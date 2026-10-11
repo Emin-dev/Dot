@@ -11,6 +11,10 @@ final class STTManager: NSObject, ObservableObject {
     @Published var recording = false
     @Published var transcript = ""
     @Published var permissionDenied = false
+    /// Live microphone level 0..1 (drives the orb while listening).
+    @Published var level: Double = 0
+    /// Set to true when a voice capture should auto-send its final transcript.
+    var autoSendOnFinal = false
 
     private let audioEngine = AVAudioEngine()
     private var recognizer: SFSpeechRecognizer?
@@ -56,8 +60,19 @@ final class STTManager: NSObject, ObservableObject {
 
         let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
         let input = audioEngine.inputNode
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+        var tapCount = 0
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             request.append(buffer)
+            // Level metering (throttled) — feeds the orb.
+            tapCount += 1
+            guard let self, tapCount % 3 == 0,
+                  let ch = buffer.floatChannelData?.pointee else { return }
+            var sum: Float = 0
+            let n = Int(buffer.frameLength)
+            for i in 0..<n { sum += ch[i] * ch[i] }
+            let rms = sqrt(sum / Float(max(1, n)))
+            let scaled = min(1.0, Double(rms) * 7.0)
+            DispatchQueue.main.async { self.level = max(0.06, scaled) }
         }
 
         task = rec.recognitionTask(with: request) { [weak self] result, error in
@@ -93,6 +108,7 @@ final class STTManager: NSObject, ObservableObject {
         task?.cancel()
         task = nil
         recognizer = nil
+        level = 0
     }
 }
 
@@ -102,12 +118,15 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
     static let shared = TTSManager()
 
     @Published var speaking = false
+    /// Fires on the main queue when the whole queue has finished playing.
+    var onFinished: (() -> Void)?
 
     private let synthesizer = AVSpeechSynthesizer()
     private var queue: [String] = []
     private var isBusy = false
-    /// Best available English voice — prefer enhanced/premium for natural quality.
-    private lazy var voice: AVSpeechSynthesisVoice? = {
+    /// Resolved per utterance — the voice list can be empty at first access
+    /// (it loads lazily), so never cache a bad result.
+    private func pickVoice() -> AVSpeechSynthesisVoice? {
         let voices = AVSpeechSynthesisVoice.speechVoices()
         let en = voices.filter { $0.language.lowercased().hasPrefix("en") }
         func score(_ v: AVSpeechSynthesisVoice) -> Int {
@@ -115,12 +134,12 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
             if v.quality == .premium { s += 8 }
             if v.quality == .enhanced { s += 5 }
             if v.quality == .default { s += 1 }
-            if v.gender == .male { s += 2 }        // distinct from typical chat assistants
             if v.name.lowercased().contains("samantha") { s += 4 }
+            if v.name.lowercased().contains("allison") { s += 3 }
             return s
         }
         return en.max(by: { score($0) < score($1) }) ?? AVSpeechSynthesisVoice(language: "en-US")
-    }()
+    }
 
     override init() {
         super.init()
@@ -148,7 +167,7 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
         isBusy = true
         let text = queue.removeFirst()
         let u = AVSpeechUtterance(string: text)
-        u.voice = voice
+        u.voice = pickVoice()
         u.rate = 0.47                     // slightly brisk, still natural
         u.pitchMultiplier = 1.0
         u.preUtteranceDelay = 0.02
@@ -160,14 +179,20 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
             guard let self else { return }
             self.isBusy = false
             if !self.queue.isEmpty { self.pump() }
-            else { self.speaking = false }
+            else {
+                self.speaking = false
+                self.onFinished?()
+            }
         }
     }
 
     func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         DispatchQueue.main.async { [weak self] in
             self?.isBusy = false
-            if self?.queue.isEmpty == true { self?.speaking = false }
+            if self?.queue.isEmpty == true {
+                self?.speaking = false
+                self?.onFinished?()
+            }
         }
     }
 }
