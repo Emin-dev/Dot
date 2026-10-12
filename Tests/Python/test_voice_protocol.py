@@ -63,13 +63,22 @@ class HelperRuntimeTests(unittest.TestCase):
         import tempfile
         with tempfile.TemporaryDirectory(prefix='Dot, local voix é ') as root:
             voice, torch, tensor, pipeline, path = self.initialize_with_fake_packages(root)
-            torch.load.assert_called_once_with(str(path), map_location='cpu', weights_only=True)
+            torch.load.assert_called_once_with(str(path.resolve(strict=True)), map_location='cpu', weights_only=True)
             self.assertIs(voice.voice, tensor)
             # The empty fake generator avoids neural execution while exercising
             # the real helper call into Kokoro's voice dispatch boundary.
             with self.assertRaisesRegex(RuntimeError, 'empty_audio'):
                 voice.render('Hello.', lambda: False)
             pipeline.assert_called_once_with('Hello.', voice=tensor, speed=1.0)
+
+    def test_bundle_parent_alias_loads_the_canonical_local_asset(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            real = Path(directory) / 'real, local bundle'; real.mkdir()
+            alias = Path(directory) / 'alias'; alias.symlink_to(real, target_is_directory=True)
+            _, torch, _, _, path = self.initialize_with_fake_packages(alias)
+            self.assertNotEqual(str(path), str(path.resolve(strict=True)))
+            torch.load.assert_called_once_with(str(path.resolve(strict=True)), map_location='cpu', weights_only=True)
 
     def test_non_tensor_local_voice_is_rejected_before_pipeline_use(self):
         import tempfile
