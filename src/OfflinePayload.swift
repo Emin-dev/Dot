@@ -43,10 +43,18 @@ actor OfflinePayload {
     nonisolated static func safePath(_ name: String, root: URL) throws -> URL {
         guard !name.isEmpty, !name.hasPrefix("/"), !name.contains("\\"),
               name.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { throw OfflineFailure.corrupt }
-        let path = root.appendingPathComponent(name).standardizedFileURL
-        let canonical = path.resolvingSymlinksInPath().path
-        guard canonical.hasPrefix(root.resolvingSymlinksInPath().path + "/") else { throw OfflineFailure.corrupt }
-        return path
+        let canonicalRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        var current = canonicalRoot
+        // Resolve each existing ancestor separately. Foundation may leave an entire
+        // path unresolved when its final download filename does not exist yet.
+        for part in name.split(separator: "/") {
+            let candidate = current.appendingPathComponent(String(part)).standardizedFileURL
+            if (try? FileManager.default.destinationOfSymbolicLink(atPath: candidate.path)) != nil,
+               !FileManager.default.fileExists(atPath: candidate.path) { throw OfflineFailure.corrupt }
+            current = candidate.resolvingSymlinksInPath().standardizedFileURL
+            guard current.path.hasPrefix(canonicalRoot.path + "/") else { throw OfflineFailure.corrupt }
+        }
+        return root.appendingPathComponent(name).standardizedFileURL
     }
     nonisolated static func hash(_ url: URL, bytes: Int64, expected: String) throws {
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])

@@ -75,6 +75,16 @@ final class OfflineIntegrationTests: XCTestCase {
         try FileManager.default.createSymbolicLink(atPath: folder.appendingPathComponent("link").path, withDestinationPath: "/tmp")
         XCTAssertThrowsError(try OfflinePayload.safePath("link/file", root: folder))
     }
+    func testMissingDownloadLeafUnderInternalDirectoryLinkStaysInsideRoot() throws {
+        let directory = folder.appendingPathComponent("inside")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("alias"), withDestinationURL: directory)
+        XCTAssertNoThrow(try OfflinePayload.safePath("alias/new-file", root: folder))
+    }
+    func testDanglingSymlinkRejectedBeforeDownloadCreatesItsTarget() throws {
+        try FileManager.default.createSymbolicLink(atPath: folder.appendingPathComponent("dangling").path, withDestinationPath: "/tmp/dot-does-not-exist-" + UUID().uuidString)
+        XCTAssertThrowsError(try OfflinePayload.safePath("dangling/new-file", root: folder))
+    }
     func testHashRejectsSymlinkEvenWhenContentsMatch() throws {
         let file = folder.appendingPathComponent("actual"); try Data("hello".utf8).write(to: file)
         let link = folder.appendingPathComponent("alias")

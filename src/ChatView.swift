@@ -17,6 +17,7 @@ final class ChatModel: ObservableObject {
     let screen = ScreenContext()
     @Published var screenEnabled = ScreenPrivacyPreference.enabled() { didSet { ScreenPrivacyPreference.setEnabled(screenEnabled); screen.enabled = screenEnabled; cancelTurn() } }
     @Published private(set) var screenContextUsed = false
+    @Published private(set) var capturingScreen = false
     private var gate = TurnGate()
     private var work: Task<Void, Never>?
     private var generating = false
@@ -95,6 +96,8 @@ final class ChatModel: ObservableObject {
                     self.firstReasoning = true; self.timing("first_reasoning")
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    self.capturingScreen = self.screen.enabled
+                    defer { if self.gate.accepts(id) { self.capturingScreen = false } }
                     let image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
                     guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
                     self.screenContextUsed = image != nil; return image
@@ -120,7 +123,7 @@ final class ChatModel: ObservableObject {
     func cancelTurn() -> UUID {
         let id = gate.advance()
         work?.cancel(); work = nil
-        stt.cancel(); tts.stop(); screen.cancel(); screenContextUsed = false; generating = false
+        stt.cancel(); tts.stop(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
         chunker = SentenceBuffer(); phase = .idle
         return id
     }
@@ -158,6 +161,7 @@ struct PetView: View {
                         }
                         Text("Once setup finishes, conversation works offline.").font(.caption2).foregroundStyle(.secondary)
                     }
+                    if model.capturingScreen { Label("Reading screen locally…", systemImage: "eye.fill").font(.caption2) }
                     if model.screenContextUsed { Label("Screen used locally for this reply", systemImage: "eye").font(.caption2) }
                     if !stt.transcript.isEmpty && model.phase == .listening {
                         Text(stt.transcript).lineLimit(5)
