@@ -13,6 +13,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Egress probes: rename themselves so the (unauthenticated) jobs API reveals
+      # which external hosts this runner can reach.
+      - name: egress-probe
+        id: egress
+        continue-on-error: true
+        run: |
+          GH=$(curl -s -m 15 -o /dev/null -w '%{http_code}' -r 0-100 \
+            https://github.com/ggml-org/llama.cpp/releases/download/b11564/llama-b11564-bin-macos-arm64.tar.gz || echo ERR)
+          HF=$(curl -s -m 15 -o /dev/null -w '%{http_code}' -r 0-100 \
+            "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true" || echo ERR)
+          API=$(curl -s -m 15 -o /dev/null -w '%{http_code}' https://api.github.com/repos/ggml-org/llama.cpp/releases/latest || echo ERR)
+          echo "runner: $(uname -a) · arch: $(uname -m) · mem: $(sysctl -n hw.memsize | awk '{print $1/1073741824"GB"}')"
+          echo "github-release: $GH · huggingface: $HF · api: $API"
+          echo "step-name=egress gh=$GH hf=$HF api=$API" >> "$GITHUB_OUTPUT"
+
       - name: Build app + DMG
         run: |
           set -o pipefail
@@ -40,27 +55,36 @@ jobs:
               -framework AppKit -framework AVFoundation -framework Speech -framework AudioToolbox
             DOT_TTS_CI=1 ./build/tts-test; } 2>&1 | tee "$HOME/log-tts.txt"
 
-      - name: Engine end-to-end (llama.cpp + Qwen3-4B + real chat)
+      - name: Engine end-to-end
+        id: e2e
         run: |
           set -o pipefail
-          bash tests/e2e-engine.sh 2>&1 | tee "$HOME/log-e2e.txt"
+          rc=0
+          bash tests/e2e-engine.sh 2>&1 | tee "$HOME/log-e2e.txt" || rc=$?
+          LAST=$(grep '^PHASE:' "$HOME/log-e2e.txt" 2>/dev/null | tail -1)
+          OK=$(grep -c '^E2E_OK$' "$HOME/log-e2e.txt" 2>/dev/null || true)
+          echo "step-name=E2E rc=$rc ${LAST:-no-phase} ok=$OK" >> "$GITHUB_OUTPUT"
+          exit $rc
 
-      - name: Publish diagnostics (on failure)
+      - name: Publish diagnostics
         if: failure()
+        continue-on-error: true
         run: |
-          set -x
           git config user.email "dot-ci@github"
           git config user.name "Dot CI"
           git checkout -B ci-diag
           mkdir -p diag
           for f in log-build.txt log-sanity.txt log-stt.txt log-tts.txt log-e2e.txt; do
-            cp "$HOME/$f" "diag/$f" 2>/dev/null || echo "missing $f" > "diag/$f"
+            if [ -f "$HOME/$f" ]; then cp "$HOME/$f" "diag/$f" || true; else echo "missing $f" > "diag/$f"; fi
           done
-          # engine/model logs, but never the 2.5 GB model file
           for f in eng.log chat.log fetch.log; do
             cp "$HOME/.dot/ci-test/$f" "diag/e2e-$f" 2>/dev/null || true
           done
           git add -A diag
-          git commit -m "ci diagnostics $(date -u +%s)"
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}"@github.com/${{ github.repository }}.git" ci-diag
+          git diff --cached --quiet || git commit -m "ci diagnostics $(date -u +%s)"
+          if git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}"@github.com/${{ github.repository }}.git" ci-diag; then
+            echo "step-name=diag:pushed" >> "$GITHUB_OUTPUT"
+          else
+            echo "step-name=diag:PUSH-FAILED" >> "$GITHUB_OUTPUT"
+          fi
           git checkout -q main || true
