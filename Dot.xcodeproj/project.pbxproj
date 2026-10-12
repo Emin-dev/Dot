@@ -20,6 +20,11 @@
         B10000000000000000000031 = {isa = PBXBuildFile; fileRef = A10000000000000000000042; };
         B10000000000000000000032 = {isa = PBXBuildFile; fileRef = A10000000000000000000041; };
         B10000000000000000000033 = {isa = PBXBuildFile; fileRef = B10000000000000000000034; };
+        C10000000000000000000001 = {isa = PBXBuildFile; fileRef = C10000000000000000000002; };
+        C10000000000000000000003 = {isa = PBXBuildFile; fileRef = C10000000000000000000004; };
+        C10000000000000000000005 = {isa = PBXBuildFile; fileRef = C10000000000000000000006; };
+        C10000000000000000000007 = {isa = PBXBuildFile; fileRef = C10000000000000000000006; };
+        C10000000000000000000008 = {isa = PBXBuildFile; fileRef = C10000000000000000000009; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +41,10 @@
         B10000000000000000000003 /* InteractionCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/InteractionCoreTests.swift; sourceTree = SOURCE_ROOT; };
         B10000000000000000000004 /* DotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
         B10000000000000000000034 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/EngineIntegrationTests.swift; sourceTree = SOURCE_ROOT; };
+        C10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BionicVoice.swift; sourceTree = "<group>"; };
+        C10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = folder; path = Voice; sourceTree = "<group>"; };
+        C10000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePipeWriter.swift; sourceTree = "<group>"; };
+        C10000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoicePipeWriterTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -79,6 +88,8 @@
 				A10000000000000000000042 /* Engine.swift */,
 				A10000000000000000000041 /* Models.swift */,
 				A10000000000000000000043 /* Speech.swift */,
+                C10000000000000000000002,
+                C10000000000000000000006,
 			);
 			path = src;
 			sourceTree = "<group>";
@@ -88,6 +99,7 @@
 			children = (
 				A10000000000000000000047 /* Info.plist */,
 				A10000000000000000000048 /* Icon.icns */,
+                C10000000000000000000004,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -158,6 +170,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000057 /* Icon.icns in Resources */,
+                C10000000000000000000003,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -193,11 +206,13 @@
 				A10000000000000000000052 /* Engine.swift in Sources */,
 				A10000000000000000000051 /* Models.swift in Sources */,
 				A10000000000000000000053 /* Speech.swift in Sources */,
+                C10000000000000000000001,
+                C10000000000000000000005,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 
-        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033,); runOnlyForDeploymentPostprocessing = 0; };
+        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -261,6 +276,7 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
                 SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;
 			};
 			name = Debug;
 		};
@@ -284,14 +300,17 @@
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
                 SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;
 			};
 			name = Release;
 		};
 
         B10000000000000000000021 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = app.dot.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0;
-                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;}; name = Debug; };
+                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;}; name = Debug; };
         B10000000000000000000022 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = app.dot.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0;
-                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;}; name = Release; };
+                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;}; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */

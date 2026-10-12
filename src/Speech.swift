@@ -175,7 +175,7 @@ final class STTManager: ObservableObject {
 /// Explicit native offline fallback while the versioned Bionic/Kokoro bridge
 /// is not yet available. No guessed daemon or unverified Python installation.
 @MainActor
-final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+final class NativeTTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published private(set) var speaking = false
     var onDrained: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?

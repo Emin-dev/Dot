@@ -38,6 +38,10 @@ final class ChatModel: ObservableObject {
             guard let self, self.gate.accepts(id) else { return }
             self.phase = .blocked(message)
         }
+        tts.onError = { [weak self] id, message in
+            guard let self, self.gate.accepts(id) else { return }
+            self.cancelTurn(); self.phase = .blocked(message)
+        }
         tts.onStarted = { [weak self] id in
             guard let self, self.gate.accepts(id), !self.firstAudio else { return }
             self.firstAudio = true; self.timing("first_audio")
@@ -69,7 +73,8 @@ final class ChatModel: ObservableObject {
         history.append(ChatMessage(role: "user", content: text))
         if history.count > 12 { history.removeFirst(history.count - 12) }
         let snapshot = history
-        tts.start(id: id)
+        do { try tts.start(id: id) }
+        catch { generating = false; phase = .blocked(error.localizedDescription); return }
         work = Task { [weak self] in
             guard let self else { return }
             do {
@@ -85,6 +90,7 @@ final class ChatModel: ObservableObject {
                 })
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 if let tail = self.chunker.flush() { self.tts.enqueue(tail, id: id) }
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))
                 self.generating = false; self.timing("generation_complete")
                 self.phase = self.tts.speaking ? .speaking : .idle
@@ -108,11 +114,12 @@ final class ChatModel: ObservableObject {
         return id
     }
     func reset() { cancelTurn(); history = []; answer = "" }
-    func configure(url: String, model: String) {
+    func configure(url: String, model: String, voice: VoiceMode, root: String) {
         cancelTurn(); engine.endpoint = url; engine.expectedModel = model
+        tts.mode = voice; tts.root = root
         phase = .idle
     }
-    func shutdown() { cancelTurn(); engine.shutdown() }
+    func shutdown() { cancelTurn(); tts.shutdown(); engine.shutdown() }
 }
 
 struct PetView: View {
@@ -176,12 +183,12 @@ struct PetView: View {
                 Button("Clear conversation") { model.reset() }
                 if model.phase.isActive { Button("Stop") { model.cancelTurn() } }
                 Divider()
-                Text("Voice: built-in English · on device")
+                Text(model.tts.mode.label)
                 Button("Quit Dot") { NSApp.terminate(nil) }
             }
             .popover(isPresented: $connectionShown, arrowEdge: .top) { ConnectionView(model: model) }
             .onChange(of: connectionShown) { _, shown in model.interactionPaused = shown }
-            Text(model.hovered ? "interim voice: built-in English" : "dot")
+            Text(model.hovered ? model.tts.mode.label : "dot")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 12)
@@ -260,6 +267,8 @@ private struct ConnectionView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var url = ""
     @State private var loadedModel = ""
+    @State private var voice: VoiceMode = .bionic
+    @State private var voiceRoot = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("A little local connection").font(.headline)
@@ -269,15 +278,32 @@ private struct ConnectionView: View {
             TextField("Exact loaded upstream model ID", text: $loadedModel)
             Text("The model must exactly match Splash /status → instance.model. A generic Bionic/LM Studio proxy isn't verified as Splash.")
                 .font(.caption2).foregroundStyle(.secondary)
+            Divider()
+            Picker("English voice", selection: $voice) {
+                ForEach(VoiceMode.allCases) { Text($0.label).tag($0) }
+            }
+            if voice == .bionic {
+                TextField("Existing Bionic voice-engine folder", text: $voiceRoot)
+                Button("Choose voice folder…") {
+                    let panel = NSOpenPanel(); panel.canChooseDirectories = true
+                    panel.canChooseFiles = false; panel.allowsMultipleSelection = false
+                    if panel.runModal() == .OK, let folder = panel.url { voiceRoot = folder.path }
+                }
+                Text("Runs this folder’s Python with the bundled warm CPU helper and your existing Kokoro files. No installs or downloads. The helper cannot access the network.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
             HStack {
                 Button("Cancel") { dismiss() }
                 Spacer()
-                Button("Save") { model.configure(url: url, model: loadedModel); dismiss() }
+                Button("Save") { model.configure(url: url, model: loadedModel, voice: voice, root: voiceRoot); dismiss() }
                     .disabled(LocalEndpoint.validate(url) == nil || loadedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .textFieldStyle(.roundedBorder)
         .padding(20).frame(width: 340)
-        .onAppear { url = model.engine.endpoint; loadedModel = model.engine.expectedModel }
+        .onAppear {
+            url = model.engine.endpoint; loadedModel = model.engine.expectedModel
+            voice = model.tts.mode; voiceRoot = model.tts.root
+        }
     }
 }

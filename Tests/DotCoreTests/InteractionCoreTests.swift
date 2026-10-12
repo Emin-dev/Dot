@@ -94,3 +94,38 @@ final class InteractionCoreTests: XCTestCase {
         XCTAssertEqual(content?.content, "Hello")
     }
 }
+
+final class VoiceEventTests: XCTestCase {
+    private func event(_ fields: [String: Any]) -> VoiceEvent? {
+        VoiceEvent.parse(try! JSONSerialization.data(withJSONObject: fields))
+    }
+    private var audio: [String: Any] {
+        ["protocol": 1, "event": "audio", "id": UUID().uuidString, "turn": UUID().uuidString,
+         "file": "audio-" + UUID().uuidString.lowercased() + ".wav", "sample_rate": 24000, "samples": 24000]
+    }
+    func testVoiceHandshakeExactIdentity() {
+        XCTAssertNotNil(event(["protocol": 1, "event": "hello", "engine": "kokoro", "voice": "bf_isabella", "sample_rate": 24000, "offline": true]))
+    }
+    func testVoiceHandshakeRejectsOtherEngine() {
+        XCTAssertNil(event(["protocol": 1, "event": "hello", "engine": "remote", "voice": "bf_isabella", "sample_rate": 24000, "offline": true]))
+    }
+    func testVoiceAudioRequiresValidRequestAndTurn() {
+        XCTAssertNotNil(event(audio))
+        var invalid = audio; invalid["turn"] = "stale"; XCTAssertNil(event(invalid))
+    }
+    func testVoiceRejectsTraversal() {
+        var invalid = audio; invalid["file"] = "../../private.wav"; XCTAssertNil(event(invalid))
+    }
+    func testVoiceRejectsOversizedAudio() {
+        var invalid = audio; invalid["samples"] = 1_440_001; XCTAssertNil(event(invalid))
+    }
+    func testVoiceRejectsWrongVersion() {
+        var invalid = audio; invalid["protocol"] = 2; XCTAssertNil(event(invalid))
+    }
+    func testVoiceRejectsUnknownEvent() {
+        XCTAssertNil(event(["protocol": 1, "event": "execute"]))
+    }
+    func testVoiceRejectsOversizedFrame() {
+        XCTAssertNil(VoiceEvent.parse(Data(repeating: 32, count: 8193)))
+    }
+}

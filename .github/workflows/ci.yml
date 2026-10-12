@@ -6,7 +6,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: dot-native-${{ github.ref }}
+  group: dot-native-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   macos:
@@ -15,24 +15,11 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
         with:
           persist-credentials: false
-      - name: Swift core tests
-        run: swift test
-      - name: Xcode app build and XCTest suite
-        run: |
-          set -o pipefail
-          xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \
-            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/DotDerived" \
-            CODE_SIGNING_ALLOWED=NO test
-      - name: Release compile
-        run: |
-          xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Release \
-            -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/DotRelease" \
-            CODE_SIGNING_ALLOWED=NO build
-      - name: Package verified test build
-        run: bash build.sh
+      - name: Test, compile and package with zero warnings
+        run: bash scripts/verify_macos.sh
       - name: Export bounded test DMG in log
         run: |
           python3 - <<'PY'

@@ -8,7 +8,7 @@ struct TTSSmoke {
         guard ProcessInfo.processInfo.environment["DOT_ALLOW_AUDIO_TEST"] == "1" else {
             print("SKIP: explicit DOT_ALLOW_AUDIO_TEST=1 required for audio playback"); exit(77)
         }
-        let tts = TTSManager(); let id = UUID(); let start = Date()
+        let tts = NativeTTSManager(); let id = UUID(); let start = Date()
         tts.start(id: id)
         tts.enqueue("Hello. This is Dot's built-in English voice test.", id: id)
         tts.enqueue("Please confirm that both sentences are audible.", id: id)

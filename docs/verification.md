@@ -13,3 +13,11 @@ Manual harness migration: `tests/main.swift` now targets the new TTS API and req
 Timing instrumentation logs only milliseconds since the explicit click: final transcript, first reasoning token, first answer token, first audio delegate start and generation completion. These are separate stages; no latency measurement is claimed until a real device run. Generation keeps thinking on at low effort.
 
 Packaging: after all CI checks succeed, an ad-hoc DMG of at most 2 MB can be exported as a delimited base64 section in the public job log with its exact byte count and SHA-256. No model or private data is included. Delivery requires the entire delimiter pair, exact bytes and digest verification; truncation is a delivery failure, never an implicit pass. No release tag or release write credential is required.
+
+## First genuine cloud macOS build
+
+Commit 3a4ed36a4de59c269b9faeaae0eebf7cf8b6037a passed GitHub run [38250357231](https://github.com/Emin-dev/Dot/actions/runs/38250357231): 17 pure tests and 22 total XCTest tests (the same 17 plus five mocked Engine tests), Debug app compile, Release compile and ad-hoc DMG packaging. First ARM64/macOS-15 DMG: 844081 bytes, SHA256 97e6f97d2ff8fe8cfc914029b186e3f0ef9bb58441e5cc109acd385ddb4af7c3. Compiler warnings-as-errors passed, but Xcode metadata/destination and checkout runtime warnings existed. That build predates the Bionic bridge. Later changes require their own CI evidence.
+
+The Bionic delta adds eight pure Swift event-validation tests and Python mocked helper lifecycle tests. The CI sandbox socket probe verifies process network denial, not actual voice synthesis. The new zero-warning gate scans Xcode output; the unused AppIntents metadata phase is disabled with the source-verified LM_SKIP_METADATA_EXTRACTION control because this app defines no AppIntents.
+
+AppIntents control provenance: [Apple Swift Build task producer](https://github.com/swiftlang/swift-build/blob/a685e4d11547273c98b7f12871cd4e6cbcf4ab4a/Sources/SWBApplePlatform/AppIntentsMetadataTaskProducer.swift#L49-L54). The zero-warning gate scans test, release and delivered-package logs; it does not filter warnings out of those logs. Three macOS pipe transport tests additionally check full-pipe close, broken-pipe failure without SIGPIPE, and ordered writes.

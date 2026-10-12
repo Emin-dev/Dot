@@ -90,3 +90,34 @@ struct StreamDelta {
                            reasoning: delta["reasoning_content"] as? String ?? "", done: false)
     }
 }
+
+/// Strict framing for Dot's bundled Bionic helper, not an installed daemon API.
+struct VoiceEvent {
+    let kind: String
+    let request: UUID?
+    let turn: UUID?
+    let filename: String?
+    static func parse(_ data: Data) -> VoiceEvent? {
+        guard data.count <= 8192,
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = value["protocol"] as? Int, version == 1,
+              let kind = value["event"] as? String else { return nil }
+        if kind == "hello" {
+            guard value["engine"] as? String == "kokoro", value["voice"] as? String == "bf_isabella",
+                  value["sample_rate"] as? Int == 24000, value["offline"] as? Bool == true else { return nil }
+            return VoiceEvent(kind: kind, request: nil, turn: nil, filename: nil)
+        }
+        if kind == "cancelled" || kind == "unavailable" {
+            return VoiceEvent(kind: kind, request: nil, turn: nil, filename: nil)
+        }
+        guard kind == "audio" || kind == "error",
+              let id = value["id"] as? String, let request = UUID(uuidString: id),
+              let generation = value["turn"] as? String, let turn = UUID(uuidString: generation) else { return nil }
+        if kind == "error" { return VoiceEvent(kind: kind, request: request, turn: turn, filename: nil) }
+        guard let filename = value["file"] as? String, filename.hasPrefix("audio-"), filename.hasSuffix(".wav"),
+              UUID(uuidString: String(filename.dropFirst(6).dropLast(4))) != nil,
+              filename.count == 46, value["sample_rate"] as? Int == 24000,
+              let samples = value["samples"] as? Int, (1...1_440_000).contains(samples) else { return nil }
+        return VoiceEvent(kind: kind, request: request, turn: turn, filename: filename)
+    }
+}
