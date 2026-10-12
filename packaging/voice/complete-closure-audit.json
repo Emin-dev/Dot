@@ -56,7 +56,7 @@
       ]
     },
     "source_metadata_catalog_sha256": "90119bdcfff31a7402a9536ee3333422f4b269ac325006b9c9743605b3ad8ea2",
-    "installer_source_sha256": "3c6153442442e30fc48cfbd482929f27af062e468040233d870a6a8a7edc70bf",
+    "installer_source_sha256": "c970cab026b85e7c730be863450ce1ef755ed176c46384bf8f17813b22ad6ae9",
     "retained_metadata_accounting": {
       "saved_completed_requests": 165,
       "saved_metadata_bytes": 30537706,
@@ -82,15 +82,24 @@
     "initial_installer_snapshot_sha256": "49699348beb2ee00a4b59c294a62357d4df4f7b74b427cbcadd381c6296775ed",
     "installer_schema_validation": {
       "result_file": "installer-schema-verification.json",
-      "status": "PASS_PREPARE_VOICE_INSTALL_LOCK_AUDIT_INVENTORY_SCHEMA_AND_BINDINGS",
-      "checks": 932,
-      "installer_source_sha256": "3c6153442442e30fc48cfbd482929f27af062e468040233d870a6a8a7edc70bf",
+      "status": "PASS_REVIEWED_PLANNER_PROFILE_DELTA_AND_JSON_SCHEMA_BINDINGS",
+      "checks": 754,
+      "installer_source_sha256": "c970cab026b85e7c730be863450ce1ef755ed176c46384bf8f17813b22ad6ae9",
       "lock_sha256": "6e8f8aa951fdafe30f575537e2ef4a17fe918758685d0766a89bf5fe452c02a5",
       "local_inventory_sha256": "8c6910b94a79d6de5a68f6cf57689ea3a9702e8ebb798d2f9c37edcb7a664336",
-      "result_payload_sha256": "d1479fc27e4cc41ac3c0d8c5b65e5a80b2d19abd4d10344fbac6309b45e94bd8",
+      "result_payload_sha256": "83163af15bd0a5c2b69c89a927f3ec0633b952779ad3a413c356a35a33847f12",
       "payload_binding": "SHA256 of UTF-8 JSON with sorted keys, compact separators and ensure_ascii=false, excluding only audit_sha256 to avoid a circular hash binding.",
-      "scope": "Checked all lock/audit/inventory requirements preceding the installer’s Python-tree verification. No installer invocation, Python runtime verification, file materialization or package execution was performed.",
-      "executed_again_for_this_correction": false
+      "scope": "Inspected the exact one-line planner diff and rechecked lock/audit/inventory JSON schemas and recorded hash bindings only. No graph expansion, wheel/report/metadata reread, planner execution, installation, network or runtime execution.",
+      "executed_again_for_this_correction": true,
+      "artifact_bindings_reexecuted": false
+    },
+    "previous_installer_source_sha256": "3c6153442442e30fc48cfbd482929f27af062e468040233d870a6a8a7edc70bf",
+    "historical_full_installer_binding_validation": {
+      "checks": 932,
+      "installer_source_sha256": "3c6153442442e30fc48cfbd482929f27af062e468040233d870a6a8a7edc70bf",
+      "schema_result_sha256": "ffffc9ddfd326ff9d8e18ddc0b74d561417e2a4162e22fc04bec4213bb66506c",
+      "closure_audit_sha256": "b5095592a4f0f31d7e8a5a58ad3168608dc1c374a1ac1b076aa3e198bf7e453d",
+      "retained_without_artifact_reread": true
     }
   },
   "active_dependency_edges": [
@@ -3530,11 +3539,24 @@
     "Runtime imports, speech synthesis, model payload closure, native loading, relocation and signing remain separate."
   ],
   "provenance_correction": {
-    "kind": "metadata_only_installer_provenance_correction",
-    "previous_audit_sha256": "8803704ef0d22d43aa4f79ff0bb943abf6aa02f130950402ab1cd9b58360b609",
+    "kind": "reviewed_planner_profile_provenance_rebind",
+    "previous_audit_sha256": "b5095592a4f0f31d7e8a5a58ad3168608dc1c374a1ac1b076aa3e198bf7e453d",
+    "previous_installer_source_sha256": "3c6153442442e30fc48cfbd482929f27af062e468040233d870a6a8a7edc70bf",
+    "current_installer_source_sha256": "c970cab026b85e7c730be863450ce1ef755ed176c46384bf8f17813b22ad6ae9",
     "changed_field": "proof.installer_source_sha256",
-    "historical_installer_snapshot_retained": true,
+    "historical_installer_snapshots_retained": true,
     "artifact_dependency_checks_reexecuted": false,
-    "runtime_or_package_execution": false
-  }
+    "runtime_or_package_execution": false,
+    "change_scope": "Only the generated sandbox profile gains the reviewed global temporary-directory read denial."
+  },
+  "provenance_history": [
+    {
+      "kind": "metadata_only_installer_provenance_correction",
+      "previous_audit_sha256": "8803704ef0d22d43aa4f79ff0bb943abf6aa02f130950402ab1cd9b58360b609",
+      "changed_field": "proof.installer_source_sha256",
+      "historical_installer_snapshot_retained": true,
+      "artifact_dependency_checks_reexecuted": false,
+      "runtime_or_package_execution": false
+    }
+  ]
 }

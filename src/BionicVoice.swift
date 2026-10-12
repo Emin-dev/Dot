@@ -70,7 +70,8 @@ final class BionicVoice {
         stop(); generation = id
         guard process == nil else { return }
         guard root.hasPrefix("/"),
-              let helper = Bundle.main.url(forResource: "bionic_helper", withExtension: "py", subdirectory: "Voice") else {
+              let helper = Bundle.main.url(forResource: "bionic_helper", withExtension: "py", subdirectory: "Voice"),
+              let profile = Bundle.main.url(forResource: "voice", withExtension: "sb", subdirectory: "Voice") else {
             throw VoiceFailure.setup
         }
         let base = URL(fileURLWithPath: root, isDirectory: true)
@@ -84,7 +85,8 @@ final class BionicVoice {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let child = Process(), stdin = Pipe(), stdout = Pipe()
         child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-        child.arguments = ["-p", "(version 1)(allow default)(deny network*)", python.path, "-I", "-B", "-u", helper.path, "--root", base.path, "--output", dir.path]
+        child.arguments = ["-D", "DOT_OUTPUT=" + dir.resolvingSymlinksInPath().path, "-f", profile.path,
+                           python.path, "-I", "-B", "-u", helper.path, "--root", base.path, "--output", dir.path]
         child.environment = ["PATH": "/usr/bin:/bin", "HOME": dir.path, "TMPDIR": dir.path,
                              "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1", "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"]
         child.standardInput = stdin; child.standardOutput = stdout

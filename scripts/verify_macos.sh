@@ -27,6 +27,7 @@ python3 -B - <<'PY'
 import json, pathlib, subprocess
 resources = pathlib.Path('build/Dot.app/Contents/Resources')
 assert (resources/'Voice/bionic_helper.py').is_file()
+assert (resources/'Voice/voice.sb').is_file()
 assert (resources/'Voice/BIONIC-LICENSE.txt').is_file()
 provenance = json.loads((resources/'build-provenance.json').read_text())
 assert provenance['commit'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()

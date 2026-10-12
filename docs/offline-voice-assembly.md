@@ -3,7 +3,7 @@
 The complete static dependency lock is `packaging/voice/complete-voice-lock.json`.
 Its SHA-256 is `6e8f8aa951fdafe30f575537e2ef4a17fe918758685d0766a89bf5fe452c02a5`.
 The matching audit SHA-256 is
-`b5095592a4f0f31d7e8a5a58ad3168608dc1c374a1ac1b076aa3e198bf7e453d`.
+`de5f5649fd90e088b2c536152855e93a0829521c5dc474ea2e508172a68572c7`.
 It recomputes every active dependency from actual wheel metadata,
 including extras and target markers. All 92 distributions are reachable from
 the 14 original Bionic pins plus the English pipeline. The three curated
@@ -77,3 +77,30 @@ Static wheel metadata and archive checks do not establish ABI compatibility,
 successful neural inference, latency, microphone/screen permissions, or safe
 relocation. Those are native acceptance gates. Personal ad-hoc test builds are
 not notarized distribution releases.
+
+## OpenMP sandbox compatibility
+
+The exact Torch wheel's `torch/lib/libomp.dylib` (SHA-256
+`6256bee09e93c28d71c65711cc69224d69994c6965648b628b70a22772fe98d4`)
+probes global `/tmp` with `opendir`, not a writability test. A readable but
+write-denied directory can trigger a misleading truncate warning. Both the
+assembly profile and product voice policy deny directory data reads for only
+`/tmp` and `/private/tmp`, selecting OpenMP's existing environment-registration
+fallback. Duplicate-runtime checks remain enabled; no warnings are filtered.
+
+The product's exact policy is `Resources/Voice/voice.sb`; supply the canonical
+private HOME/TMPDIR/output directory through sandbox-exec's `DOT_OUTPUT`
+parameter. It denies network access and all writes outside that private root.
+Installation has its separate verified Python-prefix write allowance; the
+finalized runtime must synthesize without writing to the Python/model tree.
+Use the product policy for final import/synthesis acceptance. Check native
+registration via libc `getenv` if needed, since Python's cached `os.environ`
+can miss native `setenv` updates.
+
+A target-device bounded probe verified clean Torch import, denied global temp
+enumeration, private mmap success and unchanged outside-write/network denial.
+Full neural synthesis remains a separate gate. Source rationale:
+[LLVM directory detection](https://github.com/llvm/llvm-project/blob/llvmorg-19.1.7/openmp/runtime/src/z_Linux_util.cpp#L2838-L2859),
+[registration fallback and duplicate checks](https://github.com/llvm/llvm-project/blob/llvmorg-19.1.7/openmp/runtime/src/kmp_runtime.cpp#L6296-L6404).
+Relevant machine instructions were checked in the actual wheel; its compiler
+identifier alone does not prove complete LLVM source-version provenance.

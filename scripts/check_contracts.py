@@ -29,6 +29,7 @@ checks = {
     'compact issue and screen indicators remain': 'exclamationmark.circle.fill' in chat and 'eye.fill' in chat,
     'zero-progress and paused readiness stay visible': 'Circle().stroke(Color.accentColor.opacity(0.45)' in chat and 'pause.circle.fill' in chat and 'hourglass' in chat,
     'isolated voice Python explicitly disables bytecode writes': 'python.path, "-I", "-B", "-u", helper.path' in read('src/BionicVoice.swift'),
+    'voice sandbox uses private writes and OpenMP environment fallback': '(deny file-write*)' in read('Resources/Voice/voice.sb') and '(subpath (param "DOT_OUTPUT"))' in read('Resources/Voice/voice.sb') and '(deny file-read-data (literal "/tmp") (literal "/private/tmp"))' in read('Resources/Voice/voice.sb') and '"DOT_OUTPUT="' in read('src/BionicVoice.swift'),
     'installer requires native offline acceptance': 'offline_acceptance.py' in read('scripts/package_complete.sh') and 'hdiutil create' not in read('scripts/build_complete.sh'),
     'owned runtime transport is TLS pinned': 'https://127.0.0.1:' in read('src/BundledSplash.swift') and 'RuntimeCertificatePin.matches' in engine,
     'runtime listener retained across child exec': 'pass_fds=(listener.fileno(),)' in read('Resources/Runtime/dot_runtime.py') and 'relay.close()' in read('Resources/Runtime/dot_runtime.py'),

@@ -224,6 +224,7 @@ def prepare(lock_path, audit_path, inventory_path, python_root, python_manifest,
         (output / 'python-tree.json').write_bytes(python_manifest_bytes)
         for name in ('home', 'tmp'): (output / name).mkdir(mode=0o700)
         profile = ('(version 1)(allow default)(deny network*)(deny file-write*)'
+                   '(deny file-read-data (literal "/tmp") (literal "/private/tmp"))'
                    '(allow file-write* (subpath ' + sandbox_literal(python_root) + ')'
                    ' (subpath ' + sandbox_literal(output) + '))')
         plan = {'schema_version': 1, 'kind': 'offline_voice_install_plan_not_executed', 'target': target,

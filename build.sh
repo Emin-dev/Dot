@@ -9,7 +9,7 @@ swiftc -O -warnings-as-errors -target "$(uname -m)-apple-macosx15.0" -o "$APP/Co
 mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
 cp Resources/bundled-models.json "$APP/Contents/Resources/"
-cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
+cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt Resources/Voice/voice.sb "$APP/Contents/Resources/Voice/"
 printf '{"commit":"%s","signing":"ad-hoc","notarized":false,"voice_protocol":1,"runtime_bundled":false,"models_bundled":false,"llm_weights_download_on_first_launch":false}\n' "$(git rev-parse HEAD)" > "$APP/Contents/Resources/build-provenance.json"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 ICONSET=build/Icon.iconset

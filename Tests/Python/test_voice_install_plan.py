@@ -40,6 +40,8 @@ class VoiceInstallPlanTests(unittest.TestCase):
                 self.assertIn(flag,plan['argv'])
             self.assertEqual(plan['argv'][:2],['/usr/bin/sandbox-exec','-p'])
             self.assertIn('(deny network*)',plan['argv'][2]);self.assertIn('(deny file-write*)',plan['argv'][2])
+            self.assertIn('(deny file-read-data (literal "/tmp") (literal "/private/tmp"))',plan['argv'][2])
+            self.assertNotIn('KMP_DUPLICATE_LIB_OK',plan['environment'])
             self.assertEqual(plan['environment']['PIP_CONFIG_FILE'],'/dev/null')
             self.assertEqual(plan['argv'][plan['argv'].index('--prefix')+1],str(args[3].resolve()))
             self.assertFalse(plan['immutable_runtime_manifest_may_be_created'])

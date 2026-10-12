@@ -1,0 +1,8 @@
+(version 1)
+(allow default)
+(deny network*)
+(deny file-write*)
+(allow file-write* (subpath (param "DOT_OUTPUT")))
+; OpenMP's directory-only probe must not mistake shared /tmp for writable storage.
+; Its existing environment registration still checks for duplicate runtimes.
+(deny file-read-data (literal "/tmp") (literal "/private/tmp"))
