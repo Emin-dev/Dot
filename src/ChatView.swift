@@ -4,12 +4,11 @@ import AppKit
 @MainActor
 final class ChatModel: ObservableObject {
     @Published private(set) var phase: PetPhase = .idle
-    @Published private(set) var answer = ""
+    private var answer = ""
     @Published var pinned = UserDefaults.standard.bool(forKey: "petPinned") {
         didSet { UserDefaults.standard.set(pinned, forKey: "petPinned") }
     }
     @Published var hovered = false
-    @Published var bubbleHovered = false
     @Published var interactionPaused = false
     var showOptions: (() -> Void)?
     let stt = STTManager()
@@ -112,8 +111,6 @@ final class ChatModel: ObservableObject {
             } catch {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.generating = false; self.tts.stop()
-                // Keep this capture visible for retry; never claim a connection succeeded.
-                self.answer = text
                 self.phase = .blocked(error.localizedDescription)
             }
             if self.gate.accepts(id) { self.work = nil }

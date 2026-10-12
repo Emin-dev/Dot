@@ -127,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func moveGently() {
         guard let panel, let model else { return }
-        let paused = !panel.isVisible || panel.isKeyWindow || model.hovered || model.bubbleHovered || model.interactionPaused
+        let paused = !panel.isVisible || panel.isKeyWindow || model.hovered || model.interactionPaused
             || model.pinned || model.phase.isActive || menuTracking > 0 || NSEvent.pressedMouseButtons != 0
             || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || NSWorkspace.shared.isVoiceOverEnabled
         let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame

@@ -1,42 +1,27 @@
 import Foundation
 import AVFoundation
 
-/// Explicit choice: unavailable Bionic never falls back to a different voice.
-enum VoiceMode: String, CaseIterable, Identifiable {
-    case bionic, builtIn
-    var id: String { rawValue }
-    var label: String { self == .bionic ? "Bionic / Kokoro · bf_isabella" : "Built-in English (interim)" }
-}
-
 @MainActor
 final class TTSManager {
     var onDrained: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
-    private let native = NativeTTSManager()
     private let bionic = BionicVoice()
-    private var activeMode: VoiceMode = .bionic
-    let mode: VoiceMode = .bionic
     private var root: String { Bundle.main.resourceURL?.appendingPathComponent("Offline/Voice").path ?? "" }
-    var speaking: Bool { activeMode == .bionic ? bionic.speaking : native.speaking }
+    var speaking: Bool { bionic.speaking }
     init() {
-        native.onStarted = { [weak self] in self?.onStarted?($0) }
-        native.onDrained = { [weak self] in self?.onDrained?($0) }
         bionic.onStarted = { [weak self] in self?.onStarted?($0) }
         bionic.onDrained = { [weak self] in self?.onDrained?($0) }
         bionic.onError = { [weak self] in self?.onError?($0, $1) }
     }
     func start(id: UUID) throws {
-        stop(); activeMode = mode
-        if activeMode == .bionic { try bionic.start(id: id, root: root) }
-        else { native.start(id: id) }
+        try bionic.start(id: id, root: root)
     }
     func enqueue(_ text: String, id: UUID) {
-        if activeMode == .bionic { bionic.enqueue(text, id: id) }
-        else { native.enqueue(text, id: id) }
+        bionic.enqueue(text, id: id)
     }
-    func stop() { native.stop(); bionic.stop() }
-    func shutdown() { native.stop(); bionic.shutdown() }
+    func stop() { bionic.stop() }
+    func shutdown() { bionic.shutdown() }
 }
 
 /// Only launches the bundled helper using only its app-bundled runtime.

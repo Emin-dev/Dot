@@ -128,8 +128,8 @@ final class STTManager: ObservableObject {
     func shutdown() { cancel(); recognizer.shutdown() }
 }
 
-/// Explicit native offline fallback while the versioned Bionic/Kokoro bridge
-/// is not yet available. No guessed daemon or unverified Python installation.
+/// Manual audio-device diagnostic used by tests/main.swift.
+/// The product voice coordinator neither constructs nor falls back to this voice.
 @MainActor
 final class NativeTTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published private(set) var speaking = false
