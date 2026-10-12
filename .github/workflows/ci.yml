@@ -24,12 +24,13 @@ jobs:
           trap '
             mkdir -p diag 2>/dev/null || true
             mv diag-live/egress.txt diag/egress.txt 2>/dev/null || true
+            echo "egress step exited" > diag/marker.txt 2>/dev/null || true
             git config user.email "dot-ci@github" 2>/dev/null || true
             git config user.name "Dot CI" 2>/dev/null || true
             git checkout -qB ci-diag 2>/dev/null || git checkout -q ci-diag 2>/dev/null || true
             git add -A diag 2>/dev/null || true
-            git diff --cached --quiet 2>/dev/null || git commit -qm "egress diag $(date -u +%s)" 2>/dev/null || true
-            git push -qf "https://x-access-token:$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY.git" ci-diag 2>/dev/null || true
+            git commit -qm "egress diag $(date -u +%s)" 2>/dev/null || true
+            git push -qf origin ci-diag 2>/dev/null || true
             git checkout -q main 2>/dev/null || true
           ' EXIT
           mkdir -p diag-live
@@ -78,12 +79,13 @@ jobs:
             mv diag-live/e2e.txt diag/e2e-step.log 2>/dev/null || true
             cp "$HOME/.dot/ci-test/"*.log diag/ 2>/dev/null || true
             LAST=$(grep "^PHASE:" diag/e2e-step.log 2>/dev/null | tail -1)
+            echo "rc=$rc last=${LAST:-no-phase}" > diag/marker.txt 2>/dev/null || true
             git config user.email "dot-ci@github" 2>/dev/null || true
             git config user.name "Dot CI" 2>/dev/null || true
             git checkout -qB ci-diag 2>/dev/null || git checkout -q ci-diag 2>/dev/null || true
             git add -A diag 2>/dev/null || true
-            git diff --cached --quiet 2>/dev/null || git commit -qm "e2e rc=$rc ${LAST:-no-phase} $(date -u +%s)" 2>/dev/null || true
-            git push -qf "https://x-access-token:$GITHUB_TOKEN@github.com/$GITHUB_REPOSITORY.git" ci-diag 2>/dev/null || true
+            git commit -qm "e2e rc=$rc ${LAST:-no-phase} $(date -u +%s)" 2>/dev/null || true
+            git push -qf origin ci-diag 2>/dev/null || true
             git checkout -q main 2>/dev/null || true
           ' EXIT
           mkdir -p diag-live
@@ -98,11 +100,12 @@ jobs:
           git config user.name "Dot CI" 2>/dev/null || true
           git checkout -qB ci-diag 2>/dev/null || git checkout -q ci-diag 2>/dev/null || true
           mkdir -p diag
+          echo "diag step ran" > diag/marker.txt 2>/dev/null || true
           for f in log-build.txt log-sanity.txt log-stt.txt log-tts.txt; do
             if [ -f "$HOME/$f" ]; then cp "$HOME/$f" "diag/$f" 2>/dev/null || true; else echo "missing $f" > "diag/$f"; fi
           done
           cp "$HOME/.dot/ci-test/"*.log diag/ 2>/dev/null || true
           git add -A diag 2>/dev/null || true
           git diff --cached --quiet 2>/dev/null || git commit -qm "ci diagnostics $(date -u +%s)" 2>/dev/null || true
-          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}"@github.com/${{ github.repository }}.git" ci-diag 2>&1 || true
+          git push -f origin ci-diag 2>&1 || true
           git checkout -q main 2>/dev/null || true
