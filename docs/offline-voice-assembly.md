@@ -125,3 +125,32 @@ An empty Torch cache directory inside the owned private session is temporary
 state, not an escaped runtime write. After the helper exits, the owner must
 remove that entire session directory, preserving any acceptance WAV/receipts
 outside it. No installed package or model files may change during synthesis.
+
+## eSpeak relocation boundary
+
+The pinned eSpeakNG1.52.0 library has a 160-byte native data-path buffer.
+The target Mac confirmed a 159-byte absolute path succeeds and a 160-byte path
+falls back to the library publisher's unusable build-machine path. Its actual
+relocated bundled data path was 176 UTF-8 bytes; the data itself was intact.
+This is independent of model size or network availability.
+
+The dedicated helper now selects its canonical bundled eSpeak data directory
+once, before third-party initialization and before starting its worker. It
+rejects concurrent Python-thread initialization, external data/Python links
+and nonregular phoneme data. It fixes only that helper process's cwd there,
+sets the supported native `ESPEAK_DATA_PATH='.'`, and clears Misaki's absolute
+override through `EspeakWrapper.set_data_path(None)` before the first native
+constructor. All model/config/voice/output paths remain absolute. The host app's
+cwd, signed runtime, permissions and dependency files are unchanged.
+
+A target-device isolated probe initialized and phonemized successfully from the
+same 176-byte path with empty stderr, denied network and unchanged runtime
+closures. Full PCM/cancellation/EOF acceptance of this exact helper remains
+required. Portable tests cover 159, 160, 176 and 240 UTF-8-byte paths, Unicode,
+immutable inputs, containment rejection and startup ordering without executing
+the neural dependencies.
+
+Sources: [fixed buffer](https://github.com/espeak-ng/espeak-ng/blob/1.52.0/src/libespeak-ng/speech.h#L55-L74),
+[path initialization](https://github.com/espeak-ng/espeak-ng/blob/1.52.0/src/libespeak-ng/speech.c#L247-L338).
+The exact acquired dylib's instructions and `_snprintf` call target were also
+checked; this conclusion does not rely only on a version string.

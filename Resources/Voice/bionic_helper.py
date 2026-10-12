@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import stat
 import sys
 import threading
 import uuid
@@ -52,6 +53,29 @@ def parse_request(line):
     return item
 
 
+def configure_espeak_data(root):
+    """Set one fixed cwd in this dedicated helper, before imports/worker startup.
+
+    eSpeak NG 1.52 stores its data path in a 160-byte native buffer. Absolute
+    bundle paths can exceed that after relocation. Its supported native
+    ESPEAK_DATA_PATH='.' resolves against this immutable bundled directory.
+    No host-app cwd, signed file, writable root or dependency is changed.
+    """
+    if threading.current_thread() is not threading.main_thread() or threading.active_count() != 1:
+        raise RuntimeError('espeak_setup_requires_single_thread')
+    root = Path(root).resolve(strict=True)
+    python = (root / 'python').resolve(strict=True)
+    data = (python / 'lib/python3.11/site-packages/espeakng_loader/espeak-ng-data').resolve(strict=True)
+    phonemes = data / 'phontab'
+    if (not python.is_relative_to(root) or not data.is_relative_to(python)
+            or not data.is_dir() or not stat.S_ISREG(phonemes.lstat().st_mode)):
+        raise RuntimeError('invalid_bundled_espeak_data')
+    os.environ.pop('PHONEMIZER_ESPEAK_DATA_PATH', None)
+    os.environ['ESPEAK_DATA_PATH'] = '.'
+    os.chdir(data)
+    return data
+
+
 class WarmVoice:
     def __init__(self, root):
         # The Swift host additionally runs this process inside a no-network OS sandbox.
@@ -64,6 +88,9 @@ class WarmVoice:
         for path in (model / 'config.json', model / 'kokoro-v1_0.pth', voice_path):
             if not path.is_file():
                 raise RuntimeError('local_voice_assets_missing')
+        # Main constructs exactly one voice before it starts the worker thread.
+        # Every later model/config/voice/output path is already absolute.
+        espeak_data = configure_espeak_data(self.root)
         for package in ('kokoro', 'misaki'):
             if importlib.metadata.version(package) != '0.9.4':
                 raise RuntimeError('unsupported_voice_package_version')
@@ -75,6 +102,14 @@ class WarmVoice:
             raise RuntimeError('downloads_disabled')
         spacy.cli.download = no_download
         from misaki.espeak import EspeakFallback
+        import espeakng_loader
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+        if Path(espeakng_loader.get_data_path()).resolve(strict=True) != espeak_data:
+            raise RuntimeError('unexpected_espeak_data_package')
+        # Misaki sets an absolute class override on import. Clear it through the
+        # public API so EspeakAPI passes NULL and eSpeak uses the bounded native
+        # environment path above, rather than truncating the relocated path.
+        EspeakWrapper.set_data_path(None)
         # Fail early if local eSpeak cannot initialize. Kokoro constructs its
         # own fallback later and otherwise silently tolerates its failure.
         EspeakFallback(british=True)

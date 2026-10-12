@@ -31,10 +31,12 @@ class VoiceProtocolTests(unittest.TestCase):
 class HelperRuntimeTests(unittest.TestCase):
     def initialize_with_fake_packages(self, root, voice_is_tensor=True,
                                       fallback_available=True, english_version='3.8.0',
-                                      voice_is_float32=True):
+                                      voice_is_float32=True, loader_path_matches=True):
         import contextlib, types
         from unittest.mock import Mock, patch
         model = Path(root) / 'model'; (model / 'voices').mkdir(parents=True)
+        data = Path(root).resolve(strict=True) / 'python/lib/python3.11/site-packages/espeakng_loader/espeak-ng-data'
+        data.mkdir(parents=True)
         for name in ('config.json', 'kokoro-v1_0.pth', 'voices/bf_isabella.pt'):
             (model / name).write_bytes(b'inert test fixture, never deserialized')
         class FakeTensor: pass
@@ -50,10 +52,20 @@ class HelperRuntimeTests(unittest.TestCase):
             'spacy': spacy, 'spacy.cli': spacy.cli,
             'misaki': types.ModuleType('misaki'),
             'misaki.espeak': types.SimpleNamespace(EspeakFallback=Mock()),
+            'espeakng_loader': types.SimpleNamespace(get_data_path=Mock(return_value=str(data if loader_path_matches else data.parent))),
+            'phonemizer.backend.espeak.wrapper': types.SimpleNamespace(EspeakWrapper=Mock()),
             'kokoro': types.SimpleNamespace(KPipeline=Mock(return_value=pipeline)),
             'kokoro.model': types.SimpleNamespace(KModel=Mock())}
         self.model_factory = modules['kokoro.model'].KModel
+        self.espeak_wrapper = modules['phonemizer.backend.espeak.wrapper'].EspeakWrapper
+        self.espeak_fallback = modules['misaki.espeak'].EspeakFallback
+        self.setup_order = []
+        self.espeak_wrapper.set_data_path.side_effect = lambda _: self.setup_order.append('override')
+        self.espeak_fallback.side_effect = lambda **_: self.setup_order.append('fallback')
+        def configure(_):
+            self.setup_order.append('cwd'); return data
         with patch.dict(helper.sys.modules, modules), \
+             patch.object(helper, 'configure_espeak_data', side_effect=configure), \
              patch.object(helper.importlib.metadata, 'version', side_effect=lambda name: english_version if name == 'en-core-web-sm' else '0.9.4'), \
              patch.object(helper.importlib.util, 'find_spec', return_value=object()), \
              patch.dict(helper.os.environ):
@@ -67,6 +79,15 @@ class HelperRuntimeTests(unittest.TestCase):
             model = Path(root).resolve(strict=True) / 'model'
             self.model_factory.assert_called_once_with(repo_id='hexgrad/Kokoro-82M',
                 config=str(model / 'config.json'), model=str(model / 'kokoro-v1_0.pth'))
+            self.espeak_wrapper.set_data_path.assert_called_once_with(None)
+            self.assertEqual(self.setup_order, ['cwd', 'override', 'fallback'])
+
+    def test_loader_path_mismatch_fails_before_native_initialization(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(RuntimeError, 'unexpected_espeak_data_package'):
+                self.initialize_with_fake_packages(root, loader_path_matches=False)
+            self.espeak_fallback.assert_not_called()
 
     def test_comma_and_unicode_bundle_path_passes_local_tensor_not_voice_names(self):
         import tempfile
