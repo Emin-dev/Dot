@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import errno
 import importlib.util
@@ -12,6 +13,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 import patch_splash_listener as patcher
 path = Path(__file__).resolve().parents[2] / 'Resources/Runtime/dot_tls.py'
@@ -60,6 +62,34 @@ class ListenerPatchTests(unittest.TestCase):
             with self.assertRaises(ValueError): patcher.overlay(root)
     def test_ambiguous_anchor_rejected(self):
         with self.assertRaises(ValueError): patcher.once('x x', 'x', 'y')
+
+class CertificateEncodingTests(unittest.TestCase):
+    def test_generated_public_key_uses_named_p256_not_explicit_parameters(self):
+        # LibreSSL's req defaults differ from current OpenSSL. Check the requested
+        # encoding AND actual SPKI bytes, before identity() removes its private files.
+        run = subprocess.run
+        observed = []
+        with tempfile.TemporaryDirectory() as folder:
+            state = Path(folder)
+            def inspect(command, **kwargs):
+                self.assertIn('ec_param_enc:named_curve', command)
+                result = run(command, **kwargs)
+                public = run(['/usr/bin/openssl', 'x509', '-in', str(state / 'session.crt'), '-pubkey', '-noout'],
+                             check=True, capture_output=True, timeout=10).stdout
+                self.assertLess(len(public), 4096)
+                der = base64.b64decode(b''.join(public.splitlines()[1:-1]), validate=True)
+                # Canonical SPKI: id-ecPublicKey + prime256v1 OID + uncompressed point.
+                prefix = bytes.fromhex('3059301306072a8648ce3d020106082a8648ce3d03010703420004')
+                self.assertEqual(len(der), 91)
+                self.assertTrue(der.startswith(prefix), 'P-256 must use a named-curve OID')
+                observed.append(True)
+                return result
+            with patch.object(tls.subprocess, 'run', side_effect=inspect):
+                context, pin = tls.identity(state)
+            self.assertEqual(observed, [True])
+            self.assertEqual(context.minimum_version, ssl.TLSVersion.TLSv1_2)
+            self.assertEqual(len(pin), 64)
+            self.assertEqual(list(state.iterdir()), [])
 
 class AuthenticatedRelayTests(unittest.TestCase):
     def setUp(self):

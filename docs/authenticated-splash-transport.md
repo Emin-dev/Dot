@@ -12,6 +12,8 @@ A bounded TLS relay in the supervisor is the app-facing endpoint. It generates a
 
 The recognized system utility is checked at launch and fails clearly if missing or incompatible. Presence on one Mac is not evidence for every supported OS. The macOS runtime sandbox must also permit this bounded local operation; the production-profile acceptance test remains required.
 
+The generator explicitly requests `ec_param_enc:named_curve` for P-256. Native diagnosis on macOS 27.0.1 with LibreSSL 3.3.6 found that the previous command emitted explicit EC parameters: Security.framework could parse the certificate but could not extract its key, and URLSession failed before the pin challenge. Adding only the named-curve option produced the prime256v1 OID and a readable 256-bit key. A regression checks both the command and actual public-key SPKI encoding. The positive/negative native TLS fixtures must still pass; key parsing alone is not a successful handshake. [LibreSSL option implementation](https://github.com/libressl/openbsd/blob/libressl-v3.3.6/src/lib/libcrypto/ec/ec_pmeth.c#L405-L413).
+
 The private backend still uses Splash's API-key client authentication. TLS authenticates the app-facing server; PID/model checks are additional consistency checks, not the cryptographic trust anchor. A hostile local process can deny service, but cannot obtain application bytes by presenting a different certificate. Same-user debugger/root compromise is outside this process-level boundary.
 
 ## Exact upstream patch

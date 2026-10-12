@@ -31,6 +31,7 @@ def identity(state):
     config.write_text('[req]\nprompt=no\ndistinguished_name=dn\nx509_extensions=extensions\n[dn]\nCN=dot.local\n[extensions]\nsubjectAltName=IP:127.0.0.1\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=serverAuth\n')
     config.chmod(0o600)
     subprocess.run([str(executable), 'req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1',
+                    '-pkeyopt', 'ec_param_enc:named_curve',
                     '-nodes', '-keyout', str(key), '-out', str(certificate), '-days', '1', '-config', str(config)],
                    check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
     key.chmod(0o600); certificate.chmod(0o600)
