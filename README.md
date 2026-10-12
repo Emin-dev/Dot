@@ -1,46 +1,38 @@
 # Dot — floating local companion
 
-A native macOS companion with a transparent floating glass-style character, a small speech bubble, and no conventional main window. Click to speak; click during an answer to interrupt and listen again. Right-click for Pin, Connection, Clear conversation, or Quit. The menu-bar paw brings Dot back into view.
+A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.
 
-## Current development status
+## Build status
 
-The requested final product is fully self-contained: bundled Splash/Qwen Q4, vision, local recognition and Kokoro voice, without external setup or discovery. The current test build is a foundation and **does not yet meet that requirement**. See [the self-contained build gates](docs/self-contained-build-plan.md), [screen-context contract](docs/screen-context-contract.md), and [roaming policy](docs/roaming-policy.md). No full-bundle completion or measured speed improvement is claimed.
+The review branch contains the app-owned runtime integration and automatic first-launch model download. **The complete installer is not yet validated or available:** the redistributable voice dependency lock, offline import probe, real native-framework build and end-to-end device checks remain gates. A development DMG lacks these runtimes and clearly reports that limitation. It must not be presented as a working voice replacement.
 
-## This review branch
+The intended complete installer includes Splash 1.3.1, English Whisper base.en recognition, and the Bionic-derived Kokoro voice with their runtimes and licenses. On first launch it downloads 19,930,313,310 bytes of pinned Qwen3.8-27B Q4 / draft model data with progress, Pause/Resume, size/SHA256 verification and remaining-space checks. No existing Python installation, voice folder or server is adopted. Once setup succeeds, conversation runs locally without internet. An app-only copy does not carry models stored in Application Support; a portable complete build can include the verified models with `DOT_MODEL_PAYLOAD`. In-app export is still pending.
 
-This rebuild begins at `56041cf00d1d6b7c2f87590fdd1fbbbbb216e996`. It was implemented separately on a cloud computer. Uncommitted Mac changes were not recovered or copied, and their tests do not validate this branch. Old binaries at the base revision are **not** builds of this source.
+## Interaction and privacy
 
-- Splash is the only inference engine. No llama.cpp or MLX-engine fallback; no engine downloads, launches, or borrowed-process shutdown.
-- English speech recognition must support on-device operation. Audio is never intentionally submitted to a network recognizer; unavailable support fails closed.
-- Microphone capture begins only after a click. A full three seconds without speech activity ends capture; resumed speech resets that interval. A short final-transcription drain follows.
-- Every new click invalidates earlier microphone, stream and speech callbacks. Replies never automatically restart the microphone.
-- Thinking is on by default with low effort and a bounded 1,536-token generation budget. Reasoning is not spoken.
-- Reduce Motion freezes autonomous roaming/bobbing; Reduce Transparency uses an opaque body/bubble. Varied within-display roaming pauses for hovering, voice activity, menus, popovers and pressed mouse buttons. Pin persists between launches.
-- **Bionic/Kokoro is the default voice through a bundled warm CPU helper. Select your trusted existing Bionic voice-engine folder in Connection.** The environment/model files are not bundled yet; missing setup fails closed. Built-in English is an explicit interim option, never a silent fallback. See [the bridge contract](docs/voice-bridge.md).
-- File actions, browser control and autonomous computer actions are not implemented. This slice is a conversation companion.
+- Splash is the only LLM runtime. The exact target is `mlx-community/Qwen3.8-27B-4bit`; this is a checkpoint publisher name, not use of the MLX inference engine. No automatic model or runtime substitution.
+- Thinking remains on at low effort, with a 1,536-token budget. Reasoning is not spoken.
+- Microphone capture starts only after an explicit click and OS microphone permission. Three seconds without detected speech activity ends capture. English transcription uses the bundled Whisper C library locally, with a one-minute recording bound.
+- A new click cancels the old capture, generation and audio. Stale results cannot restart the microphone or replace the new turn.
+- Screen context is captured only for an explicit conversation, just before its reply, after macOS Screen Recording permission. Its on/off preference persists. Images are bounded, used once, excluded from conversation history, and never uploaded to a remote model. A denied/unavailable capture is reported honestly; turn off Screen context to continue voice-only.
+- The Bionic-derived Kokoro helper uses CPU inference and denies network access. No built-in voice fallback is selected silently.
+- Varied within-display roaming pauses for interaction, speech, pressed mouse buttons, pinning and Reduce Motion. Reduce Transparency provides an opaque body/bubble.
+- File, browser and autonomous computer actions are not implemented. Dot does not execute instructions from screen content.
 
-## Splash connection
+Conversation state stays in memory and disappears on quit. No analytics or conversation upload. Download traffic contains public asset requests, not conversation data.
 
-Run an already-installed, offline-configured Splash server separately. Right-click Dot → Connection and enter its loopback address (released default `http://127.0.0.1:8000`) and its **exact** `/status.instance.model` value. Alternatively set `DOT_SPLASH_URL` and `DOT_SPLASH_MODEL` before direct launch. Settings saved through Connection take priority.
+## Development and verification
 
-The tested protocol fixture follows [Splash 1.3.1's source](https://github.com/incoai/splash/tree/f91c91e21dda483f8c59a248a444d0989a560d31). Dot requires `Server: Splash`, schema 6, ready state, an instance ID/PID, loopback binding, matching port and exact model ID before each turn. It refuses redirects. These are self-reported consistency checks, **not cryptographic attestation** and not proof of a binary version. A generic Bionic/OpenAI-compatible proxy will be rejected unless it genuinely exposes this direct contract.
-
-A checkpoint whose ID starts `mlx-community/` can still be served by Splash; a weight publisher name does not choose the runtime. Dot never substitutes a model automatically.
-
-## Build and test
-
-Requires a Mac with Xcode and macOS 15+ to compile the UI. Splash hardware/OS requirements are separate from the companion shell and depend on the installed Splash release.
+The UI development target builds on macOS 15+. The complete Splash installer targets Apple Silicon M3 or newer and macOS 26.4+, with enough RAM for the selected model. Device performance and voice quality require measurement.
 
 - Open `Dot.xcodeproj`, choose shared `Dot` scheme, then Product → Test.
-- `python3 -B -m unittest discover -s Tests/Python -v` checks the helper protocol and mocked warm/cancellation lifecycle without neural models.
-- `swift test` runs the deterministic portable core suite.
-- `xcodebuild -project Dot.xcodeproj -scheme Dot -destination 'platform=macOS,arch=arm64' CODE_SIGNING_ALLOWED=NO test` builds the app and runs the actual `DotTests` XCTest target.
-- `bash build.sh` creates `build/Dot.dmg`, an **ad-hoc signed, unnotarized test build**. It does not launch the app, download models, or record audio.
+- `swift test` runs the portable pure-core suite. The Xcode target additionally runs mocked network and pipe tests.
+- `python3 -B -m unittest discover -s Tests/Python -v` runs model-free protocol, assembly and supervisor fixtures.
+- `bash scripts/verify_macos.sh` runs Python/sandbox tests, SwiftPM, Debug XCTest, Release and development packaging, then rejects warnings in all logs.
+- `bash build.sh` creates `build/Dot.dmg`, an ad-hoc signed, unnotarized **development build without neural runtimes**.
+- `DOT_WHISPER_FRAMEWORK=/verified/macos/whisper.framework bash scripts/verify_whisper_link.sh` compiles the real native recognizer branch without executing the app or models.
+- `DOT_RUNTIME_PAYLOAD=/audited/payload DOT_WHISPER_FRAMEWORK=/verified/macos/whisper.framework bash scripts/build_complete.sh` fails closed unless the local payload audit, exact neural pins, dependency-lock status and offline import probe pass. It embeds the real framework and produces `build-complete/Dot.dmg`. Optionally set `DOT_MODEL_PAYLOAD` to the verified staged model root to embed data as `OfflineModels`, producing a portable app rather than a first-launch download installer. It verifies hashes before and after copying. No download or installation is performed by that build script.
 
-CI uses a standard public-repository macOS runner, a ten-minute job limit, read-only token permissions and no model downloads. Unit tests do not establish microphone quality, audible output, real Splash inference, accessibility behavior or interactive UI correctness. Those remain device tests. No local cloud-Linux execution is presented as an Xcode result.
+Standard CI does not download models or establish real neural speech, microphone quality, screen permissions, interactive UI correctness or offline inference. Those are separate native device gates. See [self-contained build plan](docs/self-contained-build-plan.md), [voice bridge](docs/voice-bridge.md), [screen contract](docs/screen-context-contract.md), and [roaming policy](docs/roaming-policy.md).
 
-## Architecture
-
-`App.swift`: floating panel and motion policy. `ChatView.swift`: character, UI and turn coordinator. `Speech.swift`: local STT and labelled interim TTS. `BionicVoice.swift`: owned offline helper and ordered cancellable audio. `Engine.swift`: direct Splash transport. `InteractionCore.swift`: pure endpoint, identity, silence, generation and stream/chunk rules. `Tests/DotCoreTests`: real regression tests shared by SwiftPM and Xcode.
-
-Conversation state stays in memory and disappears on quit. No analytics or conversation upload. No persistent broad filesystem or app-control access.
+This rebuild starts from `56041cf00d1d6b7c2f87590fdd1fbbbbb216e996`. Original Mac-only edits were not copied and their tests do not validate this branch. Removed generated binaries remain recoverable in the original history and preservation manifest. Main is unchanged.

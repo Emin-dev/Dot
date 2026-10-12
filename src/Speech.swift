@@ -1,175 +1,131 @@
 import AppKit
 import AVFoundation
-import Speech
 import Combine
 
-/// The audio tap never reaches into actor-isolated state. Its destination can
-/// rotate after a recognizer final result without replacing the microphone tap.
-private final class AudioRelay: @unchecked Sendable {
+/// Bounded PCM storage. The real-time tap only downmixes/copies a small buffer.
+private final class CapturedPCM: @unchecked Sendable {
     private let lock = NSLock()
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    func replace(with value: SFSpeechAudioBufferRecognitionRequest?) {
-        lock.lock(); defer { lock.unlock() }; request = value
-    }
+    private var samples: [Float] = []
+    private var active = true
+    private let maximum: Int
+    private(set) var rate: Double
+    private var loudness = 0.0
+    private var speechAt: Double?
+    private var overflow = false
+    init(rate: Double) { self.rate = rate; maximum = Int(rate * 61); samples.reserveCapacity(maximum) }
     func append(_ buffer: AVAudioPCMBuffer) {
-        lock.lock(); defer { lock.unlock() }; request?.append(buffer)
+        guard let channels = buffer.floatChannelData, buffer.format.sampleRate == rate,
+              buffer.format.channelCount > 0, buffer.frameLength <= 8192 else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return }
+        let count = Int(buffer.frameLength), channelCount = Int(buffer.format.channelCount)
+        guard samples.count + count <= maximum else { overflow = true; return }
+        var sum: Float = 0
+        for index in 0..<count {
+            var sample: Float = 0
+            for channel in 0..<channelCount { sample += channels[channel][index] / Float(channelCount) }
+            if !sample.isFinite { overflow = true; return }
+            samples.append(sample); sum += sample * sample
+        }
+        loudness = count > 0 ? Double(sqrt(sum / Float(count))) : 0
+        if loudness > 0.015 { speechAt = ProcessInfo.processInfo.systemUptime }
     }
+    func status() -> (Double, Double?, Bool) { lock.lock(); defer { lock.unlock() }; return (loudness, speechAt, overflow) }
+    func take() -> [Float] { lock.lock(); defer { lock.unlock() }; active = false; let result = samples; samples = []; return result }
+    func cancel() { lock.lock(); active = false; samples = []; lock.unlock() }
 }
 
 @MainActor
 final class STTManager: ObservableObject {
     @Published private(set) var recording = false
+    @Published private(set) var transcribing = false
     @Published private(set) var transcript = ""
     @Published private(set) var level = 0.0
     var onFinal: ((UUID, String) -> Void)?
     var onError: ((UUID, String) -> Void)?
     private let engine = AVAudioEngine()
-    private let relay = AudioRelay()
-    private var recognizer: SFSpeechRecognizer?
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
+    private let recognizer = WhisperRecognizer()
+    private var pcm: CapturedPCM?
+    private var cancellation: RecognitionCancellation?
+    private var inference: Task<Void, Never>?
     private var capture: UUID?
-    private var segment = UUID()
-    private var prefix = ""
-    private var partial = ""
-    private var silence = SilenceGate()
     private var timer: Timer?
-    private var finalWait: Task<Void, Never>?
     private var tapInstalled = false
     private var began = 0.0
+    private var modelURL: URL?
 
     func start(id: UUID) async {
         guard !Task.isCancelled else { return }
-        cancel()
-        capture = id
-        let mic = await withCheckedContinuation { continuation in
-            AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+        cancel(); capture = id
+        do {
+            let payload = try await OfflinePayload.shared.validate()
+            guard !Task.isCancelled, capture == id else { return }
+            modelURL = payload.appendingPathComponent("STT/ggml-base.en.bin")
+            guard WhisperRecognizer.available else { throw RecognitionFailure.unavailable }
+        } catch { fail(id, error.localizedDescription); return }
+        guard !Task.isCancelled, capture == id else { return }
+        let mic: Bool
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: mic = true
+        case .notDetermined:
+            mic = await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+            }
+        default: mic = false
         }
         guard !Task.isCancelled, capture == id else { return }
         guard mic else { fail(id, "Microphone access is off. Enable Dot in System Settings → Privacy & Security → Microphone."); return }
-        let authorization = await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
-        }
-        guard !Task.isCancelled, capture == id else { return }
-        guard authorization == .authorized else { fail(id, "Speech recognition access is off in System Settings."); return }
-        guard let speech = SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              speech.isAvailable, speech.supportsOnDeviceRecognition else {
-            fail(id, "On-device English speech isn't available. I won't send your audio to a server."); return
-        }
-        recognizer = speech
-        prefix = ""; partial = ""; transcript = ""; silence = SilenceGate()
-        began = ProcessInfo.processInfo.systemUptime
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else { fail(id, "No microphone is available."); return }
-        startSegment(id)
-        let relay = self.relay
-        input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-            relay.append(buffer)
-            guard let samples = buffer.floatChannelData?.pointee else { return }
-            let count = Int(buffer.frameLength)
-            guard count > 0 else { return }
-            var sum: Float = 0
-            for i in 0..<count { sum += samples[i] * samples[i] }
-            let rms = Double(sqrt(sum / Float(count)))
-            Task { @MainActor [weak self] in
-                guard let self, self.capture == id, self.recording else { return }
-                self.level = min(1, rms * 8)
-                if rms > 0.015 { self.silence.heardSpeech(at: ProcessInfo.processInfo.systemUptime) }
-            }
-        }
+        let input = engine.inputNode, format = engine.inputNode.outputFormat(forBus: 0)
+        guard (8000...96000).contains(format.sampleRate), (1...8).contains(format.channelCount),
+              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else { fail(id, RecognitionFailure.format.localizedDescription); return }
+        let pcm = CapturedPCM(rate: format.sampleRate); self.pcm = pcm
+        transcript = ""; began = ProcessInfo.processInfo.systemUptime
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in pcm.append(buffer) }
         tapInstalled = true
         do {
             engine.prepare(); try engine.start(); recording = true
             let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.tick(id) }
             }
-            self.timer = timer
-            RunLoop.main.add(timer, forMode: .common)
-        } catch { fail(id, "The microphone couldn't start. Try again after closing other recording apps.") }
+            self.timer = timer; RunLoop.main.add(timer, forMode: .common)
+        } catch { fail(id, "The microphone couldn't start. Click me to try again.") }
     }
-
-    private func startSegment(_ id: UUID) {
-        guard capture == id, let recognizer else { return }
-        let segmentID = UUID(); segment = segmentID
-        let next = SFSpeechAudioBufferRecognitionRequest()
-        next.requiresOnDeviceRecognition = true
-        next.shouldReportPartialResults = true
-        next.taskHint = .dictation
-        request = next; relay.replace(with: next)
-        task = recognizer.recognitionTask(with: next) { [weak self] result, error in
-            Task { @MainActor [weak self] in
-                guard let self, self.capture == id, self.segment == segmentID else { return }
-                if let result {
-                    let value = result.bestTranscription.formattedString
-                    if value != self.partial, !value.isEmpty, self.recording {
-                        self.silence.heardSpeech(at: ProcessInfo.processInfo.systemUptime)
-                    }
-                    self.partial = value
-                    self.transcript = [self.prefix, value].filter { !$0.isEmpty }.joined(separator: " ")
-                    if result.isFinal {
-                        if self.recording {
-                            // Some recognizers end segments early. Continue this same,
-                            // explicitly clicked capture until OUR silence window ends.
-                            self.prefix = self.transcript; self.partial = ""
-                            self.startSegment(id)
-                        } else { self.deliver(id) }
-                        return
-                    }
-                }
-                if error != nil {
-                    if !self.recording { self.deliver(id) }
-                    else { self.fail(id, "Local speech recognition stopped. Click me to try again.") }
-                }
+    private func tick(_ id: UUID) {
+        guard capture == id, recording, let pcm else { return }
+        let (rms, lastSpeech, overflow) = pcm.status(), now = ProcessInfo.processInfo.systemUptime
+        level = min(1, rms * 8)
+        if overflow { fail(id, "The recording reached its safe limit. Click me to start again.") }
+        else if let lastSpeech, now - lastSpeech >= 3 { finishCapture(id) }
+        else if now - began >= 60 { fail(id, "Listening ended after one minute. Click me when you're ready.") }
+    }
+    private func finishCapture(_ id: UUID) {
+        guard capture == id, let pcm, let modelURL else { return }
+        stopAudio(); let samples = pcm.take(); self.pcm = nil
+        let token = RecognitionCancellation(); cancellation = token; transcribing = true
+        inference = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
+                guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
+                self.transcript = text; self.cancel(); self.onFinal?(id, text)
+            } catch {
+                guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
+                self.fail(id, error.localizedDescription)
             }
         }
     }
-
-    private func tick(_ id: UUID) {
-        guard capture == id, recording else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        if silence.shouldFinish(at: now) {
-            finishCapture(id)
-        } else if now - began > 60 {
-            fail(id, "Listening ended after one minute. Click me when you're ready.")
-        }
-    }
-
-    private func finishCapture(_ id: UUID) {
-        stopAudio()
-        request?.endAudio()
-        // Keep recognition alive briefly for its final result, without recording.
-        finalWait = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled else { return }
-            self?.deliver(id)
-        }
-    }
-
-    private func deliver(_ id: UUID) {
-        guard capture == id else { return }
-        let text = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
-        cancel()
-        if text.isEmpty { onError?(id, "I didn't catch that. Click me and try again.") }
-        else { onFinal?(id, text) }
-    }
-    private func fail(_ id: UUID, _ message: String) {
-        guard capture == id else { return }
-        cancel(); onError?(id, message)
-    }
+    private func fail(_ id: UUID, _ message: String) { guard capture == id else { return }; cancel(); onError?(id, message) }
     private func stopAudio() {
-        timer?.invalidate(); timer = nil
-        recording = false
+        timer?.invalidate(); timer = nil; recording = false
         if engine.isRunning { engine.stop() }
         if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
-        relay.replace(with: nil); level = 0
+        level = 0
     }
     func cancel() {
-        capture = nil; segment = UUID()
-        finalWait?.cancel(); finalWait = nil
-        stopAudio(); request?.endAudio(); task?.cancel()
-        request = nil; task = nil; recognizer = nil
+        capture = nil; cancellation?.cancel(); cancellation = nil
+        inference?.cancel(); inference = nil; stopAudio(); pcm?.cancel(); pcm = nil; transcribing = false
     }
+    func shutdown() { cancel(); recognizer.shutdown() }
 }
 
 /// Explicit native offline fallback while the versioned Bionic/Kokoro bridge

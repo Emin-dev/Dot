@@ -1,3 +1,5 @@
+> Integration update: ScreenCaptureKit capture is now implemented for an explicit clicked voice turn after owned Splash readiness/vision validation. The screen-context preference persists between launches. The current patch still needs native compile, OS permission and image-inference checks; pure contract tests do not establish those outcomes.
+
 # Screen context: design and bounded contract (not enabled in the app yet)
 
 Use ScreenCaptureKit's single-frame SCScreenshotManager path on supported macOS. Obtain SCShareableContent after the user grants the operating-system Screen Recording prompt; filter out Dot's own windows. Do not call permission-request APIs at launch, grant permission automatically, add background recording, monitor keystrokes, or persist screenshots. The full product should ask at the first explicit screen-aware voice turn and show a visible screen-context indicator plus Pause control. Screenshot selection/capture errors are separate from model errors.

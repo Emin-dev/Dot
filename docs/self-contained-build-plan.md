@@ -1,3 +1,5 @@
+> Scope update: the owner now permits a small installer with an automatic, visible, resumable first-launch LLM download. Runtimes, English STT and Kokoro assets remain app-owned and bundled. Offline operation begins after setup. A portable app+models export remains a separate unfinished gate; copying the app alone does not copy Application Support assets. The source now implements this onboarding path, but the real voice dependency closure/import probe and complete installer are still unverified.
+
 # Self-contained Dot: acceptance contract and current blockers
 
 The requested product is one offline Mac application containing its own Splash inference runtime, Qwen3.8-27B Q4 target, matching DFlash2 draft, vision assets, English recognition and Bionic/Kokoro voice. It must not search existing installations, adopt an external server, execute an external Python environment or download models after installation. The currently delivered test DMG is **not this product**.

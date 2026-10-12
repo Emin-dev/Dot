@@ -27,6 +27,17 @@
         C10000000000000000000008 = {isa = PBXBuildFile; fileRef = C10000000000000000000009; };
         D10000000000000000000001 = {isa = PBXBuildFile; fileRef = D10000000000000000000002; };
         D10000000000000000000003 = {isa = PBXBuildFile; fileRef = D10000000000000000000002; };
+        E20000000000000000000001 = {isa = PBXBuildFile; fileRef = E10000000000000000000001; };
+        E20000000000000000000002 = {isa = PBXBuildFile; fileRef = E10000000000000000000002; };
+        E30000000000000000000002 = {isa = PBXBuildFile; fileRef = E10000000000000000000002; };
+        E20000000000000000000003 = {isa = PBXBuildFile; fileRef = E10000000000000000000003; };
+        E30000000000000000000003 = {isa = PBXBuildFile; fileRef = E10000000000000000000003; };
+        E20000000000000000000004 = {isa = PBXBuildFile; fileRef = E10000000000000000000004; };
+        E30000000000000000000004 = {isa = PBXBuildFile; fileRef = E10000000000000000000004; };
+        E20000000000000000000005 = {isa = PBXBuildFile; fileRef = E10000000000000000000005; };
+        E20000000000000000000010 = {isa = PBXBuildFile; fileRef = E10000000000000000000010; };
+        E20000000000000000000011 = {isa = PBXBuildFile; fileRef = E10000000000000000000011; };
+        E30000000000000000000012 = {isa = PBXBuildFile; fileRef = E10000000000000000000012; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -48,6 +59,14 @@
         C10000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePipeWriter.swift; sourceTree = "<group>"; };
         C10000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoicePipeWriterTests.swift; sourceTree = SOURCE_ROOT; };
         D10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoamingCore.swift; sourceTree = "<group>"; };
+        E10000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperRecognizer.swift; sourceTree = "<group>"; };
+        E10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflinePayload.swift; sourceTree = "<group>"; };
+        E10000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownload.swift; sourceTree = "<group>"; };
+        E10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledSplash.swift; sourceTree = "<group>"; };
+        E10000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenContext.swift; sourceTree = "<group>"; };
+        E10000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = folder; path = "Runtime"; sourceTree = "<group>"; };
+        E10000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = text.json; path = "model-downloads.json"; sourceTree = "<group>"; };
+        E10000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/OfflineIntegrationTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -68,6 +87,7 @@
 			children = (
 				A10000000000000000000004 /* Sources */,
                 B10000000000000000000003 /* InteractionCoreTests.swift */,
+                E10000000000000000000012,
 				A10000000000000000000005 /* Resources */,
 				A10000000000000000000003 /* Products */,
 			);
@@ -94,6 +114,11 @@
                 C10000000000000000000002,
                 C10000000000000000000006,
                 D10000000000000000000002,
+                E10000000000000000000005,
+                E10000000000000000000004,
+                E10000000000000000000003,
+                E10000000000000000000002,
+                E10000000000000000000001,
 			);
 			path = src;
 			sourceTree = "<group>";
@@ -103,7 +128,7 @@
 			children = (
 				A10000000000000000000047 /* Info.plist */,
 				A10000000000000000000048 /* Icon.icns */,
-                C10000000000000000000004,
+                C10000000000000000000004, E10000000000000000000011, E10000000000000000000010,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -174,7 +199,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000057 /* Icon.icns in Resources */,
-                C10000000000000000000003,
+                C10000000000000000000003, E20000000000000000000011, E20000000000000000000010,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -213,11 +238,16 @@
                 C10000000000000000000001,
                 C10000000000000000000005,
                 D10000000000000000000001,
+                E20000000000000000000005,
+                E20000000000000000000004,
+                E20000000000000000000003,
+                E20000000000000000000002,
+                E20000000000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 
-        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008, D10000000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
+        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008, D10000000000000000000003, E30000000000000000000002,E30000000000000000000003, E30000000000000000000004, E30000000000000000000012, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */

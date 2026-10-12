@@ -6,11 +6,11 @@ root = Path(__file__).resolve().parents[1]
 read = lambda p: (root / p).read_text()
 engine, speech, chat = map(read, ['src/Engine.swift', 'src/Speech.swift', 'src/ChatView.swift'])
 checks = {
-    'no inference process startup or pkill': not re.search(r'Process\(|pkill|llama-server|\.run\(', engine),
-    'local recognizer required': 'speech.supportsOnDeviceRecognition' in speech and 'next.requiresOnDeviceRecognition = true' in speech,
+    'no borrowed runtime or broad process kills': not re.search(r'pkill|llama-server|DOT_SPLASH_URL|splashURL', engine),
+    'bundled native recognizer required': 'WhisperRecognizer.available' in speech and 'SFSpeechRecognizer' not in speech,
     'capture task rejects stale generation': 'guard let self, !Task.isCancelled, self.gate.accepts(id)' in chat,
     'capture checks cancellation before permissions': re.search(r'func start\(id: UUID\) async \{\s*guard !Task.isCancelled', speech) is not None,
-    'capture checks cancellation after both permission awaits': speech.count('guard !Task.isCancelled, capture == id') == 2,
+    'capture checks cancellation after setup and microphone await': speech.count('guard !Task.isCancelled, capture == id') >= 3,
     'silence timer runs during menu tracking': 'RunLoop.main.add(timer, forMode: .common)' in speech,
     'redirects denied': 'completionHandler(nil)' in engine,
     'truncated SSE rejected': 'guard sawDone else { throw EngineError.response }' in engine,

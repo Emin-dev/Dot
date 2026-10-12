@@ -25,9 +25,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Click Dot to speak. Dot records only during that capture and requires on-device English transcription.</string>
-	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Dot requires on-device English recognition. If it is unavailable, voice capture is disabled.</string>
+	<string>Click Dot to speak. Dot records only during that capture and uses its bundled offline English recognizer.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

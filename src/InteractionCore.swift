@@ -41,6 +41,8 @@ struct SplashIdentity: Decodable {
     let schema_version: Int
     let ready: Bool
     let instance: Instance?
+    let vision: Bool?
+    let input_modalities: [String]?
     func matches(model: String, port: Int, server: String?) -> Bool {
         guard server == "Splash", schema_version == 6, ready, let instance,
               instance.pid > 0, instance.id.range(of: "^[0-9a-f]{24}$", options: .regularExpression) != nil,
@@ -170,4 +172,16 @@ struct StreamUpdateBuffer {
         guard !pending.isEmpty else { return nil }
         let value = pending; pending = ""; return value
     }
+}
+
+struct DownloadBudget {
+    static func requiredFree(total: Int64, reusableBytes: Int64) -> Int64 {
+        max(0, total - min(total, max(0, reusableBytes))) + 5_000_000_000
+    }
+}
+enum ScreenPrivacyPreference {
+    static func enabled(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: "screenContextEnabled") as? Bool ?? true
+    }
+    static func setEnabled(_ value: Bool, in defaults: UserDefaults = .standard) { defaults.set(value, forKey: "screenContextEnabled") }
 }

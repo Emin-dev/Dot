@@ -16,14 +16,8 @@ final class TTSManager {
     private let native = NativeTTSManager()
     private let bionic = BionicVoice()
     private var activeMode: VoiceMode = .bionic
-    var mode: VoiceMode {
-        get { VoiceMode(rawValue: UserDefaults.standard.string(forKey: "voiceMode") ?? "") ?? .bionic }
-        set { stop(); UserDefaults.standard.set(newValue.rawValue, forKey: "voiceMode") }
-    }
-    var root: String {
-        get { UserDefaults.standard.string(forKey: "bionicRoot") ?? "" }
-        set { shutdown(); UserDefaults.standard.set(newValue, forKey: "bionicRoot") }
-    }
+    let mode: VoiceMode = .bionic
+    private var root: String { Bundle.main.resourceURL?.appendingPathComponent("Offline/Voice").path ?? "" }
     var speaking: Bool { activeMode == .bionic ? bionic.speaking : native.speaking }
     init() {
         native.onStarted = { [weak self] in self?.onStarted?($0) }
@@ -45,7 +39,7 @@ final class TTSManager {
     func shutdown() { native.stop(); bionic.shutdown() }
 }
 
-/// Only launches the bundled helper using an explicitly chosen existing environment.
+/// Only launches the bundled helper using only its app-bundled runtime.
 /// No socket adoption, shell interpolation, model download or external-service fallback.
 @MainActor
 final class BionicVoice {
@@ -77,7 +71,7 @@ final class BionicVoice {
             throw VoiceFailure.setup
         }
         let base = URL(fileURLWithPath: root, isDirectory: true)
-        let python = base.appendingPathComponent("env/bin/python")
+        let python = base.appendingPathComponent("python/bin/python3")
         guard FileManager.default.isExecutableFile(atPath: python.path),
               FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec"),
               ["model/config.json", "model/kokoro-v1_0.pth", "model/voices/bf_isabella.pt"].allSatisfy({
@@ -88,8 +82,8 @@ final class BionicVoice {
         let child = Process(), stdin = Pipe(), stdout = Pipe()
         child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
         child.arguments = ["-p", "(version 1)(allow default)(deny network*)", python.path, "-I", "-u", helper.path, "--root", base.path, "--output", dir.path]
-        child.environment = ["PATH": "/usr/bin:/bin", "HOME": NSHomeDirectory(), "TMPDIR": dir.path,
-                             "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1"]
+        child.environment = ["PATH": "/usr/bin:/bin", "HOME": dir.path, "TMPDIR": dir.path,
+                             "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1", "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"]
         child.standardInput = stdin; child.standardOutput = stdout
         // Library diagnostics may contain paths. They never go into application logs.
         child.standardError = FileHandle.nullDevice
@@ -98,7 +92,7 @@ final class BionicVoice {
             Task { @MainActor in
                 try? FileManager.default.removeItem(at: dir)
                 guard let self, self.session == token else { return }
-                self.fail("Bionic voice stopped. Check the selected local environment.")
+                self.fail("My bundled voice stopped. Click me to try again.")
             }
         }
         let writer: VoicePipeWriter
@@ -230,7 +224,7 @@ private enum VoiceFailure: LocalizedError {
     case setup, audio
     var errorDescription: String? {
         switch self {
-        case .setup: return "Choose an existing Bionic voice-engine folder in Connection. Its Python environment and Kokoro assets must already be installed."
+        case .setup: return "My bundled voice files are missing. Please install the complete Dot installer."
         case .audio: return "Bionic returned invalid audio."
         }
     }

@@ -308,3 +308,26 @@ final class StreamUpdateTests: XCTestCase {
         XCTAssertEqual(buffer.feed(String(repeating: "x", count: 1024), now: 0.001)?.count, 1024)
     }
 }
+
+final class ProvisioningContractTests: XCTestCase {
+    func testPartialDownloadCreditsExistingBytes() {
+        XCTAssertEqual(DownloadBudget.requiredFree(total: 19_930_313_310, reusableBytes: 4_000_000_000), 20_930_313_310)
+    }
+    func testSpaceBudgetNeverCreditsMoreThanPayload() {
+        XCTAssertEqual(DownloadBudget.requiredFree(total: 20, reusableBytes: 100), 5_000_000_000)
+        XCTAssertEqual(DownloadBudget.requiredFree(total: 20, reusableBytes: -1), 5_000_000_020)
+    }
+    func testScreenPrivacyChoiceSurvivesNewReader() {
+        let name = "DotPrivacyTest." + UUID().uuidString
+        let first = UserDefaults(suiteName: name)!
+        defer { first.removePersistentDomain(forName: name) }
+        ScreenPrivacyPreference.setEnabled(false, in: first)
+        XCTAssertFalse(ScreenPrivacyPreference.enabled(in: UserDefaults(suiteName: name)!))
+    }
+    func testFirstLaunchScreenPolicyIsExplicit() {
+        let name = "DotPrivacyTest." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        XCTAssertTrue(ScreenPrivacyPreference.enabled(in: defaults))
+    }
+}

@@ -14,6 +14,9 @@ final class ChatModel: ObservableObject {
     let stt = STTManager()
     let tts = TTSManager()
     let engine = EngineManager()
+    let screen = ScreenContext()
+    @Published var screenEnabled = ScreenPrivacyPreference.enabled() { didSet { ScreenPrivacyPreference.setEnabled(screenEnabled); screen.enabled = screenEnabled; cancelTurn() } }
+    @Published private(set) var screenContextUsed = false
     private var gate = TurnGate()
     private var work: Task<Void, Never>?
     private var generating = false
@@ -30,6 +33,8 @@ final class ChatModel: ObservableObject {
     }
 
     init() {
+        screen.enabled = screenEnabled
+        ModelDownload.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available)
         stt.onFinal = { [weak self] id, text in
             guard let self, self.gate.accepts(id) else { return }
             self.submit(text, id: id)
@@ -54,6 +59,7 @@ final class ChatModel: ObservableObject {
 
     /// The only route into microphone capture is an explicit pet click.
     func clicked() {
+        guard ModelDownload.shared.ready else { return }
         let id = cancelTurn()
         clickedAt = ProcessInfo.processInfo.systemUptime
         firstReasoning = false; firstAnswer = false; firstAudio = false
@@ -87,6 +93,11 @@ final class ChatModel: ObservableObject {
                 }, onReasoning: { [weak self] in
                     guard let self, self.gate.accepts(id), !self.firstReasoning else { return }
                     self.firstReasoning = true; self.timing("first_reasoning")
+                }, screenImage: { [weak self] hasVision in
+                    guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    let image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
+                    guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    self.screenContextUsed = image != nil; return image
                 })
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 if let tail = self.chunker.flush() { self.tts.enqueue(tail, id: id) }
@@ -109,17 +120,12 @@ final class ChatModel: ObservableObject {
     func cancelTurn() -> UUID {
         let id = gate.advance()
         work?.cancel(); work = nil
-        stt.cancel(); tts.stop(); generating = false
+        stt.cancel(); tts.stop(); screen.cancel(); screenContextUsed = false; generating = false
         chunker = SentenceBuffer(); phase = .idle
         return id
     }
     func reset() { cancelTurn(); history = []; answer = "" }
-    func configure(url: String, model: String, voice: VoiceMode, root: String) {
-        cancelTurn(); engine.endpoint = url; engine.expectedModel = model
-        tts.mode = voice; tts.root = root
-        phase = .idle
-    }
-    func shutdown() { cancelTurn(); tts.shutdown(); engine.shutdown() }
+    func shutdown() { cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); ModelDownload.shared.shutdown() }
 }
 
 struct PetView: View {
@@ -127,12 +133,12 @@ struct PetView: View {
     @ObservedObject var stt: STTManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @State private var connectionShown = false
+    @ObservedObject private var downloads = ModelDownload.shared
 
     var body: some View {
         VStack(spacing: PetLayout.stackSpacing) {
             Spacer(minLength: 0)
-            if model.phase.isActive || !model.answer.isEmpty || isBlocked || model.hovered {
+            if model.phase.isActive || !model.answer.isEmpty || isBlocked || model.hovered || !downloads.ready {
                 VStack(alignment: .leading, spacing: 7) {
                     HStack(spacing: 6) {
                         Circle().fill(isBlocked ? Color.orange : Color.green).frame(width: 5, height: 5)
@@ -140,6 +146,19 @@ struct PetView: View {
                         Spacer()
                         if model.pinned { Image(systemName: "pin.fill").font(.system(size: 10)) }
                     }
+                    if !downloads.ready {
+                        Text(downloads.message).font(.system(size: 11))
+                        ProgressView(value: downloads.progress)
+                        HStack {
+                            Text("\(Int(downloads.progress * 100))%").font(.caption2)
+                            Spacer()
+                            Button(downloads.paused ? "Resume" : "Pause") {
+                                if downloads.paused { downloads.resume() } else { downloads.pause() }
+                            }
+                        }
+                        Text("Once setup finishes, conversation works offline.").font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if model.screenContextUsed { Label("Screen used locally for this reply", systemImage: "eye").font(.caption2) }
                     if !stt.transcript.isEmpty && model.phase == .listening {
                         Text(stt.transcript).lineLimit(5)
                     } else if !model.answer.isEmpty {
@@ -173,21 +192,19 @@ struct PetView: View {
             .buttonStyle(.plain)
             .contentShape(Ellipse())
             .onHover { model.hovered = $0 }
-            .help("Click to talk or interrupt. Right-click for Pin and Connection.")
+            .help("Click to talk or interrupt. Right-click for Pin and screen privacy.")
             .accessibilityLabel("Dot companion")
             .accessibilityValue(status)
             .accessibilityHint("Click to start a new voice capture. Interrupts any current answer.")
             .contextMenu {
                 Button(model.pinned ? "Unpin" : "Pin in place") { model.pinned.toggle() }
-                Button("Connection…") { connectionShown = true }
+                Toggle("Screen context", isOn: $model.screenEnabled)
                 Button("Clear conversation") { model.reset() }
                 if model.phase.isActive { Button("Stop") { model.cancelTurn() } }
                 Divider()
                 Text(model.tts.mode.label)
                 Button("Quit Dot") { NSApp.terminate(nil) }
             }
-            .popover(isPresented: $connectionShown, arrowEdge: .top) { ConnectionView(model: model) }
-            .onChange(of: connectionShown) { _, shown in model.interactionPaused = shown }
             Text(model.hovered ? model.tts.mode.label : "dot")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
@@ -199,6 +216,8 @@ struct PetView: View {
 
     private var isBlocked: Bool { if case .blocked = model.phase { return true }; return false }
     private var status: String {
+        if !downloads.ready { return "Getting ready" }
+        if stt.transcribing { return "Transcribing locally…" }
         if model.phase == .listening && !stt.recording { return "Preparing your microphone…" }
         return model.phase.caption
     }
@@ -260,51 +279,5 @@ private struct Smile: Shape {
         var path = Path(); path.move(to: CGPoint(x: 0, y: 0))
         path.addQuadCurve(to: CGPoint(x: rect.maxX, y: 0), control: CGPoint(x: rect.midX, y: rect.maxY))
         return path
-    }
-}
-
-private struct ConnectionView: View {
-    @ObservedObject var model: ChatModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var url = ""
-    @State private var loadedModel = ""
-    @State private var voice: VoiceMode = .bionic
-    @State private var voiceRoot = ""
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("A little local connection").font(.headline)
-            Text("Dot connects directly to an already-running Splash server. Nothing is downloaded or started here.")
-                .font(.caption).foregroundStyle(.secondary)
-            TextField("http://127.0.0.1:8000", text: $url)
-            TextField("Exact loaded upstream model ID", text: $loadedModel)
-            Text("The model must exactly match Splash /status → instance.model. A generic Bionic/LM Studio proxy isn't verified as Splash.")
-                .font(.caption2).foregroundStyle(.secondary)
-            Divider()
-            Picker("English voice", selection: $voice) {
-                ForEach(VoiceMode.allCases) { Text($0.label).tag($0) }
-            }
-            if voice == .bionic {
-                TextField("Existing Bionic voice-engine folder", text: $voiceRoot)
-                Button("Choose voice folder…") {
-                    let panel = NSOpenPanel(); panel.canChooseDirectories = true
-                    panel.canChooseFiles = false; panel.allowsMultipleSelection = false
-                    if panel.runModal() == .OK, let folder = panel.url { voiceRoot = folder.path }
-                }
-                Text("Runs this folder’s Python with the bundled warm CPU helper and your existing Kokoro files. No installs or downloads. The helper cannot access the network.")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            HStack {
-                Button("Cancel") { dismiss() }
-                Spacer()
-                Button("Save") { model.configure(url: url, model: loadedModel, voice: voice, root: voiceRoot); dismiss() }
-                    .disabled(LocalEndpoint.validate(url) == nil || loadedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-        }
-        .textFieldStyle(.roundedBorder)
-        .padding(20).frame(width: 340)
-        .onAppear {
-            url = model.engine.endpoint; loadedModel = model.engine.expectedModel
-            voice = model.tts.mode; voiceRoot = model.tts.root
-        }
     }
 }

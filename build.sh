@@ -5,8 +5,10 @@ cd "$(dirname "$0")"
 APP=build/Dot.app
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -warnings-as-errors -target "$(uname -m)-apple-macosx15.0" -o "$APP/Contents/MacOS/Dot" src/*.swift \
-  -framework SwiftUI -framework AppKit -framework AVFoundation -framework Speech
-mkdir -p "$APP/Contents/Resources/Voice"
+  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework CryptoKit
+mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"
+cp Resources/Runtime/dot_runtime.py "$APP/Contents/Resources/Runtime/"
+cp Resources/model-downloads.json "$APP/Contents/Resources/"
 cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 printf '{"commit":"%s","signing":"ad-hoc","notarized":false,"voice_protocol":1}\n' "$(git rev-parse HEAD)" > "$APP/Contents/Resources/build-provenance.json"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
