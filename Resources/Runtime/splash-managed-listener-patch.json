@@ -12,7 +12,7 @@
     {
       "path": "Splash/server/serve_options.py",
       "upstream_sha256": "4777020405c895f0c17d8d27864ecc6d5124853214fa99ed7241d636b1c7bf15",
-      "sha256": "5a6e5fda05bf9f3eceb2f1cb280c301af70cad9c19c469c89137dbd550769df6"
+      "sha256": "5cef666a4d459dd56a7fb661cb1c6431f919814587d1c39803133d9347a9a454"
     },
     {
       "path": "Splash/server/server.py",

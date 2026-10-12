@@ -19,11 +19,14 @@ def dot_owned_listener(fd, host, port):
         raise ValueError("invalid managed listener")
     listener = socket.socket(fileno=fd)
     try:
+        # Darwin does not implement SO_ACCEPTCONN; tcpi_state is its read-only listener state.
+        listening = (listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\\x01"
+                     if sys.platform == "darwin" else listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1)
         if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
             or listener.getsockname() != (host, port)
             or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) != 0
             or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) != 0
-            or listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1):
+            or not listening):
             raise ValueError("unowned managed listener")
         return listener
     except BaseException:
@@ -47,7 +50,7 @@ def overlay(root):
         if hashlib.sha256(data).hexdigest() != expected: raise ValueError('unsupported upstream revision: ' + name)
         values[name] = data.decode()
     name = 'server/serve_options.py'
-    values[name] = once(values[name], 'import re\n', 'import re\nimport socket\n')
+    values[name] = once(values[name], 'import re\n', 'import re\nimport socket\nimport sys\n')
     values[name] = once(values[name], 'SERVE_OPTIONS = (\n', HELPER + '''SERVE_OPTIONS = (
     ServeOption("--listen-fd", "network", dict(type=int, default=None,
                 help="Dot managed inherited listener; no bind fallback")),

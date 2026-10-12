@@ -1,4 +1,5 @@
 import importlib.util
+import errno
 import json
 from pathlib import Path
 import sys
@@ -89,3 +90,77 @@ class RuntimeOwnershipTests(unittest.TestCase):
         marker = self.state / 'preserve'; marker.write_text('private existing data')
         process = self.launch(); process.communicate(timeout=8)
         self.assertEqual(process.returncode, 2); self.assertEqual(marker.read_text(), 'private existing data')
+
+class RuntimeSignalTests(unittest.TestCase):
+    def test_term_resistant_descendant_is_killed_before_leader_reaped(self):
+        import os, select, signal, subprocess
+        reader, writer = os.pipe()
+        grandchild = "import os,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); os.write(int(sys.argv[1]),b'ready'); time.sleep(5)"
+        leader = "import subprocess,sys,time; subprocess.Popen([sys.executable,'-c',sys.argv[2],sys.argv[1]],pass_fds=(int(sys.argv[1]),),stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); time.sleep(10)"
+        child = subprocess.Popen([sys.executable, '-c', leader, str(writer), grandchild], pass_fds=(writer,), start_new_session=True)
+        os.close(writer)
+        try:
+            self.assertTrue(select.select([reader], [], [], 3)[0], 'descendant did not start')
+            self.assertEqual(os.read(reader, 5), b'ready')
+            runtime.stop_group(child)
+            self.assertIsNotNone(child.returncode)
+            self.assertTrue(select.select([reader], [], [], 2)[0], 'descendant survived group shutdown')
+            self.assertEqual(os.read(reader, 1), b'', 'descendant still owns inherited pipe')
+        finally:
+            os.close(reader)
+            if child.returncode is None:
+                try: os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError: pass
+                child.wait(timeout=3)
+    def child(self):
+        class Child:
+            pid = 12345
+            returncode = None
+            waited = False
+            def wait(self): self.waited = True; self.returncode = 0
+        return Child()
+    def test_live_leader_permission_failure_is_not_hidden(self):
+        child = self.child()
+        with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=False), patch.object(runtime.os, 'killpg', side_effect=PermissionError(errno.EPERM, 'fixture')):
+            with self.assertRaises(PermissionError): runtime.stop_group(child)
+        self.assertFalse(child.waited)
+    def test_zombie_only_darwin_group_requires_post_reap_absence(self):
+        import signal
+        child = self.child()
+        def deliver(pid, number):
+            self.assertEqual(pid, child.pid)
+            self.assertEqual(child.waited, number == 0, 'no nonzero signal may follow reap')
+            if number == signal.SIGKILL: raise PermissionError(errno.EPERM, 'fixture')
+            if number == 0: raise ProcessLookupError()
+        with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=deliver) as kill:
+            runtime.stop_group(child)
+        self.assertTrue(child.waited)
+        self.assertEqual([call.args[1] for call in kill.call_args_list], [signal.SIGTERM, signal.SIGKILL, 0])
+    def test_remaining_group_after_reap_is_not_reported_clean(self):
+        child = self.child()
+        with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=[None, PermissionError(errno.EPERM, 'fixture'), None]):
+            with self.assertRaises(PermissionError): runtime.stop_group(child)
+        self.assertTrue(child.waited)
+
+    def test_post_reap_permission_failure_is_not_hidden(self):
+        child = self.child()
+        with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=[None, PermissionError(errno.EPERM, 'fixture'), PermissionError(errno.EPERM, 'fixture')]):
+            with self.assertRaises(PermissionError): runtime.stop_group(child)
+        self.assertTrue(child.waited)
+    def test_darwin_already_exited_group_still_attempts_final_kill(self):
+        import signal
+        child = self.child()
+        with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=[PermissionError(errno.EPERM, 'fixture'), PermissionError(errno.EPERM, 'fixture'), ProcessLookupError()]) as kill:
+            runtime.stop_group(child)
+        self.assertEqual([call.args[1] for call in kill.call_args_list], [signal.SIGTERM, signal.SIGKILL, 0])
+    def test_non_darwin_permission_failure_is_not_hidden(self):
+        child = self.child()
+        with patch.object(runtime.sys, 'platform', 'linux'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=[None, PermissionError(errno.EPERM, 'fixture')]):
+            with self.assertRaises(PermissionError): runtime.stop_group(child)
+        self.assertFalse(child.waited)
+
+    def test_other_permission_errno_does_not_use_darwin_exception(self):
+        child = self.child()
+        with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=PermissionError(errno.EACCES, 'fixture')):
+            with self.assertRaises(PermissionError): runtime.stop_group(child)
+        self.assertFalse(child.waited)

@@ -20,7 +20,7 @@ tls = importlib.util.module_from_spec(spec); spec.loader.exec_module(tls)
 
 class ListenerPatchTests(unittest.TestCase):
     def helper(self):
-        namespace = {'socket': socket}; exec(patcher.HELPER, namespace)
+        namespace = {'socket': socket, 'sys': sys}; exec(patcher.HELPER, namespace)
         return namespace['dot_owned_listener']
     def test_platform_socket_state_query_distinguishes_listener_without_mutation(self):
         def check(value, state, label):

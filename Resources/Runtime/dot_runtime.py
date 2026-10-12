@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Own one pinned offline Splash process tree. No discovery or user-cache access."""
 import argparse
+import errno
 import importlib.util
 import json
 import os
@@ -56,6 +57,10 @@ def stop_group(child):
     try: os.killpg(child.pid, signal.SIGTERM)
     except ProcessLookupError:
         child.wait(); return
+    except PermissionError as error:
+        # Darwin reports EPERM for a group whose only member is an unreaped zombie.
+        # Continue to the final group signal only with the owned leader confirmed dead.
+        if sys.platform != 'darwin' or error.errno != errno.EPERM or not child_exited(child): raise
     # Keep the child unreaped until after group cleanup, preventing PID reuse.
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -65,6 +70,14 @@ def stop_group(child):
         time.sleep(0.05)
     try: os.killpg(child.pid, signal.SIGKILL)
     except ProcessLookupError: pass
+    except PermissionError as error:
+        if sys.platform != 'darwin' or error.errno != errno.EPERM or not child_exited(child): raise
+        child.wait()
+        # After releasing the PID anchor, never send another nonzero signal.
+        # A reused or surviving group produces a conservative failure, not a kill.
+        try: os.killpg(child.pid, 0)
+        except ProcessLookupError: return
+        raise
     child.wait()
 
 

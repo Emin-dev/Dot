@@ -26,12 +26,15 @@ Pinned upstream: Splash 1.3.1, commit `f91c91e21dda483f8c59a248a444d0989a560d31`
 
 The plaintext Splash admission/MSG_PEEK/disconnect code remains unchanged behind the relay. Wrapping its listening socket directly in TLS would not be compatible with those paths.
 
+Darwin uses its read-only `TCP_CONNECTION_INFO` state byte for listener validation because `SO_ACCEPTCONN` returns ENOPROTOOPT there. The native diagnostic verified unbound/bound-only/listening/connected states as 0/0/1/4. Linux retains its SO_ACCEPTCONN check. Query errors fail closed. Native competition tests also verified that wildcard/dual-stack/mapped-address binds cannot divert literal loopback traffic even when the OS permits coexistence; the original parent's descriptor remains owned after a duplicate child descriptor closes.
+
 The original and resulting hashes are in `Resources/Runtime/splash-managed-listener-patch.json`. Apply the overlay during assembly before generating the runtime file manifest and signing. Preserve upstream Apache-2.0 LICENSE, THIRD_PARTY_NOTICES and the inserted modification notices. Both Swift and Python runtime audits require the exact patched hashes and `transport_patch: dot-splash-owned-listener-v1`.
 
 ## Bounds and shutdown
 
 - Four forwarding workers; 32 KiB copy buffers; two-second socket/handshake timeouts; 180-second connection lifetime.
 - TLS listener stops and all forwarding connections/workers are closed/joined before the retained backend descriptor may close. Never call `shutdown()` on the inherited backend listener, which would affect the child descriptor too.
+- Darwin may return EPERM when a process group contains only the intentionally unreaped zombie leader. The cleanup still attempts its final group SIGKILL before reaping. Only for a confirmed-dead leader may it then reap and perform a signal-zero existence check, accepting cleanup only on ESRCH. No nonzero signal follows reaping; a remaining/reused group or real permission failure stays an error. A TERM-resistant descendant regression protects the final KILL requirement.
 - Child exit stops the TLS front end. Host EOF/quit tears down only its owned session/process group. The supervisor removes only the fresh private directory it adopted, after process teardown; directory replacement is rejected by device/inode checks.
 - Status responses: one million bytes. SSE: 256 KiB line, four million total bytes, 64 KiB combined content/reasoning. Budgets are enforced incrementally before accumulation.
 - Every exception path explicitly cancels URLSession streams. Final SSE `[DONE]` remains required.

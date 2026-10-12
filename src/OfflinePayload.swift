@@ -110,7 +110,7 @@ actor OfflinePayload {
         guard manifest.transport_patch == "dot-splash-owned-listener-v1" else { throw OfflineFailure.incomplete }
         let managedSources = [
             "Splash/install/launcher.py": "abd30361a17ef5811b509564fec123c83856f0d202b169a3678345aa064d63cd",
-            "Splash/server/serve_options.py": "5a6e5fda05bf9f3eceb2f1cb280c301af70cad9c19c469c89137dbd550769df6",
+            "Splash/server/serve_options.py": "5cef666a4d459dd56a7fb661cb1c6431f919814587d1c39803133d9347a9a454",
             "Splash/server/server.py": "34f94116f2d1efeabd3b91fb496f3521613fb1392863cf49c414fe52647e53b2"
         ]
         guard managedSources.allSatisfy({ name, expected in manifest.files.contains { $0.path == name && $0.kind == "file" && $0.sha256 == expected } }) else { throw OfflineFailure.incomplete }
