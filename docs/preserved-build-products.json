@@ -1,0 +1,84 @@
+{
+  "base_commit": "56041cf00d1d6b7c2f87590fdd1fbbbbb216e996",
+  "note": "Removed build products remain recoverable from original history. No history was rewritten. These are not outputs of the rebuild.",
+  "entries": [
+    {
+      "path": "Dot.dmg",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "744bd6b145896c3d844d0bcaae759bad812cbd1a"
+    },
+    {
+      "path": "build/Dot.app/Contents/Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "a62795735c8cdb811a6cd3be1e797035ba470537"
+    },
+    {
+      "path": "build/Dot.app/Contents/MacOS/Dot",
+      "mode": "100755",
+      "type": "blob",
+      "blob_sha": "063b62a64700422b8f0533b08162356f2c5990f5"
+    },
+    {
+      "path": "build/Dot.app/Contents/Resources/Icon.icns",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "2c0cc48dc789816df3f3cbd4659d1581e76c2c52"
+    },
+    {
+      "path": "build/Dot.app/Contents/Resources/Icon.png",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "80904226d04b900e351a51f4f97b9a1b4d10d7ac"
+    },
+    {
+      "path": "build/Dot.app/Contents/_CodeSignature/CodeResources",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "c19b164e9ac5818d1a0d31b42774cfca491a1710"
+    },
+    {
+      "path": "build/stage/Applications",
+      "mode": "120000",
+      "type": "blob",
+      "blob_sha": "bd2d47faacce9e1f31c0b1491e5dba07db4cedcd"
+    },
+    {
+      "path": "build/stage/Dot.app/Contents/Info.plist",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "a62795735c8cdb811a6cd3be1e797035ba470537"
+    },
+    {
+      "path": "build/stage/Dot.app/Contents/MacOS/Dot",
+      "mode": "100755",
+      "type": "blob",
+      "blob_sha": "063b62a64700422b8f0533b08162356f2c5990f5"
+    },
+    {
+      "path": "build/stage/Dot.app/Contents/Resources/Icon.icns",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "2c0cc48dc789816df3f3cbd4659d1581e76c2c52"
+    },
+    {
+      "path": "build/stage/Dot.app/Contents/Resources/Icon.png",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "80904226d04b900e351a51f4f97b9a1b4d10d7ac"
+    },
+    {
+      "path": "build/stage/Dot.app/Contents/_CodeSignature/CodeResources",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "c19b164e9ac5818d1a0d31b42774cfca491a1710"
+    },
+    {
+      "path": "dist/Dot-1.0.0.dmg",
+      "mode": "100644",
+      "type": "blob",
+      "blob_sha": "744bd6b145896c3d844d0bcaae759bad812cbd1a"
+    }
+  ]
+}

@@ -1,33 +1,23 @@
-// Headless TTS verification: speaks two sentences, waits for completion.
+// Manual audio-device smoke test. Not CI and not proof of heard audio.
 import AppKit
 import Speech
 
-let tts = TTSManager.shared
-tts.speakSegment("Hello! This is a test of the voice.")
-tts.speakSegment("If you hear this, text to speech is working.")
-
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-let ciMode = ProcessInfo.processInfo.environment["DOT_TTS_CI"] == "1"
-
-let start = Date()
-let timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { t in
-    if !tts.speaking {
-        t.invalidate()
-        let secs = Date().timeIntervalSince(start)
-        // A 2-sentence utterance taking <1s means it silently failed —
-        // EXCEPT in headless CI (no audio device: completion is instant by design).
-        if secs < 1.0 && !ciMode {
-            print("TTS_SUSPECT finished suspiciously fast (\(String(format: "%.1f", secs))s) — voice may be missing")
-            exit(2)
+@main
+struct TTSSmoke {
+    @MainActor static func main() async {
+        guard ProcessInfo.processInfo.environment["DOT_ALLOW_AUDIO_TEST"] == "1" else {
+            print("SKIP: explicit DOT_ALLOW_AUDIO_TEST=1 required for audio playback"); exit(77)
         }
-        print(ciMode ? "TTS_OK headless" : "TTS_OK finished=\(String(format: "%.1f", secs))s")
-        exit(0)
-    }
-    if Date().timeIntervalSince(start) > 90 {
-        t.invalidate()
-        print("TTS_TIMEOUT after 90s")
-        exit(1)
+        let tts = TTSManager(); let id = UUID(); let start = Date()
+        tts.start(id: id)
+        tts.enqueue("Hello. This is Dot's built-in English voice test.", id: id)
+        tts.enqueue("Please confirm that both sentences are audible.", id: id)
+        while tts.speaking && Date().timeIntervalSince(start) < 30 {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        guard !tts.speaking, Date().timeIntervalSince(start) > 1 else {
+            tts.stop(); print("FAIL: playback timed out or ended suspiciously early"); exit(1)
+        }
+        print("TTS callback smoke passed; human audibility confirmation still required")
     }
 }
-app.run()

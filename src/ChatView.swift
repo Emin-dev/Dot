@@ -1,470 +1,283 @@
 import SwiftUI
 import AppKit
-import Combine
 
-enum VoiceState { case idle, listening, thinking, speaking }
-
+@MainActor
 final class ChatModel: ObservableObject {
-    @Published var messages: [ChatMessage] = []
-    @Published var input: String = ""
-    @Published var showText: Bool = false
-    @Published var isGenerating = false
-    @Published var autoSpeak: Bool = true        // voice-first: replies are spoken
-    @Published var voiceState: VoiceState = .idle
-
-    let engine = EngineManager.shared
-    let tts = TTSManager.shared
-    let stt = STTManager.shared
-    private var chunker = SentenceChunker()
-    private var cancellables = Set<AnyCancellable>()
+    @Published private(set) var phase: PetPhase = .idle
+    @Published private(set) var answer = ""
+    @Published var pinned = UserDefaults.standard.bool(forKey: "petPinned") {
+        didSet { UserDefaults.standard.set(pinned, forKey: "petPinned") }
+    }
+    @Published var hovered = false
+    @Published var bubbleHovered = false
+    @Published var interactionPaused = false
+    let stt = STTManager()
+    let tts = TTSManager()
+    let engine = EngineManager()
+    private var gate = TurnGate()
+    private var work: Task<Void, Never>?
+    private var generating = false
+    private var history: [ChatMessage] = []
+    private var chunker = SentenceBuffer()
+    private var clickedAt = 0.0
+    private var firstReasoning = false
+    private var firstAnswer = false
+    private var firstAudio = false
+    private func timing(_ stage: String) {
+        // Durations only. Never log speech, prompts, replies or model paths.
+        let milliseconds = Int((ProcessInfo.processInfo.systemUptime - clickedAt) * 1000)
+        print("DOT_TIMING \(stage)=\(milliseconds)ms")
+    }
 
     init() {
-        tts.onFinished = { [weak self] in
-            guard let self, self.voiceState == .speaking else { return }
-            self.voiceState = .idle
+        stt.onFinal = { [weak self] id, text in
+            guard let self, self.gate.accepts(id) else { return }
+            self.submit(text, id: id)
         }
-        stt.$recording
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] rec in
-                guard let self else { return }
-                if rec {
-                    self.voiceState = .listening
-                } else if self.voiceState == .listening {
-                    self.voiceState = self.isGenerating ? .thinking : .idle
-                }
-            }
-            .store(in: &cancellables)
-        // Voice capture ends → the final transcript arrives here (never lost:
-        // STTManager delivers it after endAudio, with a fallback if recognition
-        // is slow or final-less).
-        stt.onFinal = { [weak self] text in
-            DispatchQueue.main.async {
-                guard let self, !text.isEmpty else { return }
-                if self.isGenerating {
-                    self.input = text
-                    self.showText = true
-                    self.stt.errorText = "Engine is busy — your words are in the text box."
-                    return
-                }
-                guard case .ready = self.engine.phase else {
-                    self.input = text
-                    self.showText = true
-                    self.stt.errorText = "Engine still loading — your words are in the text box."
-                    return
-                }
-                self.send(text)
-            }
+        stt.onError = { [weak self] id, message in
+            guard let self, self.gate.accepts(id) else { return }
+            self.phase = .blocked(message)
         }
-        Autotest.shared.attach(self)
+        tts.onStarted = { [weak self] id in
+            guard let self, self.gate.accepts(id), !self.firstAudio else { return }
+            self.firstAudio = true; self.timing("first_audio")
+        }
+        tts.onDrained = { [weak self] id in
+            guard let self, self.gate.accepts(id) else { return }
+            self.phase = self.generating ? .thinking : .idle
+        }
     }
 
-    // MARK: send (text or voice)
+    /// The only route into microphone capture is an explicit pet click.
+    func clicked() {
+        let id = cancelTurn()
+        clickedAt = ProcessInfo.processInfo.systemUptime
+        firstReasoning = false; firstAnswer = false; firstAudio = false
+        answer = ""
+        phase = .listening
+        work = Task { [weak self] in
+            guard let self, !Task.isCancelled, self.gate.accepts(id) else { return }
+            await self.stt.start(id: id)
+        }
+    }
 
-    @MainActor
-    func send(_ voiceText: String? = nil) {
-        let text = (voiceText ?? input).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isGenerating else { return }
-        guard case .ready = engine.phase else { return }
-
-        input = ""
-        tts.unbar()                     // a new turn supersedes any barge-in barrier
-        let history = messages          // snapshot BEFORE the new user message (engine appends it)
-        messages.append(ChatMessage(role: .user, content: text))
-        let assistant = ChatMessage(role: .assistant, content: "", isStreaming: true)
-        messages.append(assistant)
-        let aidx = messages.count - 1
-        isGenerating = true
-        voiceState = .thinking
-        chunker.flush()
-
-        engine.chat(history: history, userText: text, thinking: true) { [weak self] rDelta, cDelta in
-            guard let self, self.messages.indices.contains(aidx) else { return }
-            if let r = rDelta { self.messages[aidx].thinking += r }
-            if let c = cDelta { self.messages[aidx].content += c }
-            if self.autoSpeak, let c = cDelta {
-                for seg in self.chunker.feed(c) { self.tts.speakSegment(seg) }
-                if self.tts.speaking { self.voiceState = .speaking }
-            }
-        } onDone: { [weak self] ok in
+    private func submit(_ text: String, id: UUID) {
+        guard gate.accepts(id) else { return }
+        timing("final_transcript")
+        phase = .thinking; generating = true
+        answer = ""; chunker = SentenceBuffer()
+        history.append(ChatMessage(role: "user", content: text))
+        if history.count > 12 { history.removeFirst(history.count - 12) }
+        let snapshot = history
+        tts.start(id: id)
+        work = Task { [weak self] in
             guard let self else { return }
-            if self.messages.indices.contains(aidx) {
-                self.messages[aidx].isStreaming = false
-                if !ok && self.messages[aidx].content.isEmpty {
-                    self.messages[aidx].content = "⚠️ The engine didn't answer — try again."
+            do {
+                try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
+                    guard let self, self.gate.accepts(id) else { return }
+                    if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
+                    self.answer += content
+                    for sentence in self.chunker.feed(content) { self.tts.enqueue(sentence, id: id) }
+                    if self.tts.speaking { self.phase = .speaking }
+                }, onReasoning: { [weak self] in
+                    guard let self, self.gate.accepts(id), !self.firstReasoning else { return }
+                    self.firstReasoning = true; self.timing("first_reasoning")
+                })
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                if let tail = self.chunker.flush() { self.tts.enqueue(tail, id: id) }
+                self.history.append(ChatMessage(role: "assistant", content: self.answer))
+                self.generating = false; self.timing("generation_complete")
+                self.phase = self.tts.speaking ? .speaking : .idle
+            } catch {
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.generating = false; self.tts.stop()
+                // Keep this capture visible for retry; never claim a connection succeeded.
+                self.answer = text
+                self.phase = .blocked(error.localizedDescription)
+            }
+            if self.gate.accepts(id) { self.work = nil }
+        }
+    }
+
+    @discardableResult
+    func cancelTurn() -> UUID {
+        let id = gate.advance()
+        work?.cancel(); work = nil
+        stt.cancel(); tts.stop(); generating = false
+        chunker = SentenceBuffer(); phase = .idle
+        return id
+    }
+    func reset() { cancelTurn(); history = []; answer = "" }
+    func configure(url: String, model: String) {
+        cancelTurn(); engine.endpoint = url; engine.expectedModel = model
+        phase = .idle
+    }
+    func shutdown() { cancelTurn(); engine.shutdown() }
+}
+
+struct PetView: View {
+    @ObservedObject var model: ChatModel
+    @ObservedObject var stt: STTManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @State private var connectionShown = false
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Spacer(minLength: 0)
+            if model.phase.isActive || !model.answer.isEmpty || isBlocked || model.hovered {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: 6) {
+                        Circle().fill(isBlocked ? Color.orange : Color.green).frame(width: 5, height: 5)
+                        Text(status).font(.system(size: 11, weight: .semibold, design: .rounded))
+                        Spacer()
+                        if model.pinned { Image(systemName: "pin.fill").font(.system(size: 10)) }
+                    }
+                    if !stt.transcript.isEmpty && model.phase == .listening {
+                        Text(stt.transcript).lineLimit(5)
+                    } else if !model.answer.isEmpty {
+                        Text(model.answer).lineLimit(7).textSelection(.enabled)
+                    }
+                    if model.phase == .listening {
+                        Text("Take your time. I'll wait 3 seconds after you finish.")
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                    }
                 }
-                if self.autoSpeak, let last = self.chunker.flush() { self.tts.speakSegment(last) }
+                .font(.system(size: 12, design: .rounded))
+                .foregroundStyle(Color.primary)
+                .padding(14)
+                .frame(maxWidth: 280, alignment: .leading)
+                .background {
+                    if reduceTransparency {
+                        RoundedRectangle(cornerRadius: 20).fill(Color(nsColor: .windowBackgroundColor))
+                    } else {
+                        RoundedRectangle(cornerRadius: 20).fill(.regularMaterial)
+                    }
+                }
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.22), lineWidth: 1))
+                .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
+                .padding(.horizontal, 15)
+                .onHover { model.bubbleHovered = $0 }
             }
-            self.isGenerating = false
-            self.tts.unbar()
-            if self.tts.speaking { self.voiceState = .speaking }
-            else { self.voiceState = .idle }
-        }
-    }
-
-    func stop() {
-        engine.cancelChat()
-        tts.stop()
-        tts.unbar()
-        if let last = messages.last, last.isStreaming {
-            messages[messages.count - 1].isStreaming = false
-        }
-        isGenerating = false
-        voiceState = .idle
-    }
-
-    func newChat() {
-        stop()
-        messages = []
-        input = ""
-    }
-
-    // MARK: mic (with barge-in over TTS)
-
-    func micTapped() {
-        if stt.recording {
-            stt.stop()                     // endAudio → onFinal → auto-send
-            return
-        }
-        if tts.speaking { tts.stop(); tts.bar() }   // barge-in: no new audio while the user talks
-        if isGenerating { stop() }
-        stt.transcript = ""
-        stt.start()
-    }
-}
-
-// MARK: - Orb (Dottie-style reactive avatar)
-
-struct OrbView: View {
-    let state: VoiceState
-    var micLevel: Double = 0
-
-    @State private var phase: Double = 0
-    private let ticker = Timer.publish(every: 0.05, on: .main, in: .common).autoconnect()
-
-    private var core: Color {
-        switch state {
-        case .idle: return Color(red: 0.95, green: 0.45, blue: 0.25).opacity(0.55)
-        case .listening: return Color(red: 0.98, green: 0.55, blue: 0.28)
-        case .thinking: return Color(red: 0.95, green: 0.45, blue: 0.25)
-        case .speaking: return Color(red: 1.0, green: 0.62, blue: 0.35)
-        }
-    }
-
-    private var scale: Double {
-        switch state {
-        case .listening: return 1.0 + min(0.28, micLevel) * 0.9
-        case .speaking: return 1.0 + 0.07 * abs(sin(phase * 5.5))
-        case .thinking: return 1.0 + 0.03 * abs(sin(phase * 3.0))
-        case .idle: return 1.0 + 0.02 * sin(phase * 1.1)
-        }
-    }
-
-    var body: some View {
-        ZStack {
-            // glow
-            Circle()
-                .fill(RadialGradient(colors: [core.opacity(state == .idle ? 0.25 : 0.5), .clear],
-                                      center: .center, startRadius: 20, endRadius: 120))
-                .frame(width: 240, height: 240)
-                .scaleEffect(scale)
-            // thinking arc
-            if state == .thinking {
-                Circle()
-                    .trim(from: 0, to: 0.25)
-                    .stroke(core, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .frame(width: 168, height: 168)
-                    .rotationEffect(.degrees(phase * 260))
+            Button(action: model.clicked) {
+                PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || model.hovered || model.pinned)
+                    .frame(width: 140, height: 148)
             }
-            // speaking rings
-            if state == .speaking {
-                Circle()
-                    .stroke(core.opacity(0.5), lineWidth: 2)
-                    .frame(width: 190, height: 190)
-                    .scaleEffect(1.0 + 0.12 * abs(sin(phase * 5.5)))
-                Circle()
-                    .stroke(core.opacity(0.25), lineWidth: 2)
-                    .frame(width: 214, height: 214)
-                    .scaleEffect(1.0 + 0.16 * abs(sin(phase * 5.5 + 1)))
+            .buttonStyle(.plain)
+            .contentShape(Ellipse())
+            .onHover { model.hovered = $0 }
+            .help("Click to talk or interrupt. Right-click for Pin and Connection.")
+            .accessibilityLabel("Dot companion")
+            .accessibilityValue(status)
+            .accessibilityHint("Click to start a new voice capture. Interrupts any current answer.")
+            .contextMenu {
+                Button(model.pinned ? "Unpin" : "Pin in place") { model.pinned.toggle() }
+                Button("Connection…") { connectionShown = true }
+                Button("Clear conversation") { model.reset() }
+                if model.phase.isActive { Button("Stop") { model.cancelTurn() } }
+                Divider()
+                Text("Voice: built-in English · on device")
+                Button("Quit Dot") { NSApp.terminate(nil) }
             }
-            // core
-            Circle()
-                .fill(RadialGradient(colors: [core, core.opacity(0.25)],
-                                      center: UnitPoint(x: 0.35, y: 0.3),
-                                      startRadius: 4, endRadius: 90))
-                .frame(width: 150, height: 150)
-                .scaleEffect(scale)
-                .overlay(
-                    Circle().stroke(.white.opacity(0.12), lineWidth: 1)
-                        .frame(width: 150, height: 150)
-                        .scaleEffect(scale)
-                )
-        }
-        .frame(width: 240, height: 240)
-        .onReceive(ticker) { _ in
-            phase += 0.05
-        }
-    }
-}
-
-// MARK: - Main view
-
-struct ContentView: View {
-    @StateObject private var model = ChatModel()
-    /// Same singleton as model.stt — observed directly so mic state, the level
-    /// meter and error hints re-render live (nested @Published values are not
-    /// propagated through ChatModel's own observation).
-    @ObservedObject private var stt = STTManager.shared
-    @State private var lastScroll = Date.distantPast
-
-    private let accent = Color(red: 0.98, green: 0.55, blue: 0.28)
-    private let bg = Color(red: 0.06, green: 0.07, blue: 0.09)
-    private let surface = Color.white.opacity(0.06)
-
-    var body: some View {
-        VStack(spacing: 0) {
-            header
-            if model.messages.isEmpty { hero } else { transcript }
-            OrbView(state: model.voiceState, micLevel: stt.level)
-                .padding(.vertical, 8)
-            bottomBar
-            if model.showText { inputBar }
-        }
-        .frame(minWidth: 520, idealWidth: 600, minHeight: 640, idealHeight: 820)
-        .background(bg)
-        .task { model.engine.bootstrap() }
-    }
-
-    // MARK: header
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Circle().fill(dotColor).frame(width: 8, height: 8)
-            Text(statusTitle)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+            .popover(isPresented: $connectionShown, arrowEdge: .top) { ConnectionView(model: model) }
+            .onChange(of: connectionShown) { _, shown in model.interactionPaused = shown }
+            Text(model.hovered ? "interim voice: built-in English" : "dot")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
-            Spacer()
-            Button {
-                model.autoSpeak.toggle()
-                if !model.autoSpeak { model.tts.stop() }
-            } label: {
-                Image(systemName: model.autoSpeak ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                    .font(.system(size: 13))
-                    .foregroundStyle(model.autoSpeak ? accent : Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help(model.autoSpeak ? "Voice replies: on" : "Voice replies: off")
-            if !model.messages.isEmpty {
-                Button { model.newChat() } label: {
-                    Image(systemName: "square.on.square.dashed")
-                        .font(.system(size: 13))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("New chat")
-            }
+                .padding(.bottom, 12)
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
+        .frame(width: 320, height: 420)
     }
 
-    private var dotColor: Color {
-        switch model.engine.phase {
-        case .ready: return .green
-        case .checking, .starting: return .orange
-        case .downloading: return .orange
-        case .failed: return .red
-        case .idle: return .gray
-        }
+    private var isBlocked: Bool { if case .blocked = model.phase { return true }; return false }
+    private var status: String {
+        if model.phase == .listening && !stt.recording { return "Preparing your microphone…" }
+        return model.phase.caption
     }
+}
 
-    private var statusTitle: String {
-        if let f = model.engine.engineFetch {
-            return String(format: "Fetching engine… %.0f%%", f * 100)
-        }
-        switch model.engine.phase {
-        case .idle: return "Dot"
-        case .checking: return "Waking up…"
-        case .downloading(let f):
-            return String(format: "Downloading Qwen3.8-27B — %.1f/16.8 GB (%.0f%%)", 16.8 * f, f * 100)
-        case .starting: return "Loading model…"
-        case .ready:
-            return "Qwen3.8-27B · \(model.engine.isExternal() ? "Splash" : "llama.cpp") · local"
-        case .failed(let m): return m
-        }
-    }
-
-    // MARK: hero
-
-    private var hero: some View {
-        VStack(spacing: 14) {
-            Spacer()
-            if case .failed(let msg) = model.engine.phase {
-                Text(msg).font(.system(size: 12)).foregroundStyle(.red)
-                    .multilineTextAlignment(.center).padding(.horizontal, 30)
-                Button("Retry") { model.engine.retry() }.buttonStyle(.borderedProminent)
-                    .tint(accent)
-            }
-            if model.engine.engineFetch == nil {
-                if case .downloading = model.engine.phase {
-                    ProgressView().controlSize(.large)
-                }
-            }
-            if model.engine.engineFetch != nil {
-                ProgressView("Preparing the engine…")
-            } else if case .starting = model.engine.phase {
-                ProgressView("Warming up the engine…")
-            }
-            Text("Tap the mic — or type")
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // MARK: transcript
-
-    private var transcript: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(model.messages) { msg in
-                        bubble(msg).id(msg.id)
+struct PetCharacter: View {
+    let phase: PetPhase
+    let level: Double
+    let still: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still || phase == .listening)) { context in
+            let time = context.date.timeIntervalSinceReferenceDate
+            let bob = still || phase.isActive ? 0.0 : sin(time * 1.4) * 3
+            ZStack {
+                Ellipse().fill(.black.opacity(0.10)).frame(width: 75, height: 10).blur(radius: 4).offset(y: 62)
+                ZStack {
+                    if reduceTransparency {
+                        Circle().fill(Color(red: 0.84, green: 0.91, blue: 0.93)).frame(width: 108, height: 108)
+                    } else {
+                        Circle().fill(.regularMaterial).frame(width: 108, height: 108)
+                            .overlay(Circle().fill(LinearGradient(colors: [.white.opacity(0.60), Color(red: 0.55, green: 0.74, blue: 0.80).opacity(0.20)], startPoint: .topLeading, endPoint: .bottomTrailing)))
                     }
-                }
-                .padding(.horizontal, 16).padding(.vertical, 10)
+                    Circle().strokeBorder(.white.opacity(0.58), lineWidth: 1.5).frame(width: 106, height: 106)
+                    Circle().trim(from: 0.08, to: 0.43).stroke(.white.opacity(0.65), lineWidth: 2).rotationEffect(.degrees(90)).frame(width: 94, height: 94)
+                    Ellipse().fill(.white.opacity(0.75)).frame(width: 25, height: 11).rotationEffect(.degrees(-35)).blur(radius: 2).offset(x: -26, y: -33)
+                    HStack(spacing: 22) { eye(time: time); eye(time: time) }.offset(y: -4)
+                    if phase == .speaking {
+                        Ellipse().fill(Color(red: 0.22, green: 0.36, blue: 0.41))
+                            .frame(width: 8, height: still ? 6 : 4 + 4 * abs(sin(time * 7))).offset(y: 12)
+                    } else {
+                        Smile().stroke(Color(red: 0.22, green: 0.36, blue: 0.41), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 9, height: 5).offset(y: 12)
+                    }
+                    if phase == .listening {
+                        Circle().stroke(Color(red: 0.56, green: 0.68, blue: 0.87).opacity(0.55), lineWidth: 1.5)
+                            .frame(width: 121 + min(level, 0.4) * 12, height: 121 + min(level, 0.4) * 12)
+                    }
+                    if phase == .thinking {
+                        HStack(spacing: 4) {
+                            ForEach(0..<3) { index in
+                                Circle().fill(Color(red: 0.25, green: 0.43, blue: 0.45)).frame(width: 3, height: 3)
+                                    .opacity(still ? 1 : 0.35 + 0.65 * abs(sin(time * 2 + Double(index))))
+                            }
+                        }.offset(y: 34)
+                    }
+                }.offset(y: bob)
             }
-            .frame(maxHeight: 300)
-            .onChange(of: model.messages.count) { _ in scrollBottom(proxy, force: true) }
-            .onChange(of: model.messages.last?.content) { _ in scrollBottom(proxy) }
-            .onAppear { scrollBottom(proxy, force: true) }
         }
     }
-
-    /// Throttled: per-token streaming must not animate the scroll on every token.
-    private func scrollBottom(_ proxy: ScrollViewProxy, force: Bool = false) {
-        guard let last = model.messages.last else { return }
-        let now = Date()
-        guard force || now.timeIntervalSince(lastScroll) > 0.18 else { return }
-        lastScroll = now
-        withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
+    private func eye(time: TimeInterval) -> some View {
+        let closed = !still && time.truncatingRemainder(dividingBy: 5) < 0.16
+        return Capsule().fill(Color(red: 0.22, green: 0.36, blue: 0.41)).frame(width: 6, height: closed ? 2 : 11)
     }
+}
 
-    @ViewBuilder
-    private func bubble(_ msg: ChatMessage) -> some View {
-        if msg.role == .user {
+private struct Smile: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path(); path.move(to: CGPoint(x: 0, y: 0))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: 0), control: CGPoint(x: rect.midX, y: rect.maxY))
+        return path
+    }
+}
+
+private struct ConnectionView: View {
+    @ObservedObject var model: ChatModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var url = ""
+    @State private var loadedModel = ""
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("A little local connection").font(.headline)
+            Text("Dot connects directly to an already-running Splash server. Nothing is downloaded or started here.")
+                .font(.caption).foregroundStyle(.secondary)
+            TextField("http://127.0.0.1:8000", text: $url)
+            TextField("Exact loaded upstream model ID", text: $loadedModel)
+            Text("The model must exactly match Splash /status → instance.model. A generic Bionic/LM Studio proxy isn't verified as Splash.")
+                .font(.caption2).foregroundStyle(.secondary)
             HStack {
-                Spacer(minLength: 80)
-                Text(msg.content)
-                    .textSelection(.enabled)
-                    .font(.system(size: 14))
-                    .padding(.horizontal, 13).padding(.vertical, 8)
-                    .background(RoundedRectangle(cornerRadius: 13, style: .continuous)
-                        .fill(accent.opacity(0.25)))
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 6) {
-                if !msg.thinking.isEmpty {
-                    DisclosureGroup {
-                        Text(msg.thinking).font(.system(size: 11)).foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.top, 4)
-                    } label: {
-                        Label("Thinking", systemImage: "brain")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 11, style: .continuous).fill(surface))
-                }
-                if !msg.content.isEmpty || msg.isStreaming {
-                    Text(msg.content + (msg.isStreaming ? " ▍" : ""))
-                        .textSelection(.enabled)
-                        .font(.system(size: 14))
-                        .padding(.horizontal, 13).padding(.vertical, 8)
-                        .background(RoundedRectangle(cornerRadius: 13, style: .continuous).fill(surface))
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    // MARK: bottom bar (voice-first)
-
-    private var bottomBar: some View {
-        VStack(spacing: 6) {
-            if let err = stt.errorText {
-                Text(err)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red.opacity(0.8))
-            }
-            HStack(spacing: 26) {
-            Button { model.showText.toggle() } label: {
-                Image(systemName: "keyboard")
-                    .font(.system(size: 15))
-                    .frame(width: 44, height: 44)
-                    .background(Circle().fill(model.showText ? accent.opacity(0.3) : surface))
-                    .foregroundStyle(model.showText ? accent : Color.secondary)
-            }
-            .buttonStyle(.borderless)
-            .help("Type instead of talking")
-
-            Button(action: model.micTapped) {
-                Image(systemName: stt.recording ? "stop.fill" : "mic.fill")
-                    .font(.system(size: 24))
-                    .frame(width: 68, height: 68)
-                    .background(Circle().fill(
-                        stt.recording
-                            ? Color.red
-                            : (model.engine.phase == .ready ? accent : surface)))
-                    .foregroundStyle(stt.recording ? .white :
-                        (model.engine.phase == .ready ? Color.black.opacity(0.8) : Color.secondary))
-                    .scaleEffect(stt.recording ? 1.0 + stt.level * 0.15 : 1.0)
-                    .symbolEffect(.pulse, isActive: stt.recording)
-            }
-            .buttonStyle(.borderless)
-            .help(stt.recording ? "Stop & send" : "Talk")
-
-            if model.isGenerating {
-                Button { model.stop() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 44, height: 44)
-                        .background(Circle().fill(surface))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help("Stop")
-            } else {
-                Color.clear.frame(width: 44, height: 44)   // balance
-            }
+                Button("Cancel") { dismiss() }
+                Spacer()
+                Button("Save") { model.configure(url: url, model: loadedModel); dismiss() }
+                    .disabled(LocalEndpoint.validate(url) == nil || loadedModel.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(.bottom, 18)
-    }
-
-    // MARK: text input (hidden until asked)
-
-    private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField("Ask anything…", text: $model.input, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...4)
-                .font(.system(size: 14))
-                .padding(.horizontal, 12).padding(.vertical, 9)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(surface))
-                .onSubmit { model.send() }
-            Button {
-                if model.isGenerating { model.stop() } else { model.send() }
-            } label: {
-                Image(systemName: model.isGenerating ? "stop.circle.fill" : "arrow.up.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundStyle(model.isGenerating ? Color.red : accent)
-                    .opacity(model.isGenerating || !model.input.trimmingCharacters(in: .whitespaces).isEmpty ? 1 : 0.4)
-            }
-            .buttonStyle(.borderless)
-            .disabled(!model.isGenerating && model.input.trimmingCharacters(in: .whitespaces).isEmpty)
-            .disabled(model.engine.phase != .ready && !model.isGenerating)
-        }
-        .padding(.horizontal, 14).padding(.bottom, 12)
+        .textFieldStyle(.roundedBorder)
+        .padding(20).frame(width: 340)
+        .onAppear { url = model.engine.endpoint; loadedModel = model.engine.expectedModel }
     }
 }

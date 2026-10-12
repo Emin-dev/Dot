@@ -1,28 +1,26 @@
-// Headless STT crash-verification: drives STTManager.begin() directly —
-// the exact call that SIGABRT'd in 1.0 (installTap format mismatch).
+// Manual hardware regression. Explicitly opt in and grant microphone/speech
+// access to the launching test host. A skipped capture never counts as PASS.
 import AppKit
 import Speech
 
-let stt = STTManager.shared
-print("STT: calling begin() — old code crashed here (installTap NSException)")
-stt.begin()
-
-let app = NSApplication.shared
-app.setActivationPolicy(.accessory)
-
-let start = Date()
-let timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { t in
-    let el = Date().timeIntervalSince(start)
-    if el > 5 {
-        t.invalidate()
-        stt.stop()
-        print("STT_OK survived=5s recording=\(stt.recording) — no crash")
-        exit(0)
-    }
-    if el > 30 {
-        t.invalidate()
-        print("STT_TIMEOUT")
-        exit(1)
+@main
+struct STTSmoke {
+    @MainActor static func main() async {
+        guard ProcessInfo.processInfo.environment["DOT_ALLOW_MIC_TEST"] == "1" else {
+            print("SKIP: explicit DOT_ALLOW_MIC_TEST=1 required for microphone capture"); exit(77)
+        }
+        let stt = STTManager(); let id = UUID()
+        var failure: String?
+        stt.onError = { _, message in failure = message }
+        await stt.start(id: id)
+        guard stt.recording else {
+            print("FAIL: microphone capture did not start: \(failure ?? "unknown")"); exit(1)
+        }
+        try? await Task.sleep(for: .seconds(2))
+        stt.cancel()
+        guard !stt.recording, failure == nil else {
+            print("FAIL: local capture reported an error"); exit(1)
+        }
+        print("STT capture/start/cancel smoke passed; transcription accuracy and silence timing require separate tests")
     }
 }
-app.run()

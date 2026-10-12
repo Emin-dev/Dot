@@ -1,5 +1,10 @@
-Dot.xcodeproj/*
-!Dot.xcodeproj/project.pbxproj
-xcuserdata/
+build/
+dist/
+*.dmg
+.DS_Store
+.build/
+.swiftpm/
+DerivedData/
 *.xcuserstate
+xcuserdata/
 Resources/Icon.icns
