@@ -9,7 +9,7 @@ AI model with voice in and voice out — no accounts, no cloud, no subscriptions
 
 ## Get it (one button)
 
-1. Download **Dot.dmg** from the [latest release](../../releases)
+1. Download **Dot.dmg** — [direct link](dist/Dot-1.0.0.dmg) · or from the [latest release](../../releases)
 2. Drag Dot to Applications
 3. Open it *(first time only: right-click → Open, since the app is ad-hoc signed)*
 
@@ -77,6 +77,7 @@ No dependencies. Five Swift files:
 | `src/Engine.swift` | Engine discovery/fetch, model download, tuned requests, SSE streaming |
 | `src/Speech.swift` | STT + TTS + sentence chunking |
 | `src/Models.swift` | Data types |
+| `src/Autotest.swift` | Invisible verification harness (`DOT_AUTOTEST=1` or `~/.dot/autotest` marker) |
 
 ## How the model is picked
 

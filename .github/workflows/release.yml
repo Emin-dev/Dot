@@ -20,21 +20,14 @@ jobs:
           codesign -dv build/Dot.app
           ls -lh Dot.dmg
 
-      - name: Compute tag (for manual runs)
-        id: tag
-        run: |
-          if [ -z "${GITHUB_REF_NAME}" ] || [ "${GITHUB_REF_NAME}" = "main" ]; then
-            echo "tag=v0.0.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          fi
-
+      # No $GITHUB_OUTPUT steps: this runner image appears to abort steps that
+      # write to it. tag_name is computed with an expression instead.
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.tag.outputs.tag }}
-          name: "Dot ${{ steps.tag.outputs.tag }}"
+          tag_name: ${{ github.ref_name == 'main' && format('v0.0.{0}', github.run_number) || github.ref_name }}
+          name: "Dot"
           generate_release_notes: true
           files: Dot.dmg
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.DOT_PAT || secrets.GITHUB_TOKEN }}
