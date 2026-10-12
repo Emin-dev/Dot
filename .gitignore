@@ -1,5 +1,5 @@
-build/
-*.dmg
-.DS_Store
-*.xcodeproj
+Dot.xcodeproj/*
+!Dot.xcodeproj/project.pbxproj
 xcuserdata/
+*.xcuserstate
+Resources/Icon.icns

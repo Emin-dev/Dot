@@ -16,13 +16,18 @@ final class STTManager: NSObject, ObservableObject {
     @Published var errorText: String?
     /// Live microphone level 0..1 (drives the orb while listening).
     @Published var level: Double = 0
-    /// Set to true when a voice capture should auto-send its final transcript.
-    var autoSendOnFinal = false
+
+    /// Fires once on the main queue with the final transcript when a capture
+    /// ends (after endAudio; a short fallback covers slow/final-less recognition).
+    /// May be empty if nothing was recognized — callers must ignore "".
+    var onFinal: ((String) -> Void)?
 
     private let audioEngine = AVAudioEngine()
     private var recognizer: SFSpeechRecognizer?
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
+    private var finalFired = false
+    private var lastLevelPublish = Date.distantPast
 
     func ensurePermissions(_ ok: @escaping (Bool) -> Void) {
         AVCaptureDevice.requestAccess(for: .audio) { granted in
@@ -50,6 +55,7 @@ final class STTManager: NSObject, ObservableObject {
     func begin() {
         guard !recording else { return }
         transcript = ""
+        finalFired = false
         let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
         guard let rec, rec.isAvailable else { return }
         recognizer = rec
@@ -75,7 +81,6 @@ final class STTManager: NSObject, ObservableObject {
         var tapCount = 0
         input.installTap(onBus: 0, bufferSize: 1024, format: nodeFormat) { [weak self] buffer, _ in
             request.append(buffer)
-            // Level metering (throttled) — feeds the orb.
             tapCount += 1
             guard let self, tapCount % 3 == 0,
                   let ch = buffer.floatChannelData?.pointee else { return }
@@ -84,7 +89,11 @@ final class STTManager: NSObject, ObservableObject {
             for i in 0..<n { sum += ch[i] * ch[i] }
             let rms = sqrt(sum / Float(max(1, n)))
             let scaled = min(1.0, Double(rms) * 7.0)
-            DispatchQueue.main.async { self.level = max(0.06, scaled) }
+            // Throttle publishes (≈12 Hz max) so the UI stays smooth.
+            guard scaled > self.level + 0.02,
+                  Date().timeIntervalSince(self.lastLevelPublish) > 0.08 else { return }
+            self.lastLevelPublish = Date()
+            DispatchQueue.main.async { self.level = max(0.05, scaled) }
         }
 
         task = rec.recognitionTask(with: request) { [weak self] result, error in
@@ -92,6 +101,7 @@ final class STTManager: NSObject, ObservableObject {
                 guard let self else { return }
                 if let result { self.transcript = result.bestTranscription.formattedString }
                 if error != nil || result?.isFinal == true {
+                    self.deliverFinal()
                     self.stop(fireFinal: false)
                 }
             }
@@ -109,10 +119,24 @@ final class STTManager: NSObject, ObservableObject {
         }
     }
 
+    /// Ends the capture. The final recognition result arrives asynchronously
+    /// after endAudio(); a fallback delivers the best partial transcript if it
+    /// is slow, so a voice capture is never silently lost.
     func stop(fireFinal: Bool = true) {
         guard recording else { return }
         recording = false
         cleanup()
+        if fireFinal {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.deliverFinal()
+            }
+        }
+    }
+
+    private func deliverFinal() {
+        guard !finalFired else { return }
+        finalFired = true
+        onFinal?(transcript.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func cleanup() {
@@ -135,14 +159,20 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
     @Published var speaking = false
     /// Fires on the main queue when the whole queue has finished playing.
     var onFinished: (() -> Void)?
+    /// While true, new segments are dropped (barge-in: the user is talking).
+    private var barred = false
 
     private let synthesizer = AVSpeechSynthesizer()
     private var queue: [String] = []
     private var isBusy = false
-    /// Resolved per utterance — the voice list can be empty at first access
-    /// (it loads lazily), so never cache a bad result.
+    /// The voice list loads lazily — cache the choice once it is non-empty so
+    /// per-sentence speak() stays cheap.
+    private var voiceChoice: AVSpeechSynthesisVoice?
+
     private func pickVoice() -> AVSpeechSynthesisVoice? {
+        if let v = voiceChoice { return v }
         let voices = AVSpeechSynthesisVoice.speechVoices()
+        guard !voices.isEmpty else { return AVSpeechSynthesisVoice(language: "en-US") }
         let en = voices.filter { $0.language.lowercased().hasPrefix("en") }
         func score(_ v: AVSpeechSynthesisVoice) -> Int {
             var s = 0
@@ -153,7 +183,11 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
             if v.name.lowercased().contains("allison") { s += 3 }
             return s
         }
-        return en.max(by: { score($0) < score($1) }) ?? AVSpeechSynthesisVoice(language: "en-US")
+        if let best = en.max(by: { score($0) < score($1) }) {
+            voiceChoice = best
+            return best
+        }
+        return AVSpeechSynthesisVoice(language: "en-US")
     }
 
     override init() {
@@ -161,9 +195,13 @@ final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate 
         synthesizer.delegate = self
     }
 
+    func bar() { barred = true }
+    func unbar() { barred = false }
+
     /// Feed a (possibly partial) sentence; playback starts as soon as the first
     /// sentence is complete — audio never waits for the whole reply.
     func speakSegment(_ segment: String) {
+        guard !barred else { return }
         let t = segment.trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.count > 2 else { return }
         queue.append(t)

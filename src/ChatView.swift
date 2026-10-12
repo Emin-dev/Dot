@@ -29,18 +29,33 @@ final class ChatModel: ObservableObject {
                 guard let self else { return }
                 if rec {
                     self.voiceState = .listening
-                } else {
-                    MainActor.assumeIsolated {
-                        if self.stt.autoSendOnFinal, !self.stt.transcript.isEmpty {
-                            self.stt.autoSendOnFinal = false
-                            self.send(self.stt.transcript)
-                        } else if self.voiceState == .listening {
-                            self.voiceState = self.isGenerating ? .thinking : .idle
-                        }
-                    }
+                } else if self.voiceState == .listening {
+                    self.voiceState = self.isGenerating ? .thinking : .idle
                 }
             }
             .store(in: &cancellables)
+        // Voice capture ends → the final transcript arrives here (never lost:
+        // STTManager delivers it after endAudio, with a fallback if recognition
+        // is slow or final-less).
+        stt.onFinal = { [weak self] text in
+            DispatchQueue.main.async {
+                guard let self, !text.isEmpty else { return }
+                if self.isGenerating {
+                    self.input = text
+                    self.showText = true
+                    self.stt.errorText = "Engine is busy — your words are in the text box."
+                    return
+                }
+                guard case .ready = self.engine.phase else {
+                    self.input = text
+                    self.showText = true
+                    self.stt.errorText = "Engine still loading — your words are in the text box."
+                    return
+                }
+                self.send(text)
+            }
+        }
+        Autotest.shared.attach(self)
     }
 
     // MARK: send (text or voice)
@@ -52,9 +67,10 @@ final class ChatModel: ObservableObject {
         guard case .ready = engine.phase else { return }
 
         input = ""
+        tts.unbar()                     // a new turn supersedes any barge-in barrier
         let history = messages          // snapshot BEFORE the new user message (engine appends it)
         messages.append(ChatMessage(role: .user, content: text))
-        var assistant = ChatMessage(role: .assistant, content: "", isStreaming: true)
+        let assistant = ChatMessage(role: .assistant, content: "", isStreaming: true)
         messages.append(assistant)
         let aidx = messages.count - 1
         isGenerating = true
@@ -79,6 +95,7 @@ final class ChatModel: ObservableObject {
                 if self.autoSpeak, let last = self.chunker.flush() { self.tts.speakSegment(last) }
             }
             self.isGenerating = false
+            self.tts.unbar()
             if self.tts.speaking { self.voiceState = .speaking }
             else { self.voiceState = .idle }
         }
@@ -87,6 +104,7 @@ final class ChatModel: ObservableObject {
     func stop() {
         engine.cancelChat()
         tts.stop()
+        tts.unbar()
         if let last = messages.last, last.isStreaming {
             messages[messages.count - 1].isStreaming = false
         }
@@ -104,14 +122,12 @@ final class ChatModel: ObservableObject {
 
     func micTapped() {
         if stt.recording {
-            stt.autoSendOnFinal = true
-            stt.stop()
+            stt.stop()                     // endAudio → onFinal → auto-send
             return
         }
-        if tts.speaking { tts.stop() }        // barge-in
+        if tts.speaking { tts.stop(); tts.bar() }   // barge-in: no new audio while the user talks
         if isGenerating { stop() }
         stt.transcript = ""
-        stt.autoSendOnFinal = true
         stt.start()
     }
 }
@@ -194,6 +210,11 @@ struct OrbView: View {
 
 struct ContentView: View {
     @StateObject private var model = ChatModel()
+    /// Same singleton as model.stt — observed directly so mic state, the level
+    /// meter and error hints re-render live (nested @Published values are not
+    /// propagated through ChatModel's own observation).
+    @ObservedObject private var stt = STTManager.shared
+    @State private var lastScroll = Date.distantPast
 
     private let accent = Color(red: 0.98, green: 0.55, blue: 0.28)
     private let bg = Color(red: 0.06, green: 0.07, blue: 0.09)
@@ -203,7 +224,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             header
             if model.messages.isEmpty { hero } else { transcript }
-            OrbView(state: model.voiceState, micLevel: model.stt.level)
+            OrbView(state: model.voiceState, micLevel: stt.level)
                 .padding(.vertical, 8)
             bottomBar
             if model.showText { inputBar }
@@ -313,14 +334,18 @@ struct ContentView: View {
                 .padding(.horizontal, 16).padding(.vertical, 10)
             }
             .frame(maxHeight: 300)
-            .onChange(of: model.messages.count) { _ in scrollBottom(proxy) }
+            .onChange(of: model.messages.count) { _ in scrollBottom(proxy, force: true) }
             .onChange(of: model.messages.last?.content) { _ in scrollBottom(proxy) }
-            .onAppear { scrollBottom(proxy) }
+            .onAppear { scrollBottom(proxy, force: true) }
         }
     }
 
-    private func scrollBottom(_ proxy: ScrollViewProxy) {
+    /// Throttled: per-token streaming must not animate the scroll on every token.
+    private func scrollBottom(_ proxy: ScrollViewProxy, force: Bool = false) {
         guard let last = model.messages.last else { return }
+        let now = Date()
+        guard force || now.timeIntervalSince(lastScroll) > 0.18 else { return }
+        lastScroll = now
         withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(last.id, anchor: .bottom) }
     }
 
@@ -367,7 +392,7 @@ struct ContentView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 6) {
-            if let err = model.stt.errorText {
+            if let err = stt.errorText {
                 Text(err)
                     .font(.system(size: 11))
                     .foregroundStyle(.red.opacity(0.8))
@@ -384,20 +409,20 @@ struct ContentView: View {
             .help("Type instead of talking")
 
             Button(action: model.micTapped) {
-                Image(systemName: model.stt.recording ? "stop.fill" : "mic.fill")
+                Image(systemName: stt.recording ? "stop.fill" : "mic.fill")
                     .font(.system(size: 24))
                     .frame(width: 68, height: 68)
                     .background(Circle().fill(
-                        model.stt.recording
+                        stt.recording
                             ? Color.red
                             : (model.engine.phase == .ready ? accent : surface)))
-                    .foregroundStyle(model.stt.recording ? .white :
+                    .foregroundStyle(stt.recording ? .white :
                         (model.engine.phase == .ready ? Color.black.opacity(0.8) : Color.secondary))
-                    .scaleEffect(model.stt.recording ? 1.0 + model.stt.level * 0.15 : 1.0)
-                    .symbolEffect(.pulse, isActive: model.stt.recording)
+                    .scaleEffect(stt.recording ? 1.0 + stt.level * 0.15 : 1.0)
+                    .symbolEffect(.pulse, isActive: stt.recording)
             }
             .buttonStyle(.borderless)
-            .help(model.stt.recording ? "Stop & send" : "Talk")
+            .help(stt.recording ? "Stop & send" : "Talk")
 
             if model.isGenerating {
                 Button { model.stop() } label: {

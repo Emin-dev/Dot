@@ -28,4 +28,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    // Never orphan the supervised engine (17 GB of RAM!) or leave the mic tap
+    // running after the app quits.
+    func applicationWillTerminate(_ notification: Notification) {
+        EngineManager.shared.stopEngine()
+        TTSManager.shared.stop()
+        STTManager.shared.stop()
+    }
 }

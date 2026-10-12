@@ -1,0 +1,12 @@
+{
+  "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/src/App.swift" : {
+    "abi-baseline-json" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot.abi.json",
+    "const-values" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot-primary.swiftconstvalues",
+    "dependencies" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot-primary.d",
+    "diagnostics" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot-primary.dia",
+    "objc-header" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot-Swift.h",
+    "swiftdoc" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot.swiftdoc",
+    "swiftmodule" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot.swiftmodule",
+    "swiftsourceinfo" : "/Users/mac/.lmstudio/apps/bionic/projects/d49037d8-47f4-5808-9028-c707de117f8f/workspace/dot/build/Dot.build/Release/Dot.build/Objects-normal/x86_64/Dot.swiftsourceinfo"
+  }
+}

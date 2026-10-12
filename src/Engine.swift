@@ -64,6 +64,7 @@ final class EngineManager: NSObject, ObservableObject {
     private var healthTimer: Timer?
     private var activeDownloader: ModelDownloader?
     private var chatTask: Task<Void, Never>?
+    private var adopted = false   // a server we did not start (but we own the port contract with)
 
     private var engineDir: URL {
         let d = FileManager.default.homeDirectoryForCurrentUser
@@ -139,10 +140,47 @@ final class EngineManager: NSObject, ObservableObject {
 
     private func afterEngineReady() {
         if FileManager.default.fileSize(atPath: modelFile.path) == expectedModelBytes {
-            startEngine()
+            adoptExistingOrStart()
         } else {
             startDownload()
         }
+    }
+
+    /// A healthy llama-server already on our port (left over from a previous
+    /// launch) is adopted instead of failing to bind — instant "ready".
+    private func adoptExistingOrStart() {
+        var req = URLRequest(url: localURL.appendingPathComponent("health"))
+        req.timeoutInterval = 1.5
+        URLSession.shared.dataTask(with: req) { [weak self] data, resp, _ in
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if (200...299).contains(status) {
+                    var mreq = URLRequest(url: self.localURL.appendingPathComponent("v1/models"))
+                    mreq.timeoutInterval = 1.5
+                    URLSession.shared.dataTask(with: mreq) { d, _, _ in
+                        DispatchQueue.main.async {
+                            var id = "qwen3.8-27b"
+                            if let d, let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                               let arr = obj["data"] as? [[String: Any]],
+                               let first = arr.first?["id"] as? String { id = first }
+                            // Only adopt Qwen — a foreign server means the port is taken.
+                            if id.lowercased().contains("qwen") {
+                                self.loadedModel = id
+                                self.source = .llamaServer
+                                self.adopted = true
+                                self.phase = .ready
+                                self.lastLog = "Reusing the engine already running on port \(self.port)"
+                                return
+                            }
+                            self.startEngine()
+                        }
+                    }.resume()
+                    return
+                }
+                self.startEngine()
+            }
+        }.resume()
     }
 
     // Pinned engine build. llama.cpp ships every *binary* release as a prerelease
@@ -364,11 +402,15 @@ final class EngineManager: NSObject, ObservableObject {
         }
     }
 
+    private var lastStderrPublish = Date.distantPast
     private func ingestStderr(_ s: String) {
         stderrBuf += s
-        // Surface the most useful recent line.
+        // Surface the most useful recent line (throttled: load is chatty and
+        // this publishes UI state).
         let lines = stderrBuf.split(separator: "\n").map(String.init)
-        if let last = lines.last?.trimmingCharacters(in: .whitespaces), !last.isEmpty {
+        if let last = lines.last?.trimmingCharacters(in: .whitespaces), !last.isEmpty,
+           Date().timeIntervalSince(lastStderrPublish) > 0.12 {
+            lastStderrPublish = Date()
             let compact = last
                 .replacingOccurrences(of: "llama_server_context: ", with: "")
                 .replacingOccurrences(of: "load_all_data: ", with: "")
@@ -409,6 +451,15 @@ final class EngineManager: NSObject, ObservableObject {
 
     func stopEngine() {
         stopProcess()
+        // An adopted (pre-existing) server must also die, or it orphans 17 GB of RAM.
+        // Our port is app-private, so the pattern is precise.
+        if adopted || (proc != nil) == false {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+            p.arguments = ["-f", "llama-server.*--port \(port)"]
+            do { try p.run() } catch {}
+        }
+        adopted = false
     }
 
     private func stopProcess() {
@@ -485,6 +536,8 @@ final class EngineManager: NSObject, ObservableObject {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = buildBody(history: history, userText: userText, thinking: thinking)
 
+        final class StreamBox { var breakLoop = false }
+        let box = StreamBox()
         let task = Task { [weak self] in
             do {
                 let (bytes, response) = try await URLSession.shared.bytes(for: req)
@@ -495,6 +548,9 @@ final class EngineManager: NSObject, ObservableObject {
                 }
                 var gotAnything = false
                 for try await line in bytes.lines {
+                    // This SDK's AsyncBytes has no cancel() — bail out of the loop
+                    // the moment the Task is cancelled (per-token latency < 100 ms).
+                    if box.breakLoop || Task.isCancelled { box.breakLoop = true; break }
                     let s = line.trimmingCharacters(in: .whitespaces)
                     guard s.hasPrefix("data:") else { continue }
                     let payload = s.dropFirst(5).trimmingCharacters(in: .whitespaces)
@@ -503,19 +559,24 @@ final class EngineManager: NSObject, ObservableObject {
                           let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                           let choices = obj["choices"] as? [[String: Any]],
                           let delta = choices.first?["delta"] as? [String: Any] else { continue }
+                    // UI state is mutated in these callbacks — hop to main.
                     if let r = delta["reasoning_content"] as? String, !r.isEmpty {
                         gotAnything = true
-                        onDelta(r, nil)
+                        let rr = r
+                        DispatchQueue.main.async { onDelta(rr, nil) }
                     }
                     if let c = delta["content"] as? String, !c.isEmpty {
                         gotAnything = true
-                        onDelta(nil, c)
+                        let cc = c
+                        DispatchQueue.main.async { onDelta(nil, cc) }
                     }
                 }
                 if gotAnything { onDone(true) } else { onDone(false) }
             } catch is CancellationError {
-                onDone(true)   // user hit stop — treat as completed
+                box.breakLoop = true
+                onDone(true)            // user hit stop — treat as completed
             } catch let e as URLError where e.code == .cancelled {
+                box.breakLoop = true
                 onDone(true)
             } catch {
                 onDone(false)

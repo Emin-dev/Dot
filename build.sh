@@ -10,7 +10,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 echo "▸ compiling"
 swiftc -O \
   -o "$APP/Contents/MacOS/Dot" \
-  src/Models.swift src/Engine.swift src/Speech.swift src/ChatView.swift src/App.swift \
+  src/Models.swift src/Engine.swift src/Speech.swift src/ChatView.swift src/App.swift src/Autotest.swift \
   -framework SwiftUI -framework AppKit -framework AVFoundation -framework Speech \
   -framework AudioToolbox
 
