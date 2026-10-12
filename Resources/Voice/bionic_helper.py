@@ -91,7 +91,8 @@ class WarmVoice:
         # not as arbitrary Tensor dtypes; reject rather than enter its name path.
         if not isinstance(self.voice, torch.FloatTensor):
             raise RuntimeError('invalid_local_voice_asset')
-        self.model = KModel(config=str(model / 'config.json'), model=str(model / 'kokoro-v1_0.pth')).to('cpu').eval()
+        self.model = KModel(repo_id='hexgrad/Kokoro-82M', config=str(model / 'config.json'),
+                            model=str(model / 'kokoro-v1_0.pth')).to('cpu').eval()
         self.pipeline = KPipeline(lang_code='b', model=self.model, repo_id='hexgrad/Kokoro-82M')
         if self.pipeline.g2p.fallback is None:
             raise RuntimeError('local_espeak_fallback_missing')

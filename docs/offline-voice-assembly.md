@@ -104,3 +104,24 @@ Full neural synthesis remains a separate gate. Source rationale:
 [registration fallback and duplicate checks](https://github.com/llvm/llvm-project/blob/llvmorg-19.1.7/openmp/runtime/src/kmp_runtime.cpp#L6296-L6404).
 Relevant machine instructions were checked in the actual wheel; its compiler
 identifier alone does not prove complete LLVM source-version provenance.
+
+## Pinned neural-library diagnostics
+
+The helper supplies `repo_id='hexgrad/Kokoro-82M'` to both Kokoro constructors,
+along with explicit local model/config paths and the local voice tensor. This
+removes the helper's avoidable default-identity warning without enabling a
+download or changing the selected model.
+
+The first target-device offline synthesis passed PCM output, cancellation and
+EOF checks under the installation profile. Its unfiltered diagnostics also
+reported upstream single-layer LSTM dropout, legacy `weight_norm`, and
+`torch.jit.script` warnings. These remain visible and recorded; the pinned
+neural APIs have not been migrated merely to hide deprecations. The zero-warning
+compiler/build gate does not imply a warning-free third-party neural runtime.
+Final product-profile synthesis, relocation, audible playback and complete
+offline conversation still require their own evidence.
+
+An empty Torch cache directory inside the owned private session is temporary
+state, not an escaped runtime write. After the helper exits, the owner must
+remove that entire session directory, preserving any acceptance WAV/receipts
+outside it. No installed package or model files may change during synthesis.

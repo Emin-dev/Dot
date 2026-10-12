@@ -52,12 +52,21 @@ class HelperRuntimeTests(unittest.TestCase):
             'misaki.espeak': types.SimpleNamespace(EspeakFallback=Mock()),
             'kokoro': types.SimpleNamespace(KPipeline=Mock(return_value=pipeline)),
             'kokoro.model': types.SimpleNamespace(KModel=Mock())}
+        self.model_factory = modules['kokoro.model'].KModel
         with patch.dict(helper.sys.modules, modules), \
              patch.object(helper.importlib.metadata, 'version', side_effect=lambda name: english_version if name == 'en-core-web-sm' else '0.9.4'), \
              patch.object(helper.importlib.util, 'find_spec', return_value=object()), \
              patch.dict(helper.os.environ):
             voice = helper.WarmVoice(root)
         return voice, torch, tensor, pipeline, model / 'voices/bf_isabella.pt'
+
+    def test_model_identity_is_explicit_with_both_local_asset_paths(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            self.initialize_with_fake_packages(root)
+            model = Path(root).resolve(strict=True) / 'model'
+            self.model_factory.assert_called_once_with(repo_id='hexgrad/Kokoro-82M',
+                config=str(model / 'config.json'), model=str(model / 'kokoro-v1_0.pth'))
 
     def test_comma_and_unicode_bundle_path_passes_local_tensor_not_voice_names(self):
         import tempfile
