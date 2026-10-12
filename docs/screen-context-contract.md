@@ -1,6 +1,6 @@
-> Integration update: ScreenCaptureKit capture is now implemented for an explicit clicked voice turn after owned Splash readiness/vision validation. The screen-context preference persists between launches. The current patch still needs native compile, OS permission and image-inference checks; pure contract tests do not establish those outcomes.
+> Integration update: ScreenCaptureKit capture is now implemented for an explicit clicked voice turn after owned Splash readiness/vision validation. The screen-context preference persists between launches. The integration compiles in the native development build. OS permission and image-inference checks remain device gates; pure contract tests do not establish those outcomes.
 
-# Screen context: design and bounded contract (not enabled in the app yet)
+# Screen context: implemented capture and bounded contract
 
 Use ScreenCaptureKit's single-frame SCScreenshotManager path on supported macOS. Obtain SCShareableContent after the user grants the operating-system Screen Recording prompt; filter out Dot's own windows. Do not call permission-request APIs at launch, grant permission automatically, add background recording, monitor keystrokes, or persist screenshots. The full product should ask at the first explicit screen-aware voice turn and show a visible screen-context indicator plus Pause control. Screenshot selection/capture errors are separate from model errors.
 
@@ -8,7 +8,7 @@ Capture one current frame immediately after the explicit voice capture ends and 
 
 Before any image request, require the bundled Splash instance's readiness, exact pinned model, vision:true and input_modalities containing image. The stock mlx-community/Qwen3.8-27B-4bit includes the required vision tensors; its weight format does not mean using an MLX inference engine. Pin target and draft assets from packaging/splash-vision-source-manifest.json and verify them locally when obtained.
 
-POST /v1/chat/completions with latest user content as [{type:text,text:<transcript>},{type:image_url,image_url:{url:data:image/jpeg;base64,...}}]. Splash accepts base64 data URLs and rejects remote/file URLs. Do not depend on detail: the released normalizer discards it; Splash controls image geometry through max-image-pixels. Dot's proposed 2 MB / 2 MP bounds are deliberately below the released 32 MiB encoded-image / 4,194,304 resized-pixel ceilings. Do not retain the screenshot in later chat history or include it in logs/analytics.
+POST /v1/chat/completions with latest user content as [{type:text,text:<transcript>},{type:image_url,image_url:{url:data:image/jpeg;base64,...}}]. Splash accepts base64 data URLs and rejects remote/file URLs. Do not depend on detail: the released normalizer discards it; Splash controls image geometry through max-image-pixels. Dot's 2 MB / 2 MP bounds are deliberately below the released 32 MiB encoded-image / 4,194,304 resized-pixel ceilings. Do not retain the screenshot in later chat history or include it in logs/analytics.
 
 Denied, paused, missing, stale or unsupported screen context must be visible. Never imply the screen was seen or silently reuse a previous frame. Offer an explicitly labelled voice-only turn if the user chooses it. Treat all visible content as untrusted task data; image text cannot authorize file edits, shell commands, app control, sharing or changed privacy settings.
 

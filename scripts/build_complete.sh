@@ -3,6 +3,13 @@
 # No downloads, package installation, app launch, microphone or model inference.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+SOURCE_COMMIT=$(git rev-parse HEAD)
+assert_source_snapshot() {
+  [[ "$(git rev-parse HEAD)" == "$SOURCE_COMMIT" ]] || { echo 'Source revision changed during assembly.'; exit 1; }
+  git diff --quiet && git diff --cached --quiet || { echo 'Commit or preserve source changes before a provenance-labelled build.'; exit 1; }
+  [[ -z "$(git ls-files --others -- src Resources scripts)" ]] || { echo 'Untracked or ignored build inputs must be reviewed before packaging.'; exit 1; }
+}
+assert_source_snapshot
 : "${DOT_RUNTIME_PAYLOAD:?Set DOT_RUNTIME_PAYLOAD to the completed, audited local runtime payload}"
 : "${DOT_WHISPER_FRAMEWORK:?Set DOT_WHISPER_FRAMEWORK to the verified macOS whisper.framework}"
 python3 -B scripts/audit_runtime_payload.py "$DOT_RUNTIME_PAYLOAD"
@@ -33,7 +40,6 @@ if [[ -n "${DOT_MODEL_PAYLOAD:-}" ]]; then
     --destination "$APP/Contents/Resources/OfflineModels" --manifest Resources/model-downloads.json
   MODEL_DOWNLOAD=false
 fi
-printf '{"commit":"%s","signing":"ad-hoc","notarized":false,"runtime_bundled":true,"llm_weights_download_on_first_launch":%s}\n' "$(git rev-parse HEAD)" "$MODEL_DOWNLOAD" > "$APP/Contents/Resources/build-provenance.json"
 ICONSET=build-complete/Icon.iconset; mkdir -p "$ICONSET"
 for s in 16 32 128 256 512; do
   sips -z "$s" "$s" icon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
@@ -42,6 +48,23 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Icon.icns"
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
 codesign --force --sign - "$APP/Contents/Frameworks/whisper.framework"
+assert_source_snapshot
+python3 -B - "$APP" "$MODEL_DOWNLOAD" "$SOURCE_COMMIT" <<'PYCODE'
+import hashlib, json, pathlib, sys
+app = pathlib.Path(sys.argv[1]); resources = app / 'Contents/Resources'
+manifest = resources / 'Offline/runtime-manifest.json'
+framework = app / 'Contents/Frameworks/whisper.framework/whisper'
+digest = hashlib.sha256()
+with framework.open('rb') as stream:
+    for chunk in iter(lambda: stream.read(1024 * 1024), b''): digest.update(chunk)
+record = {'commit': sys.argv[3],
+          'signing': 'ad-hoc', 'notarized': False, 'runtime_bundled': True,
+          'llm_weights_download_on_first_launch': sys.argv[2] == 'true',
+          'runtime_manifest_sha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
+          'model_plan_sha256': hashlib.sha256((resources / 'model-downloads.json').read_bytes()).hexdigest(),
+          'embedded_whisper_binary_sha256': digest.hexdigest()}
+(resources / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
+PYCODE
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"

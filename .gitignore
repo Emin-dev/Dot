@@ -1,4 +1,5 @@
 build/
+build-complete/
 dist/
 *.dmg
 .DS_Store
