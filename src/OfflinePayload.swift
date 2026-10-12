@@ -20,10 +20,10 @@ enum OfflineFailure: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .incomplete: return "This is a development build without its local voice runtime. Please install the complete Dot installer."
-        case .corrupt: return "One of my local files didn't pass its integrity check. The download can be resumed safely."
+        case .corrupt: return "A bundled file failed its integrity check. This app needs a repaired complete build."
         case .space: return "I need space for the remaining model files plus 5 GB of working space."
-        case .download: return "The model download paused. Check your connection, then choose Resume."
-        case .paused: return "Model download paused. Resume whenever you're ready."
+        case .download: return "A required local file is unavailable."
+        case .paused: return "The operation was paused."
         case .runtime: return "My bundled Splash engine couldn't start. No other engine was used."
         }
     }
@@ -31,14 +31,34 @@ enum OfflineFailure: LocalizedError {
 
 actor OfflinePayload {
     static let shared = OfflinePayload()
-    private var validation: Task<URL, Error>?
+    private var validation: (id: UUID, task: Task<URL, Error>)?
+    private var verified: URL?
+    private let root: URL?
+    init(root: URL? = Bundle.main.resourceURL?.appendingPathComponent("Offline", isDirectory: true)) { self.root = root }
     func validate() async throws -> URL {
-        if let validation { return try await validation.value }
-        guard let root = Bundle.main.resourceURL?.appendingPathComponent("Offline", isDirectory: true) else { throw OfflineFailure.incomplete }
-        let task = Task.detached(priority: .utility) { try Self.audit(root); return root }
-        validation = task
-        do { return try await task.value }
-        catch { validation = nil; throw error }
+        try Task.checkCancellation()
+        if let verified { return verified }
+        guard let root else { throw OfflineFailure.incomplete }
+        let current: (id: UUID, task: Task<URL, Error>)
+        if let validation { current = validation }
+        else {
+            let task = Task.detached(priority: .utility) {
+                try Task.checkCancellation()
+                let values = try root.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard values.isDirectory == true, values.isSymbolicLink != true else { throw OfflineFailure.incomplete }
+                try Self.audit(root); return root
+            }
+            current = (UUID(), task); validation = current
+        }
+        do {
+            let value = try await withTaskCancellationHandler(operation: { try await current.task.value }, onCancel: { current.task.cancel() })
+            try Task.checkCancellation()
+            if validation?.id == current.id { verified = value; validation = nil }
+            return value
+        } catch {
+            if validation?.id == current.id { validation = nil }
+            throw error
+        }
     }
     nonisolated static func safePath(_ name: String, root: URL) throws -> URL {
         guard !name.isEmpty, !name.hasPrefix("/"), !name.contains("\\"),
@@ -73,7 +93,8 @@ actor OfflinePayload {
         let task = Task.detached(priority: .utility) { try hash(url, bytes: bytes, expected: expected) }
         try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
     }
-    private nonisolated static func audit(_ root: URL) throws {
+    nonisolated static func audit(_ root: URL) throws {
+        try Task.checkCancellation()
         let manifestURL = root.appendingPathComponent("runtime-manifest.json")
         let manifestValues = try manifestURL.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey])
         guard manifestValues.isRegularFile == true, manifestValues.isSymbolicLink != true,
@@ -87,6 +108,7 @@ actor OfflinePayload {
         guard Set(names.map { $0.precomposedStringWithCanonicalMapping.lowercased() }).count == names.count else { throw OfflineFailure.corrupt }
         var total: Int64 = 0
         for file in manifest.files {
+            try Task.checkCancellation()
             let path = try safePath(file.path, root: root)
             if file.kind == "file", let bytes = file.bytes, let checksum = file.sha256 {
                 guard (0...5_000_000_000).contains(bytes) else { throw OfflineFailure.corrupt }
@@ -100,6 +122,7 @@ actor OfflinePayload {
         guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw OfflineFailure.corrupt }
         var actual = Set<String>()
         for case let url as URL in enumerator {
+            try Task.checkCancellation()
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             if values.isSymbolicLink == true || values.isDirectory != true {
                 let prefix = root.standardizedFileURL.path + "/"

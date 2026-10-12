@@ -1,34 +1,20 @@
-name: release
-
+name: Release prerequisites
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-
+permissions:
+  contents: read
 jobs:
-  build-macos:
-    runs-on: macos-15   # Standard public Apple Silicon runner
+  checks:
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
-
-      - name: Test, compile and package with zero warnings
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Model-free source verification
         run: bash scripts/verify_macos.sh
-
-      - name: Sanity check
+      - name: Require complete native acceptance before distribution
         run: |
-          file build/Dot.app/Contents/MacOS/Dot
-          codesign -dv build/Dot.app
-          ls -lh build/Dot.dmg
-
-      # No $GITHUB_OUTPUT steps: this runner image appears to abort steps that
-      # write to it. tag_name is computed with an expression instead.
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name == 'main' && format('v0.0.{0}', github.run_number) || github.ref_name }}
-          name: "Dot"
-          generate_release_notes: true
-          files: build/Dot.dmg
-        env:
-          GITHUB_TOKEN: ${{ secrets.DOT_PAT || secrets.GITHUB_TOKEN }}
+          echo 'This runner cannot validate the full bundled model. No development DMG is published.'
+          echo 'Use scripts/build_complete.sh, native offline acceptance, then scripts/package_complete.sh.'
+          exit 1

@@ -5,9 +5,10 @@ import Foundation
 
 enum PetLayout {
     static let petSize = CGSize(width: 140, height: 148)
-    static let captionHeight: CGFloat = 14
-    static let captionBottomPadding: CGFloat = 12
-    static let stackSpacing: CGFloat = 10
+    static let panelSize = CGSize(width: 180, height: 224)
+    static let captionHeight: CGFloat = 48
+    static let captionBottomPadding: CGFloat = 8
+    static let stackSpacing: CGFloat = 8
     static var petBottom: CGFloat { captionHeight + captionBottomPadding + stackSpacing }
     static var petCenterY: CGFloat { petBottom + petSize.height / 2 }
 }

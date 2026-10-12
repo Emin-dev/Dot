@@ -11,6 +11,7 @@ final class ChatModel: ObservableObject {
     @Published var hovered = false
     @Published var bubbleHovered = false
     @Published var interactionPaused = false
+    var showOptions: (() -> Void)?
     let stt = STTManager()
     let tts = TTSManager()
     let engine = EngineManager()
@@ -35,7 +36,7 @@ final class ChatModel: ObservableObject {
 
     init() {
         screen.enabled = screenEnabled
-        ModelDownload.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available)
+        OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available)
         stt.onFinal = { [weak self] id, text in
             guard let self, self.gate.accepts(id) else { return }
             self.submit(text, id: id)
@@ -60,7 +61,7 @@ final class ChatModel: ObservableObject {
 
     /// The only route into microphone capture is an explicit pet click.
     func clicked() {
-        guard ModelDownload.shared.ready else { return }
+        guard OfflinePreparation.shared.ready else { return }
         let id = cancelTurn()
         clickedAt = ProcessInfo.processInfo.systemUptime
         firstReasoning = false; firstAnswer = false; firstAudio = false
@@ -128,101 +129,66 @@ final class ChatModel: ObservableObject {
         return id
     }
     func reset() { cancelTurn(); history = []; answer = "" }
-    func shutdown() { cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); ModelDownload.shared.shutdown() }
+    func shutdown() { cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 
 struct PetView: View {
     @ObservedObject var model: ChatModel
     @ObservedObject var stt: STTManager
+    @ObservedObject private var preparation = OfflinePreparation.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ObservedObject private var downloads = ModelDownload.shared
 
     var body: some View {
         VStack(spacing: PetLayout.stackSpacing) {
             Spacer(minLength: 0)
-            if model.phase.isActive || !model.answer.isEmpty || isBlocked || model.hovered || !downloads.ready {
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack(spacing: 6) {
-                        Circle().fill(isBlocked ? Color.orange : Color.green).frame(width: 5, height: 5)
-                        Text(status).font(.system(size: 11, weight: .semibold, design: .rounded))
-                        Spacer()
-                        if model.pinned { Image(systemName: "pin.fill").font(.system(size: 10)) }
-                    }
-                    if !downloads.ready {
-                        Text(downloads.message).font(.system(size: 11))
-                        ProgressView(value: downloads.progress)
-                        HStack {
-                            Text("\(Int(downloads.progress * 100))%").font(.caption2)
-                            Spacer()
-                            Button(downloads.paused ? "Resume" : "Pause") {
-                                if downloads.paused { downloads.resume() } else { downloads.pause() }
-                            }
-                        }
-                        Text("Once setup finishes, conversation works offline.").font(.caption2).foregroundStyle(.secondary)
-                    }
-                    if model.capturingScreen { Label("Reading screen locally…", systemImage: "eye.fill").font(.caption2) }
-                    if model.screenContextUsed { Label("Screen used locally for this reply", systemImage: "eye").font(.caption2) }
-                    if !stt.transcript.isEmpty && model.phase == .listening {
-                        Text(stt.transcript).lineLimit(5)
-                    } else if !model.answer.isEmpty {
-                        Text(model.answer).lineLimit(7).textSelection(.enabled)
-                    }
-                    if model.phase == .listening {
-                        Text("Take your time. I'll wait 3 seconds after you finish.")
-                            .font(.system(size: 10)).foregroundStyle(.secondary)
-                    }
-                }
-                .font(.system(size: 12, design: .rounded))
-                .foregroundStyle(Color.primary)
-                .padding(14)
-                .frame(maxWidth: 280, alignment: .leading)
-                .background {
-                    if reduceTransparency {
-                        RoundedRectangle(cornerRadius: 20).fill(Color(nsColor: .windowBackgroundColor))
-                    } else {
-                        RoundedRectangle(cornerRadius: 20).fill(.regularMaterial)
-                    }
-                }
-                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.22), lineWidth: 1))
-                .shadow(color: .black.opacity(0.08), radius: 12, y: 5)
-                .padding(.horizontal, 15)
-                .onHover { model.bubbleHovered = $0 }
-            }
             Button(action: model.clicked) {
                 PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || model.hovered || model.pinned)
                     .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
+                    .overlay(alignment: .topTrailing) {
+                        if model.capturingScreen || model.screenContextUsed {
+                            Image(systemName: model.capturingScreen ? "eye.fill" : "eye")
+                                .font(.system(size: 12)).accessibilityLabel(model.capturingScreen ? "Reading screen locally" : "Screen used for this reply")
+                        }
+                    }
             }
             .buttonStyle(.plain)
             .contentShape(Ellipse())
             .onHover { model.hovered = $0 }
-            .help("Click to talk or interrupt. Right-click for Pin and screen privacy.")
             .accessibilityLabel("Dot companion")
-            .accessibilityValue(status)
-            .accessibilityHint("Click to start a new voice capture. Interrupts any current answer.")
-            .contextMenu {
-                Button(model.pinned ? "Unpin" : "Pin in place") { model.pinned.toggle() }
-                Toggle("Screen context", isOn: $model.screenEnabled)
-                Button("Clear conversation") { model.reset() }
-                if model.phase.isActive { Button("Stop") { model.cancelTurn() } }
-                Divider()
-                Text(model.tts.mode.label)
-                Button("Quit Dot") { NSApp.terminate(nil) }
+            .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen, screenUsed: model.screenContextUsed))
+            .accessibilityHint("Click to talk or interrupt. Right-click or Shift F10 for options. Escape stops the current action.")
+            .accessibilityAction(named: Text("Options")) { model.showOptions?() }
+            VStack(spacing: 2) {
+                Text(status).font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(isIssue ? Color.orange : Color.primary)
+                if preparation.state == .checking {
+                    ProgressView(value: preparation.progress).frame(width: 142)
+                        .accessibilityLabel("Checking bundled files")
+                } else if let detail {
+                    Text(detail).font(.system(size: 9)).lineLimit(2).multilineTextAlignment(.center)
+                }
             }
-            Text(model.hovered ? model.tts.mode.label : "dot")
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(.secondary)
-                .frame(height: PetLayout.captionHeight)
-                .padding(.bottom, PetLayout.captionBottomPadding)
+            .frame(width: 168, height: PetLayout.captionHeight)
+            .padding(.bottom, PetLayout.captionBottomPadding)
         }
-        .frame(width: 320, height: 420)
+        .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
+        .onExitCommand {
+            if model.phase.isActive { model.cancelTurn() }
+            preparation.pause()
+        }
     }
-
-    private var isBlocked: Bool { if case .blocked = model.phase { return true }; return false }
+    private var isIssue: Bool { preparation.state.isIssue || { if case .blocked = model.phase { return true }; return false }() }
+    private var detail: String? {
+        if let issue = preparation.state.detail { return issue }
+        if case .blocked(let issue) = model.phase { return issue }
+        return nil
+    }
     private var status: String {
-        if !downloads.ready { return "Getting ready" }
+        if !preparation.ready { return preparation.state.caption }
+        if case .blocked = model.phase { return "Voice unavailable · right-click" }
         if stt.transcribing { return "Transcribing locally…" }
-        if model.phase == .listening && !stt.recording { return "Preparing your microphone…" }
+        if model.capturingScreen { return "Reading screen locally…" }
+        if model.phase == .listening && !stt.recording { return "Preparing microphone…" }
         return model.phase.caption
     }
 }

@@ -16,9 +16,15 @@ checks = {
     'truncated SSE rejected': 'guard sawDone else { throw EngineError.response }' in engine,
     'thinking preserved': '"enable_thinking": true' in engine and '"reasoning_effort": "low"' in engine,
     'packaging treats warnings as errors': '-warnings-as-errors' in read('build.sh'),
-    'release publishes current output path': 'files: build/Dot.dmg' in read('.github/workflows/release.yml'),
+    'release never publishes an incomplete development app': 'action-gh-release' not in read('.github/workflows/release.yml') and 'exit 1' in read('.github/workflows/release.yml'),
     'no stale tracked main app in source snapshot': not (root / 'Dot.dmg').exists(),
     'shared Xcode scheme exists': (root / 'Dot.xcodeproj/xcshareddata/xcschemes/Dot.xcscheme').exists(),
+    'no separate app settings or setup surfaces': not any(token in read('src/App.swift') + chat for token in ['Settings {', 'WindowGroup', '.popover(', '.sheet(', 'NSOpenPanel', 'ConnectionView']),
+    'one reusable companion surface': 'CompanionSurface()' in read('src/App.swift') and 'if let panel { window = panel }' in read('src/CompanionPanel.swift'),
+    'no production model downloader': not (root / 'src/ModelDownload.swift').exists() and 'URLSession' not in read('src/OfflinePreparation.swift') and 'AssetTransfer' not in read('src/OfflinePreparation.swift'),
+    'bundled model index has no download URLs': 'https://' not in read('Resources/bundled-models.json'),
+    'complete assembly requires all models': '${DOT_MODEL_PAYLOAD:?' in read('scripts/build_complete.sh') and 'MODEL_DOWNLOAD=true' not in read('scripts/build_complete.sh'),
+    'installer requires native offline acceptance': 'offline_acceptance.py' in read('scripts/package_complete.sh') and 'hdiutil create' not in read('scripts/build_complete.sh'),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

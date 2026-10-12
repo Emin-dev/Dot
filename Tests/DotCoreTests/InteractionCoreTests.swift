@@ -331,3 +331,35 @@ final class ProvisioningContractTests: XCTestCase {
         XCTAssertTrue(ScreenPrivacyPreference.enabled(in: defaults))
     }
 }
+
+final class CompanionPolicyTests: XCTestCase {
+    func testIncompleteAppNeverOffersTalkOrDownload() {
+        let actions = CompanionMenuAction.available(readiness: .unavailable("Missing runtime"), busy: false)
+        XCTAssertEqual(actions, [.retry, .pin, .screen, .clear, .quit])
+    }
+    func testCheckingCanPauseWithoutHidingPrivacyAndQuit() {
+        XCTAssertEqual(CompanionMenuAction.available(readiness: .checking, busy: false), [.pause, .pin, .screen, .clear, .quit])
+    }
+    func testActiveTurnAlwaysHasStopAndInterrupt() {
+        XCTAssertEqual(CompanionMenuAction.available(readiness: .ready, busy: true), [.talk, .stop, .pin, .screen, .clear, .quit])
+    }
+    func testPauseNeverLooksReadyAndOffersRetry() {
+        XCTAssertFalse(CompanionReadiness.paused.canTalk)
+        XCTAssertTrue(CompanionReadiness.paused.canRetry)
+        XCTAssertFalse(CompanionReadiness.paused.canPause)
+    }
+    func testMissingRuntimeErrorRemainsVisibleInCaptionAndDetail() {
+        let state = CompanionReadiness.unavailable("Missing runtime")
+        XCTAssertTrue(state.isIssue); XCTAssertEqual(state.detail, "Missing runtime")
+        XCTAssertTrue(state.caption.contains("Incomplete app"))
+    }
+}
+
+final class CompanionAccessibilityTests: XCTestCase {
+    func testPrimaryElementAnnouncesScreenUse() {
+        XCTAssertTrue(CompanionAccessibility.value(status: "Speaking", detail: nil, capturingScreen: false, screenUsed: true).contains("Screen used locally"))
+    }
+    func testNoScreenClaimWhenCaptureWasNotUsed() {
+        XCTAssertEqual(CompanionAccessibility.value(status: "Thinking", detail: nil, capturingScreen: false, screenUsed: false), "Thinking")
+    }
+}

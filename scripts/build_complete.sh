@@ -11,6 +11,7 @@ assert_source_snapshot() {
 }
 assert_source_snapshot
 : "${DOT_RUNTIME_PAYLOAD:?Set DOT_RUNTIME_PAYLOAD to the completed, audited local runtime payload}"
+: "${DOT_MODEL_PAYLOAD:?Set DOT_MODEL_PAYLOAD to the verified complete target, draft and vision model payload}"
 : "${DOT_WHISPER_FRAMEWORK:?Set DOT_WHISPER_FRAMEWORK to the verified macOS whisper.framework}"
 python3 -B scripts/audit_runtime_payload.py "$DOT_RUNTIME_PAYLOAD"
 test -f "$DOT_WHISPER_FRAMEWORK/Modules/module.modulemap"
@@ -33,13 +34,9 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
 cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/splash.sb "$APP/Contents/Resources/Runtime/"
-cp Resources/model-downloads.json "$APP/Contents/Resources/"
-MODEL_DOWNLOAD=true
-if [[ -n "${DOT_MODEL_PAYLOAD:-}" ]]; then
-  python3 -B scripts/copy_offline_models.py --source "$DOT_MODEL_PAYLOAD" \
-    --destination "$APP/Contents/Resources/OfflineModels" --manifest Resources/model-downloads.json
-  MODEL_DOWNLOAD=false
-fi
+cp Resources/bundled-models.json "$APP/Contents/Resources/"
+python3 -B scripts/copy_offline_models.py --source "$DOT_MODEL_PAYLOAD" \
+  --destination "$APP/Contents/Resources/OfflineModels" --manifest Resources/bundled-models.json
 ICONSET=build-complete/Icon.iconset; mkdir -p "$ICONSET"
 for s in 16 32 128 256 512; do
   sips -z "$s" "$s" icon.png --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
@@ -49,7 +46,7 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Icon.icns"
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
 codesign --force --sign - "$APP/Contents/Frameworks/whisper.framework"
 assert_source_snapshot
-python3 -B - "$APP" "$MODEL_DOWNLOAD" "$SOURCE_COMMIT" <<'PYCODE'
+python3 -B - "$APP" "$SOURCE_COMMIT" <<'PYCODE'
 import hashlib, json, pathlib, sys
 app = pathlib.Path(sys.argv[1]); resources = app / 'Contents/Resources'
 manifest = resources / 'Offline/runtime-manifest.json'
@@ -57,20 +54,16 @@ framework = app / 'Contents/Frameworks/whisper.framework/whisper'
 digest = hashlib.sha256()
 with framework.open('rb') as stream:
     for chunk in iter(lambda: stream.read(1024 * 1024), b''): digest.update(chunk)
-record = {'commit': sys.argv[3],
+record = {'commit': sys.argv[2],
           'signing': 'ad-hoc', 'notarized': False, 'runtime_bundled': True,
-          'llm_weights_download_on_first_launch': sys.argv[2] == 'true',
+          'llm_weights_download_on_first_launch': False, 'models_bundled': True,
           'runtime_manifest_sha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
-          'model_plan_sha256': hashlib.sha256((resources / 'model-downloads.json').read_bytes()).hexdigest(),
+          'model_plan_sha256': hashlib.sha256((resources / 'bundled-models.json').read_bytes()).hexdigest(),
           'embedded_whisper_binary_sha256': digest.hexdigest()}
 (resources / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
 PYCODE
 codesign --force --sign - "$APP"
 codesign --verify --deep --strict "$APP"
 python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"
-STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-complete.XXXXXX")
-trap 'rm -rf "$STAGE"' EXIT
-/usr/bin/ditto "$APP" "$STAGE/Dot.app"; ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname Dot -srcfolder "$STAGE" -ov -format UDZO -o build-complete/Dot.dmg
-shasum -a 256 build-complete/Dot.dmg
-printf 'Complete-runtime test installer built. Model download on first launch: %s. Ad-hoc signed; not notarized.\n' "$MODEL_DOWNLOAD"
+printf 'Bundled app staged for native offline acceptance: %s. No installer released.\n' "$APP"
+printf 'After real relocation/conversation/cancellation tests, run scripts/package_complete.sh with the acceptance record.\n'

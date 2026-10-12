@@ -16,7 +16,7 @@ final class BundledSplash {
     func connection() async throws -> (URL, Int) {
         let payload = try await OfflinePayload.shared.validate()
         try Task.checkCancellation()
-        guard ModelDownload.shared.ready, let models = ModelDownload.shared.root else { throw OfflineFailure.download }
+        guard OfflinePreparation.shared.ready, let models = OfflinePreparation.shared.root else { throw OfflineFailure.incomplete }
         if process == nil {
             guard let resources = Bundle.main.resourceURL else { throw OfflineFailure.incomplete }
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dot-splash-" + UUID().uuidString, isDirectory: true)
@@ -29,7 +29,7 @@ final class BundledSplash {
                                payload.appendingPathComponent("Splash/python/bin/python3").path, "-I", "-B",
                                resources.appendingPathComponent("Runtime/dot_runtime.py").path,
                                "--payload", payload.path, "--models", models.path, "--state", directory.path,
-                               "--manifest", resources.appendingPathComponent("model-downloads.json").path]
+                               "--manifest", resources.appendingPathComponent("bundled-models.json").path]
             child.environment = ["PATH": "/usr/bin:/bin", "HOME": directory.path, "TMPDIR": directory.path, "PYTHONDONTWRITEBYTECODE": "1"]
             child.standardInput = input; child.standardOutput = stdout; child.standardError = FileHandle.nullDevice
             child.terminationHandler = { [weak self] _ in

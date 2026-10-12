@@ -185,3 +185,42 @@ enum ScreenPrivacyPreference {
     }
     static func setEnabled(_ value: Bool, in defaults: UserDefaults = .standard) { defaults.set(value, forKey: "screenContextEnabled") }
 }
+
+/// Visible readiness never implies that missing runtime files can be downloaded or selected.
+enum CompanionReadiness: Equatable {
+    case checking, paused, ready, unavailable(String)
+    var canTalk: Bool { self == .ready }
+    var canPause: Bool { self == .checking }
+    var canRetry: Bool { switch self { case .paused, .unavailable: return true; default: return false } }
+    var isIssue: Bool { if case .unavailable = self { return true }; return false }
+    var caption: String {
+        switch self {
+        case .checking: return "Checking bundled files…"
+        case .paused: return "Check paused · right-click"
+        case .ready: return "Click to talk"
+        case .unavailable: return "Incomplete app · right-click"
+        }
+    }
+    var detail: String? { if case .unavailable(let message) = self { return message }; return nil }
+}
+
+enum CompanionMenuAction: Equatable {
+    case talk, stop, pause, retry, pin, screen, clear, quit
+    static func available(readiness: CompanionReadiness, busy: Bool) -> [Self] {
+        var actions: [Self] = []
+        if readiness.canTalk { actions.append(.talk) }
+        if busy { actions.append(.stop) }
+        if readiness.canPause { actions.append(.pause) }
+        if readiness.canRetry { actions.append(.retry) }
+        return actions + [.pin, .screen, .clear, .quit]
+    }
+}
+
+enum CompanionAccessibility {
+    static func value(status: String, detail: String?, capturingScreen: Bool, screenUsed: Bool) -> String {
+        let base = detail ?? status
+        if capturingScreen { return base + ". Reading screen locally." }
+        if screenUsed { return base + ". Screen used locally for this reply." }
+        return base
+    }
+}
