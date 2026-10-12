@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Own one pinned offline Splash process tree. No discovery or user-cache access."""
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,9 @@ import time
 PROTOCOL = 1
 MODEL = 'mlx-community/Qwen3.8-27B-4bit'
 REVISION = '10c35caafbb80f7dc6a7a432cdd11af10a6d4818'
+_process_spec = importlib.util.spec_from_file_location('_dot_process', Path(__file__).with_name('dot_process.py'))
+_process = importlib.util.module_from_spec(_process_spec); _process_spec.loader.exec_module(_process)
+child_exited = _process.child_exited
 
 
 def local_snapshot(models, state, manifest):
@@ -43,6 +47,8 @@ def local_snapshot(models, state, manifest):
 
 def stop_group(child):
     # The child is started in a fresh session. Never signal a discovered PID/name.
+    try: child_exited(child)
+    except ChildProcessError: return
     try: os.killpg(child.pid, signal.SIGTERM)
     except ProcessLookupError:
         child.wait(); return
@@ -50,9 +56,8 @@ def stop_group(child):
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         try:
-            status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-            if status is not None: break
-        except ChildProcessError: break
+            if child_exited(child): break
+        except ChildProcessError: return
         time.sleep(0.05)
     try: os.killpg(child.pid, signal.SIGKILL)
     except ProcessLookupError: pass
@@ -98,8 +103,7 @@ def main():
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         print(json.dumps({'protocol': PROTOCOL, 'event': 'started', 'pid': child.pid, 'port': port, 'api_key': api_key}), flush=True)
         while not stopped:
-            status = os.waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
-            if status is not None: break
+            if child_exited(child): break
             readable, _, _ = select.select([sys.stdin], [], [], 0.2)
             if readable:
                 # Any explicit control byte or parent EOF requests shutdown.

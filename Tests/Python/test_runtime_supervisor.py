@@ -47,6 +47,6 @@ class RuntimeLayoutTests(unittest.TestCase):
             waited = False
             def wait(self): self.waited = True
         child = Child()
-        with patch.object(runtime.os, 'killpg') as signal, patch.object(runtime.os, 'waitid', return_value=object()):
+        with patch.object(runtime.os, 'killpg') as signal, patch.object(runtime, 'child_exited', return_value=True):
             runtime.stop_group(child)
         self.assertEqual([call.args[0] for call in signal.call_args_list], [12345, 12345]); self.assertTrue(child.waited)

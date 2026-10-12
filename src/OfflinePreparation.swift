@@ -59,18 +59,8 @@ final class OfflinePreparation: ObservableObject {
                 let folderValues = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard folderValues.isDirectory == true, folderValues.isSymbolicLink != true,
                       folder.resolvingSymlinksInPath().deletingLastPathComponent().path == resources.resolvingSymlinksInPath().path else { throw PreparationFailure.models }
-                guard let items = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw PreparationFailure.integrity }
-                var actual = Set<String>()
-                for case let item as URL in items {
-                    try Task.checkCancellation()
-                    let properties = try item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-                    guard properties.isSymbolicLink != true else { throw PreparationFailure.integrity }
-                    if properties.isDirectory != true {
-                        actual.insert(String(item.path.dropFirst(folder.path.count + 1)))
-                        guard actual.count <= 100 else { throw PreparationFailure.integrity }
-                    }
-                }
-                guard actual == Set(plan.files.map(\.path)) else { throw PreparationFailure.integrity }
+                let closure = Task.detached(priority: .utility) { try Self.verifyClosure(folder, names: Set(plan.files.map(\.path))) }
+                try await withTaskCancellationHandler(operation: { try await closure.value }, onCancel: { closure.cancel() })
                 var completed: Int64 = 0
                 for asset in plan.files {
                     try Task.checkCancellation()
@@ -88,6 +78,21 @@ final class OfflinePreparation: ObservableObject {
                 self.state = .unavailable((error as? PreparationFailure ?? .integrity).localizedDescription)
             }
         }
+    }
+    nonisolated private static func verifyClosure(_ folder: URL, names: Set<String>) throws {
+        guard let items = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw PreparationFailure.integrity }
+        var actual = Set<String>(), nodes = 0
+        for case let item as URL in items {
+            try Task.checkCancellation(); nodes += 1
+            guard nodes <= 1000 else { throw PreparationFailure.integrity }
+            let properties = try item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard properties.isSymbolicLink != true else { throw PreparationFailure.integrity }
+            if properties.isDirectory != true {
+                actual.insert(String(item.path.dropFirst(folder.path.count + 1)))
+                guard actual.count <= 100 else { throw PreparationFailure.integrity }
+            }
+        }
+        guard actual == names else { throw PreparationFailure.integrity }
     }
     func pause() {
         resumeRequested = false
