@@ -108,16 +108,43 @@ final class RuntimePinTests: XCTestCase {
     }
 }
 
+private actor ObservedChallenges {
+    struct Check: Sendable { let serverTrust: Bool; let accepted: Bool }
+    private(set) var values: [Check] = []
+    func record(serverTrust: Bool, accepted: Bool) { values.append(Check(serverTrust: serverTrust, accepted: accepted)) }
+}
+private final class ObservedPinDelegate: NSObject, URLSessionTaskDelegate {
+    let production: NoRedirects
+    let observations: ObservedChallenges
+    init(pin: String, observations: ObservedChallenges) {
+        production = NoRedirects(certificateSHA256: pin); self.observations = observations
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        production.urlSession(session, task: task, didReceive: challenge) { [observations] disposition, credential in
+            let isTrust = challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust
+            Task { await observations.record(serverTrust: isTrust, accepted: disposition == .useCredential) }
+            completionHandler(disposition, credential)
+        }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        production.urlSession(session, task: task, willPerformHTTPRedirection: response, newRequest: request, completionHandler: completionHandler)
+    }
+}
+
 /// Exercises the actual URLSession authentication delegate against the production relay.
 /// The fixture is model-free and cannot read user prompts, screenshots or credentials.
 final class NativeTLSIntegrationTests: XCTestCase {
     private struct Ready: Decodable { let port: Int; let pin: String }
     @MainActor private func runFixture(correctPin: Bool) async throws {
+        let python = try XCTUnwrap(ProcessInfo.processInfo.environment["DOT_TEST_PYTHON"], "Run scripts/verify_macos.sh to select the supported test interpreter")
+        guard python.hasPrefix("/"), !python.contains("$(") else { throw CocoaError(.executableNotLoadable) }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let process = Process(), control = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        process.executableURL = URL(fileURLWithPath: python)
         process.arguments = ["-I", "-B", root.appendingPathComponent("Fixtures/tls_endpoint.py").path, directory.path]
         process.standardInput = control
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
@@ -135,16 +162,25 @@ final class NativeTLSIntegrationTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.connectionProxyDictionary = [:]; config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 3; config.timeoutIntervalForResource = 5
-        let session = URLSession(configuration: config, delegate: NoRedirects(certificateSHA256: correctPin ? ready.pin : String(repeating: "0", count: 64)), delegateQueue: nil)
+        let observations = ObservedChallenges()
+        let delegate = ObservedPinDelegate(pin: correctPin ? ready.pin : String(repeating: "0", count: 64), observations: observations)
+        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: URL(string: "https://127.0.0.1:\(ready.port)/fixture")!)
         request.setValue("Bearer model-free-test", forHTTPHeaderField: "Authorization")
         if correctPin {
             // Connection: close requires a fresh pinned TLS connection for each request.
             for _ in 0..<2 {
-                let (body, response) = try await session.data(for: request)
-                XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
-                XCTAssertEqual(body, Data("OK".utf8))
+                do {
+                    let (body, response) = try await session.data(for: request)
+                    XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+                    XCTAssertEqual(body, Data("OK".utf8))
+                } catch {
+                    let environment = (try? String(contentsOf: directory.appendingPathComponent("tls-debug.json"), encoding: .utf8)) ?? "missing TLS diagnostics"
+                    let failures = (try? String(contentsOf: directory.appendingPathComponent("tls-errors.txt"), encoding: .utf8)) ?? "no server SSL error"
+                    XCTFail(environment + "\n" + failures)
+                    throw error
+                }
             }
         } else {
             do { _ = try await session.data(for: request); XCTFail("wrong certificate accepted") }
@@ -152,6 +188,13 @@ final class NativeTLSIntegrationTests: XCTestCase {
             try await Task.sleep(nanoseconds: 100_000_000)
             XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("received"), encoding: .utf8), "0")
         }
+        for _ in 0..<100 {
+            if !(await observations.values).isEmpty { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        let checks = await observations.values
+        XCTAssertFalse(checks.isEmpty, "TLS failed before the production certificate-pinning delegate ran")
+        XCTAssertTrue(checks.allSatisfy { $0.serverTrust && $0.accepted == correctPin })
         try control.fileHandleForWriting.close()
         for _ in 0..<500 where process.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertFalse(process.isRunning, "TLS fixture did not stop after parent EOF")
