@@ -10,12 +10,15 @@ jobs:
     # Clean Apple Silicon macOS runner — the isolated "simulator" for a Mac app.
     runs-on: macos-15
     timeout-minutes: 45
+    env:
+      DOT_PAT: ${{ secrets.DOT_PAT }}
     steps:
       - uses: actions/checkout@v4
 
-      # NOTE: no $GITHUB_OUTPUT writes (step renames) — on this runner image they
-      # abort the step shell. Diagnostics travel via git: each step traps EXIT and
-      # force-pushes its captured logs to a ci-diag branch.
+      # NOTE: diagnostics travel via git (ci-diag branch) because unauthenticated
+      # API calls cannot read job logs. push_diag_ci prefers the DOT_PAT secret
+      # (this runner image appears to have no GITHUB_TOKEN) and falls back to the
+      # checkout credentials.
 
       - name: egress-probe
         id: egress
@@ -24,22 +27,31 @@ jobs:
           trap '
             mkdir -p diag 2>/dev/null || true
             mv diag-live/egress.txt diag/egress.txt 2>/dev/null || true
-            echo "egress step exited" > diag/marker.txt 2>/dev/null || true
+            echo "egress step exited rc=$?" > diag/marker.txt 2>/dev/null || true
             git config user.email "dot-ci@github" 2>/dev/null || true
             git config user.name "Dot CI" 2>/dev/null || true
             git checkout -qB ci-diag 2>/dev/null || git checkout -q ci-diag 2>/dev/null || true
             git add -A diag 2>/dev/null || true
             git commit -qm "egress diag $(date -u +%s)" 2>/dev/null || true
-            git push -qf origin ci-diag 2>/dev/null || true
+            push_diag_ci
             git checkout -q main 2>/dev/null || true
           ' EXIT
+          push_diag_ci() {
+            local tok="${DOT_PAT:-${GITHUB_TOKEN:-}}"
+            if [ -n "$tok" ]; then
+              git push -qf "https://x-access-token:$tok@github.com/$GITHUB_REPOSITORY.git" ci-diag 2>/dev/null || git push -qf origin ci-diag 2>/dev/null || true
+            else
+              git push -qf origin ci-diag 2>/dev/null || true
+            fi
+          }
           mkdir -p diag-live
           {
             echo "runner: $(uname -a) · arch: $(uname -m) · memGB: $(( $(sysctl -n hw.memsize) / 1073741824 ))"
+            echo "token-set: $([ -n "${DOT_PAT:-${GITHUB_TOKEN:-}}" ] && echo yes || echo no)"
             echo "github-release: $(curl -s -m 15 -o /dev/null -w '%{http_code}' -r 0-100 https://github.com/ggml-org/llama.cpp/releases/download/b11564/llama-b11564-bin-macos-arm64.tar.gz || echo ERR)"
             echo "huggingface: $(curl -s -m 15 -o /dev/null -w '%{http_code}' -r 0-100 "https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true" || echo ERR)"
             echo "api-github: $(curl -s -m 15 -o /dev/null -w '%{http_code}' https://api.github.com/repos/ggml-org/llama.cpp/releases/latest || echo ERR)"
-            echo "HOME=$HOME WORKSPACE=$GITHUB_WORKSPACE OUTPUT=$GITHUB_OUTPUT"
+            echo "HOME=$HOME WORKSPACE=$GITHUB_WORKSPACE"
           } > diag-live/egress.txt 2>&1
           cat diag-live/egress.txt
 
@@ -85,9 +97,17 @@ jobs:
             git checkout -qB ci-diag 2>/dev/null || git checkout -q ci-diag 2>/dev/null || true
             git add -A diag 2>/dev/null || true
             git commit -qm "e2e rc=$rc ${LAST:-no-phase} $(date -u +%s)" 2>/dev/null || true
-            git push -qf origin ci-diag 2>/dev/null || true
+            push_diag_ci
             git checkout -q main 2>/dev/null || true
           ' EXIT
+          push_diag_ci() {
+            local tok="${DOT_PAT:-${GITHUB_TOKEN:-}}"
+            if [ -n "$tok" ]; then
+              git push -qf "https://x-access-token:$tok@github.com/$GITHUB_REPOSITORY.git" ci-diag 2>/dev/null || git push -qf origin ci-diag 2>/dev/null || true
+            else
+              git push -qf origin ci-diag 2>/dev/null || true
+            fi
+          }
           mkdir -p diag-live
           set -o pipefail
           bash -x tests/e2e-engine.sh 2>&1 | tee diag-live/e2e.txt
@@ -106,6 +126,11 @@ jobs:
           done
           cp "$HOME/.dot/ci-test/"*.log diag/ 2>/dev/null || true
           git add -A diag 2>/dev/null || true
-          git diff --cached --quiet 2>/dev/null || git commit -qm "ci diagnostics $(date -u +%s)" 2>/dev/null || true
-          git push -f origin ci-diag 2>&1 || true
+          git commit -qm "ci diagnostics $(date -u +%s)" 2>/dev/null || true
+          tok="${DOT_PAT:-${GITHUB_TOKEN:-}}"
+          if [ -n "$tok" ]; then
+            git push -f "https://x-access-token:$tok@github.com/$GITHUB_REPOSITORY.git" ci-diag 2>&1 || true
+          else
+            git push -f origin ci-diag 2>&1 || true
+          fi
           git checkout -q main 2>/dev/null || true
