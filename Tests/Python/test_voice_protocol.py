@@ -29,6 +29,72 @@ class VoiceProtocolTests(unittest.TestCase):
 
 
 class HelperRuntimeTests(unittest.TestCase):
+    def initialize_with_fake_packages(self, root, voice_is_tensor=True,
+                                      fallback_available=True, english_version='3.8.0',
+                                      voice_is_float32=True):
+        import contextlib, types
+        from unittest.mock import Mock, patch
+        model = Path(root) / 'model'; (model / 'voices').mkdir(parents=True)
+        for name in ('config.json', 'kokoro-v1_0.pth', 'voices/bf_isabella.pt'):
+            (model / name).write_bytes(b'inert test fixture, never deserialized')
+        class FakeTensor: pass
+        class FakeFloatTensor(FakeTensor): pass
+        tensor = (FakeFloatTensor() if voice_is_float32 else FakeTensor()) if voice_is_tensor else object()
+        torch = types.SimpleNamespace(load=Mock(return_value=tensor),
+            FloatTensor=FakeFloatTensor, is_tensor=lambda value: isinstance(value, FakeTensor),
+            inference_mode=contextlib.nullcontext)
+        pipeline = Mock(return_value=[])
+        pipeline.g2p = types.SimpleNamespace(fallback=object() if fallback_available else None)
+        spacy = types.ModuleType('spacy'); spacy.cli = types.ModuleType('spacy.cli')
+        modules = {'torch': torch, 'numpy': types.ModuleType('numpy'),
+            'spacy': spacy, 'spacy.cli': spacy.cli,
+            'misaki': types.ModuleType('misaki'),
+            'misaki.espeak': types.SimpleNamespace(EspeakFallback=Mock()),
+            'kokoro': types.SimpleNamespace(KPipeline=Mock(return_value=pipeline)),
+            'kokoro.model': types.SimpleNamespace(KModel=Mock())}
+        with patch.dict(helper.sys.modules, modules), \
+             patch.object(helper.importlib.metadata, 'version', side_effect=lambda name: english_version if name == 'en-core-web-sm' else '0.9.4'), \
+             patch.object(helper.importlib.util, 'find_spec', return_value=object()), \
+             patch.dict(helper.os.environ):
+            voice = helper.WarmVoice(root)
+        return voice, torch, tensor, pipeline, model / 'voices/bf_isabella.pt'
+
+    def test_comma_and_unicode_bundle_path_passes_local_tensor_not_voice_names(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix='Dot, local voix é ') as root:
+            voice, torch, tensor, pipeline, path = self.initialize_with_fake_packages(root)
+            torch.load.assert_called_once_with(str(path), map_location='cpu', weights_only=True)
+            self.assertIs(voice.voice, tensor)
+            # The empty fake generator avoids neural execution while exercising
+            # the real helper call into Kokoro's voice dispatch boundary.
+            with self.assertRaisesRegex(RuntimeError, 'empty_audio'):
+                voice.render('Hello.', lambda: False)
+            pipeline.assert_called_once_with('Hello.', voice=tensor, speed=1.0)
+
+    def test_non_tensor_local_voice_is_rejected_before_pipeline_use(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(RuntimeError, 'invalid_local_voice_asset'):
+                self.initialize_with_fake_packages(root, voice_is_tensor=False)
+
+    def test_actual_pipeline_missing_espeak_fallback_is_rejected(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(RuntimeError, 'local_espeak_fallback_missing'):
+                self.initialize_with_fake_packages(root, fallback_available=False)
+
+    def test_non_float32_tensor_cannot_fall_through_to_voice_name_dispatch(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(RuntimeError, 'invalid_local_voice_asset'):
+                self.initialize_with_fake_packages(root, voice_is_float32=False)
+
+    def test_importable_english_model_with_wrong_distribution_version_is_rejected(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(RuntimeError, 'english_g2p_model_missing'):
+                self.initialize_with_fake_packages(root, english_version='3.7.0')
+
     def test_protocol_output_survives_library_stdout_redirect(self):
         import contextlib, io
         from unittest.mock import patch

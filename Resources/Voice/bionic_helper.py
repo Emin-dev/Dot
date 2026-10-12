@@ -60,35 +60,47 @@ class WarmVoice:
         os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
         self.root = Path(root).resolve(strict=True)
         model = self.root / 'model'
-        self.voice = model / 'voices' / (VOICE + '.pt')
-        for path in (model / 'config.json', model / 'kokoro-v1_0.pth', self.voice):
+        voice_path = model / 'voices' / (VOICE + '.pt')
+        for path in (model / 'config.json', model / 'kokoro-v1_0.pth', voice_path):
             if not path.is_file():
                 raise RuntimeError('local_voice_assets_missing')
         for package in ('kokoro', 'misaki'):
             if importlib.metadata.version(package) != '0.9.4':
                 raise RuntimeError('unsupported_voice_package_version')
-        if importlib.util.find_spec('en_core_web_sm') is None:
+        if (importlib.util.find_spec('en_core_web_sm') is None or
+                importlib.metadata.version('en-core-web-sm') != '3.8.0'):
             raise RuntimeError('english_g2p_model_missing')
         import spacy.cli
         def no_download(*args, **kwargs):
             raise RuntimeError('downloads_disabled')
         spacy.cli.download = no_download
         from misaki.espeak import EspeakFallback
-        # Prevent Kokoro falling back to a separately downloaded G2P model.
+        # Fail early if local eSpeak cannot initialize. Kokoro constructs its
+        # own fallback later and otherwise silently tolerates its failure.
         EspeakFallback(british=True)
         import numpy as np
         import torch
         from kokoro.model import KModel
         from kokoro import KPipeline
         self.np, self.torch = np, torch
+        # Kokoro 0.9.4 treats string voices as comma-separated names, even when
+        # they are local paths. The audited bundle may itself contain a comma.
+        # Load only the verified local asset and bypass that name/download path.
+        self.voice = torch.load(str(voice_path), map_location='cpu', weights_only=True)
+        # This exact Kokoro release dispatches tensor voices as CPU FloatTensor,
+        # not as arbitrary Tensor dtypes; reject rather than enter its name path.
+        if not isinstance(self.voice, torch.FloatTensor):
+            raise RuntimeError('invalid_local_voice_asset')
         self.model = KModel(config=str(model / 'config.json'), model=str(model / 'kokoro-v1_0.pth')).to('cpu').eval()
         self.pipeline = KPipeline(lang_code='b', model=self.model, repo_id='hexgrad/Kokoro-82M')
+        if self.pipeline.g2p.fallback is None:
+            raise RuntimeError('local_espeak_fallback_missing')
 
     def render(self, text, cancelled):
         chunks = []
         samples = 0
         with self.torch.inference_mode():
-            for item in self.pipeline(text, voice=str(self.voice), speed=1.0):
+            for item in self.pipeline(text, voice=self.voice, speed=1.0):
                 if cancelled():
                     return None
                 tensors = [value for value in item if self.torch.is_tensor(value)]
