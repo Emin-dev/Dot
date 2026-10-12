@@ -41,10 +41,20 @@ class VoiceInstallPlanTests(unittest.TestCase):
             self.assertEqual(plan['argv'][:2],['/usr/bin/sandbox-exec','-p'])
             self.assertIn('(deny network*)',plan['argv'][2]);self.assertIn('(deny file-write*)',plan['argv'][2])
             self.assertEqual(plan['environment']['PIP_CONFIG_FILE'],'/dev/null')
-            self.assertEqual(plan['argv'][plan['argv'].index('--prefix')+1],str(args[3]))
+            self.assertEqual(plan['argv'][plan['argv'].index('--prefix')+1],str(args[3].resolve()))
             self.assertFalse(plan['immutable_runtime_manifest_may_be_created'])
             self.assertTrue((args[-1]/'wheels/fixture-1.0-py3-none-any.whl').is_file())
             self.assertIn('--hash=sha256:',(args[-1]/'requirements.txt').read_text())
+    def test_parent_alias_uses_canonical_prefix_and_write_roots(self):
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d);real=root/'real';real.mkdir();alias=root/'alias';alias.symlink_to(real,target_is_directory=True)
+            args,_,_,_=self.fixture(alias);plan=module.prepare(*args)
+            expected=str(args[3].resolve())
+            self.assertEqual(plan['argv'][plan['argv'].index('--prefix')+1],expected)
+            self.assertEqual(plan['required_preflight_argv'][-1],expected)
+            self.assertIn(module.sandbox_literal(args[3].resolve()),plan['argv'][2])
+            self.assertIn(module.sandbox_literal(args[-1].resolve()),plan['argv'][2])
+            self.assertNotIn(str(alias),plan['argv'][2])
     def test_unresolved_lock_rejected_before_output(self):
         with tempfile.TemporaryDirectory() as d:
             args,lock,_,_=self.fixture(Path(d));lock['unresolved']=['missing'];write(args[0],lock)
