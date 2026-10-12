@@ -419,3 +419,50 @@ final class ResponseBoundaryTests: XCTestCase {
         XCTAssertThrowsError(try budget.accept("a"))
     }
 }
+
+final class CompanionDragTests: XCTestCase {
+    func testDragCooldownSurvivesPausedToUnpausedTransition() {
+        for seed in 1...20 {
+            var roam = RoamingCore(seed: UInt64(seed), now: 0)
+            let frame = CGRect(x: 200, y: 200, width: 148, height: 156)
+            let visible = CGRect(x: 0, y: 0, width: 1440, height: 900)
+            let cursor = CGPoint(x: 5000, y: 5000)
+            _ = roam.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: 0)
+            roam.cancel(now: 1, longRest: true)
+            for tick in 2...30 {
+                XCTAssertEqual(roam.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick)), frame.origin)
+                XCTAssertFalse(roam.isTravelling)
+            }
+        }
+    }
+    func testPanelFootprintHasOnlySmallCharacterPadding() {
+        XCTAssertEqual(PetLayout.panelSize.width, PetLayout.petSize.width + 8)
+        XCTAssertEqual(PetLayout.panelSize.height, PetLayout.petSize.height + 8)
+        XCTAssertEqual(PetLayout.petBottom, 4)
+    }
+    func testClickWaitsForReleaseAndRequiresInside() {
+        var gesture = CompanionDragState(); gesture.begin(point: .zero, origin: .zero)
+        XCTAssertNil(gesture.update(point: CGPoint(x: 3, y: 4)))
+        XCTAssertTrue(gesture.release(point: CGPoint(x: 3, y: 4), inside: true))
+        XCTAssertFalse(gesture.release(point: .zero, inside: true))
+        gesture.begin(point: .zero, origin: .zero)
+        XCTAssertFalse(gesture.release(point: .zero, inside: false))
+    }
+    func testExactThresholdLatchesDragAndSuppressesReturnClick() {
+        var gesture = CompanionDragState(); gesture.begin(point: .zero, origin: CGPoint(x: -200, y: 40))
+        XCTAssertEqual(gesture.update(point: CGPoint(x: 6, y: 0)), CGPoint(x: -194, y: 40))
+        XCTAssertTrue(gesture.dragging)
+        XCTAssertEqual(gesture.update(point: .zero), CGPoint(x: -200, y: 40))
+        XCTAssertFalse(gesture.release(point: .zero, inside: true))
+    }
+    func testReleaseDisplacementWithoutDraggedEventDoesNotClick() {
+        var gesture = CompanionDragState(); gesture.begin(point: .zero, origin: .zero)
+        XCTAssertFalse(gesture.release(point: CGPoint(x: 0, y: 6), inside: true))
+    }
+    func testCancellationAndReplacementNeverResurrectOldClick() {
+        var gesture = CompanionDragState(); gesture.begin(point: .zero, origin: .zero); gesture.cancel()
+        XCTAssertFalse(gesture.release(point: .zero, inside: true)); XCTAssertNil(gesture.update(point: .zero))
+        gesture.begin(point: CGPoint(x: 10, y: 10), origin: .zero)
+        XCTAssertTrue(gesture.release(point: CGPoint(x: 10, y: 10), inside: true))
+    }
+}

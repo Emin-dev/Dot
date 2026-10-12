@@ -29,6 +29,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let panel = surface.present(content: NSHostingView(rootView: PetView(model: model, stt: model.stt)), size: PetLayout.panelSize)
         panel.stopAction = { [weak self] in self?.stopCurrentAction() }
         panel.optionsAction = { [weak self] in self?.showOptions() }
+        panel.primaryAction = { [weak model] in model?.clicked() }
+        panel.primaryHitTest = { point in
+            NSBezierPath(ovalIn: NSRect(x: (PetLayout.panelSize.width - PetLayout.petSize.width) / 2,
+                                       y: PetLayout.petBottom, width: PetLayout.petSize.width,
+                                       height: PetLayout.petSize.height)).contains(point)
+        }
+        panel.pointerInteraction = { [weak self, weak model] active in
+            model?.interactionPaused = active
+            self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: !active)
+        }
+        panel.constrainDrag = { [weak panel] origin, cursor in
+            guard let panel else { return origin }
+            let screen = NSScreen.screens.first { $0.frame.contains(cursor) } ?? panel.screen ?? NSScreen.main
+            guard let screen, let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: screen.visibleFrame) else { return panel.frame.origin }
+            return RoamingCore.clamp(origin, to: bounds)
+        }
         model.showOptions = { [weak self] in self?.showOptions() }
         if let frame = NSScreen.main?.visibleFrame {
             panel.setFrameOrigin(NSPoint(x: frame.maxX - PetLayout.panelSize.width - 16, y: frame.minY + 16))
@@ -80,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func clearConversation() { model?.reset() }
     private func showOptions() {
         guard let panel, let view = panel.contentView, let model else { return }
-        cancelMovement(); panel.makeKey()
+        panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
         let menu = NSMenu()
         if let message = OfflinePreparation.shared.state.detail {
             let item = NSMenuItem(title: String(message.prefix(160)), action: nil, keyEquivalent: "")

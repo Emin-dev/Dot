@@ -5,12 +5,24 @@ import AppKit
 final class CompanionPanel: NSPanel {
     var stopAction: (() -> Void)?
     var optionsAction: (() -> Void)?
+    var primaryAction: (() -> Void)?
+    var primaryHitTest: ((NSPoint) -> Bool)?
+    var pointerInteraction: ((Bool) -> Void)?
+    var constrainDrag: ((NSPoint, NSPoint) -> NSPoint)?
+    private var pointer = CompanionDragState()
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
-    override func cancelOperation(_ sender: Any?) { stopAction?() }
+    func cancelPointerGesture() {
+        let wasPressed = pointer.isPressed; pointer.cancel()
+        if wasPressed { pointerInteraction?(false) }
+    }
+    private func openOptions() { cancelPointerGesture(); optionsAction?() }
+    override func cancelOperation(_ sender: Any?) { cancelPointerGesture(); stopAction?() }
+    override func resignKey() { cancelPointerGesture(); super.resignKey() }
+    override func close() { cancelPointerGesture(); super.close() }
     override func keyDown(with event: NSEvent) {
-        if event.keyCode == 53 { stopAction?(); return }
-        if event.keyCode == 109, event.modifierFlags.contains(.shift) { optionsAction?(); return }
+        if event.keyCode == 53 { cancelOperation(nil); return }
+        if event.keyCode == 109, event.modifierFlags.contains(.shift) { openOptions(); return }
         super.keyDown(with: event)
     }
     override func sendEvent(_ event: NSEvent) {
@@ -18,12 +30,33 @@ final class CompanionPanel: NSPanel {
             keyDown(with: event); return
         }
         if event.type == .rightMouseDown || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) {
-            makeKey(); optionsAction?(); return
+            cancelPointerGesture(); makeKey(); openOptions(); return
         }
-        if event.type == .leftMouseDown { makeKey() }
+        if event.type == .leftMouseDown {
+            cancelPointerGesture()
+            guard primaryHitTest?(event.locationInWindow) == true else { return }
+            makeKey()
+            pointer.begin(point: convertPoint(toScreen: event.locationInWindow), origin: frame.origin)
+            pointerInteraction?(true); return
+        }
+        if event.type == .leftMouseDragged {
+            let point = convertPoint(toScreen: event.locationInWindow)
+            if let origin = pointer.update(point: point) {
+                setFrameOrigin(constrainDrag?(origin, point) ?? origin)
+            }
+            return
+        }
+        if event.type == .leftMouseUp {
+            let wasPressed = pointer.isPressed
+            let click = pointer.release(point: convertPoint(toScreen: event.locationInWindow),
+                                        inside: primaryHitTest?(event.locationInWindow) == true)
+            if wasPressed { pointerInteraction?(false) }
+            if click { primaryAction?() }
+            return
+        }
         super.sendEvent(event)
     }
-    override func rightMouseDown(with event: NSEvent) { optionsAction?() }
+    override func rightMouseDown(with event: NSEvent) { openOptions() }
 }
 
 @MainActor

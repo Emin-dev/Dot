@@ -5,12 +5,35 @@ import Foundation
 
 enum PetLayout {
     static let petSize = CGSize(width: 140, height: 148)
-    static let panelSize = CGSize(width: 180, height: 232)
-    static let captionHeight: CGFloat = 56
-    static let captionBottomPadding: CGFloat = 8
-    static let stackSpacing: CGFloat = 8
-    static var petBottom: CGFloat { captionHeight + captionBottomPadding + stackSpacing }
+    static let edgePadding: CGFloat = 4
+    static let panelSize = CGSize(width: petSize.width + edgePadding * 2, height: petSize.height + edgePadding * 2)
+    static var petBottom: CGFloat { edgePadding }
     static var petCenterY: CGFloat { petBottom + petSize.height / 2 }
+}
+
+/// A pointer gesture can become a click or a drag, never both.
+struct CompanionDragState {
+    static let threshold: CGFloat = 6
+    private var start: CGPoint?
+    private var origin = CGPoint.zero
+    private(set) var dragging = false
+    var isPressed: Bool { start != nil }
+    mutating func begin(point: CGPoint, origin: CGPoint) {
+        cancel(); start = point; self.origin = origin
+    }
+    mutating func update(point: CGPoint) -> CGPoint? {
+        guard let start else { return nil }
+        let dx = point.x - start.x, dy = point.y - start.y
+        if hypot(dx, dy) >= Self.threshold { dragging = true }
+        return dragging ? CGPoint(x: origin.x + dx, y: origin.y + dy) : nil
+    }
+    mutating func release(point: CGPoint, inside: Bool) -> Bool {
+        guard start != nil else { return false }
+        _ = update(point: point)
+        let click = !dragging && inside
+        cancel(); return click
+    }
+    mutating func cancel() { start = nil; dragging = false }
 }
 
 /// Deterministic within-display wandering. Coordinates are AppKit points, not pixels.
@@ -23,6 +46,7 @@ struct RoamingCore {
     }
     private var random: UInt64
     private var nextDecision: Double
+    private var minimumRestUntil = 0.0
     private var lastTick: Double?
     private var trip: Trip?
     private var recentCells: [Int] = []
@@ -33,7 +57,8 @@ struct RoamingCore {
     }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
-        nextDecision = now + (longRest ? 30 + unit() * 30 : 8 + unit() * 7)
+        if longRest { minimumRestUntil = now + 30 + unit() * 30 }
+        nextDecision = max(minimumRestUntil, now + 8 + unit() * 7)
     }
     private mutating func unit() -> Double {
         random &+= 0x9e3779b97f4a7c15

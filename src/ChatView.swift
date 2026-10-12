@@ -137,48 +137,49 @@ struct PetView: View {
     @ObservedObject var stt: STTManager
     @ObservedObject private var preparation = OfflinePreparation.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        VStack(spacing: PetLayout.stackSpacing) {
-            Spacer(minLength: 0)
-            Button(action: model.clicked) {
-                PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || model.hovered || model.pinned)
-                    .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
-                    .overlay(alignment: .topTrailing) {
-                        if model.capturingScreen || model.screenContextUsed {
-                            Image(systemName: model.capturingScreen ? "eye.fill" : "eye")
-                                .font(.system(size: 12)).accessibilityLabel(model.capturingScreen ? "Reading screen locally" : "Screen used for this reply")
+        Button(action: model.clicked) {
+            PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || model.hovered || model.pinned)
+                .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
+                .overlay {
+                    if preparation.state == .checking {
+                        ZStack {
+                            Circle().stroke(Color.accentColor.opacity(0.45), lineWidth: 2)
+                            Circle().trim(from: 0, to: CGFloat(preparation.progress))
+                                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         }
+                            .frame(width: 116, height: 116).rotationEffect(.degrees(-90))
+                            .accessibilityHidden(true)
                     }
-            }
-            .buttonStyle(.plain)
-            .contentShape(Ellipse())
-            .onHover { model.hovered = $0 }
-            .accessibilityLabel("Dot companion")
-            .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen, screenUsed: model.screenContextUsed))
-            .accessibilityHint("Click to talk or interrupt. Right-click or Shift F10 for options. Escape stops the current action.")
-            .accessibilityAction(named: Text("Options")) { model.showOptions?() }
-            VStack(spacing: 2) {
-                Text(status).font(.system(size: 11, weight: .medium, design: .rounded))
-                    .foregroundStyle(isIssue ? Color.orange : Color.primary)
-                if preparation.state == .checking {
-                    ProgressView(value: preparation.progress).frame(width: 142)
-                        .accessibilityLabel("Checking bundled files")
-                } else if let detail {
-                    Text(detail).font(.system(size: 11)).lineLimit(2).multilineTextAlignment(.center)
                 }
-            }
-            .frame(width: 168, height: PetLayout.captionHeight)
-            .background {
-                if reduceTransparency {
-                    RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .windowBackgroundColor))
-                } else {
-                    RoundedRectangle(cornerRadius: 12).fill(.regularMaterial)
+                .overlay(alignment: .topLeading) {
+                    if isIssue {
+                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 12))
+                            .foregroundStyle(.orange).accessibilityHidden(true)
+                    } else if preparation.state == .paused {
+                        Image(systemName: "pause.circle.fill").font(.system(size: 12))
+                            .foregroundStyle(.secondary).accessibilityHidden(true)
+                    } else if preparation.state == .checking {
+                        Image(systemName: "hourglass").font(.system(size: 12))
+                            .foregroundStyle(Color.accentColor).accessibilityHidden(true)
+                    }
                 }
-            }
-            .padding(.bottom, PetLayout.captionBottomPadding)
+                .overlay(alignment: .topTrailing) {
+                    if model.capturingScreen || model.screenContextUsed {
+                        Image(systemName: model.capturingScreen ? "eye.fill" : "eye")
+                            .font(.system(size: 12)).accessibilityLabel(model.capturingScreen ? "Reading screen locally" : "Screen used for this reply")
+                    }
+                }
         }
+        .buttonStyle(.plain)
+        .contentShape(Ellipse())
+        .onHover { model.hovered = $0 }
+        .accessibilityLabel("Dot companion")
+        .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen, screenUsed: model.screenContextUsed))
+        .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click or Shift F10 for options. Escape stops the current action.")
+        .accessibilityAction(named: Text("Options")) { model.showOptions?() }
+        .padding(PetLayout.edgePadding)
         .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
         .onExitCommand {
             if model.phase.isActive { model.cancelTurn() }
@@ -192,6 +193,7 @@ struct PetView: View {
         return nil
     }
     private var status: String {
+        if preparation.state == .checking { return "Checking bundled files, \(Int(preparation.progress * 100)) percent" }
         if !preparation.ready { return preparation.state.caption }
         if case .blocked = model.phase { return "Voice unavailable · right-click" }
         if stt.transcribing { return "Transcribing locally…" }

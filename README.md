@@ -1,10 +1,10 @@
 # Dot — floating local companion
 
-A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.
+A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Drag to move without starting the microphone. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.
 
 ## Build status
 
-The review branch implements a single floating dot with a small right-click menu. There are no app settings, setup, folder-selection or chat windows. Compact status and verification progress appear on the dot. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
+The review branch implements a single floating dot with a small right-click menu. There are no app settings, setup, folder-selection or chat windows, or persistent text label below the dot. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
 
 **A working complete installer is not yet available.** The voice dependency lock, licensed redistributable closure, offline import probe and end-to-end native conversation remain incomplete. The real Whisper framework branch has compiled on the supported Mac, but that is not a working speech pipeline. A development build reports missing bundled components and cannot talk.
 

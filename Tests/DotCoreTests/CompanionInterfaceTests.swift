@@ -3,6 +3,72 @@ import XCTest
 import AppKit
 
 final class CompanionInterfaceTests: XCTestCase {
+    @MainActor private func pointerPanel() -> CompanionPanel {
+        _ = NSApplication.shared
+        let panel = CompanionPanel(contentRect: NSRect(x: 100, y: 100, width: 100, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.primaryHitTest = { $0.x >= 0 && $0.x <= 100 && $0.y >= 0 && $0.y <= 100 }
+        panel.constrainDrag = { [weak panel] _, _ in panel?.frame.origin ?? .zero }
+        return panel
+    }
+    @MainActor private func sendPointer(_ type: NSEvent.EventType, _ point: NSPoint, to panel: CompanionPanel, modifiers: NSEvent.ModifierFlags = []) {
+        let event = NSEvent.mouseEvent(with: type, location: point, modifierFlags: modifiers, timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)!
+        panel.sendEvent(event)
+    }
+    @MainActor func testMouseTalkOnlyOccursOnceOnUndraggedRelease() {
+        let panel = pointerPanel(); defer { panel.close() }; var talks = 0
+        panel.primaryAction = { talks += 1 }
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel); XCTAssertEqual(talks, 0)
+        sendPointer(.leftMouseUp, NSPoint(x: 22, y: 22), to: panel); XCTAssertEqual(talks, 1)
+        sendPointer(.leftMouseUp, NSPoint(x: 22, y: 22), to: panel); XCTAssertEqual(talks, 1)
+    }
+    @MainActor func testDraggingThenReturningNeverStartsTalk() {
+        let panel = pointerPanel(); defer { panel.close() }; var talks = 0; var interactions: [Bool] = []
+        panel.primaryAction = { talks += 1 }; panel.pointerInteraction = { interactions.append($0) }
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel)
+        sendPointer(.leftMouseDragged, NSPoint(x: 26, y: 20), to: panel)
+        sendPointer(.leftMouseDragged, NSPoint(x: 20, y: 20), to: panel)
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel)
+        XCTAssertEqual(talks, 0); XCTAssertEqual(interactions, [true, false])
+    }
+    @MainActor func testCanceledOrControlClickGestureNeverStartsTalkOnRelease() {
+        let panel = pointerPanel(); defer { panel.close() }; var talks = 0; var options = 0
+        panel.primaryAction = { talks += 1 }; panel.optionsAction = { options += 1 }
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel); panel.cancelOperation(nil)
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel)
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel, modifiers: [.control])
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel)
+        XCTAssertEqual(talks, 0); XCTAssertEqual(options, 1)
+    }
+    @MainActor func testOutsideHitRegionAndLostKeyNeverStartTalk() {
+        let panel = pointerPanel(); defer { panel.close() }; var talks = 0
+        panel.primaryAction = { talks += 1 }
+        sendPointer(.leftMouseDown, NSPoint(x: -5, y: -5), to: panel)
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel)
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel); panel.resignKey()
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel); XCTAssertEqual(talks, 0)
+    }
+    @MainActor func testKeyboardOptionsCancelsPressedPointerBeforeLaterRelease() {
+        let panel = pointerPanel(); defer { panel.close() }; var talks = 0; var options = 0
+        panel.primaryAction = { talks += 1 }; panel.optionsAction = { options += 1 }
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel)
+        let key = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [.shift], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: 109)!
+        panel.sendEvent(key)
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel)
+        XCTAssertEqual(talks, 0); XCTAssertEqual(options, 1)
+    }
+    @MainActor func testDragUsesGlobalDeltaAfterPanelOriginChanges() {
+        let panel = pointerPanel(); defer { panel.close() }; panel.constrainDrag = nil
+        let initial = panel.frame.origin
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel)
+        sendPointer(.leftMouseDragged, NSPoint(x: 30, y: 20), to: panel)
+        XCTAssertEqual(panel.frame.origin.x, initial.x + 10, accuracy: 0.01)
+        sendPointer(.leftMouseDragged, NSPoint(x: 35, y: 20), to: panel)
+        XCTAssertEqual(panel.frame.origin.x, initial.x + 25, accuracy: 0.01)
+        sendPointer(.leftMouseUp, NSPoint(x: 35, y: 20), to: panel)
+    }
     @MainActor func testRepeatedRecallReusesOnlyCompanionPanel() {
         _ = NSApplication.shared
         let surface = CompanionSurface()
