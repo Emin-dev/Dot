@@ -59,7 +59,7 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(plan['environment']['HF_HUB_OFFLINE'], '1')
         self.assertIn('--offline', plan['launcher_arguments'])
         snapshot = state / 'hf/hub/models--owner--model/snapshots' / ('a' * 40)
-        self.assertEqual((snapshot / 'config.json').resolve(), self.payload / 'target/config.json')
+        self.assertEqual((snapshot / 'config.json').resolve(), (self.payload / 'target/config.json').resolve())
         self.assertTrue((state / 'launch-plan.json').is_file())
     def test_existing_state_never_replaced(self):
         state = self.base / 'state'; state.mkdir(); (state / 'keep').write_text('keep')
