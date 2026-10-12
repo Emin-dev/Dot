@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 LOGS=$(mktemp -d "${TMPDIR:-/tmp}/dot-checks.XXXXXX")
 python3 -B -m unittest discover -s Tests/Python -v 2>&1 | tee "$LOGS/python.log"
 python3 -B scripts/test_voice_sandbox.py 2>&1 | tee "$LOGS/sandbox.log"
+python3 -B scripts/test_splash_sandbox.py 2>&1 | tee "$LOGS/splash-sandbox.log"
 python3 -B scripts/check_contracts.py
 swift test 2>&1 | tee "$LOGS/swift.log"
 xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \

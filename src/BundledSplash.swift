@@ -25,7 +25,7 @@ final class BundledSplash {
             token = generation; bytes = Data(); port = nil; serverPID = nil; apiKey = nil
             child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
             // Only loopback connections are allowed inside the owned runtime sandbox.
-            child.arguments = ["-p", "(version 1)(allow default)(deny network*)(allow network-inbound (local ip \"127.0.0.1:*\"))(allow network-outbound (remote ip \"127.0.0.1:*\"))",
+            child.arguments = ["-f", resources.appendingPathComponent("Runtime/splash.sb").path,
                                payload.appendingPathComponent("Splash/python/bin/python3").path, "-I", "-B",
                                resources.appendingPathComponent("Runtime/dot_runtime.py").path,
                                "--payload", payload.path, "--models", models.path, "--state", directory.path,

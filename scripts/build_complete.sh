@@ -25,7 +25,7 @@ nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
 cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
-cp Resources/Runtime/dot_runtime.py "$APP/Contents/Resources/Runtime/"
+cp Resources/Runtime/dot_runtime.py Resources/Runtime/splash.sb "$APP/Contents/Resources/Runtime/"
 cp Resources/model-downloads.json "$APP/Contents/Resources/"
 MODEL_DOWNLOAD=true
 if [[ -n "${DOT_MODEL_PAYLOAD:-}" ]]; then
