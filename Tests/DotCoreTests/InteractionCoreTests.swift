@@ -1,3 +1,6 @@
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 import XCTest
 #if SWIFT_PACKAGE
 @testable import DotCore
