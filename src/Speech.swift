@@ -11,6 +11,9 @@ final class STTManager: NSObject, ObservableObject {
     @Published var recording = false
     @Published var transcript = ""
     @Published var permissionDenied = false
+    /// Human-readable voice error (shown in the UI; modal alerts are avoided —
+    /// they would hang the app/CI when no audio device or permission exists).
+    @Published var errorText: String?
     /// Live microphone level 0..1 (drives the orb while listening).
     @Published var level: Double = 0
     /// Set to true when a voice capture should auto-send its final transcript.
@@ -43,7 +46,8 @@ final class STTManager: NSObject, ObservableObject {
         }
     }
 
-    private func begin() {
+    // internal (not private) so the headless STT harness can drive it directly.
+    func begin() {
         guard !recording else { return }
         transcript = ""
         let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
@@ -58,10 +62,18 @@ final class STTManager: NSObject, ObservableObject {
         request.taskHint = .dictation
         self.request = request
 
-        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
         let input = audioEngine.inputNode
+        // CRASH FIX: the tap MUST use the input node's OWN output format
+        // (48 kHz on most Macs). Installing a custom 16 kHz tap format throws
+        // an unrecoverable ObjC exception → SIGABRT. The recognizer resamples
+        // internally, so no manual conversion is needed.
+        let nodeFormat = input.outputFormat(forBus: 0)
+        guard nodeFormat.sampleRate > 0 else {
+            errorText = "No microphone available"
+            return
+        }
         var tapCount = 0
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+        input.installTap(onBus: 0, bufferSize: 1024, format: nodeFormat) { [weak self] buffer, _ in
             request.append(buffer)
             // Level metering (throttled) — feeds the orb.
             tapCount += 1
@@ -86,10 +98,13 @@ final class STTManager: NSObject, ObservableObject {
         }
 
         do {
+            audioEngine.prepare()
             try audioEngine.start()
+            errorText = nil
             recording = true
         } catch {
-            AppKit.NSApp?.presentError(error)
+            // Mic permission denied / device busy — recover cleanly, no crash.
+            errorText = error.localizedDescription
             cleanup()
         }
     }

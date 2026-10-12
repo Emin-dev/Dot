@@ -1,0 +1,39 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test-macos:
+    # Clean Apple Silicon macOS runner — the isolated "simulator" for a Mac app.
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build app + DMG
+        run: bash build.sh
+
+      - name: Sanity (arch, signature, plist)
+        run: |
+          file build/Dot.app/Contents/MacOS/Dot
+          codesign -v --verbose=2 build/Dot.app
+          plutil -lint build/Dot.app/Contents/Info.plist
+          ls -lh Dot.dmg
+
+      - name: STT crash regression (headless)
+        run: |
+          swiftc -o build/stt-test src/Speech.swift tests/stt/main.swift \
+            -framework AppKit -framework AVFoundation -framework Speech -framework AudioToolbox 2>&1 | grep -E 'error' || true
+          ./build/stt-test
+
+      - name: TTS (headless CI mode)
+        run: |
+          swiftc -o build/tts-test src/Speech.swift tests/main.swift \
+            -framework AppKit -framework AVFoundation -framework Speech -framework AudioToolbox 2>&1 | grep -E 'error' || true
+          DOT_TTS_CI=1 ./build/tts-test
+
+      - name: Engine end-to-end (llama.cpp + Qwen3-4B + real chat)
+        run: bash tests/e2e-engine.sh

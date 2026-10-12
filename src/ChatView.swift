@@ -366,7 +366,13 @@ struct ContentView: View {
     // MARK: bottom bar (voice-first)
 
     private var bottomBar: some View {
-        HStack(spacing: 26) {
+        VStack(spacing: 6) {
+            if let err = model.stt.errorText {
+                Text(err)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red.opacity(0.8))
+            }
+            HStack(spacing: 26) {
             Button { model.showText.toggle() } label: {
                 Image(systemName: "keyboard")
                     .font(.system(size: 15))
@@ -405,6 +411,7 @@ struct ContentView: View {
                 .help("Stop")
             } else {
                 Color.clear.frame(width: 44, height: 44)   // balance
+            }
             }
         }
         .padding(.bottom, 18)
