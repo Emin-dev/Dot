@@ -66,15 +66,17 @@ class RuntimeOwnershipTests(unittest.TestCase):
     def tearDown(self): self.temp.cleanup()
     def launch(self):
         import subprocess
-        return subprocess.Popen([sys.executable, '-B', str(path), '--payload', str(self.payload), '--models', str(self.models), '--state', str(self.state), '--manifest', str(self.manifest)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Call the same production main with test-only traceback diagnostics. No model code runs.
+        entry = "import runpy,sys,traceback; sys.argv=sys.argv[1:]; scope=runpy.run_path(sys.argv[0],run_name='dot_runtime_fixture');\ntry: sys.exit(scope['main']())\nexcept Exception: traceback.print_exc(); sys.exit(2)"
+        return subprocess.Popen([sys.executable, '-B', '-c', entry, str(path), '--payload', str(self.payload), '--models', str(self.models), '--state', str(self.state), '--manifest', str(self.manifest)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     def test_parent_eof_stops_child_and_removes_private_state(self):
         import os
         process = self.launch()
         try:
             event = json.loads(process.stdout.readline()); self.assertEqual(event['event'], 'started')
             process.stdin.close(); process.stdin = None
-            process.communicate(timeout=8)
-            self.assertEqual(process.returncode, 0); self.assertFalse(self.state.exists())
+            _, errors = process.communicate(timeout=8)
+            self.assertEqual(process.returncode, 0, errors); self.assertFalse(self.state.exists())
             with self.assertRaises(ProcessLookupError): os.kill(event['pid'], 0)
         finally:
             if process.poll() is None: process.terminate(); process.communicate(timeout=8)
