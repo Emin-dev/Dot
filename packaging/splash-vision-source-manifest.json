@@ -1,0 +1,156 @@
+{
+  "splash_version": "1.3.1",
+  "splash_commit": "f91c91e21dda483f8c59a248a444d0989a560d31",
+  "review_date": "2026-10-12",
+  "verification": "Official source and small metadata reads only. No weights downloaded or runtime inference executed. Weight SHA-256 and sizes are upstream LFS metadata, not independently verified downloaded bytes.",
+  "sources": [
+    {
+      "repo": "mlx-community/Qwen3.8-27B-4bit",
+      "revision": "10c35caafbb80f7dc6a7a432cdd11af10a6d4818",
+      "license": "apache-2.0",
+      "metadata_url": "https://huggingface.co/api/models/mlx-community/Qwen3.8-27B-4bit/revision/10c35caafbb80f7dc6a7a432cdd11af10a6d4818?blobs=true",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 632,
+          "git_blob_sha1": "43eb816caadebce9a7fac44466053d32e1c0acd9",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/README.md",
+          "sha256": "860ff845b4746d0b3e1d1afa4f13aac691ef49c7165054cedfb199371568c4c2",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "chat_template.jinja",
+          "bytes": 8952,
+          "git_blob_sha1": "c0c686f9c38d70d179fb7b5f5aa7530bc913dda3",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/chat_template.jinja",
+          "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "config.json",
+          "bytes": 4932,
+          "git_blob_sha1": "3fb03e916f494e6745aa23df751da26f79e06470",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/config.json",
+          "sha256": "14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "model-00001-of-00003.safetensors",
+          "bytes": 5343268662,
+          "git_blob_sha1": "f336d1709a0c72139c885f29f788a79b6e07c0a8",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/model-00001-of-00003.safetensors",
+          "sha256": "6cc1508e96fb5d0865dfd5753a79f4ec60651bf3e2a82844a7e8ae9c60528c0d",
+          "hash_verification": "Upstream LFS metadata; bytes not downloaded"
+        },
+        {
+          "path": "model-00002-of-00003.safetensors",
+          "bytes": 5354185130,
+          "git_blob_sha1": "8c410f2dafa9e74257bc258c48ddafde82cad9b9",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/model-00002-of-00003.safetensors",
+          "sha256": "83f2a20ca8058f486a3634a27faf99587f4cd3c156a83dee34fb99e6ac178670",
+          "hash_verification": "Upstream LFS metadata; bytes not downloaded"
+        },
+        {
+          "path": "model-00003-of-00003.safetensors",
+          "bytes": 5357087557,
+          "git_blob_sha1": "0ec9f213db3c2377c235745b97bee46b465cd78d",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/model-00003-of-00003.safetensors",
+          "sha256": "31b8c91ef899f79efaaa69e3d2c096f6e2ebeb2ff20e29222abbd9ebc79e560a",
+          "hash_verification": "Upstream LFS metadata; bytes not downloaded"
+        },
+        {
+          "path": "model.safetensors.index.json",
+          "bytes": 218281,
+          "git_blob_sha1": "05a3a3a17368d54d2887783e96b3a8191e9655f0",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/model.safetensors.index.json",
+          "sha256": "13b840162b4cb35c66fef7df072f7dbb4717908204364f5e5d9f9655a2758fa8",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "preprocessor_config.json",
+          "bytes": 390,
+          "git_blob_sha1": "2ea84a437d448ff71b08df68fdd949d5cc4ebb64",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/preprocessor_config.json",
+          "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "processor_config.json",
+          "bytes": 991,
+          "git_blob_sha1": "4bbac788e2cf449e619d7fee64f206c793a4695e",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/processor_config.json",
+          "sha256": "222e060084f093738ca7af4c89ef09d844e415876021325fdf7d5c6821b119d4",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "tokenizer.json",
+          "bytes": 19989325,
+          "git_blob_sha1": "5520bfd2dd834ce386c1312c410fa71af56db5ad",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/tokenizer.json",
+          "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523",
+          "hash_verification": "Upstream LFS metadata; bytes not downloaded"
+        },
+        {
+          "path": "tokenizer_config.json",
+          "bytes": 1165,
+          "git_blob_sha1": "1d134cd298be1e3be25db393d93a1cefe80e3214",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/tokenizer_config.json",
+          "sha256": "792fa3f0cb88b111e54ef3134c873531008c4df471d108da17903426e308aa7b",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "vocab.json",
+          "bytes": 6722759,
+          "git_blob_sha1": "0aa0ce0658d60ac4a5d609f4eadb0e8e43514176",
+          "source_url": "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/blob/10c35caafbb80f7dc6a7a432cdd11af10a6d4818/vocab.json",
+          "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        }
+      ],
+      "total_bytes": 16081488776
+    },
+    {
+      "repo": "incoai/Qwen3.8-27B-DFlash2",
+      "revision": "015e795645c74b1a0eeef3b570031fb62e769bc5",
+      "license": "apache-2.0",
+      "metadata_url": "https://huggingface.co/api/models/incoai/Qwen3.8-27B-DFlash2/revision/015e795645c74b1a0eeef3b570031fb62e769bc5?blobs=true",
+      "files": [
+        {
+          "path": "README.md",
+          "bytes": 5399,
+          "git_blob_sha1": "f753df682b9f4281444f209c4deb14fc3a9894f1",
+          "source_url": "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/015e795645c74b1a0eeef3b570031fb62e769bc5/README.md",
+          "sha256": "be141ff737af8779959cb5ecaefb458ac3c214a5020aa40f69d4d1dc6f42494a",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "config.json",
+          "bytes": 1239,
+          "git_blob_sha1": "79279cc5665bced6f3cdaa2095a2ffe819497b2e",
+          "source_url": "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/015e795645c74b1a0eeef3b570031fb62e769bc5/config.json",
+          "sha256": "873e3556509b0da06e29654ba00d4944888d4b5e8a33afde25f7eb27d321e980",
+          "hash_verification": "SHA-256 computed from fetched small metadata bytes"
+        },
+        {
+          "path": "model.safetensors",
+          "bytes": 3848817896,
+          "git_blob_sha1": "a988e2ea15d5cb6553f37a7f140304fb42fa8c10",
+          "source_url": "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/blob/015e795645c74b1a0eeef3b570031fb62e769bc5/model.safetensors",
+          "sha256": "67fc76d68dc5a9415511a4f394ef744d67510cd20e93b37cc2cc7d28e4bab65c",
+          "hash_verification": "Upstream LFS metadata; bytes not downloaded"
+        }
+      ],
+      "total_bytes": 3848824534
+    }
+  ],
+  "upstream_license": {
+    "repo": "Qwen/Qwen3.8-27B",
+    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "path": "LICENSE",
+    "bytes": 11544,
+    "sha256": "bbedc3fda3305820b977265f01b8619d87570a6739de3a5582c3464840f1e57a",
+    "git_blob_sha1": "f938136e3adacfd92be087f6e113b5d6d97f678f",
+    "source_url": "https://huggingface.co/Qwen/Qwen3.8-27B/raw/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0/LICENSE",
+    "note": "Original Qwen base-model Apache-2.0 license; fetched only this license and metadata, not base-model weights."
+  }
+}

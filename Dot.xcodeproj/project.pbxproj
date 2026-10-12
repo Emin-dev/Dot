@@ -25,6 +25,8 @@
         C10000000000000000000005 = {isa = PBXBuildFile; fileRef = C10000000000000000000006; };
         C10000000000000000000007 = {isa = PBXBuildFile; fileRef = C10000000000000000000006; };
         C10000000000000000000008 = {isa = PBXBuildFile; fileRef = C10000000000000000000009; };
+        D10000000000000000000001 = {isa = PBXBuildFile; fileRef = D10000000000000000000002; };
+        D10000000000000000000003 = {isa = PBXBuildFile; fileRef = D10000000000000000000002; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,7 +38,7 @@
 		A10000000000000000000045 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A10000000000000000000046 /* InteractionCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionCore.swift; sourceTree = "<group>"; };
 		A10000000000000000000047 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A10000000000000000000048 /* Icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Icon.icns; sourceTree = "<group>"; };
+		A10000000000000000000048 /* Icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Icon.icns; sourceTree = DERIVED_FILE_DIR; };
 
         B10000000000000000000003 /* InteractionCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/InteractionCoreTests.swift; sourceTree = SOURCE_ROOT; };
         B10000000000000000000004 /* DotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -45,6 +47,7 @@
         C10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = folder; path = Voice; sourceTree = "<group>"; };
         C10000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePipeWriter.swift; sourceTree = "<group>"; };
         C10000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoicePipeWriterTests.swift; sourceTree = SOURCE_ROOT; };
+        D10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoamingCore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -90,6 +93,7 @@
 				A10000000000000000000043 /* Speech.swift */,
                 C10000000000000000000002,
                 C10000000000000000000006,
+                D10000000000000000000002,
 			);
 			path = src;
 			sourceTree = "<group>";
@@ -188,10 +192,10 @@
 			inputPaths = ("$(PROJECT_DIR)/icon.png",);
 			outputFileListPaths = (
 			);
-			outputPaths = ("$(PROJECT_DIR)/Resources/Icon.icns",);
+			outputPaths = ("$(DERIVED_FILE_DIR)/Icon.icns", "$(DERIVED_FILE_DIR)/Icon.iconset", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_16x16.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_16x16@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_32x32.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_32x32@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_128x128.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_128x128@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_256x256.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_256x256@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_512x512.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_512x512@2x.png", );
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nICONSET=\"${PROJECT_DIR}/build/Icon.iconset\"\nrm -rf \"$ICONSET\"\nmkdir -p \"$ICONSET\"\nfor s in 16 32 128 256 512; do\n  sips -z $s $s \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}.png\" > /dev/null\n  d=$((s * 2))\n  sips -z $d $d \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}@2x.png\" > /dev/null\ndone\nsips -z 1024 1024 \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_512x512@2x.png\" > /dev/null\niconutil -c icns \"$ICONSET\" -o \"${PROJECT_DIR}/Resources/Icon.icns\"\n";
+			shellScript = "set -e\nICONSET=\"${DERIVED_FILE_DIR}/Icon.iconset\"\nrm -rf \"$ICONSET\"\nmkdir -p \"$ICONSET\"\nfor s in 16 32 128 256 512; do\n  sips -z $s $s \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}.png\" > /dev/null\n  d=$((s * 2))\n  sips -z $d $d \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}@2x.png\" > /dev/null\ndone\nsips -z 1024 1024 \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_512x512@2x.png\" > /dev/null\niconutil -c icns \"$ICONSET\" -o \"${DERIVED_FILE_DIR}/Icon.icns\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -208,11 +212,12 @@
 				A10000000000000000000053 /* Speech.swift in Sources */,
                 C10000000000000000000001,
                 C10000000000000000000005,
+                D10000000000000000000001,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 
-        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008,); runOnlyForDeploymentPostprocessing = 0; };
+        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008, D10000000000000000000003,); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -221,6 +226,35 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				COPY_PHASE_STRIP = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -244,6 +278,35 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				COPY_PHASE_STRIP = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;

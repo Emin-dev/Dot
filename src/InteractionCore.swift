@@ -121,3 +121,53 @@ struct VoiceEvent {
         return VoiceEvent(kind: kind, request: request, turn: turn, filename: filename)
     }
 }
+
+/// Pure contract for one ephemeral screenshot bound to one explicit voice turn.
+/// CaptureKit integration is separate; this type never captures, writes or uploads pixels.
+struct ScreenContextGate {
+    enum Failure: Error, Equatable { case disabled, permissionDenied, unavailable, unsupportedModel, stale, invalidImage }
+    private var turn: UUID?
+    private var image: Data?
+    private var capturedAt: Double?
+    private var state: Failure? = .unavailable
+    static let maximumBytes = 2_000_000
+    static let maximumPixels = 2_097_152
+    mutating func begin(turn: UUID, enabled: Bool, permissionGranted: Bool, modelHasVision: Bool) {
+        self.turn = turn; image = nil; capturedAt = nil
+        state = !enabled ? .disabled : !permissionGranted ? .permissionDenied : !modelHasVision ? .unsupportedModel : .unavailable
+    }
+    mutating func capturedJPEG(_ data: Data, width: Int, height: Int, turn: UUID, now: Double) throws {
+        guard self.turn == turn else { throw Failure.stale }
+        guard state == .unavailable else { throw state ?? Failure.stale }
+        guard now.isFinite, width > 0, height > 0, width <= 4096, height <= 4096,
+              width * height <= Self.maximumPixels, data.count <= Self.maximumBytes, data.count >= 4,
+              data.starts(with: [0xff, 0xd8, 0xff]), data.suffix(2).elementsEqual([0xff, 0xd9]) else { throw Failure.invalidImage }
+        image = data; capturedAt = now; state = nil
+    }
+    mutating func consumeDataURL(turn: UUID, now: Double) throws -> String {
+        guard self.turn == turn else { throw Failure.stale }
+        if let state { throw state }
+        guard let image, let capturedAt, now.isFinite, now >= capturedAt, now - capturedAt <= 5 else {
+            cancel(); throw Failure.stale
+        }
+        // Consume once; callers must not retain this in subsequent conversation history.
+        let url = "data:image/jpeg;base64," + image.base64EncodedString()
+        cancel(); return url
+    }
+    mutating func cancel() { turn = nil; image = nil; capturedAt = nil; state = .unavailable }
+}
+
+/// Coalesces fast token streams without delaying the first visible answer token.
+struct StreamUpdateBuffer {
+    private var pending = ""
+    private var lastEmission: Double?
+    mutating func feed(_ content: String, now: Double) -> String? {
+        pending += content
+        guard lastEmission == nil || now - lastEmission! >= 0.04 || pending.utf8.count >= 1024 else { return nil }
+        lastEmission = now; return flush()
+    }
+    mutating func flush() -> String? {
+        guard !pending.isEmpty else { return nil }
+        let value = pending; pending = ""; return value
+    }
+}

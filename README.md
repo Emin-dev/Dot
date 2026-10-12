@@ -2,6 +2,10 @@
 
 A native macOS companion with a transparent floating glass-style character, a small speech bubble, and no conventional main window. Click to speak; click during an answer to interrupt and listen again. Right-click for Pin, Connection, Clear conversation, or Quit. The menu-bar paw brings Dot back into view.
 
+## Current development status
+
+The requested final product is fully self-contained: bundled Splash/Qwen Q4, vision, local recognition and Kokoro voice, without external setup or discovery. The current test build is a foundation and **does not yet meet that requirement**. See [the self-contained build gates](docs/self-contained-build-plan.md), [screen-context contract](docs/screen-context-contract.md), and [roaming policy](docs/roaming-policy.md). No full-bundle completion or measured speed improvement is claimed.
+
 ## This review branch
 
 This rebuild begins at `56041cf00d1d6b7c2f87590fdd1fbbbbb216e996`. It was implemented separately on a cloud computer. Uncommitted Mac changes were not recovered or copied, and their tests do not validate this branch. Old binaries at the base revision are **not** builds of this source.
@@ -11,7 +15,7 @@ This rebuild begins at `56041cf00d1d6b7c2f87590fdd1fbbbbb216e996`. It was implem
 - Microphone capture begins only after a click. A full three seconds without speech activity ends capture; resumed speech resets that interval. A short final-transcription drain follows.
 - Every new click invalidates earlier microphone, stream and speech callbacks. Replies never automatically restart the microphone.
 - Thinking is on by default with low effort and a bounded 1,536-token generation budget. Reasoning is not spoken.
-- Reduce Motion freezes drift/bobbing; Reduce Transparency uses an opaque body/bubble. Hovering and active conversations pause movement. Pin persists between launches.
+- Reduce Motion freezes autonomous roaming/bobbing; Reduce Transparency uses an opaque body/bubble. Varied within-display roaming pauses for hovering, voice activity, menus, popovers and pressed mouse buttons. Pin persists between launches.
 - **Bionic/Kokoro is the default voice through a bundled warm CPU helper. Select your trusted existing Bionic voice-engine folder in Connection.** The environment/model files are not bundled yet; missing setup fails closed. Built-in English is an explicit interim option, never a silent fallback. See [the bridge contract](docs/voice-bridge.md).
 - File actions, browser control and autonomous computer actions are not implemented. This slice is a conversation companion.
 

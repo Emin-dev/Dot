@@ -130,7 +130,7 @@ struct PetView: View {
     @State private var connectionShown = false
 
     var body: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: PetLayout.stackSpacing) {
             Spacer(minLength: 0)
             if model.phase.isActive || !model.answer.isEmpty || isBlocked || model.hovered {
                 VStack(alignment: .leading, spacing: 7) {
@@ -168,7 +168,7 @@ struct PetView: View {
             }
             Button(action: model.clicked) {
                 PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || model.hovered || model.pinned)
-                    .frame(width: 140, height: 148)
+                    .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
             }
             .buttonStyle(.plain)
             .contentShape(Ellipse())
@@ -191,7 +191,8 @@ struct PetView: View {
             Text(model.hovered ? model.tts.mode.label : "dot")
                 .font(.system(size: 10, weight: .medium, design: .rounded))
                 .foregroundStyle(.secondary)
-                .padding(.bottom, 12)
+                .frame(height: PetLayout.captionHeight)
+                .padding(.bottom, PetLayout.captionBottomPadding)
         }
         .frame(width: 320, height: 420)
     }

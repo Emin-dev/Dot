@@ -89,14 +89,20 @@ final class EngineManager: ObservableObject {
               http.value(forHTTPHeaderField: "Server") == "Splash" else { throw EngineError.response }
         var hasContent = false
         var sawDone = false
+        var sawReasoning = false
+        let updates = StreamDelivery(onDelta: onDelta)
+        defer { updates.cancel() }
         for try await line in bytes.lines {
             try Task.checkCancellation()
             guard let delta = StreamDelta.parse(line) else { continue }
-            if delta.done { sawDone = true; break }
-            if !delta.reasoning.isEmpty { onReasoning() }
+            if delta.done {
+                updates.finish()
+                sawDone = true; break
+            }
+            if !delta.reasoning.isEmpty && !sawReasoning { sawReasoning = true; onReasoning() }
             if !delta.content.isEmpty {
                 hasContent = true
-                onDelta(delta.content)
+                updates.feed(delta.content)
             }
         }
         try Task.checkCancellation()
@@ -107,5 +113,36 @@ final class EngineManager: ObservableObject {
     func shutdown() {
         session.invalidateAndCancel()
         // Borrowed Splash stays running. Dot creates no inference processes.
+    }
+}
+
+/// Keeps a trailing streamed sentence responsive even when the server pauses.
+@MainActor
+final class StreamDelivery {
+    private var buffer = StreamUpdateBuffer()
+    private var deadline: Task<Void, Never>?
+    private var closed = false
+    private let onDelta: @MainActor (String) -> Void
+    init(onDelta: @escaping @MainActor (String) -> Void) { self.onDelta = onDelta }
+    func feed(_ content: String) {
+        guard !closed else { return }
+        if let batch = buffer.feed(content, now: ProcessInfo.processInfo.systemUptime) {
+            deadline?.cancel(); deadline = nil; onDelta(batch)
+        } else if deadline == nil {
+            deadline = Task { @MainActor [weak self] in
+                do { try await Task.sleep(nanoseconds: 40_000_000) } catch { return }
+                guard let self, !Task.isCancelled, !self.closed else { return }
+                self.deadline = nil
+                if let tail = self.buffer.flush() { self.onDelta(tail) }
+            }
+        }
+    }
+    func finish() {
+        guard !closed else { return }
+        deadline?.cancel(); deadline = nil; closed = true
+        if let tail = buffer.flush() { onDelta(tail) }
+    }
+    func cancel() {
+        deadline?.cancel(); deadline = nil; closed = true; buffer = StreamUpdateBuffer()
     }
 }

@@ -18,7 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: ChatModel?
     private var movement: Timer?
     private var statusItem: NSStatusItem?
-    private var tickCount = 0
+    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime)
+    private var menuTracking = 0
+    private var observations: [NSObjectProtocol] = []
+    private var movementInterval = 0.5
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -42,38 +45,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Show Dot", action: #selector(showPet), keyEquivalent: "")
         menu.addItem(withTitle: "Quit Dot", action: #selector(quit), keyEquivalent: "q")
         menu.items.forEach { $0.target = self }; item.menu = menu; statusItem = item
-        movement = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.moveGently() }
-        }
+        observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }; self.menuTracking += 1; self.moveGently()
+            }
+        })
+        observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }; self.menuTracking = max(0, self.menuTracking - 1); self.moveGently()
+            }
+        })
+        observations.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.cancelMovement(); self?.moveGently() }
+        })
+        observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.cancelMovement(); self?.moveGently() }
+        })
+        scheduleMovement(interval: 0.5)
     }
 
-    @objc private func showPet() { panel?.orderFrontRegardless() }
+    private func scheduleMovement(interval: Double) {
+        movement?.invalidate(); movementInterval = interval
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.moveGently() }
+        }
+        RunLoop.main.add(timer, forMode: .common); movement = timer
+    }
+    private func cancelMovement() { roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
+
+    @objc private func showPet() { cancelMovement(); panel?.orderFrontRegardless() }
     @objc private func quit() { NSApp.terminate(nil) }
 
     private func moveGently() {
-        guard let panel, let model,
-              !model.hovered, !model.bubbleHovered, !model.interactionPaused, !model.pinned, !model.phase.isActive,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-              !NSWorkspace.shared.isVoiceOverEnabled else { return }
-        tickCount += 1
-        let frame = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
-        let mouse = NSEvent.mouseLocation
-        // The character is at the bottom center of the transparent panel.
-        let center = CGPoint(x: panel.frame.midX, y: panel.frame.minY + 90)
-        let distance = hypot(mouse.x - center.x, mouse.y - center.y)
-        var origin = panel.frame.origin
-        if distance < 120, distance > 75 {
-            origin.x += mouse.x < center.x ? 1.8 : -1.8
-        } else if tickCount % 8 == 0 {
-            origin.x += sin(Double(tickCount) * 0.028) * 0.8
-        }
-        origin.x = min(max(origin.x, frame.minX), max(frame.minX, frame.maxX - panel.frame.width))
-        origin.y = min(max(origin.y, frame.minY), max(frame.minY, frame.maxY - panel.frame.height))
-        panel.setFrameOrigin(origin)
+        guard let panel, let model else { return }
+        let paused = !panel.isVisible || model.hovered || model.bubbleHovered || model.interactionPaused
+            || model.pinned || model.phase.isActive || menuTracking > 0 || NSEvent.pressedMouseButtons != 0
+            || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || NSWorkspace.shared.isVoiceOverEnabled
+        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        let origin = roam.step(frame: panel.frame, visible: visible, cursor: NSEvent.mouseLocation,
+                               paused: paused, now: ProcessInfo.processInfo.systemUptime)
+        if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
+        let interval = roam.isTravelling ? 1.0 / 60 : 0.5
+        if interval != movementInterval { scheduleMovement(interval: interval) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         movement?.invalidate(); model?.shutdown()
+        for observation in observations {
+            NotificationCenter.default.removeObserver(observation)
+            NSWorkspace.shared.notificationCenter.removeObserver(observation)
+        }
+        observations.removeAll()
         // No pkill, process-name matching, or shutdown of borrowed services.
     }
 }

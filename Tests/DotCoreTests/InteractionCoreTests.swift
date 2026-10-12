@@ -129,3 +129,179 @@ final class VoiceEventTests: XCTestCase {
         XCTAssertNil(VoiceEvent.parse(Data(repeating: 32, count: 8193)))
     }
 }
+
+final class RoamingTests: XCTestCase {
+    private let visible = CGRect(x: -1440, y: 30, width: 1440, height: 900)
+    private let cursor = CGPoint(x: 5000, y: 5000)
+    func testNegativeMonitorBoundsClampWholeWindow() {
+        let bounds = RoamingCore.originBounds(window: CGSize(width: 320, height: 420), visible: visible)!
+        let point = RoamingCore.clamp(CGPoint(x: 9000, y: -9000), to: bounds)
+        XCTAssertEqual(point.x, -336); XCTAssertEqual(point.y, 46)
+    }
+    func testTinyDisplayCannotStartTrip() {
+        XCTAssertNil(RoamingCore.originBounds(window: CGSize(width: 320, height: 420), visible: CGRect(x: 0, y: 0, width: 200, height: 300)))
+    }
+    func testSegmentDistanceRejectsCrossingCursor() {
+        XCTAssertEqual(RoamingCore.distanceToSegment(CGPoint(x: 50, y: 0), .zero, CGPoint(x: 100, y: 0)), 0)
+        XCTAssertEqual(RoamingCore.distanceToSegment(CGPoint(x: 50, y: 150), .zero, CGPoint(x: 100, y: 0)), 150)
+    }
+    func testSeededWanderStaysVisibleAndVisitsVariedPositions() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        var visited: Set<String> = []
+        for tick in 0..<24000 {
+            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick) / 60)
+            XCTAssertTrue(visible.contains(frame))
+            visited.insert("\(Int(frame.minX / 100)):\(Int(frame.minY / 100))")
+        }
+        XCTAssertGreaterThan(visited.count, 8)
+    }
+    func testPauseNeverMovesAndReleaseWaits() {
+        var planner = RoamingCore(seed: 1, now: 0)
+        let frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        for tick in 0..<100 {
+            XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: Double(tick)), frame.origin)
+            XCTAssertFalse(planner.isTravelling)
+        }
+        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 100), frame.origin)
+        XCTAssertFalse(planner.isTravelling)
+    }
+    func testApproachingPointerStopsWithoutFleeing() {
+        var planner = RoamingCore(seed: 2, now: 0)
+        let frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        let near = CGPoint(x: frame.midX, y: frame.minY + 85)
+        for tick in 0..<200 { XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: near, paused: false, now: Double(tick)), frame.origin) }
+    }
+    func testLongWakeIntervalDoesNotTeleport() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        for tick in 0..<10000 {
+            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick) / 60)
+            if planner.isTravelling {
+                let old = frame.origin
+                let next = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 100000)
+                XCTAssertLessThan(hypot(next.x - old.x, next.y - old.y), 20); return
+            }
+        }
+        XCTFail("seed never travelled")
+    }
+    func testCancellationInvalidatesTrajectory() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        let frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9)
+        planner.cancel(now: 10)
+        XCTAssertFalse(planner.isTravelling)
+        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 10.1), frame.origin)
+    }
+}
+
+final class ScreenContextTests: XCTestCase {
+    private let jpeg = Data([0xff, 0xd8, 0xff, 0x00, 0xff, 0xd9])
+    private func active(_ id: UUID) -> ScreenContextGate {
+        var gate = ScreenContextGate(); gate.begin(turn: id, enabled: true, permissionGranted: true, modelHasVision: true); return gate
+    }
+    func testFreshFrameIsLocalDataURLAndConsumedOnce() throws {
+        let id = UUID(); var gate = active(id)
+        try gate.capturedJPEG(jpeg, width: 1920, height: 1080, turn: id, now: 5)
+        XCTAssertEqual(try gate.consumeDataURL(turn: id, now: 6), "data:image/jpeg;base64," + jpeg.base64EncodedString())
+        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 6))
+    }
+    func testCaptureFailureNeverUsesMissingImage() {
+        let id = UUID(); var gate = active(id)
+        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .unavailable) }
+    }
+    func testPermissionDenialCannotClaimCapture() {
+        let id = UUID(); var gate = ScreenContextGate()
+        gate.begin(turn: id, enabled: true, permissionGranted: false, modelHasVision: true)
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .permissionDenied) }
+    }
+    func testTextOnlyModelCannotUseImage() {
+        let id = UUID(); var gate = ScreenContextGate()
+        gate.begin(turn: id, enabled: true, permissionGranted: true, modelHasVision: false)
+        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .unsupportedModel) }
+    }
+    func testNewTurnRejectsOldScreenshot() throws {
+        let old = UUID(); var gate = active(old)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, now: 1)
+        gate.begin(turn: UUID(), enabled: true, permissionGranted: true, modelHasVision: true)
+        XCTAssertThrowsError(try gate.consumeDataURL(turn: old, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
+    }
+    func testExpiredFrameIsRejected() throws {
+        let id = UUID(); var gate = active(id)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)
+        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 7)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
+    }
+    func testImageDimensionsAndBytesAreBounded() {
+        let id = UUID(); var gate = active(id)
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 4096, height: 4096, turn: id, now: 1))
+        XCTAssertThrowsError(try gate.capturedJPEG(Data(repeating: 0, count: 2_000_001), width: 10, height: 10, turn: id, now: 1))
+    }
+    func testPauseClearsCapturedPixels() throws {
+        let id = UUID(); var gate = active(id)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)
+        gate.begin(turn: id, enabled: false, permissionGranted: true, modelHasVision: true)
+        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .disabled) }
+    }
+}
+
+extension RoamingTests {
+    func testPauseInterruptsAnActiveTripAtCurrentPosition() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        for tick in 0..<10000 {
+            let now = Double(tick) / 60
+            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: now)
+            if planner.isTravelling {
+                let origin = frame.origin
+                XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: now + 0.1), origin)
+                XCTAssertFalse(planner.isTravelling)
+                XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: now + 30), origin)
+                return
+            }
+        }
+        XCTFail("seed never travelled")
+    }
+    func testDisplayRemovalCancelsAndClampsToRemainingScreen() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
+        for tick in 0..<10000 {
+            let now = Double(tick) / 60
+            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: now)
+            if planner.isTravelling {
+                let replacement = CGRect(x: 0, y: 0, width: 1200, height: 900)
+                planner.cancel(now: now)
+                frame.origin = planner.step(frame: frame, visible: replacement, cursor: cursor, paused: false, now: now + 0.1)
+                XCTAssertTrue(replacement.contains(frame)); XCTAssertFalse(planner.isTravelling); return
+            }
+        }
+        XCTFail("seed never travelled")
+    }
+}
+
+extension ScreenContextTests {
+    func testStaleCaptureCallbackHasAccurateFailure() {
+        let old = UUID(), current = UUID(); var gate = active(current)
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, now: 1)) {
+            XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale)
+        }
+    }
+}
+
+final class StreamUpdateTests: XCTestCase {
+    func testFirstAnswerTokenIsImmediate() {
+        var buffer = StreamUpdateBuffer(); XCTAssertEqual(buffer.feed("Hello", now: 0), "Hello")
+    }
+    func testFastTokensCoalesceInOrder() {
+        var buffer = StreamUpdateBuffer(); _ = buffer.feed("a", now: 0)
+        XCTAssertNil(buffer.feed("b", now: 0.01)); XCTAssertNil(buffer.feed("c", now: 0.02))
+        XCTAssertEqual(buffer.feed("d", now: 0.05), "bcd")
+    }
+    func testFinalFlushPreservesTrailingTextOnce() {
+        var buffer = StreamUpdateBuffer(); _ = buffer.feed("a", now: 0); _ = buffer.feed("b", now: 0.01)
+        XCTAssertEqual(buffer.flush(), "b"); XCTAssertNil(buffer.flush())
+    }
+    func testPendingByteLimitFlushesBeforeInterval() {
+        var buffer = StreamUpdateBuffer(); _ = buffer.feed("a", now: 0)
+        XCTAssertEqual(buffer.feed(String(repeating: "x", count: 1024), now: 0.001)?.count, 1024)
+    }
+}

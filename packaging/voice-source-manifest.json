@@ -1,0 +1,604 @@
+{
+  "schema_version": 1,
+  "research_date_utc": "2026-10-12",
+  "title": "Dot bundled offline voice source manifest",
+  "status": "RESEARCH_ONLY_NOT_A_RELEASE_LOCK",
+  "scope": {
+    "repository": "Emin-dev/Dot",
+    "bionic_baseline_commit": "5166bf4915d436c505f4731667daf5b9375b5e77",
+    "baseline_source": "https://github.com/Emin-dev/Bionic/blob/5166bf4915d436c505f4731667daf5b9375b5e77/requirements.txt",
+    "tts": "Kokoro 82M v1.0 CPU, British English bf_isabella",
+    "stt": "whisper.cpp with a bundled English GGML model",
+    "repository_files_modified": false,
+    "runtime_installation_performed": false,
+    "model_inference_executed": false,
+    "large_models_downloaded": false,
+    "new_network_queries_for_this_artifact": false
+  },
+  "product_requirements": {
+    "full_app_minimum_macos": "26.4",
+    "full_app_minimum_hardware": "Apple M3 or newer",
+    "reason": "Splash integration requirement supplied by the integration owner; Splash itself is outside this voice/STT research.",
+    "component_floor_warning": "Lower voice/STT component minimums do not lower the full app requirement. Intel slices in a dependency do not imply full app Intel support.",
+    "first_run": "All runtime code and assets must ship in the app; no external folders, server setup, package installation or model/OS speech-asset downloads."
+  },
+  "python_compatibility": {
+    "allowed_major_minor": [
+      "3.11",
+      "3.12"
+    ],
+    "evidence": [
+      "Published kokoro 0.9.4 requires >=3.10,<3.13",
+      "Published misaki 0.9.4 requires >=3.8,<3.13",
+      "Pinned numpy 2.4.6 requires >=3.11"
+    ],
+    "candidate_target": "CPython 3.11 ARM64"
+  },
+  "voice_and_stt_assets": [
+    {
+      "name": "Kokoro model",
+      "version": "9871713c6a29032f914cee65b617e2b6b3323770",
+      "filename": "kokoro-v1_0.pth",
+      "size_bytes": 327212226,
+      "sha256": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4",
+      "download_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/9871713c6a29032f914cee65b617e2b6b3323770/kokoro-v1_0.pth",
+      "source_metadata_url": "https://huggingface.co/api/models/hexgrad/Kokoro-82M/tree/9871713c6a29032f914cee65b617e2b6b3323770?recursive=true",
+      "license": "Apache-2.0",
+      "hash_verification": "publisher_metadata_only"
+    },
+    {
+      "name": "Kokoro British female Isabella voice",
+      "version": "9871713c6a29032f914cee65b617e2b6b3323770",
+      "filename": "voices/bf_isabella.pt",
+      "size_bytes": 523440,
+      "sha256": "cdd4c37003805104d1d08fb1e05855c8fb2c68de24ca6e71f264a30aaa59eefd",
+      "download_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/9871713c6a29032f914cee65b617e2b6b3323770/voices/bf_isabella.pt",
+      "source_metadata_url": "https://huggingface.co/api/models/hexgrad/Kokoro-82M/tree/9871713c6a29032f914cee65b617e2b6b3323770?recursive=true",
+      "license": "Apache-2.0",
+      "hash_verification": "publisher_metadata_only"
+    },
+    {
+      "name": "Kokoro configuration",
+      "version": "9871713c6a29032f914cee65b617e2b6b3323770",
+      "filename": "config.json",
+      "size_bytes": 2351,
+      "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f",
+      "download_url": "https://huggingface.co/hexgrad/Kokoro-82M/resolve/9871713c6a29032f914cee65b617e2b6b3323770/config.json",
+      "source_metadata_url": "https://huggingface.co/api/models/hexgrad/Kokoro-82M/tree/9871713c6a29032f914cee65b617e2b6b3323770?recursive=true",
+      "license": "Apache-2.0",
+      "hash_verification": "downloaded_bytes_sha256_verified"
+    },
+    {
+      "name": "Whisper English base model",
+      "version": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "filename": "ggml-base.en.bin",
+      "size_bytes": 147964211,
+      "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-base.en.bin",
+      "source_metadata_url": "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1?recursive=true",
+      "license": "MIT",
+      "hash_verification": "publisher_metadata_only",
+      "selection": "initial_candidate"
+    },
+    {
+      "name": "Whisper English small model",
+      "version": "5359861c739e955e79d9a303bcbc70fb988958b1",
+      "filename": "ggml-small.en.bin",
+      "size_bytes": 487614201,
+      "sha256": "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+      "download_url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.en.bin",
+      "source_metadata_url": "https://huggingface.co/api/models/ggerganov/whisper.cpp/tree/5359861c739e955e79d9a303bcbc70fb988958b1?recursive=true",
+      "license": "MIT",
+      "hash_verification": "publisher_metadata_only",
+      "selection": "optional_alternative_do_not_include_both_by_default"
+    },
+    {
+      "name": "spaCy small English pipeline",
+      "version": "3.8.0",
+      "filename": "en_core_web_sm-3.8.0-py3-none-any.whl",
+      "size_bytes": 12806118,
+      "sha256": null,
+      "download_url": "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
+      "source_metadata_url": "https://api.github.com/repos/explosion/spacy-models/releases/tags/en_core_web_sm-3.8.0",
+      "license": "MIT",
+      "hash_verification": "not_downloaded_publisher_digest_absent",
+      "compatibility": "spacy>=3.8.0,<3.9.0",
+      "source_model_metadata": "https://github.com/explosion/spacy-models/blob/master/meta/en_core_web_sm-3.8.0.json",
+      "data_notice_review": [
+        "WordNet 3.0 license",
+        "Model metadata identifies OntoNotes 5 as commercially licensed by Explosion; do not package its training corpus."
+      ]
+    }
+  ],
+  "runtime_artifacts": [
+    {
+      "name": "CPython standalone ARM64 runtime",
+      "version": "3.11.17+20261009",
+      "filename": "cpython-3.11.17+20261009-aarch64-apple-darwin-install_only.tar.gz",
+      "size_bytes": 27105320,
+      "sha256": "7b6068989d9b6a0e2a883352b7d0d141ce8670a61360bf4ddabac0e046a08e10",
+      "download_url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.11.17%2B20261009-aarch64-apple-darwin-install_only.tar.gz",
+      "source_metadata_url": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/20261009",
+      "license": "Python licensing plus bundled third-party licenses",
+      "hash_verification": "publisher_metadata_only",
+      "minimum_macos_from_build_source": "11.0",
+      "minimum_source": "https://github.com/astral-sh/python-build-standalone/blob/20261009/cpython-unix/targets.yml",
+      "relocation": "Standalone installation is a feasible candidate. Actual nested Mach-O load commands, installed wheel closure and final signed app were not audited."
+    },
+    {
+      "name": "whisper.cpp official XCFramework",
+      "version": "v1.7.6",
+      "filename": "whisper-v1.7.6-xcframework.zip",
+      "size_bytes": 41291976,
+      "sha256": "9fcb28106d0b94a525e59bec057e35b57033195ac7408d7e1ab8e4b597cdfeb5",
+      "download_url": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.7.6/whisper-v1.7.6-xcframework.zip",
+      "source_metadata_url": "https://api.github.com/repos/ggml-org/whisper.cpp/releases/tags/v1.7.6",
+      "license": "MIT",
+      "hash_verification": "publisher_metadata_only",
+      "source_commit": "a8d002cfd879315632a579e73f0148d06959de36",
+      "minimum_macos_from_build_source": "13.3",
+      "macos_architectures_from_build_source": [
+        "arm64",
+        "x86_64"
+      ],
+      "build_source": "https://github.com/ggml-org/whisper.cpp/blob/v1.7.6/build-xcframework.sh",
+      "install_name_from_build_source": "@rpath/whisper.framework/Versions/Current/whisper",
+      "system_link_dependencies_from_build_source": [
+        "Foundation",
+        "Metal",
+        "Accelerate",
+        "CoreML",
+        "C++ runtime"
+      ],
+      "coreml": "Enabled with WHISPER_COREML_ALLOW_FALLBACK=ON. Missing local encoder falls back locally; no download is implemented in this path.",
+      "metal_library": "Embedded by GGML_METAL_EMBED_LIBRARY=ON.",
+      "release_status": "Verified candidate pin; newest release and security suitability were not assessed. Actual release binary was not downloaded or inspected."
+    }
+  ],
+  "python_direct_pins": [
+    {
+      "name": "kokoro",
+      "version": "0.9.4",
+      "filename": "kokoro-0.9.4-py3-none-any.whl",
+      "size_bytes": 32592,
+      "sha256": "a129dc6364a286bd6a92c396e9862459d3d3e45f2c15596ed5a94dcee5789efd",
+      "download_url": "https://files.pythonhosted.org/packages/ea/cc/75f41633c75224ba820a4533163bc8b070b6bf25416014074c63284c2d4e/kokoro-0.9.4-py3-none-any.whl",
+      "source_metadata_url": "https://pypi.org/pypi/kokoro/0.9.4/json",
+      "license": "Apache-2.0",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/kokoro/0.9.4/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "observed_target_direct_dependencies": [
+        "huggingface-hub",
+        "loguru",
+        "misaki[en]>=0.9.4",
+        "numpy",
+        "torch",
+        "transformers"
+      ]
+    },
+    {
+      "name": "misaki",
+      "version": "0.9.4",
+      "filename": "misaki-0.9.4-py3-none-any.whl",
+      "size_bytes": 3617774,
+      "sha256": "90e2eeb169786c014c429e5058d2ea6bcd02d651f2a24450ba6c9ffc0f8da15a",
+      "download_url": "https://files.pythonhosted.org/packages/82/ec/0ee4110ddb54278b8f21c40a140370ae8f687036c4edf578316602697c56/misaki-0.9.4-py3-none-any.whl",
+      "source_metadata_url": "https://pypi.org/pypi/misaki/0.9.4/json",
+      "license": "Apache-2.0",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/misaki/0.9.4/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "source_inspection": "Exact 0.9.4 wheel source inspected in memory; package archive checksum was not independently recomputed.",
+      "observed_target_direct_dependencies": [
+        "addict",
+        "regex",
+        "espeakng-loader (en extra)",
+        "num2words (en extra)",
+        "phonemizer-fork (en extra)",
+        "spacy (en extra)",
+        "spacy-curated-transformers (en extra)"
+      ]
+    },
+    {
+      "name": "torch",
+      "version": "2.14.1",
+      "filename": "torch-2.14.1-cp311-cp311-macosx_14_0_arm64.whl",
+      "size_bytes": 127281154,
+      "sha256": "b6074b130fd26bc50f5d171f07dfed70db22dd0c354ab34767729249f9e0f042",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/torch/2.14.1/json",
+      "license": "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND BSD-2-Clause AND BSD-3-Clause AND BSL-1.0 AND MIT",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/torch/2.14.1/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": [
+        "filelock",
+        "typing-extensions>=4.10.0",
+        "setuptools>=77.0.3",
+        "sympy>=1.13.3",
+        "networkx>=2.5.1",
+        "jinja2",
+        "fsspec>=0.8.5"
+      ]
+    },
+    {
+      "name": "transformers",
+      "version": "5.19.0",
+      "filename": "transformers-5.19.0-py3-none-any.whl",
+      "size_bytes": 12599123,
+      "sha256": "afcd2dd5f603ed28c1e1fcb00a338ccbb4ef5f878ed289635df8b58187afb518",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/transformers/5.19.0/json",
+      "license": "Apache-2.0",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/transformers/5.19.0/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": [
+        "huggingface-hub<3.0,>=1.31.0",
+        "numpy>=1.17",
+        "packaging>=20.0",
+        "pyyaml>=5.1",
+        "regex>=2025.10.22",
+        "tokenizers<0.24.0,>=0.23.1",
+        "typer",
+        "safetensors>=0.8.0",
+        "tqdm>=4.60"
+      ]
+    },
+    {
+      "name": "tokenizers",
+      "version": "0.23.3",
+      "filename": "tokenizers-0.23.3-cp310-abi3-macosx_11_0_arm64.whl",
+      "size_bytes": 3101381,
+      "sha256": "68649e97d5b43c44c031d8d848874a6eecae8f8fe40ea989aa777a5a83aca716",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/tokenizers/0.23.3/json",
+      "license": null,
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/tokenizers/0.23.3/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "license_status": "Exact license text was not retained from queried metadata; inspect the selected distribution license files before redistribution.",
+      "observed_target_direct_dependencies": [
+        "huggingface-hub<3.0,>=0.16.4"
+      ]
+    },
+    {
+      "name": "huggingface-hub",
+      "version": "2.2.0",
+      "filename": null,
+      "size_bytes": null,
+      "sha256": null,
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/huggingface-hub/2.2.0/json",
+      "license": "Apache-2.0",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/huggingface-hub/2.2.0/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "artifact_status": "Version/dependencies/license verified; selected wheel size/hash/filename not retained. Must be completed before release.",
+      "observed_target_direct_dependencies": [
+        "click<9.0.0,>=8.4.2",
+        "filelock>=3.10.0",
+        "fsspec>=2023.5.0",
+        "hf-xet<2.0.0,>=1.6.0 (ARM64 marker)",
+        "httpx2<3,>=2.0.0",
+        "packaging>=20.9",
+        "pyyaml>=5.1",
+        "tqdm>=4.42.1",
+        "typing-extensions>=4.1.0"
+      ]
+    },
+    {
+      "name": "safetensors",
+      "version": "0.8.0",
+      "filename": "safetensors-0.8.0-cp310-abi3-macosx_11_0_arm64.whl",
+      "size_bytes": 484562,
+      "sha256": "c80201d22cbf405b80647a60ada77bba06c8fba2da2743ba1e89cdcc39a81f25",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/safetensors/0.8.0/json",
+      "license": null,
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/safetensors/0.8.0/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "license_status": "Exact license text was not retained from queried metadata; inspect the selected distribution license files before redistribution.",
+      "observed_target_direct_dependencies": []
+    },
+    {
+      "name": "numpy",
+      "version": "2.4.6",
+      "filename": "numpy-2.4.6-cp311-cp311-macosx_14_0_arm64.whl",
+      "size_bytes": 5469159,
+      "sha256": "4cfe66903cc32a9921a6733d96b19bb6abf310397581bbad89c228f5abaf0ee8",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/numpy/2.4.6/json",
+      "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/numpy/2.4.6/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": []
+    },
+    {
+      "name": "regex",
+      "version": "2026.9.29",
+      "filename": "regex-2026.9.29-cp311-cp311-macosx_11_0_arm64.whl",
+      "size_bytes": 292123,
+      "sha256": "066d0e3dbfdd739bce2bf8c2a41dd16f73e3d8adc2eb06dd803a36a307f56075",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/regex/2026.9.29/json",
+      "license": "Apache-2.0 AND CNRI-Python",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/regex/2026.9.29/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": []
+    },
+    {
+      "name": "loguru",
+      "version": "0.7.3",
+      "filename": "loguru-0.7.3-py3-none-any.whl",
+      "size_bytes": 61595,
+      "sha256": "31a33c10c8e1e10422bfd431aeb5d351c7cf7fa671e3c4df004162264b28220c",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/loguru/0.7.3/json",
+      "license": null,
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/loguru/0.7.3/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "license_status": "Exact license text was not retained from queried metadata; inspect the selected distribution license files before redistribution.",
+      "observed_target_direct_dependencies": []
+    },
+    {
+      "name": "spacy",
+      "version": "3.8.16",
+      "filename": "spacy-3.8.16-cp311-cp311-macosx_11_0_arm64.whl",
+      "size_bytes": 6891423,
+      "sha256": "cb07d4b8255be6b6ff3a34ada93173176d0937d2023b35302a34eed3364681c0",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/spacy/3.8.16/json",
+      "license": "MIT",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/spacy/3.8.16/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": [
+        "spacy-legacy<3.1.0,>=3.0.11",
+        "spacy-loggers<2.0.0,>=1.0.0",
+        "murmurhash<1.1.0,>=0.28.0",
+        "cymem<2.1.0,>=2.0.2",
+        "preshed<3.1.0,>=3.0.2",
+        "thinc<8.4.0,>=8.3.12",
+        "wasabi<1.2.0,>=0.9.1",
+        "srsly<3.0.0,>=2.5.3",
+        "catalogue<2.1.0,>=2.0.6",
+        "weasel<2.0.0,>=1.0.0",
+        "confection<2.0.0,>=1.3.2",
+        "typer<1.0.0,>=0.3.0",
+        "click<9.0.0,>=8.2.1",
+        "tqdm<5.0.0,>=4.38.0",
+        "numpy>=1.19.0",
+        "requests<3.0.0,>=2.13.0",
+        "pydantic<3.0.0,>=2.0.0",
+        "jinja2",
+        "setuptools",
+        "packaging>=20.0"
+      ]
+    },
+    {
+      "name": "espeakng-loader",
+      "version": "0.2.4",
+      "filename": "espeakng_loader-0.2.4-py3-none-macosx_11_0_arm64.whl",
+      "size_bytes": 9892565,
+      "sha256": "d27cdca31112226e7299d8562e889d3e38a1e48055c9ee381b45d669072ee59f",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/espeakng-loader/0.2.4/json",
+      "license": "MIT wrapper; bundled eSpeak NG GPL-3.0-or-later",
+      "hash_verification": "downloaded_bytes_sha256_verified",
+      "package_page_url": "https://pypi.org/project/espeakng-loader/0.2.4/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": []
+    },
+    {
+      "name": "num2words",
+      "version": "0.5.14",
+      "filename": "num2words-0.5.14-py3-none-any.whl",
+      "size_bytes": 163525,
+      "sha256": "1c8e5b00142fc2966fd8d685001e36c4a9911e070d1b120e1beb721fa1edb33d",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/num2words/0.5.14/json",
+      "license": "LGPL (project COPYING text is version 2.1)",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/num2words/0.5.14/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": [
+        "docopt>=0.6.2"
+      ]
+    },
+    {
+      "name": "phonemizer-fork",
+      "version": "3.3.2",
+      "filename": "phonemizer_fork-3.3.2-py3-none-any.whl",
+      "size_bytes": 82700,
+      "sha256": "97305c76f4183b3825dae8f4c032265fe78c9946ce58c47d4b62161349264b74",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/phonemizer-fork/3.3.2/json",
+      "license": "GPL (PyPI license text is version 3)",
+      "hash_verification": "publisher_metadata_only",
+      "package_page_url": "https://pypi.org/project/phonemizer-fork/3.3.2/",
+      "selection_status": "Bionic direct pin; full dependency environment and imports unverified",
+      "download_url_status": "Direct file URL was not retained in the verified research output; resolve the exact filename from the source metadata during an authorized build. No URL guessed.",
+      "observed_target_direct_dependencies": [
+        "attrs>=18.1",
+        "dlinfo",
+        "joblib",
+        "segments",
+        "typing-extensions"
+      ]
+    }
+  ],
+  "transitive_closure": {
+    "status": "UNRESOLVED_IMPORT_UNVERIFIED",
+    "complete_lock_available": false,
+    "metadata_only_resolver_result": "No completed lock artifact was produced.",
+    "resolver_failure": "Metadata resolution canceled before completion; no candidate lock produced",
+    "resolver_scope": "Read-only PyPI JSON dependency resolution for Bionic direct pins using CPython 3.11 / macOS 15 / ARM64 markers; no package installation. The canceled resolver target was not retried. The full app requirement was subsequently clarified to macOS 26.4 / M3+.",
+    "artifact_presence_checked": "The expected candidate-lock JSON was absent when this report was written.",
+    "dependency_list_scope": "Listed dependencies are observed first-hop target dependencies, not a recursively complete lock. Optional unrelated language/development extras and non-macOS dependencies are excluded.",
+    "observed_conflict": {
+      "package": "spacy-curated-transformers",
+      "latest_observed_version": "2.1.2",
+      "requires": "thinc>=9.0.0.dev4,<9.2.0",
+      "conflicts_with": "spacy==3.8.16 requires thinc>=8.3.12,<8.4.0",
+      "source": "https://pypi.org/pypi/spacy-curated-transformers/2.1.2/json"
+    },
+    "compatible_older_candidate": {
+      "name": "spacy-curated-transformers compatible older candidate",
+      "version": "0.3.1",
+      "filename": "spacy_curated_transformers-0.3.1-py2.py3-none-any.whl",
+      "size_bytes": 237943,
+      "sha256": "503559b6a1d6e44ec2c978e18ed871ce5c3d56871dc9216c0e1523428204e610",
+      "download_url": null,
+      "source_metadata_url": "https://pypi.org/pypi/spacy-curated-transformers/0.3.1/json",
+      "license": "MIT project; selected wheel license files not audited",
+      "hash_verification": "publisher_metadata_only",
+      "dependencies": [
+        "curated-transformers<0.2.0,>=0.1.0",
+        "curated-tokenizers<0.1.0,>=0.0.9",
+        "torch>=1.12.0"
+      ],
+      "status": "Compatibility candidate only; not a completed solver result or import-tested environment."
+    }
+  },
+  "espeak_binary_audit": {
+    "artifact": "espeakng_loader-0.2.4-py3-none-macosx_11_0_arm64.whl",
+    "audit_method": "Downloaded the small wheel into memory, verified its SHA-256 against official PyPI metadata, inspected zip entries and parsed Mach-O load commands without executing code.",
+    "wheel_tag_macos": "11.0",
+    "actual_dylib_minimum_macos": "14.0",
+    "actual_dylib_sdk": "14.5",
+    "dylib_names": [
+      "libespeak-ng.1.52.0.dylib",
+      "libespeak-ng.1.dylib",
+      "libespeak-ng.dylib"
+    ],
+    "each_inspected_dylib_size_bytes": 504168,
+    "install_id": "@rpath/libespeak-ng.1.dylib",
+    "load_dependencies": [
+      "/usr/lib/libSystem.B.dylib",
+      "/usr/lib/libc++.1.dylib"
+    ],
+    "obsolete_rpath": "/Users/runner/work/espeakng-loader/espeakng-loader/espeak-ng/_dynamic/lib",
+    "loader_paths": "Library and espeak-ng-data are resolved relative to espeakng_loader.__file__.",
+    "license_files_in_wheel": "No path matching LICENSE or COPYING was found.",
+    "source_correspondence": "Exact corresponding source for this published binary has not been established. The observed publishing workflow consumes releases/latest binary archives.",
+    "workflow_source": "https://github.com/thewh1teagle/espeakng-loader/blob/main/.github/workflows/pypi.yml",
+    "required_followup": [
+      "Verify/remove the obsolete build-runner RPATH during packaging.",
+      "Preserve data files and add upstream licensing/corresponding-source compliance material.",
+      "Re-sign final Mach-O code and verify the complete app on target macOS."
+    ]
+  },
+  "packaging_findings": [
+    "Preserve complete installed wheel layouts including .dist-info, spaCy model metadata, Misaki dictionaries and native shared libraries.",
+    "Exact Misaki 0.9.4 invokes spacy.util.is_package before spacy.load; folder-only model copies can cause a download attempt.",
+    "Exact Misaki 0.9.4 has no additional neural G2P fallback. Current GitHub main differs from the published wheel.",
+    "Use bundle-relative absolute paths derived at runtime, not developer home paths, Homebrew prefixes, external Bionic folders or a copied virtual environment.",
+    "Run the existing CPU TTS helper as a private bundled child process; stdio IPC does not require a server.",
+    "Keep local-only model loading and download prevention. Missing assets must fail closed with a local actionable error.",
+    "Native whisper.cpp with AVFoundation capture/resampling avoids OS speech-model provisioning. It still needs microphone permission.",
+    "A source-built minimal whisper.cpp variant can disable CoreML, Metal and OpenMP and use system Accelerate. Build/inference equivalence is unverified."
+  ],
+  "license_review": {
+    "status": "INCOMPLETE_NOT_LEGAL_CLEARANCE",
+    "components": [
+      {
+        "component": "Bionic helper source",
+        "license": "MIT",
+        "source": "https://github.com/Emin-dev/Bionic/blob/5166bf4915d436c505f4731667daf5b9375b5e77/LICENSE",
+        "requirement": "Retain copyright/license and modification provenance."
+      },
+      {
+        "component": "Kokoro code, model and voice; Misaki",
+        "license": "Apache-2.0",
+        "sources": [
+          "https://pypi.org/pypi/kokoro/0.9.4/json",
+          "https://pypi.org/pypi/misaki/0.9.4/json",
+          "https://huggingface.co/hexgrad/Kokoro-82M/tree/9871713c6a29032f914cee65b617e2b6b3323770"
+        ],
+        "requirement": "Retain license and applicable notices; record modified files. Audit included data/component notices."
+      },
+      {
+        "component": "espeakng-loader wrapper",
+        "license": "MIT",
+        "source": "https://github.com/thewh1teagle/espeakng-loader/blob/main/LICENSE",
+        "requirement": "Wrapper MIT terms do not relicense bundled eSpeak NG."
+      },
+      {
+        "component": "eSpeak NG",
+        "license": "GPL-3.0-or-later",
+        "source": "https://github.com/espeak-ng/espeak-ng#license-information",
+        "requirement": "Provide applicable license/copyright and satisfy corresponding-source obligations for the distributed binary. Exact corresponding source is not yet verified."
+      },
+      {
+        "component": "phonemizer-fork",
+        "license": "GPL; published license text version 3",
+        "source": "https://pypi.org/pypi/phonemizer-fork/3.3.2/json",
+        "requirement": "Review distribution/combined-work obligations, preserve license and provide required source. Helper process separation alone does not establish compatibility."
+      },
+      {
+        "component": "num2words",
+        "license": "LGPL; project COPYING text version 2.1",
+        "source": "https://github.com/savoirfairelinux/num2words/blob/master/COPYING",
+        "requirement": "Preserve licensing and satisfy applicable source/modification/replacement obligations."
+      },
+      {
+        "component": "spaCy and en_core_web_sm",
+        "license": "MIT plus applicable bundled data notices",
+        "source": "https://github.com/explosion/spacy-models/blob/master/meta/en_core_web_sm-3.8.0.json",
+        "requirement": "Retain software/model/data notices; do not bundle source training corpora."
+      },
+      {
+        "component": "CPython standalone distribution",
+        "license": "Python licenses and bundled dependency licenses",
+        "source": "https://gregoryszorc.com/docs/python-build-standalone/main/distributions.html",
+        "requirement": "Audit the full distribution metadata/licenses and the exact subset shipped. install_only omits the full PYTHON.json build manifest."
+      },
+      {
+        "component": "PyTorch, NumPy and remaining dependency closure",
+        "license": "Multiple; selected metadata recorded above where retained",
+        "sources": [
+          "https://pypi.org/pypi/torch/2.14.1/json",
+          "https://pypi.org/pypi/numpy/2.4.6/json"
+        ],
+        "requirement": "Preserve actual wheel third-party notices and inventory nested libraries; top-level package metadata is not a complete SBOM."
+      },
+      {
+        "component": "whisper.cpp and Whisper model weights",
+        "license": "MIT",
+        "sources": [
+          "https://github.com/ggml-org/whisper.cpp/blob/v1.7.6/LICENSE",
+          "https://github.com/openai/whisper#license"
+        ],
+        "requirement": "Retain code/model copyright/license notices."
+      }
+    ],
+    "publication_gate": "Do not describe the bundle as fully licensed or release-ready until the selected artifacts, combined distribution and required corresponding sources have been reviewed."
+  },
+  "release_gates": [
+    "Complete a reproducible recursively pinned and hashed ARM64 wheel/runtime/model lock; fill all null artifact/hash/license fields.",
+    "Audit every shipped Mach-O architecture, minimum OS, load dependency and RPATH; no unresolved external non-system library paths.",
+    "Verify source correspondence and license obligations, especially eSpeak/phonemizer/num2words and bundled native libraries.",
+    "Build/sign/notarize the app and nested code; relocation and signature verification are required after any Mach-O changes.",
+    "Cold-start from a relocated app on clean supported M3+ macOS 26.4 or later with networking disabled, no external Python/Bionic/Homebrew and empty model caches.",
+    "Demonstrate bf_isabella CPU synthesis and microphone STT without Apple speech assets, including first-run, cancellation, repeated requests and relaunch.",
+    "Measure latency, peak memory and final installed/download size on target hardware. None is established by publisher archive sizes."
+  ],
+  "hash_semantics": "All hashes are SHA-256. Publisher metadata hashes are expected hashes only, not proof the final app contains those bytes. Only records marked downloaded_bytes_sha256_verified were independently hashed in this research. Runtime/model binaries were not executed."
+}

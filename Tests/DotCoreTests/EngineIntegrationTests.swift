@@ -56,4 +56,30 @@ final class EngineIntegrationTests: XCTestCase {
         XCTAssertTrue(SplashFixtureProtocol.requests.isEmpty)
     }
 }
+
+final class StreamDeliveryTests: XCTestCase {
+    @MainActor func testServerPauseStillFlushesCompleteSentence() async throws {
+        var chunks: [String] = []
+        let delivery = StreamDelivery { chunks.append($0) }; defer { delivery.cancel() }
+        delivery.feed("Hello"); delivery.feed(" there. ")
+        XCTAssertEqual(chunks, ["Hello"])
+        for _ in 0..<100 where chunks.count < 2 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(chunks, ["Hello", " there. "])
+    }
+    @MainActor func testCancellationSuppressesDeferredTail() async throws {
+        var chunks: [String] = []
+        let delivery = StreamDelivery { chunks.append($0) }
+        delivery.feed("first"); delivery.feed(" stale"); delivery.cancel()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        delivery.feed(" later"); delivery.finish()
+        XCTAssertEqual(chunks, ["first"])
+    }
+    @MainActor func testFinishFlushesExactlyOnce() async throws {
+        var chunks: [String] = []
+        let delivery = StreamDelivery { chunks.append($0) }
+        delivery.feed("first"); delivery.feed(" tail"); delivery.finish(); delivery.finish()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertEqual(chunks, ["first", " tail"])
+    }
+}
 #endif
