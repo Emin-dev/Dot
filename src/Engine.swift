@@ -145,73 +145,75 @@ final class EngineManager: NSObject, ObservableObject {
         }
     }
 
-    /// Self-contained fallback: pulls the official llama.cpp macos-arm64 release binary
-    /// into ~/.dot/bin so the app works on ANY Apple Silicon Mac with zero prerequisites.
+    // Pinned engine build. llama.cpp ships every *binary* release as a prerelease
+    // (b11564) with .tar.gz assets, and "releases/latest" points at v0.6.0 which
+    // contains NO binaries — so a "latest" lookup silently finds nothing. b11564 is
+    // verified to accept every flag the app uses (--jinja, --flash-attn on,
+    // --reasoning-format deepseek, --cache-reuse, --no-webui, --alias, …).
+    static let engineBuild = "b11564"
+
+    /// Self-contained fallback: pulls the official llama.cpp release binary into
+    /// ~/.dot/bin so the app works on ANY Apple Silicon Mac with zero prerequisites.
     private func fetchEngineBinary(_ done: @escaping (Bool) -> Void) {
         lastLog = "Fetching llama.cpp engine…"
-        let api = URL(string: "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")!
-        var req = URLRequest(url: api)
-        req.timeoutInterval = 20
-        req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        URLSession.shared.dataTask(with: req) { data, _, error in
-            guard error == nil, let data,
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let assets = obj["assets"] as? [[String: Any]] else {
-                DispatchQueue.main.async { done(false) }
-                return
-            }
-            let unameArch = Self.machineArch()
-            let suffix = unameArch == "arm64" ? "macos-arm64" : "macos-x64"
-            guard let asset = assets.first(where: {
-                guard let name = $0["name"] as? String else { return false }
-                return name.contains("bin-") && name.hasSuffix(".zip") && name.contains(suffix)
-            }),
-                  let dl = asset["browser_download_url"] as? String,
-                  let size = asset["size"] as? Int64,
-                  let url = URL(string: dl) else {
-                DispatchQueue.main.async { done(false) }
-                return
-            }
-            DispatchQueue.main.async { done(true) }
-            // download happens next frame; zip is small (~15–40 MB)
-            DispatchQueue.main.async {
-                let zip = self.engineDir.appendingPathComponent("llama-server.zip")
-                let downloader = ModelDownloader(
-                    url: url,
-                    destination: zip,
-                    expectedSize: size,
-                    existingBytes: FileManager.default.fileSize(atPath: zip.path)
-                )
-                downloader.onProgress = { [weak self] f in self?.engineFetch = f }
-                downloader.onFinished = { [weak self] ok in
-                    guard let self else { return }
-                    if ok { self.unzipEngine(done: done) } else { done(false) }
-                }
-                self.activeDownloader = downloader
-                downloader.start()
-            }
-        }.resume()
+        let suffix = Self.machineArch() == "arm64" ? "macos-arm64" : "macos-x64"
+        let tag = Self.engineBuild
+        let name = "llama-\(tag)-bin-\(suffix).tar.gz"
+        // Direct release-asset URL (302 → GitHub release CDN): no API call, no rate limits.
+        guard let url = URL(string: "https://github.com/ggml-org/llama.cpp/releases/download/\(tag)/\(name)") else {
+            DispatchQueue.main.async { done(false) }
+            return
+        }
+        let expected: Int64 = suffix == "macos-arm64" ? 12_105_541 : 11_597_000
+        let archive = engineDir.appendingPathComponent("llama-server.tar.gz")
+        let downloader = ModelDownloader(
+            url: url,
+            destination: archive,
+            expectedSize: expected,
+            existingBytes: FileManager.default.fileSize(atPath: archive.path)
+        )
+        downloader.onProgress = { [weak self] f in self?.engineFetch = f }
+        downloader.onFinished = { [weak self] ok in
+            guard let self else { return }
+            if ok { self.extractEngine(done: done) } else { done(false) }
+        }
+        activeDownloader = downloader
+        downloader.start()
     }
 
-    private func unzipEngine(done: @escaping (Bool) -> Void) {
-        let zip = engineDir.appendingPathComponent("llama-server.zip")
+    private func extractEngine(done: @escaping (Bool) -> Void) {
+        let archive = engineDir.appendingPathComponent("llama-server.tar.gz")
+        let staging = engineDir.appendingPathComponent(".staging-\(UUID().uuidString)")
+        do { try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: true) }
+        catch { done(false); return }
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        p.arguments = ["-o", zip.path, "-d", engineDir.path]
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        p.arguments = ["xzf", archive.path, "-C", staging.path]
         p.terminationHandler = { [weak self] proc in
             DispatchQueue.main.async {
-                if proc.terminationStatus == 0 {
-                    let bin = self?.engineDir.appendingPathComponent("llama-server")
-                    if let bin, FileManager.default.isExecutableFile(atPath: bin.path) {
-                        try? FileManager.default.setAttributes(
-                            [.posixPermissions: 0o755], ofItemAtPath: bin.path)
-                        self?.lastLog = "Engine ready (llama.cpp)"
-                        done(true)
-                        try? FileManager.default.removeItem(at: zip)
-                        return
+                guard let self else { return }
+                // The tarball unpacks into a single top-level dir (llama-b11564/);
+                // flatten it so ~/.dot/bin/llama-server is the stable discovery path.
+                if proc.terminationStatus == 0,
+                   let top = try? FileManager.default.contentsOfDirectory(at: staging, includingPropertiesForKeys: nil),
+                   let inner = top.first {
+                    for item in (try? FileManager.default.contentsOfDirectory(at: inner, includingPropertiesForKeys: nil)) ?? [] {
+                        let dest = self.engineDir.appendingPathComponent(item.lastPathComponent)
+                        try? FileManager.default.removeItem(at: dest)
+                        try? FileManager.default.moveItem(at: item, to: dest)
                     }
                 }
-                done(false)
+                try? FileManager.default.removeItem(at: staging)
+                let bin = self.engineDir.appendingPathComponent("llama-server")
+                if proc.terminationStatus == 0,
+                   FileManager.default.isExecutableFile(atPath: bin.path) {
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bin.path)
+                    try? FileManager.default.removeItem(at: archive)
+                    self.lastLog = "Engine ready (llama.cpp \(Self.engineBuild))"
+                    done(true)
+                } else {
+                    done(false)  // keep archive: ModelDownloader resumes next attempt
+                }
             }
         }
         do { try p.run() } catch { done(false) }
