@@ -97,13 +97,13 @@
       "version": "3.8.0",
       "filename": "en_core_web_sm-3.8.0-py3-none-any.whl",
       "size_bytes": 12806118,
-      "sha256": null,
+      "sha256": "1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85",
       "download_url": "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl",
       "source_metadata_url": "https://api.github.com/repos/explosion/spacy-models/releases/tags/en_core_web_sm-3.8.0",
       "license": "MIT",
-      "hash_verification": "not_downloaded_publisher_digest_absent",
+      "hash_verification": "publisher_metadata_only_not_downloaded",
       "compatibility": "spacy>=3.8.0,<3.9.0",
-      "source_model_metadata": "https://github.com/explosion/spacy-models/blob/master/meta/en_core_web_sm-3.8.0.json",
+      "source_model_metadata": "https://github.com/explosion/spacy-models/blob/68f6a2f92d34c3236e5e10573e5465d51119b725/meta/en_core_web_sm-3.8.0.json",
       "data_notice_review": [
         "WordNet 3.0 license",
         "Model metadata identifies OntoNotes 5 as commercially licensed by Explosion; do not package its training corpus."

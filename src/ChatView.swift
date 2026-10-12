@@ -51,7 +51,7 @@ final class ChatModel: ObservableObject {
         }
         tts.onStarted = { [weak self] id in
             guard let self, self.gate.accepts(id), !self.firstAudio else { return }
-            self.firstAudio = true; self.timing("first_audio")
+            self.firstAudio = true; self.timing("playback_started")
         }
         tts.onDrained = { [weak self] id in
             guard let self, self.gate.accepts(id) else { return }
@@ -137,6 +137,7 @@ struct PetView: View {
     @ObservedObject var stt: STTManager
     @ObservedObject private var preparation = OfflinePreparation.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         VStack(spacing: PetLayout.stackSpacing) {
@@ -165,10 +166,17 @@ struct PetView: View {
                     ProgressView(value: preparation.progress).frame(width: 142)
                         .accessibilityLabel("Checking bundled files")
                 } else if let detail {
-                    Text(detail).font(.system(size: 9)).lineLimit(2).multilineTextAlignment(.center)
+                    Text(detail).font(.system(size: 11)).lineLimit(2).multilineTextAlignment(.center)
                 }
             }
             .frame(width: 168, height: PetLayout.captionHeight)
+            .background {
+                if reduceTransparency {
+                    RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .windowBackgroundColor))
+                } else {
+                    RoundedRectangle(cornerRadius: 12).fill(.regularMaterial)
+                }
+            }
             .padding(.bottom, PetLayout.captionBottomPadding)
         }
         .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)

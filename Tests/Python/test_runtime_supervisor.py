@@ -50,3 +50,40 @@ class RuntimeLayoutTests(unittest.TestCase):
         with patch.object(runtime.os, 'killpg') as signal, patch.object(runtime, 'child_exited', return_value=True):
             runtime.stop_group(child)
         self.assertEqual([call.args[0] for call in signal.call_args_list], [12345, 12345]); self.assertTrue(child.waited)
+
+class RuntimeOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name)
+        self.payload = self.root / 'payload'; splash = self.payload / 'Splash'
+        (splash / 'python/bin').mkdir(parents=True); (splash / 'install').mkdir()
+        (splash / 'python/bin/python3').symlink_to(sys.executable)
+        (splash / 'install/launcher.py').write_text('import time\ntime.sleep(120)\n')
+        self.models = self.root / 'models'; self.state = self.root / 'state'; self.state.mkdir(mode=0o700)
+        entries = []
+        for name in ('llm-target/config.json', 'llm-target/model.safetensors', 'llm-draft/config.json', 'llm-draft/model.safetensors'):
+            file = self.models / name; file.parent.mkdir(parents=True, exist_ok=True); file.write_bytes(b'fixture'); entries.append({'path': name})
+        self.manifest = self.root / 'manifest.json'; self.manifest.write_text(json.dumps({'files': entries}))
+    def tearDown(self): self.temp.cleanup()
+    def launch(self):
+        import subprocess
+        return subprocess.Popen([sys.executable, '-B', str(path), '--payload', str(self.payload), '--models', str(self.models), '--state', str(self.state), '--manifest', str(self.manifest)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    def test_parent_eof_stops_child_and_removes_private_state(self):
+        import os
+        process = self.launch()
+        try:
+            event = json.loads(process.stdout.readline()); self.assertEqual(event['event'], 'started')
+            process.stdin.close(); process.stdin = None
+            process.communicate(timeout=8)
+            self.assertEqual(process.returncode, 0); self.assertFalse(self.state.exists())
+            with self.assertRaises(ProcessLookupError): os.kill(event['pid'], 0)
+        finally:
+            if process.poll() is None: process.terminate(); process.communicate(timeout=8)
+    def test_startup_failure_removes_only_owned_fresh_state(self):
+        self.manifest.write_text('{invalid')
+        process = self.launch(); process.communicate(timeout=8)
+        self.assertEqual(process.returncode, 2); self.assertFalse(self.state.exists())
+        self.assertTrue(self.models.exists()); self.assertTrue(self.payload.exists())
+    def test_nonempty_state_is_rejected_without_deletion(self):
+        marker = self.state / 'preserve'; marker.write_text('private existing data')
+        process = self.launch(); process.communicate(timeout=8)
+        self.assertEqual(process.returncode, 2); self.assertEqual(marker.read_text(), 'private existing data')

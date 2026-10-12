@@ -102,6 +102,16 @@ final class CompanionInterfaceTests: XCTestCase {
         XCTAssertEqual(preparation.state, .ready); XCTAssertEqual(preparation.progress, 1)
         XCTAssertEqual(try FileManager.default.subpathsOfDirectory(atPath: folder.path).sorted(), before)
     }
+    @MainActor func testResourceAncestorAliasDoesNotCorruptRelativeModelNames() async throws {
+        let folder = try fixture(); defer { try? FileManager.default.removeItem(at: folder) }
+        let alias = folder.deletingLastPathComponent().appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: folder)
+        defer { try? FileManager.default.removeItem(at: alias) }
+        let preparation = OfflinePreparation(resources: alias, runtimeCheck: { folder })
+        preparation.start(nativeRecognizerAvailable: true)
+        try await waitUntil { preparation.state != .checking }
+        XCTAssertEqual(preparation.state, .ready)
+    }
     @MainActor func testCorruptBundledFileFailsWithoutRepairOrDownload() async throws {
         let folder = try fixture(); defer { try? FileManager.default.removeItem(at: folder) }
         let model = folder.appendingPathComponent("OfflineModels/model")

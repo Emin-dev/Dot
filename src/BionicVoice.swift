@@ -57,6 +57,9 @@ final class BionicVoice {
     private var pending: Set<UUID> = []
     private var unsent: [(UUID, String)] = []
     private var audio: [Data] = []
+    private var loads: [UUID: Task<Void, Never>] = [:]
+    private var audioOrder: [UUID] = []
+    private var loaded: [UUID: Data] = [:]
     private var player: AVAudioPlayer?
     private var timer: Timer?
     private var deadline = 0.0
@@ -81,7 +84,7 @@ final class BionicVoice {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         let child = Process(), stdin = Pipe(), stdout = Pipe()
         child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-        child.arguments = ["-p", "(version 1)(allow default)(deny network*)", python.path, "-I", "-u", helper.path, "--root", base.path, "--output", dir.path]
+        child.arguments = ["-p", "(version 1)(allow default)(deny network*)", python.path, "-I", "-B", "-u", helper.path, "--root", base.path, "--output", dir.path]
         child.environment = ["PATH": "/usr/bin:/bin", "HOME": dir.path, "TMPDIR": dir.path,
                              "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1", "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"]
         child.standardInput = stdin; child.standardOutput = stdout
@@ -115,6 +118,11 @@ final class BionicVoice {
                 self.receive(bytes)
             }
         }
+        ensureTimer()
+    }
+
+    private func ensureTimer() {
+        guard timer == nil else { return }
         let tick = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tick() }
         }
@@ -125,9 +133,10 @@ final class BionicVoice {
         guard generation == id else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        guard value.count <= 1000, pending.count + audio.count < 24 else {
+        guard value.count <= 1000, pending.count + audio.count + audioOrder.count < 24, loads.count < 24 else {
             fail("Bionic voice queue reached its safe limit. Click to start again."); return
         }
+        ensureTimer()
         let request = UUID(); pending.insert(request); speaking = true
         if pending.count == 1 { deadline = clock() + 60 }
         if ready { send(request: request, text: value, turn: id) }
@@ -154,33 +163,47 @@ final class BionicVoice {
                 let waiting = unsent; unsent.removeAll()
                 if let id = generation { for (request, text) in waiting { send(request: request, text: text, turn: id) } }
             } else if event.kind == "unavailable" {
-                fail("Bionic needs its existing Python packages, English language data and Kokoro assets. Nothing was downloaded."); return
+                fail("The bundled voice files are missing or incompatible. A repaired complete app is required."); return
             } else if event.kind == "audio", let filename = event.filename, let dir = directory {
                 let url = dir.appendingPathComponent(filename)
-                defer { try? FileManager.default.removeItem(at: url) }
-                guard ready, event.turn == generation, let request = event.request, pending.remove(request) != nil else { continue }
-                do {
-                    let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-                    guard attributes[.type] as? FileAttributeType == .typeRegular,
-                          let size = attributes[.size] as? NSNumber, (44...2_881_024).contains(size.intValue) else { throw VoiceFailure.audio }
-                    let bytes = try Data(contentsOf: url)
-                    guard bytes.count <= 2_881_024 else { throw VoiceFailure.audio }
-                    audio.append(bytes); deadline = clock() + 60; playNext()
-                } catch { fail("Bionic returned invalid local audio."); return }
+                guard ready, event.turn == generation, let request = event.request, pending.remove(request) != nil else {
+                    try? FileManager.default.removeItem(at: url); continue
+                }
+                let token = session, turn = generation
+                audioOrder.append(request)
+                loads[request] = Task { [weak self] in
+                    defer { self?.loads.removeValue(forKey: request) }
+                    do {
+                        let data = try await VoiceAudioReader.read(url)
+                        guard let self, !Task.isCancelled, self.session == token, self.generation == turn else { return }
+                        self.loaded[request] = data
+                        // Independent disk reads may finish out of order. Playback may not.
+                        while let first = self.audioOrder.first, let next = self.loaded.removeValue(forKey: first) {
+                            self.audioOrder.removeFirst(); self.audio.append(next)
+                        }
+                        self.deadline = self.clock() + 60; self.playNext()
+                    } catch {
+                        guard let self, !Task.isCancelled, self.session == token, self.generation == turn else { return }
+                        self.fail("The bundled voice returned invalid audio.")
+                    }
+                }
             } else if event.kind == "error", event.turn == generation {
-                fail("Bionic could not synthesize this sentence. Check the local voice setup."); return
+                fail("The bundled voice could not speak this sentence. Try again; if it persists, this app needs repair."); return
             }
         }
         if buffer.count > 8192 { fail("Bionic voice response exceeded its safe limit.") }
     }
     private func tick() {
-        if (!ready || !pending.isEmpty) && clock() > deadline { fail("Bionic voice timed out."); return }
+        if (!ready || !pending.isEmpty || !audioOrder.isEmpty) && clock() > deadline { fail("Bionic voice timed out."); return }
         if let player, !player.isPlaying { self.player = nil; playNext() }
+        if ready && pending.isEmpty && audioOrder.isEmpty && audio.isEmpty && player == nil {
+            timer?.invalidate(); timer = nil
+        }
     }
     private func playNext() {
         guard player == nil, let id = generation else { return }
         if audio.isEmpty {
-            if pending.isEmpty && speaking { speaking = false; onDrained?(id) }
+            if pending.isEmpty && audioOrder.isEmpty && speaking { speaking = false; onDrained?(id) }
             return
         }
         do {
@@ -192,6 +215,8 @@ final class BionicVoice {
     }
     func stop() {
         generation = nil; pending.removeAll(); unsent.removeAll(); audio.removeAll()
+        for task in loads.values { task.cancel() }
+        audioOrder.removeAll(); loaded.removeAll()
         player?.stop(); player = nil; speaking = false
         if ready { write(["protocol": 1, "type": "cancel"]) }
     }
@@ -205,6 +230,8 @@ final class BionicVoice {
         session = UUID(); generation = nil; ready = false
         timer?.invalidate(); timer = nil
         pending.removeAll(); unsent.removeAll(); audio.removeAll(); buffer = Data()
+        for task in loads.values { task.cancel() }
+        audioOrder.removeAll(); loaded.removeAll()
         player?.stop(); player = nil; speaking = false
         output?.readabilityHandler = nil; try? output?.close(); output = nil
         // Do not wait for a pipe write or a stuck inference kernel to acknowledge shutdown.

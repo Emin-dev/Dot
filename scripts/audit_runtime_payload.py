@@ -67,6 +67,11 @@ def audit_runtime(root, enforce_pins=True):
             if not any(entries[x]['kind'] == 'file' and (root / x).resolve(strict=True) == resolved for x in names):
                 raise ValueError('required input not covered by hash')
     if enforce_pins:
+        patch = json.loads((Path(__file__).resolve().parents[1] / 'Resources/Runtime/splash-managed-listener-patch.json').read_text())
+        if manifest.get('transport_patch') != patch['id']: raise ValueError('authenticated listener patch missing')
+        for entry in patch['files']:
+            if entries.get(entry['path'], {}).get('sha256') != entry['sha256']:
+                raise ValueError('wrong managed listener source')
         for name, (size, sha) in PINS.items():
             if entries.get(name, {}).get('bytes') != size or entries[name].get('sha256') != sha:
                 raise ValueError('wrong pinned neural asset')

@@ -80,7 +80,11 @@ final class OfflinePreparation: ObservableObject {
         }
     }
     nonisolated private static func verifyClosure(_ folder: URL, names: Set<String>) throws {
-        guard let items = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw PreparationFailure.integrity }
+        // macOS may enumerate /var paths as /private/var. Use one canonical root
+        // for both traversal and relative names; reject links before resolving entries.
+        let canonical = folder.resolvingSymlinksInPath().standardizedFileURL
+        let prefix = canonical.path + "/"
+        guard let items = FileManager.default.enumerator(at: canonical, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw PreparationFailure.integrity }
         var actual = Set<String>(), nodes = 0
         for case let item as URL in items {
             try Task.checkCancellation(); nodes += 1
@@ -88,7 +92,9 @@ final class OfflinePreparation: ObservableObject {
             let properties = try item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard properties.isSymbolicLink != true else { throw PreparationFailure.integrity }
             if properties.isDirectory != true {
-                actual.insert(String(item.path.dropFirst(folder.path.count + 1)))
+                let path = item.resolvingSymlinksInPath().standardizedFileURL.path
+                guard path.hasPrefix(prefix) else { throw PreparationFailure.integrity }
+                actual.insert(String(path.dropFirst(prefix.count)))
                 guard actual.count <= 100 else { throw PreparationFailure.integrity }
             }
         }

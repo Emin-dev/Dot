@@ -11,9 +11,12 @@ final class BundledSplash {
     private var token = UUID()
     private var bytes = Data()
     private(set) var port: Int?
+    private(set) var backendPort: Int?
+    private(set) var certificateSHA256: String?
     private(set) var serverPID: Int?
     private(set) var apiKey: String?
-    func connection() async throws -> (URL, Int) {
+    struct Connection { let url: URL; let pid: Int; let backendPort: Int; let certificateSHA256: String }
+    func connection() async throws -> Connection {
         let payload = try await OfflinePayload.shared.validate()
         try Task.checkCancellation()
         guard OfflinePreparation.shared.ready, let models = OfflinePreparation.shared.root else { throw OfflineFailure.incomplete }
@@ -22,7 +25,7 @@ final class BundledSplash {
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dot-splash-" + UUID().uuidString, isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
             let child = Process(), input = Pipe(), stdout = Pipe(), generation = UUID()
-            token = generation; bytes = Data(); port = nil; serverPID = nil; apiKey = nil
+            token = generation; bytes = Data(); port = nil; backendPort = nil; certificateSHA256 = nil; serverPID = nil; apiKey = nil
             child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
             // Only loopback connections are allowed inside the owned runtime sandbox.
             child.arguments = ["-f", resources.appendingPathComponent("Runtime/splash.sb").path,
@@ -36,7 +39,7 @@ final class BundledSplash {
                 try? FileManager.default.removeItem(at: directory)
                 Task { @MainActor in
                     guard let self, self.token == generation else { return }
-                    self.process = nil; self.port = nil; self.serverPID = nil; self.apiKey = nil
+                    self.process = nil; self.port = nil; self.backendPort = nil; self.certificateSHA256 = nil; self.serverPID = nil; self.apiKey = nil
                     self.output?.readabilityHandler = nil; self.output = nil; self.control = nil
                 }
             }
@@ -54,7 +57,9 @@ final class BundledSplash {
         for _ in 0..<300 {
             try Task.checkCancellation()
             guard token == expected, process?.isRunning == true else { throw OfflineFailure.runtime }
-            if let port, let serverPID, let url = URL(string: "http://127.0.0.1:\(port)") { return (url, serverPID) }
+            if let port, let serverPID, let backendPort, let certificateSHA256, let url = URL(string: "https://127.0.0.1:\(port)") {
+                return Connection(url: url, pid: serverPID, backendPort: backendPort, certificateSHA256: certificateSHA256)
+            }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
         throw OfflineFailure.runtime
@@ -67,8 +72,10 @@ final class BundledSplash {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               object["protocol"] as? Int == 1, object["event"] as? String == "started",
               let port = object["port"] as? Int, (1...65535).contains(port), let pid = object["pid"] as? Int, pid > 0,
+              let backend = object["backend_port"] as? Int, (1...65535).contains(backend), backend != port,
+              let certificate = object["tls_certificate_sha256"] as? String, certificate.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
               let key = object["api_key"] as? String, key.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { return }
-        self.port = port; serverPID = pid; apiKey = key
+        self.port = port; backendPort = backend; certificateSHA256 = certificate; serverPID = pid; apiKey = key
     }
     func owns(pid: Int) -> Bool { serverPID == pid && process?.isRunning == true }
     func shutdown() {
@@ -76,6 +83,6 @@ final class BundledSplash {
         // EOF tells the supervisor to stop its own process group. No synchronous waits on UI.
         try? control?.close(); control = nil
         if process?.isRunning == true { process?.terminate() }
-        process = nil; port = nil; serverPID = nil; apiKey = nil; state = nil
+        process = nil; port = nil; backendPort = nil; certificateSHA256 = nil; serverPID = nil; apiKey = nil; state = nil
     }
 }

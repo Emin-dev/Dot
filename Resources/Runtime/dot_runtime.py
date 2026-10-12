@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import select
 import secrets
+import shutil
+import stat
 import signal
 import socket
 import subprocess
@@ -16,6 +18,8 @@ import time
 PROTOCOL = 1
 MODEL = 'mlx-community/Qwen3.8-27B-4bit'
 REVISION = '10c35caafbb80f7dc6a7a432cdd11af10a6d4818'
+_spec = importlib.util.spec_from_file_location('_dot_tls', Path(__file__).with_name('dot_tls.py'))
+tls = importlib.util.module_from_spec(_spec); _spec.loader.exec_module(tls)
 _process_spec = importlib.util.spec_from_file_location('_dot_process', Path(__file__).with_name('dot_process.py'))
 _process = importlib.util.module_from_spec(_process_spec); _process_spec.loader.exec_module(_process)
 child_exited = _process.child_exited
@@ -75,33 +79,36 @@ def main():
         raise ValueError('state_not_disjoint')
     if state.stat().st_uid != os.getuid() or state.stat().st_mode & 0o077:
         raise ValueError('private_state_required')
-    manifest = json.loads(Path(args.manifest).read_text())
-    draft = local_snapshot(models, state, manifest)
-    runtime = payload / 'Splash'
-    # A single ephemeral owned bind attempt. No port scan or listener adoption.
-    with socket.socket() as probe:
-        probe.bind(('127.0.0.1', 0)); port = probe.getsockname()[1]
-    home = state / 'home'; home.mkdir()
-    api_key = secrets.token_hex(32)
-    environment = {'SPLASH_API_KEY': api_key, 'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(state),
-                   'HF_HOME': str(state / 'hf'), 'HF_HUB_CACHE': str(state / 'hf/hub'),
-                   'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'PYTHONNOUSERSITE': '1',
-                   'HF_HUB_DISABLE_TELEMETRY': '1', 'HF_HUB_DISABLE_IMPLICIT_TOKEN': '1',
-                   'PYTHONDONTWRITEBYTECODE': '1'}
-    command = [str(runtime / 'python/bin/python3'), '-B', str(runtime / 'install/launcher.py'),
-               'serve', '--model', MODEL, '--revision', REVISION, '--draft-model', str(draft),
-               '--offline', '--host', '127.0.0.1', '--port', str(port), '--max-cache-disk', '0']
+    # Only adopt the fresh private directory made for this invocation, never user data.
+    if Path(args.state).is_symlink() or any(state.iterdir()): raise ValueError('fresh_state_required')
+    identity = state.stat()
     stopped = False
     def request_stop(*_):
         nonlocal stopped
         stopped = True
     signal.signal(signal.SIGTERM, request_stop); signal.signal(signal.SIGINT, request_stop)
-    if stopped: return 0
-    child = None
+    child = None; listener = None; relay = None
     try:
+        manifest = json.loads(Path(args.manifest).read_text())
+        draft = local_snapshot(models, state, manifest)
+        runtime = payload / 'Splash'
+        # Never release/rebind this backend socket. Only the patched Splash child accepts.
+        listener = tls.owned_listener(); port = listener.getsockname()[1]
+        relay = tls.TLSRelay(listener, state)
+        home = state / 'home'; home.mkdir()
+        api_key = secrets.token_hex(32)
+        environment = {'SPLASH_API_KEY': api_key, 'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(state),
+                       'HF_HOME': str(state / 'hf'), 'HF_HUB_CACHE': str(state / 'hf/hub'),
+                       'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'PYTHONNOUSERSITE': '1',
+                       'HF_HUB_DISABLE_TELEMETRY': '1', 'HF_HUB_DISABLE_IMPLICIT_TOKEN': '1',
+                       'PYTHONDONTWRITEBYTECODE': '1'}
+        command = [str(runtime / 'python/bin/python3'), '-B', str(runtime / 'install/launcher.py'),
+                   'serve', '--model', MODEL, '--revision', REVISION, '--draft-model', str(draft),
+                   '--offline', '--no-webui', '--host', '127.0.0.1', '--port', str(port), '--listen-fd', str(listener.fileno()), '--max-cache-disk', '0']
+        if stopped: return 0
         child = subprocess.Popen(command, cwd=runtime, env=environment, stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        print(json.dumps({'protocol': PROTOCOL, 'event': 'started', 'pid': child.pid, 'port': port, 'api_key': api_key}), flush=True)
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, pass_fds=(listener.fileno(),))
+        print(json.dumps({'protocol': PROTOCOL, 'event': 'started', 'pid': child.pid, 'port': relay.port, 'backend_port': port, 'api_key': api_key, 'tls_certificate_sha256': relay.certificate_sha256}), flush=True)
         while not stopped:
             if child_exited(child): break
             readable, _, _ = select.select([sys.stdin], [], [], 0.2)
@@ -109,7 +116,21 @@ def main():
                 # Any explicit control byte or parent EOF requests shutdown.
                 if sys.stdin.buffer.read(1) is not None: break
     finally:
-        if child is not None: stop_group(child)
+        try:
+            try:
+                if relay is not None: relay.close()
+            finally:
+                if child is not None: stop_group(child)
+                # A failed relay shutdown retains its socket through live worker references.
+                if listener is not None and (relay is None or relay.closed): listener.close()
+        finally:
+            # The supervisor outlives a quitting app and cleans its own private state.
+            # Never follow a replaced path or remove another invocation's directory.
+            try:
+                current = state.lstat()
+                if stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
+                    shutil.rmtree(state)
+            except FileNotFoundError: pass
     return 0
 
 

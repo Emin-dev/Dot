@@ -57,15 +57,21 @@ struct SentenceBuffer {
     mutating func feed(_ delta: String) -> [String] {
         pending += delta
         var output: [String] = []
-        // A boundary needs following whitespace: never split an unfinished decimal.
-        while let range = pending.range(of: #"[.!?…](?:[\"”']?\s+)"#, options: .regularExpression) {
-            let chunk = String(pending[..<range.upperBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            pending = String(pending[range.upperBound...])
+        // Keep every chunk bounded, including a whole sentence arriving in one SSE delta.
+        while !pending.isEmpty {
+            let sentence = pending.range(of: #"[.!?…](?:[\"”']?\s+)"#, options: .regularExpression)
+            let end: String.Index
+            if let sentence, pending.distance(from: pending.startIndex, to: sentence.upperBound) <= 280 {
+                end = sentence.upperBound
+            } else if pending.count >= 280 {
+                let prefix = pending.prefix(280)
+                if let whitespace = prefix.lastIndex(where: { $0.isWhitespace }), whitespace != pending.startIndex {
+                    end = pending.index(after: whitespace)
+                } else { end = pending.index(pending.startIndex, offsetBy: 280) }
+            } else { break }
+            let chunk = String(pending[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
+            pending.removeSubrange(..<end)
             if !chunk.isEmpty { output.append(chunk) }
-        }
-        if pending.count >= 280, let space = pending.prefix(280).lastIndex(of: " ") {
-            output.append(String(pending[..<space]))
-            pending = String(pending[pending.index(after: space)...])
         }
         return output
     }
@@ -222,5 +228,34 @@ enum CompanionAccessibility {
         if capturingScreen { return base + ". Reading screen locally." }
         if screenUsed { return base + ". Screen used locally for this reply." }
         return base
+    }
+}
+
+/// Client-side resource bounds do not trust server completion-token settings.
+enum ResponseLimit: Error { case exceeded, invalidUTF8 }
+struct BoundedSSELines {
+    static let maximumLineBytes = 262_144
+    static let maximumStreamBytes = 4_000_000
+    private var line = Data()
+    private var total = 0
+    mutating func feed(_ byte: UInt8) throws -> String? {
+        total += 1
+        guard total <= Self.maximumStreamBytes else { throw ResponseLimit.exceeded }
+        if byte == 10 {
+            defer { line.removeAll(keepingCapacity: true) }
+            if line.last == 13 { line.removeLast() }
+            guard let value = String(data: line, encoding: .utf8) else { throw ResponseLimit.invalidUTF8 }
+            return value
+        }
+        guard line.count < Self.maximumLineBytes else { throw ResponseLimit.exceeded }
+        line.append(byte); return nil
+    }
+}
+struct ResponseTextBudget {
+    private var bytes = 0
+    mutating func accept(_ text: String) throws {
+        let count = text.utf8.count
+        guard count <= 64_000 - bytes else { throw ResponseLimit.exceeded }
+        bytes += count
     }
 }

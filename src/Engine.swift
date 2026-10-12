@@ -1,9 +1,32 @@
 import Foundation
 import Combine
+import CryptoKit
+import Security
 
-/// Direct HTTP to the app-owned Splash runtime. No generic proxy or fallback engine.
-/// These are consistency checks of the local server's reported identity, not attestation.
-private final class NoRedirects: NSObject, URLSessionTaskDelegate {
+enum RuntimeCertificatePin {
+    static func matches(_ data: Data, expected: String, host: String) -> Bool {
+        guard host == "127.0.0.1", !data.isEmpty, data.count <= 65_536,
+              expected.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { return false }
+        return SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expected
+    }
+}
+
+/// Direct TLS to the app-owned Splash runtime. No generic proxy or fallback engine.
+/// Every owned connection pins the ephemeral TLS certificate delivered over the private process pipe.
+final class NoRedirects: NSObject, URLSessionTaskDelegate {
+    private let certificateSHA256: String?
+    init(certificateSHA256: String?) { self.certificateSHA256 = certificateSHA256 }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        guard challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust,
+              challenge.protectionSpace.host == "127.0.0.1", let certificateSHA256,
+              let trust = challenge.protectionSpace.serverTrust,
+              let certificates = SecTrustCopyCertificateChain(trust) as? [SecCertificate], let leaf = certificates.first,
+              RuntimeCertificatePin.matches(SecCertificateCopyData(leaf) as Data, expected: certificateSHA256, host: challenge.protectionSpace.host) else {
+            completionHandler(.cancelAuthenticationChallenge, nil); return
+        }
+        completionHandler(.useCredential, URLCredential(trust: trust))
+    }
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,
@@ -27,33 +50,40 @@ enum EngineError: LocalizedError, Equatable {
 
 @MainActor
 final class EngineManager: ObservableObject {
-    private let delegate = NoRedirects()
+    private var certificateSHA256: String?
+    private var currentSession: URLSession?
     private let configuredEndpoint: String?
     private let configuredModel: String?
     private let protocolClasses: [AnyClass]?
     init(endpoint: String? = nil, model: String? = nil, protocolClasses: [AnyClass]? = nil) {
         configuredEndpoint = endpoint; configuredModel = model; self.protocolClasses = protocolClasses
     }
-    private lazy var session: URLSession = {
+    private var session: URLSession {
+        if let currentSession { return currentSession }
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 180
         configuration.connectionProxyDictionary = [:]
         configuration.protocolClasses = protocolClasses
-        configuration.httpCookieStorage = nil
-        configuration.urlCache = nil
-        return URLSession(configuration: configuration, delegate: delegate, delegateQueue: nil)
-    }()
+        configuration.httpCookieStorage = nil; configuration.urlCache = nil; configuration.urlCredentialStorage = nil
+        let value = URLSession(configuration: configuration, delegate: NoRedirects(certificateSHA256: certificateSHA256), delegateQueue: nil)
+        currentSession = value; return value
+    }
+
 
     private(set) var visionAvailable = false
     func verifyConnection() async throws -> (URL, String) {
-        let base: URL, model: String, ownedPID: Int?
+        let base: URL, model: String, ownedPID: Int?, identityPort: Int
         if let configuredEndpoint {
-            guard let url = LocalEndpoint.validate(configuredEndpoint), let selected = configuredModel, !selected.isEmpty else { throw EngineError.configuration }
-            base = url; model = selected; ownedPID = nil
+            guard protocolClasses?.isEmpty == false, let url = LocalEndpoint.validate(configuredEndpoint), let selected = configuredModel, !selected.isEmpty else { throw EngineError.configuration }
+            base = url; model = selected; ownedPID = nil; identityPort = url.port ?? 0
         } else {
             let connection = try await BundledSplash.shared.connection()
-            base = connection.0; ownedPID = connection.1; model = BundledSplash.model
+            base = connection.url; ownedPID = connection.pid; identityPort = connection.backendPort; model = BundledSplash.model
+            if certificateSHA256 != connection.certificateSHA256 {
+                currentSession?.invalidateAndCancel(); currentSession = nil
+                certificateSHA256 = connection.certificateSHA256
+            }
         }
         let attempts = ownedPID == nil ? 1 : 900
         let readinessDeadline = ProcessInfo.processInfo.systemUptime + 180
@@ -63,10 +93,10 @@ final class EngineManager: ObservableObject {
             var request = URLRequest(url: base.appendingPathComponent("status")); request.timeoutInterval = 2
             if ownedPID != nil, let key = BundledSplash.shared.apiKey { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
             do {
-                let (data, response) = try await session.data(for: request)
+                let (data, response) = try await Self.boundedStatus(session: session, request: request)
                 guard data.count <= 1_000_000, let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let identity = try? JSONDecoder().decode(SplashIdentity.self, from: data),
-                      identity.matches(model: model, port: base.port ?? 0, server: http.value(forHTTPHeaderField: "Server")),
+                      identity.matches(model: model, port: identityPort, server: http.value(forHTTPHeaderField: "Server")),
                       ownedPID == nil || identity.instance?.pid == ownedPID else { throw EngineError.identity }
                 visionAvailable = identity.vision == true && identity.input_modalities?.contains("image") == true
                 return (base, model)
@@ -95,22 +125,30 @@ final class EngineManager: ObservableObject {
             let text = messages[last]["content"] as? String ?? ""
             messages[last]["content"] = [["type": "text", "text": text], ["type": "image_url", "image_url": ["url": image]]] as [[String: Any]]
         }
+        if configuredEndpoint == nil {
+            guard let pid = BundledSplash.shared.serverPID, BundledSplash.shared.owns(pid: pid),
+                  certificateSHA256 == BundledSplash.shared.certificateSHA256 else { throw EngineError.identity }
+        }
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "model": model, "messages": messages, "stream": true, "max_completion_tokens": 1536, "reasoning_effort": "low",
             "temperature": 0.7, "top_p": 0.8,
             "chat_template_kwargs": ["enable_thinking": true, "reasoning_effort": "low"]
         ])
         let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
               http.value(forHTTPHeaderField: "Server") == "Splash" else { throw EngineError.response }
         var hasContent = false
         var sawDone = false
         var sawReasoning = false
+        var lines = BoundedSSELines(), textBudget = ResponseTextBudget()
         let updates = StreamDelivery(onDelta: onDelta)
         defer { updates.cancel() }
-        for try await line in bytes.lines {
+        for try await byte in bytes {
             try Task.checkCancellation()
-            guard let delta = StreamDelta.parse(line) else { continue }
+            guard let line = try lines.feed(byte), let delta = StreamDelta.parse(line) else { continue }
+            try textBudget.accept(delta.content)
+            try textBudget.accept(delta.reasoning)
             if delta.done {
                 updates.finish()
                 sawDone = true; break
@@ -126,8 +164,21 @@ final class EngineManager: ObservableObject {
         if !hasContent { throw EngineError.empty }
     }
 
+    nonisolated private static func boundedStatus(session: URLSession, request: URLRequest) async throws -> (Data, URLResponse) {
+        let (bytes, response) = try await session.bytes(for: request)
+        defer { bytes.task.cancel() }
+        guard response.expectedContentLength <= 1_000_000 else { throw EngineError.response }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < 1_000_000 else { throw EngineError.response }
+            data.append(byte)
+        }
+        return (data, response)
+    }
+
     func shutdown() {
-        session.invalidateAndCancel()
+        currentSession?.invalidateAndCancel(); currentSession = nil
         BundledSplash.shared.shutdown()
     }
 }

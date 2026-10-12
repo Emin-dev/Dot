@@ -363,3 +363,59 @@ final class CompanionAccessibilityTests: XCTestCase {
         XCTAssertEqual(CompanionAccessibility.value(status: "Thinking", detail: nil, capturingScreen: false, screenUsed: false), "Thinking")
     }
 }
+
+final class SpeechChunkBoundTests: XCTestCase {
+    private func assertChunks(_ input: String, incremental: Bool = false, file: StaticString = #filePath, line: UInt = #line) {
+        var buffer = SentenceBuffer(), chunks: [String] = []
+        if incremental { for char in input { chunks += buffer.feed(String(char)) } }
+        else { chunks = buffer.feed(input) }
+        if let tail = buffer.flush() { chunks.append(tail) }
+        XCTAssertTrue(chunks.allSatisfy { !$0.isEmpty && $0.count <= 280 }, file: file, line: line)
+        let compact: (String) -> String = { String($0.filter { !$0.isWhitespace }) }
+        XCTAssertEqual(compact(chunks.joined()), compact(input), file: file, line: line)
+    }
+    func testLargeSingleDeltaWithoutPunctuation() { assertChunks(String(repeating: "word ", count: 400)) }
+    func testLargePunctuatedSentenceIsBounded() { assertChunks(String(repeating: "word ", count: 400) + ". ") }
+    func testLongUnbrokenTokenIsBounded() { assertChunks(String(repeating: "x", count: 1700)) }
+    func testIncrementalLongSentencePreservesContent() { assertChunks(String(repeating: "word ", count: 400) + ". ", incremental: true) }
+}
+
+final class ResponseBoundsTests: XCTestCase {
+    func testOversizedUnterminatedLineRejected() {
+        var parser = BoundedSSELines()
+        XCTAssertThrowsError(try (0...BoundedSSELines.maximumLineBytes).forEach { _ in _ = try parser.feed(65) })
+    }
+    func testCRLFAndSplitUTF8Preserved() throws {
+        var parser = BoundedSSELines(), output: [String] = []
+        for byte in "data: héllo\r\n".utf8 { if let line = try parser.feed(byte) { output.append(line) } }
+        XCTAssertEqual(output, ["data: héllo"])
+    }
+    func testRepeatedContentCannotExceedReplyBudget() throws {
+        var budget = ResponseTextBudget()
+        for _ in 0..<64 { try budget.accept(String(repeating: "x", count: 1000)) }
+        XCTAssertThrowsError(try budget.accept("x"))
+    }
+    func testStreamOfShortLinesStillHasTotalLimit() {
+        var parser = BoundedSSELines()
+        XCTAssertThrowsError(try (0...BoundedSSELines.maximumStreamBytes).forEach { _ in _ = try parser.feed(10) })
+    }
+}
+
+final class ResponseBoundaryTests: XCTestCase {
+    func testInvalidUTF8RejectedAtLineBoundary() throws {
+        var parser = BoundedSSELines()
+        _ = try parser.feed(0xff)
+        XCTAssertThrowsError(try parser.feed(10))
+    }
+    func testExactLineLimitAcceptedThenNextLineStartsEmpty() throws {
+        var parser = BoundedSSELines()
+        for _ in 0..<BoundedSSELines.maximumLineBytes { _ = try parser.feed(65) }
+        XCTAssertEqual(try parser.feed(10)?.utf8.count, BoundedSSELines.maximumLineBytes)
+        XCTAssertEqual(try parser.feed(10), "")
+    }
+    func testTextBudgetCountsUTF8BytesInsteadOfCharacters() throws {
+        var budget = ResponseTextBudget()
+        try budget.accept(String(repeating: "é", count: 32_000))
+        XCTAssertThrowsError(try budget.accept("a"))
+    }
+}

@@ -24,7 +24,13 @@ checks = {
     'no production model downloader': not (root / 'src/ModelDownload.swift').exists() and 'URLSession' not in read('src/OfflinePreparation.swift') and 'AssetTransfer' not in read('src/OfflinePreparation.swift'),
     'bundled model index has no download URLs': 'https://' not in read('Resources/bundled-models.json'),
     'complete assembly requires all models': '${DOT_MODEL_PAYLOAD:?' in read('scripts/build_complete.sh') and 'MODEL_DOWNLOAD=true' not in read('scripts/build_complete.sh'),
+    'voice errors never request external setup': all(x not in read('src/BionicVoice.swift') for x in ['existing Python packages', 'Check the local voice setup']),
+    'caption supports reduced transparency': 'RoundedRectangle(cornerRadius: 12).fill(Color(nsColor: .windowBackgroundColor))' in chat,
+    'isolated voice Python explicitly disables bytecode writes': 'python.path, "-I", "-B", "-u", helper.path' in read('src/BionicVoice.swift'),
     'installer requires native offline acceptance': 'offline_acceptance.py' in read('scripts/package_complete.sh') and 'hdiutil create' not in read('scripts/build_complete.sh'),
+    'owned runtime transport is TLS pinned': 'https://127.0.0.1:' in read('src/BundledSplash.swift') and 'RuntimeCertificatePin.matches' in engine,
+    'runtime listener retained across child exec': 'pass_fds=(listener.fileno(),)' in read('Resources/Runtime/dot_runtime.py') and 'relay.close()' in read('Resources/Runtime/dot_runtime.py'),
+    'status and SSE enforce client byte budgets': 'boundedStatus' in engine and 'BoundedSSELines()' in engine and 'ResponseTextBudget()' in engine,
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

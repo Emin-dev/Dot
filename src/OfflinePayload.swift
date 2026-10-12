@@ -14,6 +14,7 @@ struct RuntimeManifest: Decodable {
     let kind: String
     let files: [OfflineFile]
     let components: [Component]
+    let transport_patch: String?
 }
 enum OfflineFailure: LocalizedError {
     case incomplete, corrupt, space, download, paused, runtime
@@ -106,6 +107,15 @@ actor OfflinePayload {
         guard manifest.components.count == 3, roles == Set(["splash_runtime", "speech_recognition", "speech_synthesis"]) else { throw OfflineFailure.incomplete }
         let names = manifest.files.map(\.path)
         guard Set(names.map { $0.precomposedStringWithCanonicalMapping.lowercased() }).count == names.count else { throw OfflineFailure.corrupt }
+        guard manifest.transport_patch == "dot-splash-owned-listener-v1" else { throw OfflineFailure.incomplete }
+        let managedSources = [
+            "Splash/install/launcher.py": "abd30361a17ef5811b509564fec123c83856f0d202b169a3678345aa064d63cd",
+            "Splash/server/serve_options.py": "5a6e5fda05bf9f3eceb2f1cb280c301af70cad9c19c469c89137dbd550769df6",
+            "Splash/server/server.py": "34f94116f2d1efeabd3b91fb496f3521613fb1392863cf49c414fe52647e53b2"
+        ]
+        guard managedSources.allSatisfy({ name, expected in manifest.files.contains { $0.path == name && $0.kind == "file" && $0.sha256 == expected } }) else { throw OfflineFailure.incomplete }
+        let nameSet = Set(names)
+        let entries = Dictionary(uniqueKeysWithValues: manifest.files.map { ($0.path, $0) })
         var total: Int64 = 0
         for file in manifest.files {
             try Task.checkCancellation()
@@ -119,23 +129,24 @@ actor OfflinePayload {
                 guard try FileManager.default.destinationOfSymbolicLink(atPath: path.path) == target else { throw OfflineFailure.corrupt }
             } else { throw OfflineFailure.corrupt }
         }
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw OfflineFailure.corrupt }
+        let enumerationRoot = root.resolvingSymlinksInPath().standardizedFileURL
+        guard let enumerator = FileManager.default.enumerator(at: enumerationRoot, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) else { throw OfflineFailure.corrupt }
         var actual = Set<String>()
         for case let url as URL in enumerator {
             try Task.checkCancellation()
             let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             if values.isSymbolicLink == true || values.isDirectory != true {
-                let prefix = root.standardizedFileURL.path + "/"
+                let prefix = enumerationRoot.path + "/"
                 guard url.standardizedFileURL.path.hasPrefix(prefix) else { throw OfflineFailure.corrupt }
                 let name = String(url.standardizedFileURL.path.dropFirst(prefix.count))
                 if name != "runtime-manifest.json" { actual.insert(name) }
                 if actual.count > 100_000 { throw OfflineFailure.corrupt }
             }
         }
-        guard actual == Set(names) else { throw OfflineFailure.corrupt }
+        guard actual == nameSet else { throw OfflineFailure.corrupt }
         for component in manifest.components {
             guard !component.files.isEmpty, !component.license_paths.isEmpty,
-                  (component.files + component.license_paths).allSatisfy({ names.contains($0) }) else { throw OfflineFailure.incomplete }
+                  (component.files + component.license_paths).allSatisfy({ nameSet.contains($0) }) else { throw OfflineFailure.incomplete }
         }
         let requiredByRole = [
             "splash_runtime": ["Splash/python/bin/python3", "Splash/install/launcher.py", "Splash/engine/splash", "Splash/engine/splash.metallib"],
@@ -144,13 +155,14 @@ actor OfflinePayload {
         ]
         for (role, required) in requiredByRole {
             guard let component = manifest.components.first(where: { $0.role == role }) else { throw OfflineFailure.incomplete }
+            let componentNames = Set(component.files)
             for name in required {
-                guard component.files.contains(name), let entry = manifest.files.first(where: { $0.path == name }) else { throw OfflineFailure.incomplete }
+                guard componentNames.contains(name), let entry = entries[name] else { throw OfflineFailure.incomplete }
                 let path = try safePath(name, root: root)
                 if entry.kind == "symlink" {
                     let resolved = path.resolvingSymlinksInPath()
                     guard try manifest.files.contains(where: { candidate in
-                        guard candidate.kind == "file", component.files.contains(candidate.path) else { return false }
+                        guard candidate.kind == "file", componentNames.contains(candidate.path) else { return false }
                         return try safePath(candidate.path, root: root).resolvingSymlinksInPath() == resolved
                     }) else { throw OfflineFailure.corrupt }
                 }
