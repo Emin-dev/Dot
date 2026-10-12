@@ -25,5 +25,5 @@ STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-stage.XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname Dot -srcfolder "$STAGE" -ov -format UDZO -o build/Dot.dmg
+python3 -B scripts/create_dmg.py "$STAGE" build/Dot.dmg
 printf 'Built %s/build/Dot.dmg (development-only, no neural runtimes; ad-hoc signed, not notarized)\n' "$PWD"
