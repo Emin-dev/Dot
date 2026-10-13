@@ -668,8 +668,8 @@ final class PlacementGeometryComparisonTests: XCTestCase {
     func testMalformedOrUnboundedGeometryCannotCompareEqual() {
         XCTAssertFalse(PlacementSnapshot.sameGeometry([.null], [.null]))
         XCTAssertFalse(PlacementSnapshot.sameGeometry([.zero], [.zero]))
-        XCTAssertFalse(PlacementSnapshot.sameGeometry([CGRect(x: .infinity, y: 0, width: 1, height: 1)],
-                                                     [CGRect(x: .infinity, y: 0, width: 1, height: 1)]))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([CGRect(x: CGFloat.infinity, y: 0, width: 1, height: 1)],
+                                                     [CGRect(x: CGFloat.infinity, y: 0, width: 1, height: 1)]))
         let tooMany = Array(repeating: a, count: PlacementSnapshot.maximumRegions + 1)
         XCTAssertFalse(PlacementSnapshot.sameGeometry(tooMany, tooMany))
     }
