@@ -1,36 +1,60 @@
 import Foundation
 import AVFoundation
+import Combine
 import OSLog
 
 @MainActor
-final class TTSManager {
+final class TTSManager: ObservableObject {
+    @Published private(set) var playbackLevel: Double = 0
+    private var generation: UUID?
     var onDrained: ((UUID) -> Void)?
+    var onFinalPlayback: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
     private let bionic = BionicVoice()
     private var root: String { Bundle.main.resourceURL?.appendingPathComponent("Offline/Voice").path ?? "" }
     var speaking: Bool { bionic.speaking }
     init() {
-        bionic.onStarted = { [weak self] in self?.onStarted?($0) }
-        bionic.onDrained = { [weak self] in self?.onDrained?($0) }
-        bionic.onError = { [weak self] in self?.onError?($0, $1) }
+        bionic.onStarted = { [weak self] id in
+            guard let self, self.generation == id else { return }; self.onStarted?(id)
+        }
+        bionic.onDrained = { [weak self] id in
+            guard let self, self.generation == id else { return }; self.onDrained?(id)
+        }
+        bionic.onFinalPlayback = { [weak self] id in
+            guard let self, self.generation == id else { return }; self.onFinalPlayback?(id)
+        }
+        bionic.onPlaybackLevel = { [weak self] id, level in
+            guard let self, self.generation == id else { return }
+            let bounded = level.isFinite ? min(1, max(0, level)) : 0
+            if self.playbackLevel != bounded { self.playbackLevel = bounded }
+        }
+        bionic.onError = { [weak self] id, message in
+            guard let self, self.generation == id else { return }
+            self.playbackLevel = 0; self.onError?(id, message)
+        }
     }
     func start(id: UUID) throws {
-        try bionic.start(id: id, root: root)
+        generation = id; playbackLevel = 0
+        do { try bionic.start(id: id, root: root) }
+        catch { generation = nil; playbackLevel = 0; throw error }
     }
     func enqueue(_ text: String, id: UUID) {
         bionic.enqueue(text, id: id)
     }
-    func stop() { bionic.stop() }
-    func shutdown() { bionic.shutdown() }
+    func markGenerationComplete(id: UUID) { bionic.markGenerationComplete(id: id) }
+    func stop() { generation = nil; playbackLevel = 0; bionic.stop() }
+    func shutdown() { generation = nil; playbackLevel = 0; bionic.shutdown() }
 }
 
 /// Only launches the bundled helper using only its app-bundled runtime.
 /// No socket adoption, shell interpolation, model download or external-service fallback.
 @MainActor
-final class BionicVoice {
+final class BionicVoice: NSObject, AVAudioPlayerDelegate {
+    var onPlaybackLevel: ((UUID, Double) -> Void)?
     private static let log = Logger(subsystem: "app.dot", category: "runtime")
     var onDrained: ((UUID) -> Void)?
+    var onFinalPlayback: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
     private(set) var speaking = false
@@ -43,18 +67,21 @@ final class BionicVoice {
     private var ready = false
     private var pending: Set<UUID> = []
     private var unsent: [(UUID, String)] = []
-    private var audio: [Data] = []
+    private var audio: [(UUID, Data)] = []
     private var loads: [UUID: Task<Void, Never>] = [:]
     private var audioOrder: [UUID] = []
     private var loaded: [UUID: Data] = [:]
     private var player: AVAudioPlayer?
+    private var playerRequest: UUID?
+    private var playerDeadline = 0.0
+    private var finalPlayback = FinalPlaybackBarrier()
     private var timer: Timer?
     private var deadline = 0.0
     private var buffer = Data()
     private let clock = { ProcessInfo.processInfo.systemUptime }
 
     func start(id: UUID, root: String) throws {
-        stop(); generation = id
+        stop(); generation = id; finalPlayback.begin(turn: id)
         guard process == nil else { return }
         guard root.hasPrefix("/"),
               let helper = Bundle.main.url(forResource: "bionic_helper", withExtension: "py", subdirectory: "Voice"),
@@ -133,14 +160,22 @@ final class BionicVoice {
         guard generation == id else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        guard value.count <= 1000, pending.count + audio.count + audioOrder.count < 24, loads.count < 24 else {
+        guard value.count <= 1000, audio.count + audioOrder.count + (player == nil ? 0 : 1) < 24, loads.count < 24 else {
             fail("Bionic voice queue reached its safe limit. Click to start again."); return
         }
         ensureTimer()
-        let request = UUID(); pending.insert(request); speaking = true
+        let request = UUID()
+        guard finalPlayback.enqueue(turn: id, request: request) else {
+            fail("Bionic voice received a sentence after its final response."); return
+        }
+        pending.insert(request); audioOrder.append(request); speaking = true
         if pending.count == 1 { deadline = clock() + 60 }
         if ready { send(request: request, text: value, turn: id) }
         else { unsent.append((request, value)) }
+    }
+    func markGenerationComplete(id: UUID) {
+        guard generation == id else { return }
+        if let completed = finalPlayback.generationComplete(turn: id) { onFinalPlayback?(completed) }
     }
     private func send(request: UUID, text: String, turn: UUID) {
         write(["protocol": 1, "type": "speak", "id": request.uuidString, "turn": turn.uuidString, "text": text])
@@ -170,7 +205,6 @@ final class BionicVoice {
                     try? FileManager.default.removeItem(at: url); continue
                 }
                 let token = session, turn = generation
-                audioOrder.append(request)
                 loads[request] = Task { [weak self] in
                     defer { self?.loads.removeValue(forKey: request) }
                     do {
@@ -179,7 +213,7 @@ final class BionicVoice {
                         self.loaded[request] = data
                         // Independent disk reads may finish out of order. Playback may not.
                         while let first = self.audioOrder.first, let next = self.loaded.removeValue(forKey: first) {
-                            self.audioOrder.removeFirst(); self.audio.append(next)
+                            self.audioOrder.removeFirst(); self.audio.append((first, next))
                         }
                         self.deadline = self.clock() + 60; self.playNext()
                     } catch {
@@ -195,7 +229,22 @@ final class BionicVoice {
     }
     private func tick() {
         if (!ready || !pending.isEmpty || !audioOrder.isEmpty) && clock() > deadline { fail("Bionic voice timed out."); return }
-        if let player, !player.isPlaying { self.player = nil; playNext() }
+        // isPlaying becoming false also describes interruptions and errors. Only the
+        // delegate's successful completion can satisfy the final audible barrier.
+        if player != nil && clock() > playerDeadline { fail("Bionic audio playback did not finish."); return }
+        if let id = generation {
+            var level = 0.0
+            if let player, player.isPlaying {
+                player.updateMeters()
+                let power = player.averagePower(forChannel: 0)
+                if power.isFinite && power > -50 {
+                    // Linear RMS amplitude with bounded visual gain. This is an audio
+                    // envelope for mouth aperture, not phoneme or viseme alignment.
+                    level = min(1, pow(10, Double(min(0, power)) / 20) * 3)
+                }
+            }
+            onPlaybackLevel?(id, level)
+        }
         if ready && pending.isEmpty && audioOrder.isEmpty && audio.isEmpty && player == nil {
             timer?.invalidate(); timer = nil
         }
@@ -207,17 +256,46 @@ final class BionicVoice {
             return
         }
         do {
-            let next = try AVAudioPlayer(data: audio.removeFirst())
+            let (request, data) = audio.removeFirst()
+            let next = try AVAudioPlayer(data: data)
             guard next.numberOfChannels == 1, next.format.sampleRate == 24000,
-                  next.duration > 0, next.duration <= 60, next.play() else { throw VoiceFailure.audio }
-            player = next; onStarted?(id)
+                  next.duration > 0, next.duration <= 60 else { throw VoiceFailure.audio }
+            next.isMeteringEnabled = true
+            next.delegate = self; player = next; playerRequest = request
+            playerDeadline = clock() + next.duration + 2
+            guard next.play() else { throw VoiceFailure.audio }
+            onStarted?(id)
         } catch { fail("Bionic audio playback failed.") }
     }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor [weak self, weak player] in
+            guard let player else { return }
+            self?.playbackFinished(player, successfully: flag)
+        }
+    }
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor [weak self, weak player] in
+            guard let self, let player, self.player === player else { return }
+            self.fail("Bionic audio playback failed.")
+        }
+    }
+    private func playbackFinished(_ player: AVAudioPlayer, successfully: Bool) {
+        guard self.player === player, let request = playerRequest, let id = generation else { return }
+        guard successfully else { fail("Bionic audio playback failed."); return }
+        player.delegate = nil; self.player = nil; playerRequest = nil
+        onPlaybackLevel?(id, 0)
+        let completed = finalPlayback.playbackFinished(turn: id, request: request, successfully: true)
+        playNext()
+        if let completed, generation == completed { onFinalPlayback?(completed) }
+    }
     func stop() {
+        if let id = generation { onPlaybackLevel?(id, 0) }
+        finalPlayback.cancel()
         generation = nil; pending.removeAll(); unsent.removeAll(); audio.removeAll()
         for task in loads.values { task.cancel() }
+        loads.removeAll()
         audioOrder.removeAll(); loaded.removeAll()
-        player?.stop(); player = nil; speaking = false
+        player?.delegate = nil; player?.stop(); player = nil; playerRequest = nil; speaking = false
         if ready { write(["protocol": 1, "type": "cancel"]) }
     }
     private func fail(_ message: String) {
@@ -227,12 +305,14 @@ final class BionicVoice {
     }
     func shutdown() {
         // Invalidate before closing handles or receiving delayed callbacks.
-        session = UUID(); generation = nil; ready = false
+        if let id = generation { onPlaybackLevel?(id, 0) }
+        session = UUID(); generation = nil; ready = false; finalPlayback.cancel()
         timer?.invalidate(); timer = nil
         pending.removeAll(); unsent.removeAll(); audio.removeAll(); buffer = Data()
         for task in loads.values { task.cancel() }
+        loads.removeAll()
         audioOrder.removeAll(); loaded.removeAll()
-        player?.stop(); player = nil; speaking = false
+        player?.delegate = nil; player?.stop(); player = nil; playerRequest = nil; speaking = false
         output?.readabilityHandler = nil; try? output?.close(); output = nil
         // Do not wait for a pipe write or a stuck inference kernel to acknowledge shutdown.
         input?.close(); input = nil

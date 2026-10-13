@@ -8,10 +8,28 @@ private final class SplashFixtureProtocol: URLProtocol {
     static var requests: [URLRequest] = []
     static var declaredLength: Int?
     static var oversizedBody = false
+    static var chatBody = ""
+    static var chatRequestBody: Data?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
         Self.requests.append(request)
+        if request.url?.path == "/v1/chat/completions" {
+            Self.chatRequestBody = request.httpBody
+            if Self.chatRequestBody == nil, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var body = Data(), buffer = [UInt8](repeating: 0, count: 4096)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; body.append(contentsOf: buffer.prefix(count))
+                }
+                Self.chatRequestBody = body
+            }
+            let body = Data(Self.chatBody.utf8)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Server": Self.server, "Content-Type": "text/event-stream"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: body); client?.urlProtocolDidFinishLoading(self); return
+        }
         let payload = """
         {"schema_version":6,"ready":\(Self.ready),"instance":{"id":"0123456789abcdef01234567","pid":1234,"model":"owner/model","host":"127.0.0.1","port":8000}}
         """
@@ -27,6 +45,7 @@ private final class SplashFixtureProtocol: URLProtocol {
 final class EngineIntegrationTests: XCTestCase {
     @MainActor private func makeEngine(endpoint: String = "http://127.0.0.1:8000", model: String = "owner/model") -> EngineManager {
         SplashFixtureProtocol.ready = true; SplashFixtureProtocol.server = "Splash"; SplashFixtureProtocol.requests = []; SplashFixtureProtocol.declaredLength = nil; SplashFixtureProtocol.oversizedBody = false
+        SplashFixtureProtocol.chatBody = ""; SplashFixtureProtocol.chatRequestBody = nil
         return EngineManager(endpoint: endpoint, model: model, protocolClasses: [SplashFixtureProtocol.self])
     }
     @MainActor func testRealTransportValidatesStatusBeforeUse() async throws {
@@ -68,6 +87,78 @@ final class EngineIntegrationTests: XCTestCase {
         catch { XCTAssertEqual(error as? EngineError, .configuration) }
         XCTAssertTrue(SplashFixtureProtocol.requests.isEmpty)
     }
+    private func frame(_ delta: [String: Any] = [:], finish: String? = nil) throws -> String {
+        var choice: [String: Any] = ["index": 0, "delta": delta]
+        if let finish { choice["finish_reason"] = finish }
+        return "data: " + String(decoding: try JSONSerialization.data(withJSONObject: ["choices": [choice]]), as: UTF8.self) + "\n\n"
+    }
+    private func questionCall(_ arguments: String, name: String = "ask_user") throws -> String {
+        try frame(["tool_calls": [["index": 0, "id": "call_turn_0", "type": "function", "function": ["name": name, "arguments": arguments]]]])
+    }
+    @MainActor func testProductionChatRequestAndFragmentedFinalQuestionContract() async throws {
+        let engine = makeEngine(); defer { engine.shutdown() }
+        SplashFixtureProtocol.chatBody = try frame(["content": "I can help. "])
+            + questionCall(#"{"question":"Which "#)
+            + frame(["tool_calls": [["index": 0, "function": ["arguments": #"colour?"}"#]]]])
+            + frame(finish: "tool_calls") + "data: [DONE]\n\n"
+        var spoken = ""
+        let question = try await engine.chat(history: [ChatMessage(role: "user", content: "Help me choose")], onDelta: { spoken += $0 })
+        XCTAssertEqual(question?.text, "Which colour?")
+        XCTAssertEqual(spoken, "I can help. ", "Tool arguments are never sent to streaming speech")
+        XCTAssertEqual(SplashFixtureProtocol.requests.map { $0.url?.path }, ["/status", "/v1/chat/completions"])
+        let body = try XCTUnwrap(SplashFixtureProtocol.chatRequestBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertEqual(object["model"] as? String, "owner/model")
+        XCTAssertEqual(object["tool_choice"] as? String, "auto")
+        XCTAssertEqual(object["parallel_tool_calls"] as? Bool, false)
+        XCTAssertEqual(object["stream"] as? Bool, true)
+        let tools = try XCTUnwrap(object["tools"] as? [[String: Any]])
+        XCTAssertEqual(tools.count, 1); XCTAssertEqual(tools[0]["type"] as? String, "function")
+        let function = try XCTUnwrap(tools[0]["function"] as? [String: Any])
+        XCTAssertEqual(function["name"] as? String, "ask_user"); XCTAssertEqual(function["strict"] as? Bool, true)
+        let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+        XCTAssertEqual(parameters["additionalProperties"] as? Bool, false)
+        XCTAssertEqual(parameters["required"] as? [String], ["question"])
+        let properties = try XCTUnwrap(parameters["properties"] as? [String: [String: Any]])
+        XCTAssertEqual(Set(properties.keys), ["question"])
+        XCTAssertEqual(properties["question"]?["maxLength"] as? Int, 400)
+    }
+    @MainActor func testOrdinaryPunctuationDoesNotProduceQuestionIntent() async throws {
+        let engine = makeEngine(); defer { engine.shutdown() }
+        SplashFixtureProtocol.chatBody = try frame(["content": "The quotation says: Why?"])
+            + frame(finish: "stop") + "data: [DONE]\n\n"
+        var spoken = ""
+        let question = try await engine.chat(history: [], onDelta: { spoken += $0 })
+        XCTAssertNil(question); XCTAssertEqual(spoken, "The quotation says: Why?")
+    }
+    @MainActor func testToolOnlyQuestionIsNotAnEmptyAnswer() async throws {
+        let engine = makeEngine(); defer { engine.shutdown() }
+        SplashFixtureProtocol.chatBody = try questionCall(#"{"question":"Which colour?"}"#)
+            + frame(finish: "tool_calls") + "data: [DONE]\n\n"
+        let question = try await engine.chat(history: [], onDelta: { _ in XCTFail("Tool JSON entered speech") })
+        XCTAssertEqual(question?.text, "Which colour?")
+    }
+    @MainActor func testMalformedFailedTruncatedAndNonFinalQuestionStreamsReject() async throws {
+        let call = try questionCall(#"{"question":"Which colour?"}"#)
+        let streams = try [
+            call + frame(finish: "tool_calls"), // missing DONE
+            call + "data: [DONE]\n\n", // missing terminal
+            call + frame(finish: "length") + "data: [DONE]\n\n",
+            call + "data: {\"error\":{\"message\":\"fixture failure\"}}\n\ndata: [DONE]\n\n",
+            call + frame(["content": "Actually, more comes after."]) + frame(finish: "tool_calls") + "data: [DONE]\n\n",
+            questionCall("{}", name: "execute") + frame(finish: "tool_calls") + "data: [DONE]\n\n",
+            questionCall(#"{"question":"Yes?",}"#) + frame(finish: "tool_calls") + "data: [DONE]\n\n",
+            frame(["content": "Incomplete answer"]) + frame(finish: "length") + "data: [DONE]\n\n",
+            frame(["content": "No terminal"]) + "data: [DONE]\n\n"
+        ]
+        for stream in streams {
+            let engine = makeEngine(); defer { engine.shutdown() }
+            SplashFixtureProtocol.chatBody = stream
+            do { try await engine.chat(history: [], onDelta: { _ in }); XCTFail("Invalid stream accepted") }
+            catch { XCTAssertEqual(error as? EngineError, .response) }
+        }
+    }
+
 }
 
 final class StreamDeliveryTests: XCTestCase {

@@ -674,3 +674,308 @@ final class PlacementGeometryComparisonTests: XCTestCase {
         XCTAssertFalse(PlacementSnapshot.sameGeometry(tooMany, tooMany))
     }
 }
+
+final class CompactIssueTests: XCTestCase {
+    func testEveryIssueUsesShortSingleLineTitlesAndRetryActions() {
+        for issue in CompanionIssue.allCases {
+            for value in [issue.title, issue.retryTitle] {
+                XCTAssertLessThanOrEqual(value.count, 28)
+                XCTAssertFalse(value.contains("\n")); XCTAssertFalse(value.isEmpty)
+            }
+        }
+    }
+    func testArbitrarilyLongFailureDoesNotBecomeMenuHeader() {
+        let long = String(repeating: "private detail ", count: 10000)
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .unavailable(long), issue: nil, progress: 0), "App files need repair")
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .ready, issue: .screenPermission, progress: 1), "Screen access needed")
+    }
+    func testCheckingProgressIsFiniteAndClamped() {
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: .nan), "Checking files, 0%")
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: 10), "Checking files, 100%")
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: -1), "Checking files, 0%")
+    }
+    func testDetailsActionOnlyAppearsWhenNeededAndQuitStaysLast() {
+        for state in [CompanionReadiness.checking, .paused, .ready, .unavailable("detail")] {
+            for busy in [false, true] {
+                let normal = CompanionMenuAction.available(readiness: state, busy: busy)
+                XCTAssertFalse(normal.contains(.copyDetails))
+                let detail = CompanionMenuAction.available(readiness: state, busy: busy, hasDetails: true)
+                XCTAssertEqual(detail.filter { $0 == .copyDetails }.count, 1)
+                XCTAssertEqual(detail.last, .quit); XCTAssertLessThanOrEqual(detail.count, 8)
+            }
+        }
+    }
+}
+
+final class QuestionReplyGateTests: XCTestCase {
+    private func consume(_ gate: inout QuestionReplyGate, _ turn: UUID, at time: Double = 1) -> UUID? {
+        gate.consume(turn: turn, now: time, ready: true, microphoneAuthorized: true, screenAuthorized: true, interacting: false)
+    }
+    func testCompleteQuestionAndItsActualPlaybackAreBothRequired() {
+        var gate = QuestionReplyGate(); let turn = UUID(), question = UUID()
+        gate.begin(turn: turn, explicitClick: true)
+        gate.questionPlayed(turn: turn, question: question, now: 0)
+        XCTAssertNil(consume(&gate, turn))
+        gate.responseFinished(turn: turn, question: question, succeeded: true)
+        XCTAssertNil(consume(&gate, turn))
+        gate.questionPlayed(turn: turn, question: question, now: 0)
+        XCTAssertEqual(consume(&gate, turn), question); XCTAssertNil(consume(&gate, turn))
+    }
+    func testOrdinaryOrQuotedQuestionTextHasNoExplicitIntent() {
+        // Text is deliberately not an input to this policy: '?', quotes and rhetoric
+        // cannot synthesize a question ID. The structured parser must prove intent.
+        for _ in ["Why?", "The quote says 'What is this?'", "Who wouldn't enjoy that?"] {
+            var gate = QuestionReplyGate(); let turn = UUID()
+            gate.begin(turn: turn, explicitClick: true)
+            gate.responseFinished(turn: turn, question: nil, succeeded: true)
+            gate.questionPlayed(turn: turn, question: UUID(), now: 0)
+            XCTAssertNil(consume(&gate, turn))
+        }
+    }
+    func testFailedTruncatedOrUnplayedResponseNeverArms() {
+        var gate = QuestionReplyGate(); let turn = UUID(), question = UUID()
+        gate.begin(turn: turn, explicitClick: true)
+        gate.responseFinished(turn: turn, question: question, succeeded: false)
+        gate.questionPlayed(turn: turn, question: question, now: 0)
+        XCTAssertNil(consume(&gate, turn))
+    }
+    func testStopAndReplacementRejectStalePlayback() {
+        var gate = QuestionReplyGate(); let first = UUID(), next = UUID(), question = UUID()
+        gate.begin(turn: first, explicitClick: true)
+        gate.responseFinished(turn: first, question: question, succeeded: true)
+        gate.cancel(); gate.questionPlayed(turn: first, question: question, now: 0)
+        XCTAssertNil(consume(&gate, first))
+        gate.begin(turn: next, explicitClick: true)
+        gate.responseFinished(turn: first, question: question, succeeded: true)
+        gate.questionPlayed(turn: first, question: question, now: 0)
+        XCTAssertNil(consume(&gate, next))
+    }
+    func testInterruptionOrMissingPermissionCancelsRatherThanDefersListening() {
+        for missing in 0..<4 {
+            var gate = QuestionReplyGate(); let turn = UUID(), question = UUID()
+            gate.begin(turn: turn, explicitClick: true)
+            gate.responseFinished(turn: turn, question: question, succeeded: true)
+            gate.questionPlayed(turn: turn, question: question, now: 0)
+            XCTAssertNil(gate.consume(turn: turn, now: 1, ready: missing != 0, microphoneAuthorized: missing != 1,
+                screenAuthorized: missing != 2, interacting: missing == 3))
+            XCTAssertNil(consume(&gate, turn))
+        }
+    }
+    func testSettleDelayAndExpiryCannotBeExtendedByRepeatedDrain() {
+        var gate = QuestionReplyGate(); let turn = UUID(), question = UUID()
+        gate.begin(turn: turn, explicitClick: true)
+        gate.responseFinished(turn: turn, question: question, succeeded: true)
+        gate.questionPlayed(turn: turn, question: question, now: 0)
+        XCTAssertNil(consume(&gate, turn, at: 0.2))
+        gate.responseFinished(turn: turn, question: question, succeeded: true)
+        gate.questionPlayed(turn: turn, question: question, now: 7)
+        XCTAssertNil(consume(&gate, turn, at: 9)); XCTAssertNil(consume(&gate, turn, at: 10))
+    }
+    func testAutomaticChainIsBoundedAndExplicitClickResetsBudget() {
+        var gate = QuestionReplyGate()
+        var continuation: UUID?
+        for index in 0...QuestionReplyGate.maximumAutomaticReplies {
+            let turn = UUID(), question = UUID()
+            gate.begin(turn: turn, explicitClick: index == 0, continuation: continuation, now: Double(index))
+            gate.responseFinished(turn: turn, question: question, succeeded: true)
+            gate.questionPlayed(turn: turn, question: question, now: Double(index))
+            continuation = consume(&gate, turn, at: Double(index) + 1)
+            XCTAssertEqual(continuation, index < QuestionReplyGate.maximumAutomaticReplies ? question : nil)
+        }
+        let turn = UUID(), question = UUID(); gate.begin(turn: turn, explicitClick: true)
+        gate.responseFinished(turn: turn, question: question, succeeded: true)
+        gate.questionPlayed(turn: turn, question: question, now: 0)
+        XCTAssertEqual(consume(&gate, turn), question)
+    }
+}
+
+
+extension QuestionReplyGateTests {
+    func testIdleOrStoppedConversationCannotBeginAutomatically() {
+        for stopped in [false, true] {
+            var gate = QuestionReplyGate(); let first = UUID(), next = UUID(), question = UUID()
+            if stopped {
+                gate.begin(turn: first, explicitClick: true)
+                gate.responseFinished(turn: first, question: question, succeeded: true)
+                gate.questionPlayed(turn: first, question: question, now: 0)
+                XCTAssertEqual(consume(&gate, first), question)
+                gate.cancel()
+            }
+            gate.begin(turn: next, explicitClick: false, continuation: question, now: 1)
+            gate.responseFinished(turn: next, question: question, succeeded: true)
+            gate.questionPlayed(turn: next, question: question, now: 1)
+            XCTAssertNil(consume(&gate, next, at: 2))
+        }
+    }
+    func testContinuationIsExactSingleUseAndExpires() {
+        for failure in 0..<3 {
+            var gate = QuestionReplyGate(); let first = UUID(), next = UUID(), question = UUID()
+            gate.begin(turn: first, explicitClick: true)
+            gate.responseFinished(turn: first, question: question, succeeded: true)
+            gate.questionPlayed(turn: first, question: question, now: 0)
+            XCTAssertEqual(consume(&gate, first), question)
+            gate.begin(turn: next, explicitClick: false, continuation: failure == 0 ? UUID() : question, now: failure == 1 ? 3 : 1)
+            if failure == 2 { gate.begin(turn: next, explicitClick: false, continuation: question, now: 1) }
+            gate.responseFinished(turn: next, question: question, succeeded: true)
+            gate.questionPlayed(turn: next, question: question, now: 3)
+            XCTAssertNil(consume(&gate, next, at: 4))
+        }
+    }
+    func testCopiedDiagnosticCannotContainRawErrorPayload() {
+        let summary = CompanionIssue.copiedDiagnostic(readiness: .unavailable("/private/secret user transcript token=ABC"), issue: .voice)
+        XCTAssertEqual(summary, "Dot diagnostic summary\nPreparation: unavailable\nIssue: Voice unavailable")
+        XCTAssertFalse(summary.contains("secret")); XCTAssertFalse(summary.contains("ABC"))
+    }
+}
+
+final class QuestionIntentStreamTests: XCTestCase {
+    private func frame(_ delta: [String: Any] = [:], finish: String? = nil) throws -> String {
+        var choice: [String: Any] = ["index": 0, "delta": delta]
+        if let finish { choice["finish_reason"] = finish }
+        return "data: " + String(decoding: try JSONSerialization.data(withJSONObject: ["choices": [choice]]), as: UTF8.self)
+    }
+    private func call(_ arguments: String, name: String = "ask_user", index: Any = 0) throws -> String {
+        try frame(["tool_calls": [["index": index, "id": "call_question", "type": "function", "function": ["name": name, "arguments": arguments]]]])
+    }
+    func testFragmentedQuestionNeedsTerminalAndDone() throws {
+        var stream = QuestionIntentStream()
+        try stream.feed(call("{\"question\":\"Which "))
+        try stream.feed(frame(["tool_calls": [["index": 0, "function": ["arguments": "colour do you prefer?\"}"]]]]))
+        XCTAssertThrowsError(try stream.completed())
+        try stream.feed(frame(finish: "tool_calls")); XCTAssertThrowsError(try stream.completed())
+        try stream.feed("data: [DONE]")
+        XCTAssertEqual(try stream.completed()?.text, "Which colour do you prefer?")
+    }
+    func testPlainAndQuotedQuestionsNeverProduceIntent() throws {
+        for text in ["Why?", "The quotation is: What is this?", "Who wouldn't like that?"] {
+            var stream = QuestionIntentStream()
+            try stream.feed(frame(["content": text])); try stream.feed(frame(finish: "stop")); try stream.feed("data: [DONE]")
+            XCTAssertNil(try stream.completed())
+        }
+    }
+    func testWrongFinishOrTruncationCannotArm() throws {
+        for reason in ["stop", "length", "content_filter"] {
+            var stream = QuestionIntentStream(); try stream.feed(call("{\"question\":\"Your preference?\"}"))
+            try stream.feed(frame(finish: reason)); try stream.feed("data: [DONE]")
+            XCTAssertThrowsError(try stream.completed())
+        }
+    }
+    func testUnknownMultipleAndBooleanIndexedCallsReject() throws {
+        var unknown = QuestionIntentStream(); XCTAssertThrowsError(try unknown.feed(call("{}", name: "execute")))
+        var index = QuestionIntentStream(); XCTAssertThrowsError(try index.feed(call("{}", index: true)))
+        var multiple = QuestionIntentStream()
+        XCTAssertThrowsError(try multiple.feed(frame(["tool_calls": [["index": 0], ["index": 1]]])))
+    }
+    func testArgumentsAreExactAndBounded() throws {
+        for arguments in ["{}", "{\"question\":\"\"}", "{\"question\":\"Yes?\",\"command\":\"run\"}",
+                          "{\"question\":\"" + String(repeating: "a", count: 401) + "\"}"] {
+            var stream = QuestionIntentStream(); try stream.feed(call(arguments))
+            try stream.feed(frame(finish: "tool_calls")); try stream.feed("data: [DONE]")
+            XCTAssertThrowsError(try stream.completed())
+        }
+        var oversized = QuestionIntentStream(); XCTAssertThrowsError(try oversized.feed(call(String(repeating: "x", count: 2049))))
+    }
+    func testDuplicateKeysAndTrailingCommasCannotProduceQuestionIntent() throws {
+        for arguments in [#"{"question":"First?","question":"Second?"}"#, #"{"question":"Yes?",}"#] {
+            var stream = QuestionIntentStream(); try stream.feed(call(arguments))
+            try stream.feed(frame(finish: "tool_calls")); try stream.feed("data: [DONE]")
+            XCTAssertThrowsError(try stream.completed())
+        }
+    }
+    func testStrictArgumentsStillAllowJSONEscapedQuestionText() throws {
+        var stream = QuestionIntentStream()
+        try stream.feed(call(#" { "question" : "Would you choose \"blue\"?" } "#))
+        try stream.feed(frame(finish: "tool_calls")); try stream.feed("data: [DONE]")
+        XCTAssertEqual(try stream.completed()?.text, "Would you choose \"blue\"?")
+    }
+    func testNonObjectDeltaInvalidatesPreviouslyValidQuestion() throws {
+        for delta in ["malformed", NSNull(), 1, ["array"]] as [Any] {
+            var stream = QuestionIntentStream()
+            try stream.feed(call("{\"question\":\"Your preference?\"}"))
+            let data = try JSONSerialization.data(withJSONObject: ["choices": [["index": 0, "delta": delta, "finish_reason": "tool_calls"]]])
+            XCTAssertThrowsError(try stream.feed("data: " + String(decoding: data, as: UTF8.self)))
+            XCTAssertThrowsError(try stream.feed("data: [DONE]"))
+            XCTAssertThrowsError(try stream.completed())
+        }
+    }
+    func testMalformedOrPostCompletionFramesStayRejected() throws {
+        var invalid = QuestionIntentStream(); XCTAssertThrowsError(try invalid.feed("data: {"))
+        XCTAssertThrowsError(try invalid.feed("data: [DONE]")); XCTAssertThrowsError(try invalid.completed())
+        var complete = QuestionIntentStream(); try complete.feed("data: [DONE]")
+        XCTAssertThrowsError(try complete.feed(call("{}"))); XCTAssertThrowsError(try complete.completed())
+    }
+}
+
+
+extension QuestionIntentStreamTests {
+    func testOrdinaryAnswersNeedSuccessfulStopTerminal() throws {
+        for reason in [nil, "length", "content_filter", "tool_calls"] as [String?] {
+            var stream = QuestionIntentStream()
+            try stream.feed(frame(["content": "Answer"], finish: reason)); try stream.feed("data: [DONE]")
+            XCTAssertThrowsError(try stream.completed())
+        }
+    }
+    func testErrorEnvelopeAndTextAfterCallInvalidateIntent() throws {
+        var failure = QuestionIntentStream()
+        XCTAssertThrowsError(try failure.feed(#"data: {"error":{"message":"failed"}}"#))
+        var stream = QuestionIntentStream(); try stream.feed(call(#"{"question":"Which?"}"#))
+        XCTAssertThrowsError(try stream.feed(frame(["content": "A later answer."])))
+        XCTAssertThrowsError(try stream.completed())
+    }
+    func testUsageChunkAfterSuccessfulTerminalIsAllowed() throws {
+        var stream = QuestionIntentStream(); try stream.feed(call(#"{"question":"Which?"}"#))
+        try stream.feed(frame(finish: "tool_calls"))
+        try stream.feed(#"data: {"choices":[],"usage":{"completion_tokens":12}}"#)
+        try stream.feed("data: [DONE]"); XCTAssertEqual(try stream.completed()?.text, "Which?")
+    }
+}
+
+final class FinalPlaybackBarrierTests: XCTestCase {
+    func testIntermediateDrainAndGenerationAloneCannotComplete() {
+        var barrier = FinalPlaybackBarrier(); let turn = UUID(), answer = UUID(), question = UUID()
+        barrier.begin(turn: turn)
+        XCTAssertTrue(barrier.enqueue(turn: turn, request: answer))
+        XCTAssertNil(barrier.playbackFinished(turn: turn, request: answer, successfully: true))
+        XCTAssertTrue(barrier.enqueue(turn: turn, request: question))
+        XCTAssertNil(barrier.generationComplete(turn: turn))
+        XCTAssertEqual(barrier.playbackFinished(turn: turn, request: question, successfully: true), turn)
+        XCTAssertNil(barrier.playbackFinished(turn: turn, request: question, successfully: true))
+        XCTAssertNil(barrier.generationComplete(turn: turn))
+    }
+    func testAllSuccessfulRequestsAndFinalSealAreRequiredInEitherOrdering() {
+        for sealFirst in [false, true] {
+            var barrier = FinalPlaybackBarrier(); let turn = UUID(), first = UUID(), last = UUID()
+            barrier.begin(turn: turn)
+            XCTAssertTrue(barrier.enqueue(turn: turn, request: first)); XCTAssertTrue(barrier.enqueue(turn: turn, request: last))
+            if sealFirst { XCTAssertNil(barrier.generationComplete(turn: turn)) }
+            XCTAssertNil(barrier.playbackFinished(turn: turn, request: last, successfully: true))
+            let result = barrier.playbackFinished(turn: turn, request: first, successfully: true)
+            XCTAssertEqual(result, sealFirst ? turn : nil)
+            XCTAssertEqual(barrier.generationComplete(turn: turn), sealFirst ? nil : turn)
+        }
+    }
+    func testFailedAudioStopReplacementAndUnknownCallbacksCannotComplete() {
+        for failure in 0..<3 {
+            var barrier = FinalPlaybackBarrier(); let turn = UUID(), request = UUID()
+            barrier.begin(turn: turn); XCTAssertTrue(barrier.enqueue(turn: turn, request: request))
+            XCTAssertNil(barrier.generationComplete(turn: turn))
+            XCTAssertNil(barrier.playbackFinished(turn: turn, request: UUID(), successfully: true))
+            if failure == 0 { XCTAssertNil(barrier.playbackFinished(turn: turn, request: request, successfully: false)) }
+            if failure == 1 { barrier.cancel() }
+            if failure == 2 { barrier.begin(turn: UUID()) }
+            XCTAssertNil(barrier.playbackFinished(turn: turn, request: request, successfully: true))
+            XCTAssertNil(barrier.generationComplete(turn: turn))
+        }
+    }
+    func testNoAudioDuplicateRequestOrLateSentenceCannotGrantCompletion() {
+        var barrier = FinalPlaybackBarrier(); let turn = UUID(), request = UUID()
+        barrier.begin(turn: turn); XCTAssertNil(barrier.generationComplete(turn: turn))
+        XCTAssertFalse(barrier.enqueue(turn: turn, request: request))
+        barrier.begin(turn: turn); XCTAssertTrue(barrier.enqueue(turn: turn, request: request))
+        XCTAssertFalse(barrier.enqueue(turn: turn, request: request))
+        XCTAssertNil(barrier.generationComplete(turn: turn))
+        XCTAssertFalse(barrier.enqueue(turn: turn, request: UUID()))
+        XCTAssertNil(barrier.playbackFinished(turn: UUID(), request: request, successfully: true))
+        XCTAssertEqual(barrier.playbackFinished(turn: turn, request: request, successfully: true), turn)
+    }
+}

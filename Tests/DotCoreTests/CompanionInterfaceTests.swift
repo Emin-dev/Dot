@@ -2,6 +2,17 @@
 import XCTest
 import AppKit
 
+@MainActor
+private final class StatusMenuTarget: NSObject {
+    var shows = 0, quits = 0
+    var selectedSeconds = 0
+    var selectedSkin = ""
+    @objc func seconds(_ item: NSMenuItem) { selectedSeconds = item.tag }
+    @objc func skin(_ item: NSMenuItem) { selectedSkin = item.representedObject as? String ?? "" }
+    @objc func showPet() { shows += 1 }
+    @objc func quitDot() { quits += 1 }
+}
+
 final class CompanionInterfaceTests: XCTestCase {
     @MainActor func testExplicitRecallRecoversRemovedDisplayWithoutScreenCapture() {
         _ = NSApplication.shared
@@ -12,6 +23,63 @@ final class CompanionInterfaceTests: XCTestCase {
         let visible = CGRect(x: -1200, y: 40, width: 1200, height: 800)
         surface.recall(visibleFrames: [visible])
         XCTAssertTrue(visible.contains(panel.frame))
+    }
+    @MainActor func testCompactMenuLabelsFitWithoutWrappingOrScrolling() {
+        let font = NSFont.menuFont(ofSize: 0)
+        for issue in CompanionIssue.allCases {
+            let labels = [issue.title] + CompanionMenuAction.allCases.map { $0.title(busy: false, pinned: false, issue: issue) }
+            for label in labels {
+                let width = (label as NSString).size(withAttributes: [.font: font]).width
+                XCTAssertLessThanOrEqual(width, 240)
+                XCTAssertFalse(label.contains("\n"))
+            }
+        }
+    }
+    @MainActor func testTopMenuBarOffersAccessibleShowAndQuit() {
+        _ = NSApplication.shared
+        let target = StatusMenuTarget()
+        let menu = CompanionStatusMenu.make(target: target, show: #selector(StatusMenuTarget.showPet), quit: #selector(StatusMenuTarget.quitDot))
+        XCTAssertEqual(menu.items.filter { !$0.isSeparatorItem }.map(\.title), ["Show Dot", "Quit Dot"])
+        XCTAssertEqual(menu.items.last?.keyEquivalent, "q")
+        XCTAssertEqual(menu.items.first?.action, #selector(StatusMenuTarget.showPet))
+        XCTAssertEqual(menu.items.last?.action, #selector(StatusMenuTarget.quitDot))
+        XCTAssertTrue(menu.items.allSatisfy { $0.submenu == nil })
+        XCTAssertTrue(NSApp.sendAction(#selector(StatusMenuTarget.showPet), to: target, from: menu.items.first))
+        XCTAssertTrue(NSApp.sendAction(#selector(StatusMenuTarget.quitDot), to: target, from: menu.items.last))
+        XCTAssertEqual(target.shows, 1); XCTAssertEqual(target.quits, 1)
+    }
+    @MainActor func testVoiceOptionsExposeIndependentApprovedTimersAndSelectedValues() throws {
+        _ = NSApplication.shared
+        let domain = "DotVoiceMenuTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = VoiceTimingSettings(defaults: defaults), target = StatusMenuTarget()
+        settings.setSilenceSeconds(8); settings.setInvitationSeconds(20)
+        let menu = try XCTUnwrap(VoiceOptionsMenu.make(settings: settings, target: target,
+            silence: #selector(StatusMenuTarget.seconds(_:)), invitation: #selector(StatusMenuTarget.seconds(_:))).submenu)
+        let groups = menu.items.compactMap(\.submenu)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups[0].items.map(\.tag), [2, 3, 5, 8])
+        XCTAssertEqual(groups[1].items.map(\.tag), [3, 6, 9, 12, 20])
+        XCTAssertEqual(groups[0].items.filter { $0.state == .on }.map(\.tag), [8])
+        XCTAssertEqual(groups[1].items.filter { $0.state == .on }.map(\.tag), [20])
+        XCTAssertTrue(NSApp.sendAction(#selector(StatusMenuTarget.seconds(_:)), to: target, from: groups[1].items[1]))
+        XCTAssertEqual(target.selectedSeconds, 6)
+    }
+    @MainActor func testAppearanceMenuKeepsOriginalDefaultAndAllAcceptedChoices() throws {
+        _ = NSApplication.shared
+        let domain = "DotAppearanceMenuTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        let settings = SkinPreferences(defaults: defaults), target = StatusMenuTarget()
+        let menu = try XCTUnwrap(AppearanceOptionsMenu.make(settings: settings, target: target,
+            skin: #selector(StatusMenuTarget.skin(_:)), motion: #selector(StatusMenuTarget.skin(_:))).submenu)
+        let skins = menu.items.filter { $0.representedObject != nil }
+        XCTAssertEqual(skins.map(\.title), ["Original", "Pearl", "Mochi", "Cloudlet", "Pip", "Dew", "Ripple", "Sprout", "Veil", "Halo", "Nova"])
+        XCTAssertEqual(skins.filter { $0.state == .on }.map(\.title), ["Original"])
+        XCTAssertTrue(NSApp.sendAction(#selector(StatusMenuTarget.skin(_:)), to: target, from: skins[8]))
+        XCTAssertEqual(target.selectedSkin, "veil")
+        XCTAssertEqual(menu.items.last?.submenu?.items.map(\.title), ["Full", "Subtle", "Still"])
     }
     @MainActor private func pointerPanel() -> CompanionPanel {
         _ = NSApplication.shared
