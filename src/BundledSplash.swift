@@ -47,22 +47,39 @@ final class BundledSplash {
             protocolReader?.close(); protocolReader = nil
             output?.readabilityHandler = nil; try? output?.close(); output = nil
             guard let resources = Bundle.main.resourceURL else { throw OfflineFailure.incomplete }
-            let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dot-splash-" + UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let requested = FileManager.default.temporaryDirectory.appendingPathComponent("dot-splash-" + UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+            let identity = try VoiceLaunchConfiguration.privateIdentity(requested)
+            let directory: URL
+            let launchPaths: (python: String, helper: String, profile: String, payload: String, models: String, manifest: String)
+            do {
+                directory = URL(fileURLWithPath: try VoiceLaunchConfiguration.canonicalPrivatePath(requested), isDirectory: true)
+                launchPaths = (
+                    try VoiceLaunchConfiguration.canonicalExistingPath(payload.appendingPathComponent("Splash/python/bin/python3"), directory: false),
+                    try VoiceLaunchConfiguration.canonicalExistingPath(resources.appendingPathComponent("Runtime/dot_runtime.py"), directory: false),
+                    try VoiceLaunchConfiguration.canonicalExistingPath(resources.appendingPathComponent("Runtime/splash.sb"), directory: false),
+                    try VoiceLaunchConfiguration.canonicalExistingPath(payload, directory: true),
+                    try VoiceLaunchConfiguration.canonicalExistingPath(models, directory: true),
+                    try VoiceLaunchConfiguration.canonicalExistingPath(resources.appendingPathComponent("bundled-models.json"), directory: false))
+                guard try VoiceLaunchConfiguration.privateIdentity(directory) == identity else { throw OfflineFailure.runtime }
+            } catch {
+                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
+                throw OfflineFailure.runtime
+            }
             let child = Process(), input = Pipe(), stdout = Pipe(), generation = UUID()
             token = generation; diagnostic = nil; exitState = RuntimeExitState(); bytes = Data(); port = nil; backendPort = nil; certificateSHA256 = nil; serverPID = nil; apiKey = nil
-            child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-            // Only loopback connections are allowed inside the owned runtime sandbox.
-            child.arguments = ["-f", resources.appendingPathComponent("Runtime/splash.sb").path,
-                               payload.appendingPathComponent("Splash/python/bin/python3").path, "-I", "-B",
-                               resources.appendingPathComponent("Runtime/dot_runtime.py").path,
-                               "--payload", payload.path, "--models", models.path, "--state", directory.path,
-                               "--manifest", resources.appendingPathComponent("bundled-models.json").path]
+            // The stdlib-only bootstrap binds both sockets, then execs the sandbox
+            // with exact endpoints and retained FDs before any model/runtime import.
+            child.executableURL = URL(fileURLWithPath: launchPaths.python)
+            child.arguments = ["-I", "-S", "-B", launchPaths.helper, "--sandbox-profile", launchPaths.profile,
+                               "--payload", launchPaths.payload, "--models", launchPaths.models,
+                               "--state", directory.path, "--manifest", launchPaths.manifest]
             child.environment = ["PATH": "/usr/bin:/bin", "HOME": directory.path, "TMPDIR": directory.path, "PYTHONDONTWRITEBYTECODE": "1"]
+            child.currentDirectoryURL = directory
             child.standardInput = input; child.standardOutput = stdout; child.standardError = FileHandle.nullDevice
             child.terminationHandler = { [weak self] finished in
                 let status = (finished.terminationReason == .uncaughtSignal ? -1 : 1) * Int(finished.terminationStatus)
-                try? FileManager.default.removeItem(at: directory)
+                if (try? VoiceLaunchConfiguration.privateIdentity(directory)) == identity { try? FileManager.default.removeItem(at: directory) }
                 Task { @MainActor in
                     guard let self, self.token == generation else { return }
                     self.exitState.exited(status: status); self.publishResolvedFailure()
@@ -71,7 +88,10 @@ final class BundledSplash {
                     self.control = nil
                 }
             }
-            do { try child.run() } catch { try? FileManager.default.removeItem(at: directory); throw OfflineFailure.runtime }
+            do { try child.run() } catch {
+                VoiceLaunchConfiguration.removeEmptyIfUnchanged(directory, identity: identity)
+                throw OfflineFailure.runtime
+            }
             Self.log.notice("stage=splash_supervisor_started")
             process = child; state = directory; control = input.fileHandleForWriting; output = stdout.fileHandleForReading
             do {

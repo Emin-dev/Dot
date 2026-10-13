@@ -111,6 +111,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
         child.arguments = launch.arguments
         child.environment = launch.environment
+        child.currentDirectoryURL = launch.directory
         child.standardInput = stdin; child.standardOutput = stdout
         // Library diagnostics may contain paths. They never go into application logs.
         child.standardError = FileHandle.nullDevice

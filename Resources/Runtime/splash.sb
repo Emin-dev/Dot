@@ -1,5 +1,43 @@
 (version 1)
+; Native GPU/Mach operations retain their current behavior. File and network
+; access is limited to the verified runtime, model inputs and private launch state.
 (allow default)
+(deny file-read*)
+(deny file-map-executable)
+(deny file-write*)
+(allow file-read-metadata
+  (path-ancestors (param "DOT_RUNTIME"))
+  (path-ancestors (param "DOT_PYTHON_ROOT"))
+  (path-ancestors (param "DOT_RUNTIME_SCRIPTS"))
+  (path-ancestors (param "DOT_MODELS"))
+  (path-ancestors (param "DOT_MANIFEST"))
+  (path-ancestors (param "DOT_STATE"))
+  (literal "/tmp") (literal "/var") (literal "/etc"))
+(allow file-read*
+  (literal "/")
+  (subpath "/System/Library") (subpath "/Library/Apple/System")
+  (subpath "/usr/lib") (subpath "/usr/share")
+  (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
+  (literal "/private/etc/localtime") (literal "/usr/bin/openssl")
+  ; The system certificate generator initializes this public system config.
+  (literal "/private/etc/ssl/openssl.cnf")
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
+  (subpath (param "DOT_RUNTIME"))
+  (subpath (param "DOT_PYTHON_ROOT"))
+  (subpath (param "DOT_RUNTIME_SCRIPTS"))
+  (subpath (param "DOT_MODELS"))
+  (literal (param "DOT_MANIFEST"))
+  (subpath (param "DOT_STATE")))
+(allow file-map-executable
+  (subpath "/System/Library") (subpath "/Library/Apple/System") (subpath "/usr/lib")
+  (literal "/usr/bin/openssl")
+  (subpath (param "DOT_PYTHON_ROOT"))
+  (subpath (param "DOT_RUNTIME")))
+(allow file-write* (subpath (param "DOT_STATE")))
+(allow file-write-data (literal "/dev/null"))
 (deny network*)
-(allow network-inbound (local ip "localhost:*"))
-(allow network-outbound (remote ip "localhost:*"))
+; Both listeners are continuously owned across bootstrap/exec. No wildcard ports.
+(allow network-inbound
+  (require-all (socket-domain AF_INET)
+    (require-any (local tcp (param "DOT_BACKEND_ADDRESS")) (local tcp (param "DOT_TLS_ADDRESS")))))
+(allow network-outbound (require-all (socket-domain AF_INET) (remote tcp (param "DOT_BACKEND_ADDRESS"))))

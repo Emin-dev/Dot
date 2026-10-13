@@ -5,6 +5,7 @@ import errno
 import importlib.util
 import json
 import os
+import resource
 from pathlib import Path
 import select
 import secrets
@@ -128,35 +129,105 @@ def stop_group(child):
     child.wait()
 
 
+def close_unrelated_descriptors(kept):
+    """Retain stdio/control and the two listeners, even if a caller leaked an FD."""
+    maximum = resource.getrlimit(resource.RLIMIT_NOFILE)[1]
+    if maximum == resource.RLIM_INFINITY: maximum = os.sysconf('SC_OPEN_MAX')
+    first = 3
+    for descriptor in sorted(kept):
+        os.closerange(first, descriptor)
+        first = descriptor + 1
+    os.closerange(first, maximum)
+
+
+def bootstrap(args, payload, models, state, manifest):
+    """Only stdlib/path validation and prebinding occur outside the sandbox.
+
+    exec keeps this PID, its control pipe and both exact listening descriptors.
+    No model, launcher or manifest contents are loaded before the sandbox.
+    """
+    scripts = Path(__file__).resolve(strict=True).parent
+    profile = Path(args.sandbox_profile).resolve(strict=True)
+    if profile != scripts / 'splash.sb' or not profile.is_file():
+        raise ValueError('invalid_sandbox_profile')
+    runtime = (payload / 'Splash').resolve(strict=True)
+    python_root = (runtime / 'python').resolve(strict=True)
+    python = (runtime / 'python/bin/python3').resolve(strict=True)
+    if not python.is_relative_to(python_root) or not python.is_file():
+        raise ValueError('invalid_bundled_interpreter')
+    for readable in (runtime, scripts, models, manifest, python_root):
+        if state.is_relative_to(readable) or readable.is_relative_to(state):
+            raise ValueError('state_not_disjoint')
+    backend = endpoint = None
+    try:
+        backend = tls.owned_listener(); endpoint = tls.owned_listener()
+        backend_port, tls_port = backend.getsockname()[1], endpoint.getsockname()[1]
+        parameters = {'DOT_RUNTIME': runtime, 'DOT_RUNTIME_SCRIPTS': scripts, 'DOT_MODELS': models,
+                      'DOT_MANIFEST': manifest, 'DOT_STATE': state, 'DOT_PYTHON_ROOT': python_root,
+                      # Seatbelt only accepts the localhost token for concrete ports.
+                      # Socket adoption independently requires IPv4 127.0.0.1 exactly.
+                      'DOT_BACKEND_ADDRESS': f'localhost:{backend_port}', 'DOT_TLS_ADDRESS': f'localhost:{tls_port}'}
+        command = ['/usr/bin/sandbox-exec']
+        for name, value in parameters.items(): command.extend(['-D', name + '=' + str(value)])
+        command.extend(['-f', str(profile), str(python), '-I', '-S', '-B', str(scripts / 'dot_runtime.py'),
+                        '--payload', str(payload), '--models', str(models), '--state', str(state), '--manifest', str(manifest),
+                        '--backend-fd', str(backend.fileno()), '--backend-port', str(backend_port),
+                        '--tls-fd', str(endpoint.fileno()), '--tls-port', str(tls_port)])
+        environment = {'PATH': '/usr/bin:/bin', 'HOME': str(state), 'TMPDIR': str(state), 'PYTHONDONTWRITEBYTECODE': '1'}
+        backend.set_inheritable(True); endpoint.set_inheritable(True)
+        os.chdir(state)
+        close_unrelated_descriptors((backend.fileno(), endpoint.fileno()))
+        os.execve(command[0], command, environment)
+        raise RuntimeError('sandbox_exec_returned')
+    finally:
+        # Reached only if setup/exec failed. A successful exec continuously owns both.
+        if endpoint is not None: endpoint.close()
+        if backend is not None: backend.close()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--payload', required=True); parser.add_argument('--models', required=True)
     parser.add_argument('--state', required=True); parser.add_argument('--manifest', required=True)
+    parser.add_argument('--sandbox-profile')
+    parser.add_argument('--backend-fd', type=int); parser.add_argument('--backend-port', type=int)
+    parser.add_argument('--tls-fd', type=int); parser.add_argument('--tls-port', type=int)
     args = parser.parse_args()
     payload = Path(args.payload).resolve(strict=True); models = Path(args.models).resolve(strict=True)
     state = Path(args.state).resolve(strict=True)
+    manifest_path = Path(args.manifest).resolve(strict=True)
     if state.is_relative_to(payload) or state.is_relative_to(models) or payload.is_relative_to(state) or models.is_relative_to(state):
         raise ValueError('state_not_disjoint')
-    if state.stat().st_uid != os.getuid() or state.stat().st_mode & 0o077:
+    if not state.is_dir() or state.stat().st_uid != os.getuid() or state.stat().st_mode & 0o077:
         raise ValueError('private_state_required')
     # Only adopt the fresh private directory made for this invocation, never user data.
     if Path(args.state).is_symlink() or any(state.iterdir()): raise ValueError('fresh_state_required')
     identity = state.stat()
+    if args.sandbox_profile:
+        if any(value is not None for value in (args.backend_fd, args.backend_port, args.tls_fd, args.tls_port)):
+            raise ValueError('mixed_bootstrap_arguments')
+        return bootstrap(args, payload, models, state, manifest_path)
+    if (args.backend_fd is None or args.tls_fd is None or args.backend_port is None or args.tls_port is None
+        or args.backend_fd == args.tls_fd or args.backend_port == args.tls_port):
+        raise ValueError('owned_listeners_required')
     stopped = False
     def request_stop(*_):
         nonlocal stopped
         stopped = True
     signal.signal(signal.SIGTERM, request_stop); signal.signal(signal.SIGINT, request_stop)
-    child = None; listener = None; relay = None
+    child = None; listener = None; endpoint = None; relay = None
     stage = 'snapshot'; tail = FailureTail(); unexpected_exit = False
     try:
-        manifest = json.loads(Path(args.manifest).read_text())
+        # Invalid descriptors fail before snapshot/model reads or subprocesses.
+        listener = tls.adopt_listener(args.backend_fd, args.backend_port)
+        endpoint = tls.adopt_listener(args.tls_fd, args.tls_port)
+        manifest = json.loads(manifest_path.read_text())
         draft = local_snapshot(models, state, manifest)
         runtime = payload / 'Splash'
         # Never release/rebind this backend socket. Only the patched Splash child accepts.
-        listener = tls.owned_listener(); port = listener.getsockname()[1]
+        port = listener.getsockname()[1]
         stage = 'tls'
-        relay = tls.TLSRelay(listener, state)
+        relay = tls.TLSRelay(listener, state, listener=endpoint)
         home = state / 'home'; home.mkdir()
         api_key = secrets.token_hex(32)
         environment = {'SPLASH_API_KEY': api_key, 'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(state),
@@ -201,6 +272,7 @@ def main():
                             finally: child.stderr.close()
                 # A failed relay shutdown retains its socket through live worker references.
                 if listener is not None and (relay is None or relay.closed): listener.close()
+                if endpoint is not None and relay is None: endpoint.close()
         finally:
             # The supervisor outlives a quitting app and cleans its own private state.
             # Never follow a replaced path or remove another invocation's directory.

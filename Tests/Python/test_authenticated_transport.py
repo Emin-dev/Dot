@@ -91,6 +91,41 @@ class CertificateEncodingTests(unittest.TestCase):
             self.assertEqual(len(pin), 64)
             self.assertEqual(list(state.iterdir()), [])
 
+class InheritedTLSListenerTests(unittest.TestCase):
+    def test_exact_descriptor_is_adopted_without_bind_or_listen(self):
+        with tls.owned_listener() as listener:
+            descriptor = os.dup(listener.fileno())
+            os.set_inheritable(descriptor, True)
+            adopted = tls.adopt_listener(descriptor, listener.getsockname()[1])
+            try:
+                self.assertEqual(adopted.fileno(), descriptor)
+                self.assertEqual(adopted.getsockname(), listener.getsockname())
+                self.assertFalse(os.get_inheritable(descriptor))
+                with socket.create_connection(adopted.getsockname(), timeout=2) as client:
+                    connection, _ = adopted.accept(); connection.close()
+            finally: adopted.close()
+    def test_wrong_port_reusable_and_non_listening_sockets_are_not_closed_or_adopted(self):
+        for mode in ('wrong_port', 'reusable', 'bound_only', 'wildcard'):
+            with self.subTest(mode=mode), socket.socket() as listener:
+                listener.bind(('0.0.0.0' if mode == 'wildcard' else '127.0.0.1', 0))
+                if mode != 'bound_only': listener.listen(1)
+                if mode == 'reusable': listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                port = listener.getsockname()[1]
+                with self.assertRaises(ValueError): tls.adopt_listener(listener.fileno(), port % 65535 + 1 if mode == 'wrong_port' else port)
+                self.assertGreaterEqual(listener.fileno(), 3)
+                os.fstat(listener.fileno())
+    def test_relay_uses_existing_tls_listener_and_keeps_endpoint_owned(self):
+        with tempfile.TemporaryDirectory() as folder, tls.owned_listener() as backend:
+            endpoint = tls.owned_listener(); descriptor = endpoint.fileno(); address = endpoint.getsockname()
+            relay = tls.TLSRelay(backend, Path(folder), listener=endpoint)
+            try:
+                self.assertEqual(relay.listener.fileno(), descriptor)
+                self.assertEqual(relay.port, address[1])
+                with socket.socket() as contender:
+                    with self.assertRaises(OSError) as error: contender.bind(address)
+                    self.assertEqual(error.exception.errno, errno.EADDRINUSE)
+            finally: relay.close()
+
 class AuthenticatedRelayTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.state = Path(self.temp.name)

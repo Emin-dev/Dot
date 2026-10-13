@@ -2,11 +2,13 @@
 No remote networking, persistent key, system trust changes or backend discovery.
 """
 import hashlib
+import os
 from pathlib import Path
 import select
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 import time
 
@@ -20,6 +22,27 @@ def owned_listener():
         return listener
     except BaseException:
         listener.close(); raise
+
+
+def adopt_listener(descriptor, port):
+    """Adopt an exact prebound loopback listener, without binding or listening again."""
+    if type(descriptor) is not int or descriptor < 3 or type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError('invalid_owned_listener')
+    listener = socket.socket(fileno=descriptor)
+    try:
+        # Darwin does not implement SO_ACCEPTCONN; inspect TCP state without mutation.
+        listening = (listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b'\x01'
+                     if sys.platform == 'darwin' else listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1)
+        if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
+            or listener.getsockname() != ('127.0.0.1', port)
+            or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) != 0
+            or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) != 0 or not listening):
+            raise ValueError('unowned_listener')
+        os.set_inheritable(descriptor, False)
+        return listener
+    except BaseException:
+        listener.detach()  # Never close an unvalidated caller descriptor.
+        raise
 
 
 def identity(state):
@@ -45,10 +68,11 @@ def identity(state):
 
 
 class TLSRelay:
-    def __init__(self, backend, state):
+    def __init__(self, backend, state, listener=None):
         self.backend = backend  # Kept open by the caller until close() has joined every worker.
         self.context, self.certificate_sha256 = identity(state)
-        self.listener = owned_listener(); self.listener.settimeout(0.2)
+        self.listener = listener if listener is not None else owned_listener()
+        self.listener.settimeout(0.2)
         self.port = self.listener.getsockname()[1]
         self.closed = False
         self.stopping = threading.Event(); self.lock = threading.Lock()

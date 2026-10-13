@@ -1,8 +1,38 @@
 (version 1)
+; Keep existing native process/Mach behavior while restricting helper data access.
+; Paths are canonical, verified launch inputs; no user-home or shared-temp grant.
 (allow default)
 (deny network*)
+(deny file-read*)
+(deny file-map-executable)
 (deny file-write*)
+(allow file-read-metadata
+  (path-ancestors (param "DOT_VOICE_ROOT"))
+  (path-ancestors (param "DOT_PYTHON_ROOT"))
+  (path-ancestors (param "DOT_VOICE_HELPER"))
+  (path-ancestors (param "DOT_OUTPUT"))
+  (literal "/tmp") (literal "/var") (literal "/etc"))
+(allow file-read*
+  ; The root-directory lookup is required by dyld, not a recursive disk grant.
+  (literal "/")
+  (subpath "/System/Library") (subpath "/Library/Apple/System")
+  (subpath "/usr/lib") (subpath "/usr/share")
+  (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
+  (literal "/private/etc/localtime")
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
+  (subpath (param "DOT_VOICE_ROOT"))
+  (subpath (param "DOT_PYTHON_ROOT"))
+  (literal (param "DOT_VOICE_HELPER"))
+  (subpath (param "DOT_OUTPUT")))
+(allow file-map-executable
+  (subpath "/System/Library") (subpath "/Library/Apple/System") (subpath "/usr/lib")
+  (subpath (param "DOT_PYTHON_ROOT"))
+  ; Phonemizer isolates eSpeak's native globals by copying this bundled dylib
+  ; into a tempfile directory. Permit that private copy, not arbitrary outputs.
+  (require-all (subpath (param "DOT_OUTPUT"))
+    (regex #"/tmp[^/]+/libespeak-ng[.]dylib$")))
 (allow file-write* (subpath (param "DOT_OUTPUT")))
+(allow file-write-data (literal "/dev/null"))
 ; OpenMP's directory-only probe must not mistake shared /tmp for writable storage.
 ; Its existing environment registration still checks for duplicate runtimes.
 (deny file-read-data (literal "/tmp") (literal "/private/tmp"))

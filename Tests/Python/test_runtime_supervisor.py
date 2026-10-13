@@ -69,7 +69,12 @@ class RuntimeOwnershipTests(unittest.TestCase):
         import subprocess
         # Call the same production main with test-only traceback diagnostics. No model code runs.
         entry = "import runpy,sys,traceback; sys.argv=sys.argv[1:]; scope=runpy.run_path(sys.argv[0],run_name='dot_runtime_fixture');\ntry: sys.exit(scope['main']())\nexcept Exception: traceback.print_exc(); sys.exit(2)"
-        return subprocess.Popen([sys.executable, '-B', '-c', entry, str(path), '--payload', str(self.payload), '--models', str(self.models), '--state', str(self.state), '--manifest', str(self.manifest)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        # Fixture uses the exact retained-listener supervisor path; no model runs.
+        with runtime.tls.owned_listener() as backend, runtime.tls.owned_listener() as endpoint:
+            return subprocess.Popen([sys.executable, '-B', '-c', entry, str(path), '--payload', str(self.payload), '--models', str(self.models), '--state', str(self.state), '--manifest', str(self.manifest),
+                                     '--backend-fd', str(backend.fileno()), '--backend-port', str(backend.getsockname()[1]),
+                                     '--tls-fd', str(endpoint.fileno()), '--tls-port', str(endpoint.getsockname()[1])],
+                                    pass_fds=(backend.fileno(), endpoint.fileno()), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     def test_parent_eof_stops_child_and_removes_private_state(self):
         import os
         process = self.launch()
@@ -193,3 +198,111 @@ class RuntimeSignalTests(unittest.TestCase):
         with patch.object(runtime.sys, 'platform', 'darwin'), patch.object(runtime, 'child_exited', return_value=True), patch.object(runtime.os, 'killpg', side_effect=PermissionError(errno.EACCES, 'fixture')):
             with self.assertRaises(PermissionError): runtime.stop_group(child)
         self.assertFalse(child.waited)
+
+class RuntimeBootstrapTests(unittest.TestCase):
+    """No ML imports: fixture launcher only serves an authenticated local byte reply."""
+    def setUp(self):
+        import shutil
+        RuntimeOwnershipTests.setUp(self)
+        python_root = self.payload / 'Splash/python'
+        shutil.rmtree(python_root)
+        python_root.symlink_to(Path(sys.base_prefix).resolve(), target_is_directory=True)
+    def tearDown(self): RuntimeOwnershipTests.tearDown(self)
+    def arguments(self):
+        import argparse
+        return argparse.Namespace(sandbox_profile=str(path.with_name('splash.sb')))
+    def test_bootstrap_passes_exact_paths_and_continuously_owned_fds(self):
+        import os, socket
+        captured = []
+        def exec_fixture(executable, command, environment):
+            self.assertEqual(executable, '/usr/bin/sandbox-exec')
+            parameters = dict(command[index + 1].split('=', 1) for index, value in enumerate(command) if value == '-D')
+            self.assertEqual(parameters['DOT_STATE'], str(self.state.resolve()))
+            self.assertEqual(parameters['DOT_MODELS'], str(self.models.resolve()))
+            self.assertEqual(parameters['DOT_MANIFEST'], str(self.manifest.resolve()))
+            self.assertEqual(parameters['DOT_PYTHON_ROOT'], str(Path(sys.base_prefix).resolve()))
+            for prefix, name in (('backend', 'DOT_BACKEND_ADDRESS'), ('tls', 'DOT_TLS_ADDRESS')):
+                descriptor = int(command[command.index('--' + prefix + '-fd') + 1])
+                port = int(command[command.index('--' + prefix + '-port') + 1])
+                self.assertEqual(parameters[name], 'localhost:' + str(port))
+                self.assertTrue(os.get_inheritable(descriptor))
+                with socket.socket(fileno=os.dup(descriptor)) as held:
+                    self.assertEqual(held.getsockname(), ('127.0.0.1', port))
+                    with socket.socket() as contender:
+                        with self.assertRaises(OSError) as error: contender.bind(held.getsockname())
+                        self.assertEqual(error.exception.errno, errno.EADDRINUSE)
+                captured.append(descriptor)
+            self.assertEqual(environment, {'PATH': '/usr/bin:/bin', 'HOME': str(self.state.resolve()), 'TMPDIR': str(self.state.resolve()), 'PYTHONDONTWRITEBYTECODE': '1'})
+            raise OSError(errno.ENOENT, 'fixture exec rejection')
+        # No model/manifest contents are read on the unsandboxed bootstrap path.
+        self.manifest.write_text('not JSON; must not be read before sandbox')
+        with patch.object(runtime.os, 'execve', side_effect=exec_fixture), patch.object(runtime.os, 'chdir'), patch.object(runtime, 'close_unrelated_descriptors') as close:
+            with self.assertRaises(OSError): runtime.bootstrap(self.arguments(), self.payload.resolve(), self.models.resolve(), self.state.resolve(), self.manifest.resolve())
+            self.assertEqual(close.call_args.args[0], tuple(captured))
+        self.assertEqual(len(captured), 2)
+        for descriptor in captured:
+            with self.assertRaises(OSError): os.fstat(descriptor)
+        self.assertTrue(self.state.exists())
+    def test_different_profile_is_rejected_before_binding(self):
+        args = self.arguments(); args.sandbox_profile = str(self.manifest)
+        with patch.object(runtime.tls, 'owned_listener') as bind:
+            with self.assertRaises(ValueError): runtime.bootstrap(args, self.payload.resolve(), self.models.resolve(), self.state.resolve(), self.manifest.resolve())
+            bind.assert_not_called()
+    def test_unrelated_inheritable_descriptor_is_closed_before_exec(self):
+        import os, subprocess
+        reader, writer = os.pipe()
+        os.set_inheritable(writer, True)
+        code = """import importlib.util,os,sys
+spec=importlib.util.spec_from_file_location('fixture_runtime',sys.argv[1])
+runtime=importlib.util.module_from_spec(spec); spec.loader.exec_module(runtime)
+with runtime.tls.owned_listener() as backend, runtime.tls.owned_listener() as endpoint:
+    kept=(backend.fileno(),endpoint.fileno())
+    runtime.close_unrelated_descriptors(kept)
+    for fd in kept: os.fstat(fd)
+    try: os.fstat(int(sys.argv[2]))
+    except OSError: print('UNRELATED_FD_CLOSED',flush=True)
+    else: raise AssertionError('unrelated descriptor survived')
+"""
+        try:
+            result = subprocess.run([sys.executable, '-I', '-S', '-B', '-c', code, str(path), str(writer)],
+                                    pass_fds=(writer,), capture_output=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(result.stdout, b'UNRELATED_FD_CLOSED\n')
+        finally: os.close(reader); os.close(writer)
+    @unittest.skipUnless(sys.platform == 'darwin', 'real Seatbelt bootstrap requires macOS')
+    def test_actual_bootstrap_sandbox_tls_roundtrip_and_eof_cleanup(self):
+        import hashlib, os, select, socket, ssl, subprocess
+        launcher = self.payload / 'Splash/install/launcher.py'
+        launcher.write_text("""import os,socket,sys
+fd = int(sys.argv[sys.argv.index('--listen-fd') + 1])
+listener = socket.socket(fileno=fd)
+while True:
+    connection, _ = listener.accept()
+    with connection:
+        data = connection.recv(8192)
+        expected = ('Bearer ' + os.environ['SPLASH_API_KEY']).encode()
+        connection.sendall(b'fixture authenticated' if expected in data else b'unauthorized')
+""")
+        command = [sys.executable, '-I', '-S', '-B', str(path), '--sandbox-profile', str(path.with_name('splash.sb')),
+                   '--payload', str(self.payload), '--models', str(self.models), '--state', str(self.state), '--manifest', str(self.manifest)]
+        child = subprocess.Popen(command, cwd=self.state, env={'PATH': '/usr/bin:/bin', 'HOME': str(self.state), 'TMPDIR': str(self.state)},
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            self.assertTrue(select.select([child.stdout], [], [], 12)[0], 'bootstrap did not report ready')
+            line = child.stdout.readline()
+            if not line: self.fail('bootstrap closed output before its started event')
+            event = json.loads(line)
+            self.assertEqual(event.get('event'), 'started', line)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
+            with context.wrap_socket(socket.create_connection(('127.0.0.1', event['port']), timeout=3), server_hostname='dot.local') as secure:
+                self.assertEqual(hashlib.sha256(secure.getpeercert(binary_form=True)).hexdigest(), event['tls_certificate_sha256'])
+                secure.sendall(('Bearer ' + event['api_key']).encode())
+                self.assertEqual(secure.recv(100), b'fixture authenticated')
+            child.stdin.close(); child.stdin = None
+            _, errors = child.communicate(timeout=8)
+            self.assertEqual(child.returncode, 0, errors)
+            self.assertFalse(self.state.exists())
+            with self.assertRaises(ProcessLookupError): os.kill(event['pid'], 0)
+        finally:
+            if child.poll() is None: child.terminate(); child.communicate(timeout=8)

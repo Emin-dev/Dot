@@ -33,12 +33,19 @@ struct VoiceLaunchConfiguration {
     let directory: URL
     let arguments: [String]
     let environment: [String: String]
-    enum Failure: Error { case privateDirectory }
+    enum Failure: Error { case privateDirectory, launchPath }
     init(python: URL, helper: URL, profile: URL, root: URL, output: URL) throws {
         let path = try Self.canonicalPrivatePath(output)
+        let voiceRoot = try Self.canonicalExistingPath(root, directory: true)
+        let pythonRoot = try Self.canonicalExistingPath(python.deletingLastPathComponent().deletingLastPathComponent(), directory: true)
+        let executable = try Self.canonicalExistingPath(python, directory: false)
+        let script = try Self.canonicalExistingPath(helper, directory: false)
+        let policy = try Self.canonicalExistingPath(profile, directory: false)
+        guard executable.hasPrefix(pythonRoot + "/") else { throw Failure.launchPath }
         directory = URL(fileURLWithPath: path, isDirectory: true)
-        arguments = ["-D", "DOT_OUTPUT=" + path, "-f", profile.path,
-                     python.path, "-I", "-B", "-u", helper.path, "--root", root.path, "--output", path]
+        arguments = ["-D", "DOT_OUTPUT=" + path, "-D", "DOT_VOICE_ROOT=" + voiceRoot,
+                     "-D", "DOT_VOICE_HELPER=" + script, "-D", "DOT_PYTHON_ROOT=" + pythonRoot,
+                     "-f", policy, executable, "-I", "-B", "-u", script, "--root", voiceRoot, "--output", path]
         environment = ["PATH": "/usr/bin:/bin", "HOME": path, "TMPDIR": path,
                        "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
                        "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"]
@@ -46,6 +53,15 @@ struct VoiceLaunchConfiguration {
     struct DirectoryIdentity: Equatable {
         let device: dev_t
         let inode: ino_t
+    }
+    static func canonicalExistingPath(_ url: URL, directory: Bool) throws -> String {
+        guard url.isFileURL, let resolved = realpath(url.path, nil) else { throw Failure.launchPath }
+        defer { free(resolved) }
+        let path = String(cString: resolved)
+        var info = stat()
+        guard path.hasPrefix("/"), lstat(path, &info) == 0,
+              info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG) else { throw Failure.launchPath }
+        return path
     }
     static func privateIdentity(_ directory: URL) throws -> DirectoryIdentity {
         var info = stat()

@@ -46,12 +46,20 @@ final class VoiceLaunchConfigurationTests: XCTestCase {
         let directory = try privateDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
         let path = try VoiceLaunchConfiguration.canonicalPrivatePath(directory)
         XCTAssertEqual(path, "/private" + directory.path)
-        let value = try VoiceLaunchConfiguration(python: URL(fileURLWithPath: "/python"), helper: URL(fileURLWithPath: "/helper"),
-            profile: URL(fileURLWithPath: "/profile"), root: URL(fileURLWithPath: "/root"), output: directory)
+        let runtime = directory.appendingPathComponent("runtime"), python = runtime.appendingPathComponent("python/bin/python3")
+        try FileManager.default.createDirectory(at: python.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let helper = directory.appendingPathComponent("helper.py"), profile = directory.appendingPathComponent("profile.sb")
+        for file in [python, helper, profile] { try Data("fixture".utf8).write(to: file) }
+        let value = try VoiceLaunchConfiguration(python: python, helper: helper, profile: profile, root: runtime, output: directory)
         XCTAssertEqual(value.arguments[1], "DOT_OUTPUT=" + path)
         XCTAssertEqual(value.arguments.last, path)
         XCTAssertEqual(value.environment["HOME"], path); XCTAssertEqual(value.environment["TMPDIR"], path)
         XCTAssertEqual(value.directory.path, path)
+        XCTAssertTrue(value.arguments.contains("DOT_VOICE_ROOT=" + path + "/runtime"))
+        XCTAssertTrue(value.arguments.contains("DOT_VOICE_HELPER=" + path + "/helper.py"))
+        XCTAssertTrue(value.arguments.contains("DOT_PYTHON_ROOT=" + path + "/runtime/python"))
+        XCTAssertThrowsError(try VoiceLaunchConfiguration(python: python, helper: directory.appendingPathComponent("missing.py"),
+                                                          profile: profile, root: runtime, output: directory))
     }
     func testMissingNonPrivateAndSymlinkDirectoriesFailClosed() throws {
         let directory = try privateDirectory(); defer { try? FileManager.default.removeItem(at: directory) }
@@ -106,11 +114,12 @@ final class VoiceLaunchConfigurationTests: XCTestCase {
         """
         try Data(script.utf8).write(to: helper)
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let launch = try VoiceLaunchConfiguration(python: URL(fileURLWithPath: python), helper: helper,
+        let launch = try VoiceLaunchConfiguration(python: URL(fileURLWithPath: python).resolvingSymlinksInPath(), helper: helper,
             profile: repository.appendingPathComponent("Resources/Voice/voice.sb"), root: directory, output: directory)
         let child = Process(), stdout = Pipe(), stderr = Pipe()
         child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
         child.arguments = launch.arguments; child.environment = launch.environment
+        child.currentDirectoryURL = launch.directory
         child.standardInput = FileHandle.nullDevice; child.standardOutput = stdout; child.standardError = stderr
         try child.run(); defer { if child.isRunning { child.terminate() } }
         for _ in 0..<100 where child.isRunning { try await Task.sleep(nanoseconds: 100_000_000) }
