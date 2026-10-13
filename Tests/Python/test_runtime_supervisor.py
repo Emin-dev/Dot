@@ -290,7 +290,9 @@ while True:
         try:
             self.assertTrue(select.select([child.stdout], [], [], 12)[0], 'bootstrap did not report ready')
             line = child.stdout.readline()
-            if not line: self.fail('bootstrap closed output before its started event')
+            if not line:
+                _, errors = child.communicate(timeout=8)
+                self.fail(f'bootstrap closed output before its started event; exit={child.returncode}; stderr={errors[-8192:]}')
             event = json.loads(line)
             self.assertEqual(event.get('event'), 'started', line)
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -305,4 +307,6 @@ while True:
             self.assertFalse(self.state.exists())
             with self.assertRaises(ProcessLookupError): os.kill(event['pid'], 0)
         finally:
-            if child.poll() is None: child.terminate(); child.communicate(timeout=8)
+            # Reap and close all pipes even when bootstrap exited before readiness.
+            if child.poll() is None: child.terminate()
+            child.communicate(timeout=8)
