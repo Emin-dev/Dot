@@ -4,11 +4,11 @@ A native macOS floating companion. Click to talk; click during an answer to inte
 
 ## Build status
 
-The review branch implements a single floating dot with a small right-click menu. There are no app settings, setup, folder-selection or chat windows, or persistent text label below the dot. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
+The merged source implements a single floating dot with a small right-click menu. There are no app settings, setup, folder-selection or chat windows, or persistent text label below the dot. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
 
-**A working complete installer is not yet available.** The voice dependency lock, licensed redistributable closure, offline import probe and end-to-end native conversation remain incomplete. The real Whisper framework branch has compiled on the supported Mac, but that is not a working speech pipeline. A development build reports missing bundled components and cannot talk.
+**A complete personal test app is installed and working on the owner’s Mac; a generally validated public installer is not available yet.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
 
-The shipped product must contain Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. There is no first-launch downloader, external folder picker, borrowed Python installation or server discovery. At launch, Dot verifies the embedded payload, with pause/retry in its context menu. Missing or damaged files remain a visible error; the app never downloads a repair. Copying the eventual complete app carries its immutable assets with it. Relocation and offline behavior still need real device proof.
+The shipped product must contain Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. There is no first-launch downloader, external folder picker, borrowed Python installation or server discovery. At launch, Dot verifies the embedded payload, with pause/retry in its context menu. Missing or damaged files remain a visible error; the app never downloads a repair. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
 
 ## Interaction and privacy
 
@@ -25,7 +25,7 @@ Conversation state stays in memory and disappears on quit. No analytics or conve
 
 ## Development and verification
 
-The UI development target builds on macOS 15+. The complete Splash installer targets Apple Silicon M3 or newer and macOS 26.4+, with enough RAM for the selected model. Device performance and voice quality require measurement.
+The UI development target builds on macOS 15+. The complete Splash runtime requires macOS 26.4+. The requested product target is M4 Pro-class or newer with at least 32 GB RAM, but 32 GB has not been validated: upstream Q4 guidance is 36 GB minimum and 48 GB recommended. The personal test hardware is reported as M5 Pro/48 GB. See [hardware and release gaps](docs/PROGRESS.md#hardware-and-distribution-targets); other-Mac support is not yet certified.
 
 - Open `Dot.xcodeproj`, choose shared `Dot` scheme, then Product → Test.
 - `swift test` runs the portable pure-core suite. The Xcode target additionally runs mocked network and pipe tests.
