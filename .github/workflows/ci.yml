@@ -10,14 +10,20 @@ concurrency:
   cancel-in-progress: true
 jobs:
   macos:
-    # Standard public-repository runner. No models, app launch, downloads,
-    # caches, uploaded artifacts, microphone access, or publishing credentials.
+    # Standard public-repository runner. Test Python is provisioned explicitly.
+    # No neural payloads, app launch, dependency caches, uploaded artifacts,
+    # microphone access, or publishing credentials.
     runs-on: macos-15
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
         with:
           persist-credentials: false
+      # Homebrew Python links TLS outside its root and correctly fails Seatbelt.
+      # Use the official test toolchain; never widen the product sandbox for CI.
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
       - name: Test, compile and package with zero warnings
         run: bash scripts/verify_macos.sh
       - name: Export bounded test DMG in log
