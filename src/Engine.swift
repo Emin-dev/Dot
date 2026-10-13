@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import CryptoKit
 import Security
+import OSLog
 
 enum RuntimeCertificatePin {
     static func matches(_ data: Data, expected: String, host: String) -> Bool {
@@ -50,6 +51,7 @@ enum EngineError: LocalizedError, Equatable {
 
 @MainActor
 final class EngineManager: ObservableObject {
+    private static let log = Logger(subsystem: "app.dot", category: "runtime")
     private var certificateSHA256: String?
     private var currentSession: URLSession?
     private let configuredEndpoint: String?
@@ -94,15 +96,22 @@ final class EngineManager: ObservableObject {
             if ownedPID != nil, let key = BundledSplash.shared.apiKey { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
             do {
                 let (data, response) = try await Self.boundedStatus(session: session, request: request)
+                try Task.checkCancellation()
                 guard data.count <= 1_000_000, let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let identity = try? JSONDecoder().decode(SplashIdentity.self, from: data),
                       identity.matches(model: model, port: identityPort, server: http.value(forHTTPHeaderField: "Server")),
                       ownedPID == nil || identity.instance?.pid == ownedPID else { throw EngineError.identity }
                 visionAvailable = identity.vision == true && identity.input_modalities?.contains("image") == true
+                let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: .ready)
+                Self.log.notice("\(diagnostic.logLine, privacy: .public)")
                 return (base, model)
             } catch {
                 try Task.checkCancellation()
-                if attempt == attempts - 1 || ProcessInfo.processInfo.systemUptime >= readinessDeadline { throw (error as? EngineError) ?? EngineError.unavailable }
+                if attempt == attempts - 1 || ProcessInfo.processInfo.systemUptime >= readinessDeadline {
+                    let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: ownedPID == nil ? .failed : .timeout)
+                    Self.log.error("\(diagnostic.logLine, privacy: .public)")
+                    throw (error as? EngineError) ?? EngineError.unavailable
+                }
                 try await Task.sleep(nanoseconds: 200_000_000)
             }
         }
@@ -136,8 +145,13 @@ final class EngineManager: ObservableObject {
         ])
         let (bytes, response) = try await session.bytes(for: request)
         defer { bytes.task.cancel() }
+        try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              http.value(forHTTPHeaderField: "Server") == "Splash" else { throw EngineError.response }
+              http.value(forHTTPHeaderField: "Server") == "Splash" else {
+            let diagnostic = PipelineDiagnostic(stage: .response, outcome: .failed, reason: .httpRejected)
+            Self.log.error("\(diagnostic.logLine, privacy: .public)")
+            throw EngineError.response
+        }
         var hasContent = false
         var sawDone = false
         var sawReasoning = false

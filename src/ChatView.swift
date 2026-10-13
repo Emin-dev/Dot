@@ -35,6 +35,30 @@ final class ChatModel: ObservableObject {
         Self.timingLog.notice("DOT_TIMING \(stage, privacy: .public)=\(milliseconds)ms")
     }
 
+    private static let runtimeLog = Logger(subsystem: "app.dot", category: "runtime")
+    private func logFailure(_ error: Error, stage: PipelineDiagnostic.Stage) {
+        let reason: PipelineDiagnostic.Reason
+        if let value = error as? ScreenContext.ScreenFailure {
+            switch value {
+            case .permission: reason = .permission
+            case .unsupported: reason = .unsupported
+            case .unavailable: reason = .unavailable
+            }
+        } else if let value = error as? EngineError {
+            switch value {
+            case .configuration, .unavailable: reason = .unavailable
+            case .identity: reason = .identity
+            case .response: reason = .invalidResponse
+            case .empty: reason = .emptyResponse
+            }
+        } else if error is ResponseLimit { reason = .resourceLimit }
+        else if error is URLError { reason = .transport }
+        else { reason = stage == .capture ? .captureFailed : stage == .voice ? .voiceFailed : .unknown }
+        guard let diagnostic = PipelineDiagnostic.failure(stage: stage, reason: reason,
+            cancelled: Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled) else { return }
+        Self.runtimeLog.error("\(diagnostic.logLine, privacy: .public)")
+    }
+
     init() {
         screen.enabled = screenEnabled
         OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available)
@@ -48,6 +72,8 @@ final class ChatModel: ObservableObject {
         }
         tts.onError = { [weak self] id, message in
             guard let self, self.gate.accepts(id) else { return }
+            let diagnostic = PipelineDiagnostic(stage: .voice, outcome: .failed, reason: .voiceFailed)
+            Self.runtimeLog.error("\(diagnostic.logLine, privacy: .public)")
             self.cancelTurn(); self.phase = .blocked(message)
         }
         tts.onStarted = { [weak self] id in
@@ -83,9 +109,10 @@ final class ChatModel: ObservableObject {
         if history.count > 12 { history.removeFirst(history.count - 12) }
         let snapshot = history
         do { try tts.start(id: id) }
-        catch { generating = false; phase = .blocked(error.localizedDescription); return }
+        catch { logFailure(error, stage: .voice); generating = false; phase = .blocked(error.localizedDescription); return }
         work = Task { [weak self] in
             guard let self else { return }
+            var stage = PipelineDiagnostic.Stage.readiness
             do {
                 try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
                     guard let self, self.gate.accepts(id) else { return }
@@ -98,10 +125,20 @@ final class ChatModel: ObservableObject {
                     self.firstReasoning = true; self.timing("first_reasoning")
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    stage = .capture
                     self.capturingScreen = self.screen.enabled
+                    if self.screen.enabled {
+                        let diagnostic = PipelineDiagnostic(stage: .capture, outcome: .started)
+                        Self.runtimeLog.notice("\(diagnostic.logLine, privacy: .public)")
+                    }
                     defer { if self.gate.accepts(id) { self.capturingScreen = false } }
                     let image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
                     guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    if image != nil {
+                        let diagnostic = PipelineDiagnostic(stage: .capture, outcome: .ready)
+                        Self.runtimeLog.notice("\(diagnostic.logLine, privacy: .public)")
+                    }
+                    stage = .response
                     self.screenContextUsed = image != nil; return image
                 })
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
@@ -112,6 +149,7 @@ final class ChatModel: ObservableObject {
                 self.phase = self.tts.speaking ? .speaking : .idle
             } catch {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.logFailure(error, stage: stage)
                 self.generating = false; self.tts.stop()
                 self.phase = .blocked(error.localizedDescription)
             }

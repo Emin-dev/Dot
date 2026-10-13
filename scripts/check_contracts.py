@@ -38,6 +38,9 @@ checks = {
     'runtime listener retained across child exec': 'pass_fds=(listener.fileno(),)' in read('Resources/Runtime/dot_runtime.py') and 'relay.close()' in read('Resources/Runtime/dot_runtime.py'),
     'status and SSE enforce client byte budgets': 'boundedStatus' in engine and 'BoundedSSELines()' in engine and 'ResponseTextBudget()' in engine,
     'screen first grant rechecks access without prompt loops': 'ScreenPermissionAccess.allowed(preflight: CGPreflightScreenCaptureAccess' in read('src/ScreenContext.swift') and 'request: CGRequestScreenCaptureAccess' in read('src/ScreenContext.swift'),
+    'runtime protocol reads available pipe bytes without waiting for EOF': 'Darwin.read(descriptor' in read('src/BundledSplash.swift') and 'O_NONBLOCK' in read('src/BundledSplash.swift') and 'FD_CLOEXEC' in read('src/BundledSplash.swift') and 'read(upToCount:' not in read('src/BundledSplash.swift'),
+    'runtime startup timeout closes only current owned generation': re.search(r'let error = await failure\(\).*?guard token == expected, !Task.isCancelled.*?outcome=timeout.*?shutdown\(\).*?throw error', read('src/BundledSplash.swift'), re.S) is not None,
+    'turn failure logging excludes cancellation and uses finite identifiers': 'error is CancellationError' in chat and '(error as? URLError)?.code == .cancelled' in chat and 'PipelineDiagnostic.failure(stage: stage, reason: reason' in chat and 'self.logFailure(error, stage: stage)' in chat,
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

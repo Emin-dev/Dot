@@ -112,20 +112,72 @@ final class OfflineIntegrationTests: XCTestCase {
 @MainActor private final class RuntimeDeliveryFixture {
     var state = RuntimeExitState()
     var delivered: [Bool] = []
+    var bytes = Data()
+    var completed = false
 }
 final class RuntimeProtocolReaderTests: XCTestCase {
     @MainActor private func checkSingleEOF(closedHandle: Bool) async throws {
-        let pipe = Pipe(), reader = RuntimeProtocolReader(), fixture = RuntimeDeliveryFixture()
+        let pipe = Pipe(), fixture = RuntimeDeliveryFixture()
+        let reader = try RuntimeProtocolReader(handle: pipe.fileHandleForReading)
         if closedHandle { try pipe.fileHandleForReading.close() }
         try pipe.fileHandleForWriting.close()
         let receive: @MainActor @Sendable (Data) -> Void = { data in fixture.delivered.append(data.isEmpty) }
         DispatchQueue.global().async {
-            for _ in 0..<8 { reader.read(from: pipe.fileHandleForReading, deliver: receive) }
+            for _ in 0..<8 { reader.read(deliver: receive) }
         }
         for _ in 0..<100 where fixture.delivered.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
         try await Task.sleep(nanoseconds: 50_000_000)
         XCTAssertEqual(fixture.delivered, [true])
-        try? pipe.fileHandleForReading.close()
+        reader.close(); try? pipe.fileHandleForReading.close()
+    }
+    @MainActor func testLiveWriterDeliversShortMessageBeforeEOF() async throws {
+        let pipe = Pipe(), fixture = RuntimeDeliveryFixture()
+        let reader = try RuntimeProtocolReader(handle: pipe.fileHandleForReading)
+        let message = Data("{\"protocol\":1,\"event\":\"started\"}\n".utf8)
+        try pipe.fileHandleForWriting.write(contentsOf: message)
+        defer {
+            try? pipe.fileHandleForWriting.close()
+            reader.close(); try? pipe.fileHandleForReading.close()
+        }
+        DispatchQueue.global().async {
+            reader.read { data in
+                fixture.delivered.append(data.isEmpty)
+                XCTAssertEqual(data, message)
+            }
+        }
+        for _ in 0..<100 where fixture.delivered.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        // The writer deliberately remains open here, exactly like the supervisor.
+        XCTAssertEqual(fixture.delivered, [false])
+    }
+    @MainActor func testEmptyLivePipeReadAndShutdownNeverWaitForWriter() async throws {
+        let pipe = Pipe(), fixture = RuntimeDeliveryFixture()
+        let reader = try RuntimeProtocolReader(handle: pipe.fileHandleForReading)
+        DispatchQueue.global().async {
+            reader.read { data in fixture.delivered.append(data.isEmpty) }
+            reader.close(); reader.close()
+            reader.read { data in fixture.delivered.append(data.isEmpty) }
+            DispatchQueue.main.async { fixture.completed = true }
+        }
+        for _ in 0..<100 where !fixture.completed { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertTrue(fixture.completed)
+        XCTAssertTrue(fixture.delivered.isEmpty) // EAGAIN and explicit close are not EOF.
+        try pipe.fileHandleForWriting.close(); try pipe.fileHandleForReading.close()
+    }
+    @MainActor func testFragmentedStartupMessageArrivesWithoutClosingWriter() async throws {
+        let pipe = Pipe(), fixture = RuntimeDeliveryFixture()
+        let reader = try RuntimeProtocolReader(handle: pipe.fileHandleForReading)
+        defer { reader.close(); try? pipe.fileHandleForWriting.close(); try? pipe.fileHandleForReading.close() }
+        let fragments = ["{\"protocol\":1,", "\"event\":\"started\"}", "\n"]
+        for fragment in fragments {
+            try pipe.fileHandleForWriting.write(contentsOf: Data(fragment.utf8))
+            reader.read { data in
+                XCTAssertLessThanOrEqual(data.count, 8192)
+                fixture.bytes.append(data); fixture.delivered.append(data.isEmpty)
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(fixture.delivered, [false, false, false])
+        XCTAssertEqual(fixture.bytes, Data(fragments.joined().utf8))
     }
     @MainActor func testClosedHandleIsOneSafeEOF() async throws { try await checkSingleEOF(closedHandle: true) }
     @MainActor func testRepeatedPipeEOFIsDeliveredOnlyOnce() async throws { try await checkSingleEOF(closedHandle: false) }
@@ -142,7 +194,7 @@ final class RuntimeProtocolReaderTests: XCTestCase {
         let fixture = RuntimeDeliveryFixture()
         fixture.state.exited(status: Int(child.terminationStatus))
         XCTAssertNil(fixture.state.resolved)
-        let reader = RuntimeProtocolReader()
+        let reader = try RuntimeProtocolReader(handle: pipe.fileHandleForReading)
         let receive: @MainActor @Sendable (Data) -> Void = { data in
             fixture.delivered.append(data.isEmpty)
             if data.isEmpty { fixture.state.finishedOutput() }
@@ -153,14 +205,14 @@ final class RuntimeProtocolReaderTests: XCTestCase {
             }
         }
         DispatchQueue.global().async {
-            reader.read(from: pipe.fileHandleForReading, deliver: receive)
-            reader.read(from: pipe.fileHandleForReading, deliver: receive)
+            reader.read(deliver: receive)
+            reader.read(deliver: receive)
         }
         for _ in 0..<100 where fixture.delivered.count < 2 { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(fixture.delivered, [false, true])
         XCTAssertEqual(fixture.state.resolved?.reason, .moduleMissing)
         XCTAssertEqual(fixture.state.resolved?.exitStatus, 7)
-        try pipe.fileHandleForReading.close()
+        reader.close(); try pipe.fileHandleForReading.close()
     }
 }
 #endif

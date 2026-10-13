@@ -331,3 +331,26 @@ enum ScreenPermissionAccess {
         return preflight()
     }
 }
+
+/// Public diagnostics accept only finite identifiers, never error descriptions or payloads.
+struct PipelineDiagnostic: Equatable {
+    enum Stage: String { case microphone, voice, readiness, capture, response }
+    enum Outcome: String { case started, ready, timeout, failed }
+    enum Reason: String {
+        case permission, unsupported, unavailable, identity, httpRejected = "http_rejected"
+        case invalidResponse = "invalid_response", emptyResponse = "empty_response"
+        case resourceLimit = "resource_limit", transport, captureFailed = "capture_failed", voiceFailed = "voice_failed", unknown
+    }
+    let stage: Stage
+    let outcome: Outcome
+    let reason: Reason?
+    init(stage: Stage, outcome: Outcome, reason: Reason? = nil) {
+        self.stage = stage; self.outcome = outcome; self.reason = reason
+    }
+    static func failure(stage: Stage, reason: Reason, cancelled: Bool) -> Self? {
+        cancelled ? nil : Self(stage: stage, outcome: .failed, reason: reason)
+    }
+    var logLine: String {
+        "pipeline=\(stage.rawValue) outcome=\(outcome.rawValue)\(reason.map { " reason=\($0.rawValue)" } ?? "")"
+    }
+}

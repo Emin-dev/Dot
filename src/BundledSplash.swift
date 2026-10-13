@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import Darwin
 
 @MainActor
 final class BundledSplash {
@@ -27,6 +28,7 @@ final class BundledSplash {
     private var process: Process?
     private var control: FileHandle?
     private var output: FileHandle?
+    private var protocolReader: RuntimeProtocolReader?
     private var state: URL?
     private var token = UUID()
     private var bytes = Data()
@@ -42,6 +44,7 @@ final class BundledSplash {
         guard OfflinePreparation.shared.ready, let models = OfflinePreparation.shared.root else { throw OfflineFailure.incomplete }
         if process == nil {
             // A quick retry may precede the old pipe's EOF callback.
+            protocolReader?.close(); protocolReader = nil
             output?.readabilityHandler = nil; try? output?.close(); output = nil
             guard let resources = Bundle.main.resourceURL else { throw OfflineFailure.incomplete }
             let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dot-splash-" + UUID().uuidString, isDirectory: true)
@@ -71,12 +74,17 @@ final class BundledSplash {
             do { try child.run() } catch { try? FileManager.default.removeItem(at: directory); throw OfflineFailure.runtime }
             Self.log.notice("stage=splash_supervisor_started")
             process = child; state = directory; control = input.fileHandleForWriting; output = stdout.fileHandleForReading
-            let reader = RuntimeProtocolReader()
-            output?.readabilityHandler = { [weak self] handle in
-                reader.read(from: handle) { [weak self] data in
-                    guard let self, self.token == generation else { return }
-                    self.receive(data)
+            do {
+                let reader = try RuntimeProtocolReader(handle: stdout.fileHandleForReading)
+                protocolReader = reader
+                output?.readabilityHandler = { [weak self] _ in
+                    reader.read { [weak self] data in
+                        guard let self, self.token == generation else { return }
+                        self.receive(data)
+                    }
                 }
+            } catch {
+                shutdown(); throw OfflineFailure.runtime
             }
         }
         let expected = token
@@ -89,11 +97,17 @@ final class BundledSplash {
             }
             try await Task.sleep(nanoseconds: 100_000_000)
         }
-        throw await failure()
+        let error = await failure()
+        guard token == expected, !Task.isCancelled else { throw CancellationError() }
+        Self.log.error("stage=splash_startup outcome=timeout")
+        // A startup-event timeout must not leave an unreachable owned model alive.
+        shutdown()
+        throw error
     }
     private func receive(_ data: Data) {
         if data.isEmpty {
             exitState.finishedOutput(); publishResolvedFailure()
+            protocolReader?.close(); protocolReader = nil
             output?.readabilityHandler = nil; try? output?.close(); output = nil
             return
         }
@@ -116,7 +130,8 @@ final class BundledSplash {
     }
     func owns(pid: Int) -> Bool { serverPID == pid && process?.isRunning == true }
     func shutdown() {
-        token = UUID(); output?.readabilityHandler = nil; try? output?.close(); output = nil
+        token = UUID(); protocolReader?.close(); protocolReader = nil
+        output?.readabilityHandler = nil; try? output?.close(); output = nil
         // EOF tells the supervisor to stop its own process group. No synchronous waits on UI.
         try? control?.close(); control = nil
         if process?.isRunning == true { process?.terminate() }
@@ -124,18 +139,48 @@ final class BundledSplash {
     }
 }
 
-/// Serialize the read plus dispatch submission, so EOF cannot overtake bytes.
-/// Main-queue FIFO provides ordering that separate unstructured Tasks do not.
+/// A pipe read must deliver available bytes while its long-lived writer stays open.
+/// Own a duplicate descriptor so shutdown cannot close/reuse it during a read.
 final class RuntimeProtocolReader: @unchecked Sendable {
     private let lock = NSLock()
+    private let handle: FileHandle
+    private var descriptor: Int32
     private var finished = false
-    func read(from handle: FileHandle, deliver: @escaping @MainActor @Sendable (Data) -> Void) {
+    init(handle: FileHandle) throws {
+        self.handle = handle
+        let fd = Darwin.dup(handle.fileDescriptor)
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        descriptor = fd
+        let descriptorFlags = fcntl(fd, F_GETFD)
+        let statusFlags = fcntl(fd, F_GETFL)
+        guard descriptorFlags >= 0, statusFlags >= 0,
+              fcntl(fd, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0,
+              fcntl(fd, F_SETFL, statusFlags | O_NONBLOCK) == 0 else {
+            let error = errno; Darwin.close(fd); descriptor = -1
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(error))
+        }
+    }
+    func read(deliver: @escaping @MainActor @Sendable (Data) -> Void) {
         lock.lock(); defer { lock.unlock() }
         guard !finished else { return }
-        // A concurrent shutdown may close the handle. Throwing bounded reads turn
-        // that into one EOF event instead of a noncatchable Foundation exception.
-        let data = (try? handle.read(upToCount: 8192)) ?? Data()
-        if data.isEmpty { finished = true; handle.readabilityHandler = nil }
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress!, $0.count) }
+        if count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) { return }
+        let data: Data
+        if count > 0 { data = Data(buffer.prefix(count)) }
+        else { finishLocked(); data = Data() }
+        // Submission is under the same lock as read/EOF; main-queue FIFO preserves order.
         DispatchQueue.main.async { deliver(data) }
     }
+    private func finishLocked() {
+        guard !finished else { return }
+        finished = true; handle.readabilityHandler = nil
+        let fd = descriptor; descriptor = -1
+        if fd >= 0 { Darwin.close(fd) }
+    }
+    func close() {
+        lock.lock(); defer { lock.unlock() }
+        finishLocked()
+    }
+    deinit { if descriptor >= 0 { Darwin.close(descriptor) } }
 }

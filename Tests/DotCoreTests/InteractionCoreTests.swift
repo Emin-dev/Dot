@@ -548,3 +548,24 @@ final class ScreenPermissionAccessTests: XCTestCase {
         XCTAssertEqual(checks, 2); XCTAssertEqual(requests, 1)
     }
 }
+
+final class PipelineDiagnosticTests: XCTestCase {
+    func testReadinessAndCaptureSuccessUseFixedIdentifiers() {
+        XCTAssertEqual(PipelineDiagnostic(stage: .readiness, outcome: .ready).logLine, "pipeline=readiness outcome=ready")
+        XCTAssertEqual(PipelineDiagnostic(stage: .capture, outcome: .started).logLine, "pipeline=capture outcome=started")
+        XCTAssertEqual(PipelineDiagnostic(stage: .capture, outcome: .ready).logLine, "pipeline=capture outcome=ready")
+    }
+    func testTimeoutAndHTTPFailureAreDistinguishable() {
+        XCTAssertEqual(PipelineDiagnostic(stage: .readiness, outcome: .timeout).logLine, "pipeline=readiness outcome=timeout")
+        XCTAssertEqual(PipelineDiagnostic.failure(stage: .response, reason: .httpRejected, cancelled: false)?.logLine,
+                       "pipeline=response outcome=failed reason=http_rejected")
+    }
+    func testCancellationNeverProducesFailureRecord() {
+        XCTAssertNil(PipelineDiagnostic.failure(stage: .capture, reason: .captureFailed, cancelled: true))
+        XCTAssertNil(PipelineDiagnostic.failure(stage: .readiness, reason: .transport, cancelled: true))
+    }
+    func testGenericFailureDoesNotAcceptAnErrorDescription() {
+        XCTAssertEqual(PipelineDiagnostic.failure(stage: .capture, reason: .captureFailed, cancelled: false)?.logLine,
+                       "pipeline=capture outcome=failed reason=capture_failed")
+    }
+}
