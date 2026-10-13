@@ -258,54 +258,109 @@ final class ScreenContextTests: XCTestCase {
     }
     func testFreshFrameIsLocalDataURLAndConsumedOnce() throws {
         let id = UUID(); var gate = active(id)
-        try gate.capturedJPEG(jpeg, width: 1920, height: 1080, turn: id, now: 5)
-        XCTAssertEqual(try gate.consumeDataURL(turn: id, now: 6), "data:image/jpeg;base64," + jpeg.base64EncodedString())
-        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 6))
+        try gate.capturedJPEG(jpeg, width: 1920, height: 1080, turn: id, acquiredAt: 5, now: 5.5)
+        let image = try gate.consume(turn: id, now: 6)
+        XCTAssertEqual(try image.dataURL(now: 6), "data:image/jpeg;base64," + jpeg.base64EncodedString())
+        XCTAssertEqual(image.acquiredAt, 5); XCTAssertEqual(image.turn, id)
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 6))
     }
     func testCaptureFailureNeverUsesMissingImage() {
         let id = UUID(); var gate = active(id)
-        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .unavailable) }
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .unavailable) }
     }
     func testPermissionDenialCannotClaimCapture() {
         let id = UUID(); var gate = ScreenContextGate()
         gate.begin(turn: id, enabled: true, permissionGranted: false, modelHasVision: true)
-        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .permissionDenied) }
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 1, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .permissionDenied) }
     }
     func testTextOnlyModelCannotUseImage() {
         let id = UUID(); var gate = ScreenContextGate()
         gate.begin(turn: id, enabled: true, permissionGranted: true, modelHasVision: false)
-        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .unsupportedModel) }
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 1)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .unsupportedModel) }
     }
     func testNewTurnRejectsOldScreenshot() throws {
         let old = UUID(); var gate = active(old)
-        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, now: 1)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, acquiredAt: 1, now: 1)
         gate.begin(turn: UUID(), enabled: true, permissionGranted: true, modelHasVision: true)
-        XCTAssertThrowsError(try gate.consumeDataURL(turn: old, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
+        XCTAssertThrowsError(try gate.consume(turn: old, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
     }
     func testExpiredFrameIsRejected() throws {
         let id = UUID(); var gate = active(id)
-        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)
-        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 7)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 1, now: 1)
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 7)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
     }
     func testImageDimensionsAndBytesAreBounded() {
         let id = UUID(); var gate = active(id)
-        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 4096, height: 4096, turn: id, now: 1))
-        XCTAssertThrowsError(try gate.capturedJPEG(Data(repeating: 0, count: 2_000_001), width: 10, height: 10, turn: id, now: 1))
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 4096, height: 4096, turn: id, acquiredAt: 1, now: 1))
+        XCTAssertThrowsError(try gate.capturedJPEG(Data(repeating: 0, count: 2_000_001), width: 10, height: 10, turn: id, acquiredAt: 1, now: 1))
     }
     func testPauseClearsCapturedPixels() throws {
         let id = UUID(); var gate = active(id)
-        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 1, now: 1)
         gate.begin(turn: id, enabled: false, permissionGranted: true, modelHasVision: true)
-        XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .disabled) }
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .disabled) }
     }
 }
 
 extension ScreenContextTests {
     func testStaleCaptureCallbackHasAccurateFailure() {
         let old = UUID(), current = UUID(); var gate = active(current)
-        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, now: 1)) {
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, acquiredAt: 1, now: 1)) {
             XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale)
         }
+    }
+    func testSlowEncodingCannotMakeOldAcquisitionFresh() {
+        let id = UUID(); var gate = active(id)
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 10, now: 15.001)) {
+            XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale)
+        }
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 15.001))
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 15, now: 15.1),
+                             "Expired capture cannot be revived without a new capture lifecycle")
+    }
+    func testEncodingAndSubmissionShareOneFreshnessBudget() throws {
+        let id = UUID(); var gate = active(id)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 10, now: 14)
+        let image = try gate.consume(turn: id, now: 14.5)
+        XCTAssertNoThrow(try image.validateFreshness(now: 15))
+        XCTAssertThrowsError(try image.validateFreshness(now: 15.001)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .stale) }
+        XCTAssertThrowsError(try image.dataURL(now: 15.001))
+    }
+    func testInvalidAndReversedMonotonicTimesRejectPixels() {
+        for (acquiredAt, now) in [(Double.nan, 1.0), (Double.infinity, 1.0), (-1.0, 1.0),
+                                  (2.0, 1.0), (1.0, Double.nan), (1.0, Double.infinity)] {
+            let id = UUID(); var gate = active(id)
+            XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: acquiredAt, now: now))
+            XCTAssertThrowsError(try gate.consume(turn: id, now: 1))
+        }
+    }
+    func testTypedImageRejectsInvalidSubmissionTimes() throws {
+        let id = UUID(); var gate = active(id)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 10, now: 10)
+        let image = try gate.consume(turn: id, now: 10)
+        for now in [Double.nan, Double.infinity, 9.999] { XCTAssertThrowsError(try image.dataURL(now: now)) }
+    }
+    func testCancelledEncodingCallbackCannotRestorePixels() {
+        let id = UUID(); var gate = active(id)
+        gate.cancel()
+        XCTAssertThrowsError(try gate.validateCapture(turn: id))
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 1, now: 2))
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 2))
+    }
+    func testOldCallbackAndCleanupDoNotEraseNewTurnsImage() throws {
+        let old = UUID(), current = UUID(); var gate = active(old)
+        gate.begin(turn: current, enabled: true, permissionGranted: true, modelHasVision: true)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: current, acquiredAt: 3, now: 3)
+        XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, acquiredAt: 1, now: 3))
+        gate.cancel(turn: old)
+        let image = try gate.consume(turn: current, now: 4)
+        XCTAssertEqual(image.turn, current); XCTAssertEqual(image.acquiredAt, 3)
+    }
+    func testExpiredConsumeClearsPixelsEvenIfClockThenMovesBack() throws {
+        let id = UUID(); var gate = active(id)
+        try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, acquiredAt: 1, now: 1)
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 7))
+        XCTAssertThrowsError(try gate.consume(turn: id, now: 2))
     }
 }
 
@@ -457,8 +512,8 @@ final class CompanionDragTests: XCTestCase {
     }
     func testPanelFootprintHasOnlySmallCharacterPadding() {
         XCTAssertEqual(PetLayout.panelSize.width, PetLayout.petSize.width + 8)
-        XCTAssertEqual(PetLayout.panelSize.height, PetLayout.petSize.height + 8)
-        XCTAssertEqual(PetLayout.petBottom, 4)
+        XCTAssertEqual(PetLayout.panelSize.height, PetLayout.petSize.height + 8 + PetStatusLayout.controlHeight)
+        XCTAssertEqual(PetLayout.petBottom, 4 + PetStatusLayout.controlHeight)
     }
     func testClickWaitsForReleaseAndRequiresInside() {
         var gesture = CompanionDragState(); gesture.begin(point: .zero, origin: .zero)

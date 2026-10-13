@@ -4,37 +4,102 @@ import OSLog
 import AVFoundation
 import CoreGraphics
 
+/// Replaceable boundary operations keep coordinator replays model-free. This
+/// carries no turn state; production closures use the existing native managers.
+@MainActor
+struct ChatRuntime {
+    var isReady: () -> Bool
+    var startPreparation: () -> Void
+    var microphoneAuthorized: () -> Bool
+    var currentRoute: () -> VoiceAudioRoute?
+    var screenAuthorized: () -> Bool
+    var startVoice: (UUID) throws -> Void
+    var enqueueVoice: (String, UUID) -> Void
+    var completeVoice: (UUID) -> Void
+    var stopVoice: () -> Void
+    var ttsSpeaking: () -> Bool
+    var startCapture: (UUID, VoiceTimingSettings, Bool) async -> Void
+    var stopCapture: () -> Void
+    var recording: () -> Bool
+    var transcribing: () -> Bool
+}
+
+/// The native editor and coordinator share the same bounded input contract.
+enum TypedMessageValidation {
+    static func cleaned(_ text: String) -> String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+    static func problem(_ text: String) -> String? {
+        let value = cleaned(text)
+        guard !value.isEmpty else { return "Enter a message to send." }
+        guard value.utf8.count <= 24_000, value.count <= 6_000 else {
+            return "Shorten the message to 6,000 characters and 24,000 UTF-8 bytes."
+        }
+        guard value.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) || [9, 10, 13].contains($0.value) }) else {
+            return "Remove unsupported control characters from the message."
+        }
+        return nil
+    }
+}
+
 @MainActor
 final class ChatModel: ObservableObject {
-    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() } } }
+    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext() } }
     @Published private(set) var issue: CompanionIssue?
-    private var answer = ""
-    @Published var pinned = UserDefaults.standard.bool(forKey: "petPinned") {
-        didSet { UserDefaults.standard.set(pinned, forKey: "petPinned"); placementInvalidated?() }
+    @Published private(set) var answer = ""
+    /// Identity of the displayed text, retained on Stop so history can describe
+    /// interrupted delivery without treating the replacement turn as its owner.
+    @Published private(set) var displayedAnswerTurn: UUID?
+    @Published private(set) var voiceDeliveryNotice: String?
+    @Published private(set) var captureOutcome: String?
+    private var captureOutcomeTask: Task<Void, Never>?
+    @Published private(set) var firstUseHint: Bool
+    private var lastAttemptedText: String?
+    @Published var pinned: Bool {
+        didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
-    @Published var hovered = false { didSet { if hovered { placementInvalidated?() } } }
-    @Published var interactionPaused = false { didSet { if interactionPaused { placementInvalidated?(); cancelForInteraction() } } }
+    @Published var hovered = false { didSet { if hovered { placementInvalidated?() }; updateProactiveContext() } }
+    @Published var interactionPaused = false { didSet { if interactionPaused { placementInvalidated?(); cancelForInteraction() }; updateProactiveContext() } }
     var placementInvalidated: (() -> Void)?
     @Published var placementCapturing = false
     var showOptions: (() -> Void)?
-    let voiceTiming = VoiceTimingSettings()
-    let skinPreferences = SkinPreferences()
-    private let followup = VoiceFollowup()
+    /// The integration owner pauses optional research before foreground work.
+    var onForegroundInteraction: (() -> Void)?
+    let textHistory: ConversationHistoryModel
+    let voiceTiming: VoiceTimingSettings
+    let skinPreferences: SkinPreferences
+    let proactive: ProactiveBehavior
+    private let defaults: UserDefaults
+    private let runtime: ChatRuntime
+    @Published private(set) var idleMotionOffset = IdleMotionOffset.zero
+    private var idleMotion = IdleMotionCore()
+    private var proactiveEvidence = ProactiveConversationEvidence()
+    private var proactiveTurn: (opportunity: UUID, turn: UUID)?
+    private var proactiveContextChange: ProactiveContextChange?
+    private var proactiveContextChangedAfterUser = false
+    private var externalInteractionBusy = false
+    private var controlInteraction = false
+    private var recentProactiveReplies: [String] = []
+    private let followup: VoiceFollowup
     private var voiceRoute: VoiceAudioRoute?
     @Published private(set) var automaticReply = false
-    var visible = true { didSet { if !visible { cancelTurn() } } }
+    @Published private(set) var expressionRevision: UInt64 = 0
+    private var shuttingDown = false
+    var historyPresented = false { didSet { if historyPresented { cancelForInteraction() }; updateProactiveContext() } }
+    var visible = true { didSet { if !visible { cancelTurn() }; updateProactiveContext() } }
     var followupPending: Bool { followup.pending }
-    let stt = STTManager()
-    let tts = TTSManager()
-    let engine = EngineManager()
+    var canSubmitTyped: Bool { !shuttingDown && runtime.isReady() }
+    let stt: STTManager
+    let tts: TTSManager
+    let engine: EngineManager
     let screen = ScreenContext()
-    @Published var screenEnabled = ScreenPrivacyPreference.enabled() { didSet { ScreenPrivacyPreference.setEnabled(screenEnabled); screen.enabled = screenEnabled; placementInvalidated?(); cancelTurn() } }
+    @Published var screenEnabled: Bool { didSet { ScreenPrivacyPreference.setEnabled(screenEnabled, in: defaults); screen.enabled = screenEnabled; placementInvalidated?(); cancelTurn() } }
     @Published private(set) var screenContextUsed = false
     @Published private(set) var capturingScreen = false
     private var gate = TurnGate()
     private var work: Task<Void, Never>?
     private let warmup = TurnWarmup()
     private var generating = false
+    private var currentTurnIsTyped = false
+    private var voiceDeliveryFailed = false
     private var history: [ChatMessage] = []
     private var chunker = SentenceBuffer()
     private var clickedAt = 0.0
@@ -52,12 +117,19 @@ final class ChatModel: ObservableObject {
 
     private static let runtimeLog = Logger(subsystem: "app.dot", category: "runtime")
     private func logFailure(_ error: Error, stage: PipelineDiagnostic.Stage) {
+        let actualStage: PipelineDiagnostic.Stage = error is ScreenContextGate.Failure ? .capture : stage
         let reason: PipelineDiagnostic.Reason
         if let value = error as? ScreenContext.ScreenFailure {
             switch value {
             case .permission: reason = .permission
             case .unsupported: reason = .unsupported
             case .unavailable: reason = .unavailable
+            }
+        } else if let value = error as? ScreenContextGate.Failure {
+            switch value {
+            case .permissionDenied: reason = .permission
+            case .unsupportedModel: reason = .unsupported
+            case .disabled, .unavailable, .stale, .invalidImage: reason = .captureFailed
             }
         } else if let value = error as? EngineError {
             switch value {
@@ -69,43 +141,77 @@ final class ChatModel: ObservableObject {
         } else if error is ResponseLimit { reason = .resourceLimit }
         else if error is URLError { reason = .transport }
         else { reason = stage == .capture ? .captureFailed : stage == .voice ? .voiceFailed : .unknown }
-        guard let diagnostic = PipelineDiagnostic.failure(stage: stage, reason: reason,
+        guard let diagnostic = PipelineDiagnostic.failure(stage: actualStage, reason: reason,
             cancelled: Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled) else { return }
         Self.runtimeLog.error("\(diagnostic.logLine, privacy: .public)")
     }
 
-    init() {
+    init(engine: EngineManager? = nil, textHistory: ConversationHistoryModel? = nil,
+         defaults: UserDefaults = .standard, followup: VoiceFollowup? = nil,
+         proactive: ProactiveBehavior? = nil, runtime: ChatRuntime? = nil) {
+        let stt = STTManager(), tts = TTSManager()
+        self.stt = stt; self.tts = tts
+        self.engine = engine ?? EngineManager()
+        self.textHistory = textHistory ?? ConversationHistoryModel()
+        self.defaults = defaults
+        voiceTiming = VoiceTimingSettings(defaults: defaults)
+        skinPreferences = SkinPreferences(defaults: defaults)
+        self.proactive = proactive ?? ProactiveBehavior(defaults: defaults)
+        self.followup = followup ?? VoiceFollowup()
+        firstUseHint = !defaults.bool(forKey: "dot.interactionHintDismissed.v1")
+        pinned = defaults.bool(forKey: "petPinned")
+        screenEnabled = ScreenPrivacyPreference.enabled(in: defaults)
+        self.runtime = runtime ?? ChatRuntime(
+            isReady: { OfflinePreparation.shared.ready },
+            startPreparation: { OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available) },
+            microphoneAuthorized: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized },
+            currentRoute: { VoiceAudioRoute.current() }, screenAuthorized: { CGPreflightScreenCaptureAccess() },
+            startVoice: { try tts.start(id: $0) }, enqueueVoice: { tts.enqueue($0, id: $1) },
+            completeVoice: { tts.markGenerationComplete(id: $0) }, stopVoice: { tts.stop() },
+            ttsSpeaking: { tts.speaking }, startCapture: { await stt.start(id: $0, settings: $1, invitation: $2) },
+            stopCapture: { stt.cancel() }, recording: { stt.recording }, transcribing: { stt.transcribing })
+        let followup = self.followup, textHistory = self.textHistory, proactive = self.proactive
+        textHistory.onDelete = { [weak self] in self?.reset() }
         followup.environment = { [weak self] in
             guard let self else { return .init(ready: false, microphoneAuthorized: false, screenAuthorized: false, interacting: true) }
-            return .init(ready: OfflinePreparation.shared.ready && self.visible && !self.tts.speaking && !self.stt.recording && !self.stt.transcribing
-                    && self.voiceRoute != nil && self.voiceRoute == VoiceAudioRoute.current(),
-                microphoneAuthorized: AVCaptureDevice.authorizationStatus(for: .audio) == .authorized,
-                screenAuthorized: !self.screenEnabled || CGPreflightScreenCaptureAccess(),
-                interacting: self.interactionPaused)
+            return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing()
+                    && self.voiceRoute != nil && self.voiceRoute == self.runtime.currentRoute(),
+                microphoneAuthorized: self.runtime.microphoneAuthorized(),
+                screenAuthorized: !self.screenEnabled || self.runtime.screenAuthorized(),
+                interacting: self.interactionPaused || self.historyPresented || self.controlInteraction)
         }
         followup.onInvite = { [weak self] previous, continuation in
-            guard let self, self.gate.accepts(previous), self.visible, !self.interactionPaused else { return }
+            guard let self, self.gate.accepts(previous), self.visible, !self.interactionPaused, !self.controlInteraction else { return }
             self.beginListening(continuation: continuation)
         }
-        stt.onNoSpeech = { [weak self] id in
+        stt.onCaptureEnded = { [weak self] id, reason in
             guard let self, self.gate.accepts(id) else { return }
             self.cancelTurn()
-        }
-        stt.onCaptureCancelled = { [weak self] id in
-            guard let self, self.gate.accepts(id) else { return }
-            self.cancelTurn()
+            if let message = reason.recoveryMessage { self.block(message, issue: .speech) }
+            else { self.showCaptureOutcome(reason == .noSpeech ? "No reply" : "Stopped") }
         }
         stt.onSpeechEnded = { [weak self] id, evidence in
             guard let self, self.gate.accepts(id) else { return }
+            guard [evidence.captureStartedAt, evidence.firstSpeechAt, evidence.speechEndedAt, evidence.silenceSatisfiedAt].allSatisfy(\.isFinite),
+                  VoiceTimingSettings.silenceChoices.contains(evidence.selectedSilenceSeconds),
+                  evidence.captureStartedAt <= evidence.firstSpeechAt,
+                  evidence.firstSpeechAt <= evidence.speechEndedAt,
+                  abs(evidence.silenceSatisfiedAt - evidence.speechEndedAt - evidence.selectedSilenceSeconds) < 0.000001 else { return }
             self.speechEndedAt = evidence.speechEndedAt
             self.silenceSatisfiedAt = evidence.silenceSatisfiedAt
             let milliseconds = Int(evidence.selectedSilenceSeconds * 1000)
             Self.timingLog.notice("DOT_TIMING selected_silence=\(milliseconds)ms")
         }
         screen.enabled = screenEnabled
-        OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available)
+        self.runtime.startPreparation()
         stt.onFinal = { [weak self] id, text in
             guard let self, self.gate.accepts(id) else { return }
+            guard let satisfied = self.silenceSatisfiedAt,
+                  ProcessInfo.processInfo.systemUptime >= satisfied else {
+                self.cancelTurn()
+                self.block("Listening timing could not be verified. Please try again.", issue: .speech)
+                return
+            }
             self.submit(text, id: id)
         }
         stt.onError = { [weak self] id, message in
@@ -115,7 +221,7 @@ final class ChatModel: ObservableObject {
         stt.onRecording = { [weak self] id in
             guard let self, self.gate.accepts(id) else { return }
             self.timing("capture_started")
-            do { try self.tts.start(id: id) }
+            do { try self.runtime.startVoice(id) }
             catch {
                 self.logFailure(error, stage: .voice)
                 self.cancelTurn(); self.block(error.localizedDescription, issue: .voice); return
@@ -130,13 +236,16 @@ final class ChatModel: ObservableObject {
         }
         tts.onError = { [weak self] id, message in
             guard let self, self.gate.accepts(id) else { return }
+            if self.currentTurnIsTyped { self.continueTypedWithoutVoice(id: id); return }
             let diagnostic = PipelineDiagnostic(stage: .voice, outcome: .failed, reason: .voiceFailed)
             Self.runtimeLog.error("\(diagnostic.logLine, privacy: .public)")
+            self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(.voice))
             self.cancelTurn(); self.block(message, issue: .voice)
         }
         tts.onStarted = { [weak self] id in
-            guard let self, self.gate.accepts(id), !self.firstAudio else { return }
+            guard let self, self.gate.accepts(id), !self.voiceDeliveryFailed, !self.firstAudio else { return }
             self.firstAudio = true; self.timing("playback_started")
+            self.textHistory.recordAssistant(turn: id, text: self.answer, event: .playbackStarted)
             // Player scheduling is not an acoustic measurement. Keep these metrics labelled.
             let now = ProcessInfo.processInfo.systemUptime
             if let ended = self.speechEndedAt, let satisfied = self.silenceSatisfiedAt {
@@ -145,30 +254,217 @@ final class ChatModel: ObservableObject {
             }
         }
         tts.onFinalPlayback = { [weak self] id in
-            guard let self, self.gate.accepts(id) else { return }
+            guard let self, self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
             self.timing("final_playback_complete")
+            self.textHistory.recordAssistant(turn: id, event: .playbackCompleted)
             self.followup.playbackFinished(turn: id)
+            self.finishProactiveTurn(id: id)
         }
         tts.onDrained = { [weak self] id in
-            guard let self, self.gate.accepts(id) else { return }
+            guard let self, self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
             self.phase = self.generating ? .thinking : .idle
         }
+        proactive.onOpportunity = { [weak self] in self?.suggest($0) }
+        proactive.onCancel = { [weak self] opportunity in
+            guard let self, self.proactiveTurn?.opportunity == opportunity else { return }
+            self.cancelTurn()
+        }
+        proactive.onContextChange = { [weak self] change in
+            guard let self, change.applicationIdentifier != Bundle.main.bundleIdentifier else { return }
+            self.proactiveContextChange = change
+            self.proactiveContextChangedAfterUser = true
+            self.updateProactiveContext()
+        }
+    }
+
+    func startProactivity() { proactive.start(); updateProactiveContext() }
+    func stopProactivity() { proactive.stop() }
+    /// Native control-down must not swap Stop for Talk before mouse-up dispatches
+    /// the button action. Revoke future invitations, but let that action own any
+    /// active-turn cancellation. This flag intentionally does not publish UI state.
+    func setControlInteraction(_ active: Bool) {
+        controlInteraction = active
+        if active { followup.cancel() }
+        updateProactiveContext()
+    }
+    /// Call from native menu/pointer/readiness maintenance. The engine's own
+    /// background turn is not mistaken for foreground work and cancelled by itself.
+    func updateProactiveContext(externalInteractionBusy: Bool? = nil) {
+        if let externalInteractionBusy { self.externalInteractionBusy = externalInteractionBusy }
+        let now = ProcessInfo.processInfo.systemUptime
+        let userBusy = proactiveTurn == nil && (phase.isActive || runtime.recording() || runtime.transcribing() || followupPending)
+        let context = ProactiveContext(
+            ready: !shuttingDown && runtime.isReady() && issue == nil && screenEnabled
+                && runtime.screenAuthorized() && proactiveEvidence.isRecent(now: now),
+            visible: visible, foregroundBusy: userBusy,
+            interactionBusy: interactionPaused || historyPresented || hovered || self.externalInteractionBusy
+                || (controlInteraction && proactiveTurn == nil),
+            engineBusy: generating || work != nil || runtime.ttsSpeaking() || followupPending || controlInteraction)
+        proactive.updateContext(context)
+        if context.permitsBackgroundWork, !context.engineBusy, proactiveContextChangedAfterUser,
+           let change = proactiveContextChange,
+           let key = proactiveEvidence.key(change: change, now: now, ownIdentifier: Bundle.main.bundleIdentifier) {
+            proactive.offerContext(key: key, reason: change.reason)
+        }
+    }
+
+    /// The renderer moves inside its already allocated edge padding; this never
+    /// changes the panel origin or bypasses safe roaming. Return value sets only
+    /// the native animation tick rate while a visible offset is moving.
+    @discardableResult
+    func updateIdleMotion(now: Double, externallyPaused: Bool, pointerNearby: Bool, reduceMotion: Bool, moved: Bool) -> Bool {
+        if moved { idleMotion.noteMovement(at: now) }
+        let context = IdleMotionContext(visible: visible, idle: phase == .idle && !followupPending,
+            paused: externallyPaused || proactive.paused || historyPresented,
+            pinned: pinned, dragging: interactionPaused, pointerNearby: pointerNearby || hovered,
+            reduceMotion: reduceMotion, motionScale: skinPreferences.motionDetail.movementScale,
+            availablePadding: max(0, Double(PetLayout.edgePadding) - 2))
+        let offset = idleMotion.sample(now: now, context: context)
+        if idleMotionOffset != offset { idleMotionOffset = offset }
+        return offset != .zero
+    }
+
+    private func suggest(_ opportunity: ProactiveOpportunity) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !shuttingDown, visible, phase == .idle, !followupPending,
+              !interactionPaused, !historyPresented, !hovered, !externalInteractionBusy, !controlInteraction,
+              runtime.isReady(), screenEnabled, runtime.screenAuthorized(),
+              proactiveEvidence.isRecent(now: now), proactive.activeOpportunity?.id == opportunity.id else {
+            proactive.complete(id: opportunity.id); return
+        }
+        // Advance only the single existing conversation owner. No second engine,
+        // random microphone opening, or background permission request is created.
+        let id = gate.advance()
+        work?.cancel(); warmup.cancel(); runtime.stopCapture(); runtime.stopVoice(); screen.cancel()
+        proactiveTurn = (opportunity.id, id)
+        voiceRoute = runtime.currentRoute()
+        followup.begin(turn: id)
+        clickedAt = now; firstReasoning = false; firstAnswer = false; firstAudio = false
+        speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""; displayedAnswerTurn = nil; automaticReply = false
+        currentTurnIsTyped = false; voiceDeliveryFailed = false; voiceDeliveryNotice = nil
+        screenContextUsed = false; generating = true; phase = .thinking
+        let snapshot = Array(history.suffix(10)) + [ChatMessage(role: "user", content: ProactiveReplyBuffer.prompt)]
+        work = Task(priority: .utility) { [weak self] in
+            guard let self, self.gate.accepts(id), !Task.isCancelled else { return }
+            var buffer = ProactiveReplyBuffer()
+            var failureStage = ConversationHistoryFailureStage.generation
+            do {
+                try self.screen.prepare(turn: id, requestPermission: false)
+                let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] delta in
+                    guard let self, self.gate.accepts(id), self.proactiveTurn?.turn == id else { return }
+                    buffer.append(delta)
+                }, screenImage: { [weak self] hasVision in
+                    guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    self.capturingScreen = true
+                    defer { if self.gate.accepts(id) { self.capturingScreen = false } }
+                    let image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
+                    guard image != nil, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    self.screenContextUsed = true
+                    return image
+                })
+                guard self.gate.accepts(id), self.proactiveTurn?.turn == id, !Task.isCancelled else { return }
+                let result = try buffer.completed(question: question?.text)
+                guard case .speak(let content, let finalQuestion) = result else { self.cancelTurn(); return }
+                let fingerprint = result.text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+                guard !self.recentProactiveReplies.contains(fingerprint) else { self.cancelTurn(); return }
+                self.textHistory.beginAssistant(turn: id)
+                self.displayedAnswerTurn = id
+                self.answer = result.text
+                self.textHistory.recordAssistant(turn: id, text: result.text, event: .generated)
+                failureStage = .voice
+                try self.runtime.startVoice(id)
+                self.followup.generationFinished(turn: id, hasQuestion: finalQuestion != nil)
+                var sentences = SentenceBuffer()
+                for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
+                if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
+                if let finalQuestion { self.runtime.enqueueVoice(finalQuestion, id) }
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.answer = result.text
+                self.history.append(ChatMessage(role: "assistant", content: result.text))
+                if self.history.count > 12 { self.history.removeFirst(self.history.count - 12) }
+                self.recentProactiveReplies.append(fingerprint)
+                if self.recentProactiveReplies.count > 16 { self.recentProactiveReplies.removeFirst() }
+                self.generating = false
+                self.runtime.completeVoice(id)
+                self.phase = self.runtime.ttsSpeaking() ? .speaking : .idle
+            } catch {
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.logFailure(error, stage: failureStage == .voice ? .voice : .response)
+                self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(failureStage))
+                // An optional suggestion failure stays silent and cannot open a mic.
+                self.cancelTurn()
+            }
+            if self.gate.accepts(id) { self.work = nil; self.updateProactiveContext() }
+        }
+    }
+
+    private func finishProactiveTurn(id: UUID) {
+        guard let active = proactiveTurn, active.turn == id else { return }
+        proactiveTurn = nil
+        proactive.complete(id: active.opportunity)
+        updateProactiveContext()
     }
 
     /// Manual clicks interrupt; automatic capture requires the same-turn final-question gate.
     func clicked() {
-        guard OfflinePreparation.shared.ready else { return }
+        guard !shuttingDown, runtime.isReady() else { return }
+        dismissFirstUseHint()
         beginListening(continuation: nil)
     }
+    func dismissFirstUseHint() {
+        guard firstUseHint else { return }
+        firstUseHint = false; defaults.set(true, forKey: "dot.interactionHintDismissed.v1")
+    }
+    /// Explicit typed submission is already a finished utterance. It neither
+    /// requests microphone access nor waits for a speech-silence deadline.
+    @discardableResult
+    func submitTyped(_ text: String) -> Bool {
+        let value = TypedMessageValidation.cleaned(text)
+        guard canSubmitTyped, TypedMessageValidation.problem(value) == nil else { return false }
+        onForegroundInteraction?()
+        dismissFirstUseHint()
+        let id = cancelTurn()
+        currentTurnIsTyped = true; voiceDeliveryFailed = false; voiceDeliveryNotice = nil
+        voiceRoute = runtime.currentRoute(); followup.begin(turn: id)
+        clickedAt = ProcessInfo.processInfo.systemUptime
+        firstReasoning = false; firstAnswer = false; firstAudio = false
+        speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""; displayedAnswerTurn = nil; lastAttemptedText = value
+        do {
+            try screen.prepare(turn: id, requestPermission: false)
+        } catch {
+            cancelTurn(); block(error.localizedDescription, issue: .screenPermission); return false
+        }
+        do { try runtime.startVoice(id) }
+        catch { logFailure(error, stage: .voice); continueTypedWithoutVoice(id: id) }
+        warmup.start(turn: id) { [weak self] in
+            guard let self, self.gate.accepts(id) else { throw CancellationError() }
+            _ = try await self.engine.verifyConnection()
+            guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+        }
+        submit(value, id: id, typed: true)
+        return true
+    }
+    func retryLastTurn() {
+        if let lastAttemptedText { _ = submitTyped(lastAttemptedText) }
+        else { clicked() }
+    }
+    func continueWithoutScreen() {
+        let text = lastAttemptedText
+        screenEnabled = false
+        if let text { _ = submitTyped(text) } else { clicked() }
+    }
     private func beginListening(continuation: UUID?) {
+        onForegroundInteraction?()
         let invitation = continuation != nil
         let id = cancelTurn(preserveFollowup: invitation)
-        voiceRoute = VoiceAudioRoute.current()
+        voiceDeliveryNotice = nil
+        voiceRoute = runtime.currentRoute()
         followup.begin(turn: id, continuation: continuation)
         automaticReply = invitation
         clickedAt = ProcessInfo.processInfo.systemUptime
         firstReasoning = false; firstAnswer = false; firstAudio = false
-        speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""
+        speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""; displayedAnswerTurn = nil
+        lastAttemptedText = nil
         phase = .listening
         work = Task { [weak self] in
             guard let self, !Task.isCancelled, self.gate.accepts(id) else { return }
@@ -179,16 +475,22 @@ final class ChatModel: ObservableObject {
                 self.cancelTurn(); self.block(error.localizedDescription, issue: .screenPermission); return
             }
             guard !Task.isCancelled, self.gate.accepts(id) else { return }
-            await self.stt.start(id: id, settings: self.voiceTiming, invitation: invitation)
+            await self.runtime.startCapture(id, self.voiceTiming, invitation)
         }
     }
 
-    private func submit(_ text: String, id: UUID) {
+    private func submit(_ text: String, id: UUID, typed: Bool = false) {
         guard gate.accepts(id) else { return }
-        timing("final_transcript")
+        timing(typed ? "text_submitted" : "final_transcript")
+        lastAttemptedText = text
+        proactiveEvidence.recordUser(turn: id, now: ProcessInfo.processInfo.systemUptime)
+        proactiveContextChangedAfterUser = false
         phase = .thinking; generating = true
-        answer = ""; chunker = SentenceBuffer()
+        answer = ""; displayedAnswerTurn = id; chunker = SentenceBuffer()
         history.append(ChatMessage(role: "user", content: text))
+        textHistory.append(role: .user, text: text, turn: id)
+        textHistory.beginAssistant(turn: id)
+        if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
         if history.count > 12 { history.removeFirst(history.count - 12) }
         let snapshot = history
         work = Task { [weak self] in
@@ -201,8 +503,10 @@ final class ChatModel: ObservableObject {
                     guard let self, self.gate.accepts(id) else { return }
                     if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
                     self.answer += content
-                    for sentence in self.chunker.feed(content) { self.tts.enqueue(sentence, id: id) }
-                    if self.tts.speaking { self.phase = .speaking }
+                    if !self.voiceDeliveryFailed {
+                        for sentence in self.chunker.feed(content) { self.enqueueVoice(sentence, id: id) }
+                        if !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() { self.phase = .speaking }
+                    }
                 }, onReasoning: { [weak self] in
                     guard let self, self.gate.accepts(id), !self.firstReasoning else { return }
                     self.firstReasoning = true; self.timing("first_reasoning")
@@ -225,22 +529,23 @@ final class ChatModel: ObservableObject {
                     self.screenContextUsed = image != nil; return image
                 })
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                if let tail = self.chunker.flush() { self.tts.enqueue(tail, id: id) }
+                if let tail = self.chunker.flush() { self.enqueueVoice(tail, id: id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                self.followup.generationFinished(turn: id, hasQuestion: question != nil)
+                if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: question != nil) }
                 if let question {
                     self.answer += (self.answer.isEmpty ? "" : " ") + question.text
-                    self.tts.enqueue(question.text, id: id)
+                    self.enqueueVoice(question.text, id: id)
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))
+                self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 self.generating = false; self.timing("generation_complete")
-                self.tts.markGenerationComplete(id: id)
-                self.phase = self.tts.speaking ? .speaking : .idle
+                if !self.voiceDeliveryFailed { self.runtime.completeVoice(id) }
+                self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle
             } catch {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.logFailure(error, stage: stage)
-                self.generating = false; self.tts.stop(); self.followup.cancel()
+                self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(.generation))
                 let issue: CompanionIssue
                 if let failure = error as? ScreenContext.ScreenFailure {
                     switch failure {
@@ -248,10 +553,11 @@ final class ChatModel: ObservableObject {
                     case .unavailable: issue = .screenCapture
                     case .unsupported: issue = .vision
                     }
-                } else { issue = stage == .capture ? .screenCapture : .engine }
+                } else { issue = stage == .capture || error is ScreenContextGate.Failure ? .screenCapture : .engine }
+                self.cancelTurn()
                 self.block(error.localizedDescription, issue: issue)
             }
-            if self.gate.accepts(id) { self.work = nil }
+            if self.gate.accepts(id) { self.work = nil; self.updateProactiveContext() }
         }
     }
 
@@ -259,15 +565,50 @@ final class ChatModel: ObservableObject {
         self.issue = issue; phase = .blocked(message)
     }
 
+    private func enqueueVoice(_ text: String, id: UUID) {
+        guard gate.accepts(id), !voiceDeliveryFailed else { return }
+        runtime.enqueueVoice(text, id)
+    }
+    /// Audio failure is terminal for this turn's audio, not for explicitly typed
+    /// text. The same engine task may finish; no alternate voice is selected.
+    private func continueTypedWithoutVoice(id: UUID) {
+        guard gate.accepts(id), currentTurnIsTyped, !voiceDeliveryFailed else { return }
+        voiceDeliveryFailed = true
+        voiceDeliveryNotice = "Voice unavailable. This reply is text only; automatic reply listening is off."
+        issue = .voice
+        followup.cancel(); automaticReply = false; voiceRoute = nil
+        runtime.stopVoice(); chunker = SentenceBuffer()
+        textHistory.recordAssistant(turn: id, text: answer, event: .voiceFailedContinuing)
+        phase = generating ? .thinking : .idle
+    }
+
     @discardableResult
     func cancelTurn(preserveFollowup: Bool = false) -> UUID {
+        captureOutcomeTask?.cancel(); captureOutcomeTask = nil; captureOutcome = nil
+        textHistory.recordAssistant(turn: gate.current, text: answer, event: .interrupted)
+        proactiveContextChangedAfterUser = false
+        let priorProactive = proactiveTurn; proactiveTurn = nil
+        if let priorProactive { proactive.complete(id: priorProactive.opportunity) }
+        proactive.clearContext()
+        expressionRevision &+= 1
         if !preserveFollowup { followup.cancel() }
         automaticReply = false; voiceRoute = nil
         let id = gate.advance()
         work?.cancel(); work = nil; warmup.cancel()
-        stt.cancel(); tts.stop(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
+        runtime.stopCapture(); runtime.stopVoice(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
+        currentTurnIsTyped = false; voiceDeliveryFailed = false
         chunker = SentenceBuffer(); issue = nil; phase = .idle
         return id
+    }
+    func stopCurrentTurn() { cancelTurn(); showCaptureOutcome("Stopped") }
+    private func showCaptureOutcome(_ text: String) {
+        captureOutcomeTask?.cancel(); captureOutcome = text
+        let turn = gate.current
+        captureOutcomeTask = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: 3_000_000_000) } catch { return }
+            guard let self, !Task.isCancelled, self.gate.accepts(turn) else { return }
+            self.captureOutcome = nil; self.captureOutcomeTask = nil
+        }
     }
     /// Menus and dragging revoke capture without erasing a diagnostic the user is inspecting.
     func cancelForInteraction() {
@@ -275,8 +616,21 @@ final class ChatModel: ObservableObject {
         cancelTurn()
         if case .blocked = savedPhase { issue = savedIssue; phase = savedPhase }
     }
-    func reset() { cancelTurn(); history = []; answer = "" }
-    func shutdown() { cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
+    func cancelForEnvironment(reason: VoiceCaptureEndReason) {
+        if stt.captureState != .idle {
+            stt.cancel(reason: reason)
+        } else if reason == .permissionLost {
+            // A typed answer does not need microphone permission. Revoke only
+            // the automatic invitation when no capture was using that grant.
+            followup.cancel(); automaticReply = false; updateProactiveContext()
+        } else {
+            cancelTurn()
+            if let message = reason.recoveryMessage { block(message, issue: .voice) }
+        }
+    }
+    func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
+    func beginShutdown() { shuttingDown = true; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
+    func shutdown() { stopProactivity(); cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 
 struct PetView: View {
@@ -288,10 +642,21 @@ struct PetView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
+        VStack(spacing: 0) {
+            character
+            statusControls.frame(width: PetLayout.petSize.width, height: PetStatusLayout.controlHeight)
+        }
+        .onHover { model.hovered = $0 }
+        .padding(PetLayout.edgePadding)
+        .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
+        .onExitCommand { stop() }
+    }
+    private var character: some View {
         Button(action: model.clicked) {
-            PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || model.hovered || model.pinned,
-                         skin: skins.selected, playbackLevel: tts.playbackLevel, motionDetail: skins.motionDetail)
+            PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
+                         skin: skins.selected, playbackLevel: tts.playbackLevel, motionDetail: skins.motionDetail, expressionRevision: model.expressionRevision)
                 .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
+                .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
                 .overlay {
                     if preparation.state == .checking {
                         ZStack {
@@ -324,32 +689,120 @@ struct PetView: View {
         }
         .buttonStyle(.plain)
         .contentShape(Ellipse())
-        .onHover { model.hovered = $0 }
         .accessibilityLabel("Dot companion")
         .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen || model.placementCapturing, screenUsed: model.screenContextUsed))
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click or Shift F10 for options. Escape stops the current action.")
-        .accessibilityAction(named: Text("Options")) { model.showOptions?() }
-        .padding(PetLayout.edgePadding)
-        .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
-        .onExitCommand {
-            model.cancelTurn()
-            preparation.pause()
+        .accessibilityAction(named: Text("Options")) { openOptions() }
+    }
+    private var statusControls: some View {
+        VStack(spacing: 3) {
+            HStack(spacing: 4) {
+                Label(stt.recording ? "Mic on" : "Mic off", systemImage: stt.recording ? "mic.fill" : "mic.slash")
+                    .foregroundStyle(stt.recording ? Color.accentColor : Color.secondary)
+                Text(shortStatus).lineLimit(1).minimumScaleFactor(0.85)
+            }
+            .font(.system(size: 10, weight: .medium)).monospacedDigit()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel((stt.recording ? "Microphone on. " : "Microphone off. ") + status)
+            .help(detail ?? status)
+            HStack(spacing: 6) {
+                if canContinueWithoutScreen {
+                    Button("Without screen", action: model.continueWithoutScreen)
+                        .accessibilityLabel("Continue without screen")
+                    Button("Retry", action: model.retryLastTurn)
+                } else if model.phase.isActive || model.followupPending || preparation.state == .checking {
+                    Button(action: stop) { Label("Stop", systemImage: "stop.fill") }
+                        .accessibilityHint("Cancel the current action and close the microphone.")
+                    Button("Options", action: openOptions)
+                } else if !preparation.ready {
+                    Button("Retry") { preparation.retry() }
+                    Button("Options", action: openOptions)
+                } else if isIssue {
+                    Button("Retry", action: model.retryLastTurn)
+                    Button("Options", action: openOptions)
+                } else if model.firstUseHint {
+                    Text("Click to talk\nRight-click for options").font(.system(size: 10)).lineLimit(2).multilineTextAlignment(.center)
+                } else {
+                    Button("Talk", action: model.clicked)
+                    Button("Options", action: openOptions)
+                }
+            }.buttonStyle(.bordered).controlSize(.mini).font(.system(size: 10))
         }
+        .padding(.horizontal, 3)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+    private func openOptions() { model.dismissFirstUseHint(); model.showOptions?() }
+    private func stop() { model.stopCurrentTurn(); preparation.pause() }
+    private var canContinueWithoutScreen: Bool {
+        model.screenEnabled && [.screenPermission, .screenCapture, .vision].contains(model.issue)
     }
     private var isIssue: Bool { preparation.state.isIssue || { if case .blocked = model.phase { return true }; return false }() }
     private var detail: String? {
         if let issue = preparation.state.detail { return issue }
         if case .blocked(let issue) = model.phase { return issue }
-        return nil
+        return model.voiceDeliveryNotice
     }
     private var status: String {
         if preparation.state == .checking { return "Checking bundled files, \(Int(preparation.progress * 100)) percent" }
         if !preparation.ready { return preparation.state.caption }
         if case .blocked = model.phase { return (model.issue?.title ?? CompanionIssue.unknown.title) + " · right-click" }
+        if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
         if stt.transcribing { return "Transcribing locally…" }
+        if stt.recording, let snapshot = stt.timingSnapshot {
+            switch snapshot.phase {
+            case .invitation: return "Time to begin speaking: \(CompanionStatusText.seconds(snapshot.remainingSeconds)) seconds"
+            case .trailingSilence: return "Waiting for uninterrupted silence: \(CompanionStatusText.seconds(snapshot.remainingSeconds)) seconds"
+            case .speaking, .waitingForSpeech: return "Listening"
+            }
+        }
+        if stt.captureState == .requestingPermission { return "Waiting for microphone permission" }
         if model.capturingScreen { return "Reading screen locally…" }
         if model.phase == .listening && !stt.recording { return "Preparing microphone…" }
         if model.phase == .listening && model.automaticReply { return "Listening for your reply" }
+        if model.voiceDeliveryNotice != nil { return model.phase == .thinking ? "Generating text. Voice unavailable." : "Text-only reply. Voice unavailable." }
         return model.phase.caption
+    }
+    private var shortStatus: String {
+        if preparation.state == .checking { return "Checking \(Int(preparation.progress * 100))%" }
+        if !preparation.ready { return preparation.state == .paused ? "Paused" : "Check files" }
+        if case .blocked = model.phase { return CompanionStatusText.issue(model.issue) }
+        if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
+        if stt.transcribing { return "Transcribing" }
+        if stt.recording, let snapshot = stt.timingSnapshot {
+            switch snapshot.phase {
+            case .invitation: return "Reply \(CompanionStatusText.seconds(snapshot.remainingSeconds))s"
+            case .trailingSilence: return "Wait \(CompanionStatusText.seconds(snapshot.remainingSeconds))s"
+            case .speaking, .waitingForSpeech: return "Listening"
+            }
+        }
+        if stt.captureState == .requestingPermission { return "Allow mic" }
+        if model.capturingScreen { return "Reading screen" }
+        switch model.phase {
+        case .idle: return model.voiceDeliveryNotice != nil ? "Text only" : model.followupPending ? "Reply soon" : "Ready"
+        case .listening: return stt.recording ? "Listening" : "Starting mic"
+        case .thinking: return model.voiceDeliveryNotice != nil ? "Thinking · text" : "Thinking"
+        case .speaking: return "Speaking"
+        case .blocked: return "Try again"
+        }
+    }
+}
+
+enum CompanionStatusText {
+    static func seconds(_ remaining: Double?) -> String {
+        guard let remaining, remaining.isFinite else { return "—" }
+        return String(Int(ceil(min(60, max(0, remaining)))))
+    }
+    static func issue(_ issue: CompanionIssue?) -> String {
+        switch issue {
+        case .screenPermission: return "Allow screen"
+        case .screenCapture: return "Screen failed"
+        case .vision: return "Vision offline"
+        case .speech: return "Check mic"
+        case .voice: return "Check voice"
+        case .files: return "Check files"
+        case .engine: return "Engine offline"
+        case .unknown, .none: return "Try again"
+        }
     }
 }

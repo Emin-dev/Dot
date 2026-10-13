@@ -42,6 +42,45 @@ enum VoiceCaptureDecision: Equatable, Sendable {
     case listening, silenceSatisfied, noSpeech, maximumDuration, audioUnavailable, cancelled
 }
 
+enum VoiceCaptureState: Equatable, Sendable {
+    case idle, preparing, requestingPermission, capturing, transcribing
+}
+
+/// A terminal capture outcome, rather than an undifferentiated recognizer error.
+/// Quiet outcomes deliberately have no recovery notice and never trigger a retry.
+enum VoiceCaptureEndReason: String, CaseIterable, Equatable, Sendable {
+    case intentionalCancellation, noSpeech, routeChanged, permissionLost
+    case invalidAudio, missingAudio, maximumDuration, systemSleep, noRecognizedWords
+
+    var recoveryMessage: String? {
+        switch self {
+        case .intentionalCancellation, .noSpeech: return nil
+        case .routeChanged: return "The microphone or speaker changed. Click me to start again with the current devices."
+        case .permissionLost: return "Microphone access is off. Enable Dot in System Settings → Privacy & Security → Microphone, then click me."
+        case .invalidAudio: return "The microphone audio was interrupted or unreadable. Check your input device, then click me to try again."
+        case .missingAudio: return "The microphone stopped sending audio. Check your input device, then click me to try again."
+        case .maximumDuration: return "Listening ended after one minute. Click me to start a new turn."
+        case .systemSleep: return "Listening stopped when your Mac went to sleep. Click me when you're ready."
+        case .noRecognizedWords: return "I didn't catch any words. Click me and try again."
+        }
+    }
+}
+
+/// One immutable observation of the capture's monotonic timeline. UI reads this
+/// sample; it must not invent or advance its own invitation/silence deadline.
+struct VoiceCaptureTimingSnapshot: Equatable, Sendable {
+    enum Phase: Equatable, Sendable { case waitingForSpeech, invitation, speaking, trailingSilence }
+    let phase: Phase
+    let sampledAt: Double
+    let audioThrough: Double
+    let deadlineAt: Double?
+    let remainingSeconds: Double?
+    let maximumRemainingSeconds: Double
+    let selectedSilenceSeconds: Double
+    let invitationSeconds: Double?
+    let decision: VoiceCaptureDecision
+}
+
 struct VoiceCaptureTimingEvidence: Equatable, Sendable {
     let captureStartedAt: Double
     let firstSpeechAt: Double
@@ -65,6 +104,8 @@ struct VoiceCaptureDeadline: Sendable {
     private(set) var lastSpeechAt: Double?
     private(set) var audioThrough: Double
     private(set) var decision = VoiceCaptureDecision.listening
+    private(set) var audioFailure: VoiceCaptureEndReason?
+    private var latestBufferContainsSpeech = false
 
     init(startedAt: Double, silenceSeconds: Double, invitationSeconds: Double? = nil) {
         self.startedAt = startedAt
@@ -75,6 +116,7 @@ struct VoiceCaptureDeadline: Sendable {
 
     mutating func observeAudio(firstSpeech: Double?, lastSpeech: Double?, through: Double) {
         guard decision == .listening, through.isFinite, through >= audioThrough else { return }
+        latestBufferContainsSpeech = false
         // A delayed UI timer must not join two utterances separated by a fully
         // satisfied silence interval. Audio timestamps decide this boundary too.
         if let lastSpeechAt, lastSpeechAt + silenceSeconds <= startedAt + Self.maximumDuration {
@@ -91,6 +133,7 @@ struct VoiceCaptureDeadline: Sendable {
             if self.firstSpeechAt != nil || mayBegin {
                 if self.firstSpeechAt == nil { self.firstSpeechAt = first }
                 self.lastSpeechAt = max(self.lastSpeechAt ?? startedAt, lastSpeech)
+                latestBufferContainsSpeech = true
             }
         }
         audioThrough = through
@@ -113,15 +156,45 @@ struct VoiceCaptureDeadline: Sendable {
             decision = completion
         } else if now >= limit {
             decision = .maximumDuration
-        } else if let deadline, now >= deadline + Self.missingAudioGrace, audioThrough < deadline {
-            decision = .audioUnavailable
+        } else if now >= audioThrough + Self.missingAudioGrace {
+            // Missing PCM is not silence, including before a manual turn's first
+            // word. A live microphone cannot remain "listening" for 60s with no tap.
+            audioFailure = .missingAudio; decision = .audioUnavailable
         }
         return decision
     }
 
     mutating func cancel() { decision = .cancelled }
-    mutating func rejectAudio() { if decision == .listening { decision = .audioUnavailable } }
+    mutating func rejectAudio() {
+        if decision == .listening { audioFailure = .invalidAudio; decision = .audioUnavailable }
+    }
     mutating func reachCaptureLimit() { if decision == .listening { decision = .maximumDuration } }
+    var endReason: VoiceCaptureEndReason? {
+        switch decision {
+        case .listening, .silenceSatisfied: return nil
+        case .noSpeech: return .noSpeech
+        case .maximumDuration: return .maximumDuration
+        case .audioUnavailable: return audioFailure ?? .invalidAudio
+        case .cancelled: return .intentionalCancellation
+        }
+    }
+    func snapshot(at now: Double) -> VoiceCaptureTimingSnapshot {
+        let sample = now.isFinite ? max(startedAt, now) : max(startedAt, audioThrough)
+        let phase: VoiceCaptureTimingSnapshot.Phase
+        let deadline: Double?
+        if let lastSpeechAt {
+            phase = latestBufferContainsSpeech ? .speaking : .trailingSilence
+            deadline = lastSpeechAt + silenceSeconds
+        } else if let invitationSeconds {
+            phase = .invitation; deadline = startedAt + invitationSeconds
+        } else {
+            phase = .waitingForSpeech; deadline = nil
+        }
+        return VoiceCaptureTimingSnapshot(phase: phase, sampledAt: sample, audioThrough: audioThrough,
+            deadlineAt: deadline, remainingSeconds: deadline.map { max(0, $0 - sample) },
+            maximumRemainingSeconds: max(0, startedAt + Self.maximumDuration - sample),
+            selectedSilenceSeconds: silenceSeconds, invitationSeconds: invitationSeconds, decision: decision)
+    }
     var timingEvidence: VoiceCaptureTimingEvidence? {
         guard decision == .silenceSatisfied, let firstSpeechAt, let lastSpeechAt else { return nil }
         return VoiceCaptureTimingEvidence(captureStartedAt: startedAt, firstSpeechAt: firstSpeechAt,

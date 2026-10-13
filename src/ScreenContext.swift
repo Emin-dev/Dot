@@ -9,13 +9,14 @@ final class ScreenContext {
     var enabled = true
     private var gate = ScreenContextGate()
     private var permission = ScreenPermissionTurn()
+    private var encoding: (turn: UUID, task: Task<Data?, Never>)?
     func prepare(turn: UUID, requestPermission: Bool = true) throws {
         try Task.checkCancellation()
         guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
                                  request: { requestPermission && CGRequestScreenCaptureAccess() }) else { throw ScreenFailure.permission }
         try Task.checkCancellation()
     }
-    func capture(turn: UUID, modelHasVision: Bool) async throws -> String? {
+    func capture(turn: UUID, modelHasVision: Bool) async throws -> CapturedScreenImage? {
         guard enabled else { return nil }
         guard modelHasVision else { throw ScreenFailure.unsupported }
         try Task.checkCancellation()
@@ -23,9 +24,14 @@ final class ScreenContext {
             throw ScreenFailure.permission
         }
         try Task.checkCancellation()
+        encoding?.task.cancel(); encoding = nil
         gate.begin(turn: turn, enabled: true, permissionGranted: true, modelHasVision: true)
+        defer {
+            gate.cancel(turn: turn)
+            if encoding?.turn == turn { encoding?.task.cancel(); encoding = nil }
+        }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        try Task.checkCancellation()
+        try validateCapture(turn: turn)
         let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         let displayID = (selected?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
         guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { throw ScreenFailure.unavailable }
@@ -37,23 +43,38 @@ final class ScreenContext {
         configuration.width = max(1, Int(Double(display.width) * scale))
         configuration.height = max(1, Int(Double(display.height) * scale))
         configuration.showsCursor = true; configuration.capturesAudio = false
+        // captureImage supplies no acquisition timestamp. Start conservatively before
+        // the request so framework delay, JPEG encoding and submission all count.
+        let acquiredAt = ProcessInfo.processInfo.systemUptime
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-        try Task.checkCancellation()
-        let encoded = await Task.detached(priority: .userInitiated) { () -> Data? in
+        try validateCapture(turn: turn)
+        let encoder = Task.detached(priority: .userInitiated) { () -> Data? in
             for quality in [0.75, 0.55, 0.35] {
+                guard !Task.isCancelled else { return nil }
                 let data = NSMutableData()
                 guard let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil) else { continue }
                 CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-                if CGImageDestinationFinalize(destination), data.length <= ScreenContextGate.maximumBytes { return data as Data }
+                let finished = CGImageDestinationFinalize(destination)
+                guard !Task.isCancelled else { return nil }
+                if finished, data.length <= ScreenContextGate.maximumBytes { return data as Data }
             }
             return nil
-        }.value
-        try Task.checkCancellation()
+        }
+        encoding = (turn, encoder)
+        let encoded = await withTaskCancellationHandler(operation: { await encoder.value }, onCancel: { encoder.cancel() })
+        try validateCapture(turn: turn)
         guard let encoded else { throw ScreenFailure.unavailable }
-        try gate.capturedJPEG(encoded, width: image.width, height: image.height, turn: turn, now: ProcessInfo.processInfo.systemUptime)
-        return try gate.consumeDataURL(turn: turn, now: ProcessInfo.processInfo.systemUptime)
+        try gate.capturedJPEG(encoded, width: image.width, height: image.height, turn: turn,
+                              acquiredAt: acquiredAt, now: ProcessInfo.processInfo.systemUptime)
+        return try gate.consume(turn: turn, now: ProcessInfo.processInfo.systemUptime)
     }
-    func cancel() { gate.cancel(); permission.cancel() }
+    private func validateCapture(turn: UUID) throws {
+        try Task.checkCancellation()
+        try gate.validateCapture(turn: turn)
+        guard enabled else { throw ScreenContextGate.Failure.disabled }
+        guard permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess) else { throw ScreenFailure.permission }
+    }
+    func cancel() { gate.cancel(); permission.cancel(); encoding?.task.cancel(); encoding = nil }
     enum ScreenFailure: LocalizedError {
         case permission, unavailable, unsupported
         var errorDescription: String? {

@@ -131,10 +131,45 @@ struct VoiceEvent {
     }
 }
 
-/// Pure contract for one ephemeral screenshot bound to one explicit voice turn.
+/// Ephemeral pixels with the original monotonic acquisition bound preserved through
+/// encoding and request assembly. Never put this value in conversation history.
+struct CapturedScreenImage: Sendable {
+    let turn: UUID
+    let acquiredAt: Double
+    private let encodedDataURL: String
+    static let maximumAge: Double = 5
+
+    fileprivate init(turn: UUID, acquiredAt: Double, dataURL: String) {
+        self.turn = turn; self.acquiredAt = acquiredAt; encodedDataURL = dataURL
+    }
+    func dataURL(now: Double) throws -> String {
+        try validateFreshness(now: now)
+        return encodedDataURL
+    }
+    func validateFreshness(now: Double) throws {
+        try Self.validateTime(acquiredAt: acquiredAt, now: now)
+    }
+    fileprivate static func validateTime(acquiredAt: Double, now: Double) throws {
+        guard acquiredAt.isFinite, acquiredAt >= 0, now.isFinite,
+              now >= acquiredAt, now - acquiredAt <= maximumAge else { throw ScreenContextGate.Failure.stale }
+    }
+}
+
+/// Pure contract for one ephemeral screenshot bound to one voice turn.
 /// CaptureKit integration is separate; this type never captures, writes or uploads pixels.
 struct ScreenContextGate {
-    enum Failure: Error, Equatable { case disabled, permissionDenied, unavailable, unsupportedModel, stale, invalidImage }
+    enum Failure: LocalizedError, Equatable {
+        case disabled, permissionDenied, unavailable, unsupportedModel, stale, invalidImage
+        var errorDescription: String? {
+            switch self {
+            case .disabled: return "Screen context is off. Continue without screen or enable it in Options."
+            case .permissionDenied: return "Allow Dot in System Settings → Privacy & Security → Screen Recording, or continue without screen."
+            case .stale: return "The screen image became too old before it could be used. Retry for a fresh image or continue without screen."
+            case .unsupportedModel: return "The local model could not accept screen context. Continue without screen."
+            case .unavailable, .invalidImage: return "The screen image could not be read. Retry or continue without screen."
+            }
+        }
+    }
     private var turn: UUID?
     private var image: Data?
     private var capturedAt: Double?
@@ -145,24 +180,31 @@ struct ScreenContextGate {
         self.turn = turn; image = nil; capturedAt = nil
         state = !enabled ? .disabled : !permissionGranted ? .permissionDenied : !modelHasVision ? .unsupportedModel : .unavailable
     }
-    mutating func capturedJPEG(_ data: Data, width: Int, height: Int, turn: UUID, now: Double) throws {
+    func validateCapture(turn: UUID) throws {
         guard self.turn == turn else { throw Failure.stale }
+        if let state, state != .unavailable { throw state }
+    }
+    mutating func capturedJPEG(_ data: Data, width: Int, height: Int, turn: UUID, acquiredAt: Double, now: Double) throws {
+        try validateCapture(turn: turn)
         guard state == .unavailable else { throw state ?? Failure.stale }
-        guard now.isFinite, width > 0, height > 0, width <= 4096, height <= 4096,
+        do { try CapturedScreenImage.validateTime(acquiredAt: acquiredAt, now: now) }
+        catch { cancel(); throw error }
+        guard width > 0, height > 0, width <= 4096, height <= 4096,
               width * height <= Self.maximumPixels, data.count <= Self.maximumBytes, data.count >= 4,
               data.starts(with: [0xff, 0xd8, 0xff]), data.suffix(2).elementsEqual([0xff, 0xd9]) else { throw Failure.invalidImage }
-        image = data; capturedAt = now; state = nil
+        image = data; capturedAt = acquiredAt; state = nil
     }
-    mutating func consumeDataURL(turn: UUID, now: Double) throws -> String {
+    mutating func consume(turn: UUID, now: Double) throws -> CapturedScreenImage {
         guard self.turn == turn else { throw Failure.stale }
         if let state { throw state }
-        guard let image, let capturedAt, now.isFinite, now >= capturedAt, now - capturedAt <= 5 else {
-            cancel(); throw Failure.stale
-        }
+        defer { cancel() }
+        guard let image, let capturedAt else { throw Failure.unavailable }
+        try CapturedScreenImage.validateTime(acquiredAt: capturedAt, now: now)
         // Consume once; callers must not retain this in subsequent conversation history.
         let url = "data:image/jpeg;base64," + image.base64EncodedString()
-        cancel(); return url
+        return CapturedScreenImage(turn: turn, acquiredAt: capturedAt, dataURL: url)
     }
+    mutating func cancel(turn: UUID) { if self.turn == turn { cancel() } }
     mutating func cancel() { turn = nil; image = nil; capturedAt = nil; state = .unavailable }
 }
 

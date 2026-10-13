@@ -1,0 +1,312 @@
+import Darwin
+import Foundation
+
+struct WebResearchStoredSession: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID { session.id }
+    let revision: UUID
+    let session: WebResearchSession
+    let recoveredAt: Date?
+}
+
+struct WebResearchSessionSummary: Equatable, Identifiable, Sendable {
+    let id: UUID
+    let revision: UUID
+    let question: String
+    let stage: WebResearchStage
+    let createdAt: Date
+    let updatedAt: Date
+    let recoveredAt: Date?
+    let sourcesRead: Int
+    let searchAttempts: Int
+}
+
+enum WebResearchStoreError: Error, Equatable, LocalizedError {
+    case invalidInput, capacity, corrupt, unsupportedVersion(Int), unsafeStorage, unavailable, busy, conflict, notFound
+    var errorDescription: String? {
+        switch self {
+        case .invalidInput: return "The research session is invalid or changes its original identity."
+        case .capacity: return "Saved research reached its local storage limit. Delete a session to make room."
+        case .corrupt: return "Saved research could not be read. The existing file has been preserved."
+        case .unsupportedVersion: return "Saved research uses an unsupported format. The existing file has been preserved."
+        case .unsafeStorage: return "Research storage must use a private, locally owned regular file and folder."
+        case .unavailable: return "Research could not be read or saved. Reload to check the latest saved state."
+        case .busy: return "Another research storage operation is active."
+        case .conflict: return "This research session changed. Reload it before saving again."
+        case .notFound: return "That research session has been deleted or is no longer available."
+        }
+    }
+}
+
+protocol WebResearchSessionAccess: Sendable {
+    func list() async throws -> [WebResearchSessionSummary]
+    func load(id: UUID) async throws -> WebResearchStoredSession
+    func create(question: String, queries: [String], limits: WebResearchLimits,
+                retryPolicy: WebResearchRetryPolicy) async throws -> WebResearchStoredSession
+    func save(_ session: WebResearchSession, expectedRevision: UUID) async throws -> WebResearchStoredSession
+    func delete(id: UUID, expectedRevision: UUID) async throws
+    func deleteAll() async throws
+}
+
+/// Inject one shared owner into the research UI/task coordinator. This actor performs no network,
+/// inference, source interpretation or clipboard work. Only bounded session text/receipts enter it.
+actor WebResearchSessionStore: WebResearchSessionAccess {
+    struct Limits: Sendable {
+        var maxSessions = 20
+        var maxSessionBytes = 8_388_608
+        var maxFileBytes = 16_777_216
+    }
+
+    private struct Document: Codable { let schemaVersion: Int; var sessions: [WebResearchStoredSession] }
+    private struct Version: Decodable { let schemaVersion: Int }
+    private static let fileName = "research-sessions.json"
+    private static let lockName = "research-sessions.lock"
+    private let directory: URL
+    private let limits: Limits
+    private let now: @Sendable () -> Date
+    /// Only revisions written by this live owner can still represent active network work.
+    private var ownedRevisions: Set<UUID> = []
+
+    init(directory: URL? = nil, limits: Limits = Limits(), now: @escaping @Sendable () -> Date = { Date() }) throws {
+        guard (1...50).contains(limits.maxSessions), (1_024...8_388_608).contains(limits.maxSessionBytes),
+              (1_024...33_554_432).contains(limits.maxFileBytes) else { throw WebResearchStoreError.capacity }
+        guard let chosen = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Dot/ResearchSessions", isDirectory: true), chosen.isFileURL,
+              !chosen.path.contains("\0") else { throw WebResearchStoreError.unsafeStorage }
+        self.directory = chosen.standardizedFileURL; self.limits = limits; self.now = now
+    }
+
+    func list() throws -> [WebResearchSessionSummary] {
+        try transaction { folder in
+            try readAndRecover(folder).sessions.sorted {
+                $0.session.updatedAt == $1.session.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.session.updatedAt > $1.session.updatedAt
+            }.map { stored in
+                let session = stored.session
+                return WebResearchSessionSummary(id: stored.id, revision: stored.revision, question: session.question,
+                    stage: session.stage, createdAt: session.createdAt, updatedAt: session.updatedAt,
+                    recoveredAt: stored.recoveredAt, sourcesRead: session.sources.count, searchAttempts: session.searchAttempts)
+            }
+        }
+    }
+
+    func load(id: UUID) throws -> WebResearchStoredSession {
+        try transaction { folder in
+            guard let stored = try readAndRecover(folder).sessions.first(where: { $0.id == id }) else { throw WebResearchStoreError.notFound }
+            return stored
+        }
+    }
+
+    /// IDs are minted here. An old callback cannot recreate a deleted session by passing its ID.
+    func create(question: String, queries: [String], limits researchLimits: WebResearchLimits = WebResearchLimits(),
+                retryPolicy: WebResearchRetryPolicy = .preserveUncertain) throws -> WebResearchStoredSession {
+        try transaction { folder in
+            var document = try readAndRecover(folder)
+            let session: WebResearchSession
+            do { session = try WebResearchSession(question: question, queries: queries, limits: researchLimits, retryPolicy: retryPolicy, now: now()) }
+            catch { throw WebResearchStoreError.invalidInput }
+            let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: nil)
+            document.sessions.append(stored)
+            try persist(document, folder: folder)
+            rememberOwned(document, adding: stored.revision)
+            return stored
+        }
+    }
+
+    /// Compare-and-swap on an existing record only; never an upsert. Callers must keep the returned
+    /// revision after every serialized checkpoint. A deleted/recovered/replaced revision is rejected.
+    func save(_ session: WebResearchSession, expectedRevision: UUID) throws -> WebResearchStoredSession {
+        try transaction { folder in
+            var document = try readAndRecover(folder)
+            guard let index = document.sessions.firstIndex(where: { $0.id == session.id }) else { throw WebResearchStoreError.notFound }
+            let previous = document.sessions[index]
+            guard previous.revision == expectedRevision else { throw WebResearchStoreError.conflict }
+            guard previous.session.question == session.question, previous.session.createdAt == session.createdAt,
+                  previous.session.limits == session.limits,
+                  previous.session.providerID == nil || previous.session.providerID == session.providerID,
+                  session.searchAttempts >= previous.session.searchAttempts,
+                  previous.session.queries.allSatisfy({ old in
+                      guard let next = session.queries.first(where: { $0.id == old.id }) else { return false }
+                      return next.text == old.text && next.attempts >= old.attempts
+                          && (old.status != .completed || (next.status == .completed && next.results == old.results && next.completedAt == old.completedAt))
+                  }), previous.session.reads.allSatisfy({ old in
+                      guard let next = session.reads.first(where: { $0.id == old.id }) else { return false }
+                      return next.url == old.url && (old.status != .completed || (next.status == .completed && next.source == old.source))
+                  }) else { throw WebResearchStoreError.invalidInput }
+            try validateSession(session)
+            let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: previous.recoveredAt)
+            document.sessions[index] = stored
+            try persist(document, folder: folder)
+            rememberOwned(document, adding: stored.revision)
+            return stored
+        }
+    }
+
+    func delete(id: UUID, expectedRevision: UUID) throws {
+        try transaction { folder in
+            var document = try readAndRecover(folder)
+            guard let index = document.sessions.firstIndex(where: { $0.id == id }) else { throw WebResearchStoreError.notFound }
+            guard document.sessions[index].revision == expectedRevision else { throw WebResearchStoreError.conflict }
+            document.sessions.remove(at: index)
+            try persist(document, folder: folder)
+            rememberOwned(document)
+        }
+    }
+
+    /// Explicitly deletes currently saved valid sessions. Corrupt/unknown files remain preserved,
+    /// rather than being silently replaced by an ordinary delete operation.
+    func deleteAll() throws {
+        try transaction { folder in
+            _ = try readAndRecover(folder)
+            try persist(Document(schemaVersion: 1, sessions: []), folder: folder)
+            ownedRevisions.removeAll()
+        }
+    }
+
+    private func readAndRecover(_ folder: Int32) throws -> Document {
+        var document = try read(folder), recovered = false
+        for index in document.sessions.indices {
+            let stored = document.sessions[index]
+            guard !ownedRevisions.contains(stored.revision) else { continue }
+            var session = stored.session
+            let interrupted = session.stage == .retrieving || session.queries.contains { $0.status == .inFlight }
+                || session.reads.contains { $0.status == .inFlight }
+            guard interrupted else { continue }
+            for query in session.queries.indices where session.queries[query].status == .inFlight {
+                session.queries[query].status = .uncertain
+                session.queries[query].failure = .interruptedOutcomeUnknown
+            }
+            for source in session.reads.indices where session.reads[source].status == .inFlight {
+                session.reads[source].status = .pending
+            }
+            session.stage = .paused; session.updatedAt = now()
+            document.sessions[index] = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: session.updatedAt)
+            recovered = true
+        }
+        if recovered { try persist(document, folder: folder); rememberOwned(document) }
+        return document
+    }
+
+    private func rememberOwned(_ document: Document, adding: UUID? = nil) {
+        ownedRevisions.formIntersection(Set(document.sessions.map(\.revision)))
+        if let adding { ownedRevisions.insert(adding) }
+    }
+
+    private func validateSession(_ session: WebResearchSession) throws {
+        do {
+            let data = try session.encodedCheckpoint()
+            guard data.count <= limits.maxSessionBytes else { throw WebResearchStoreError.capacity }
+        } catch let error as WebResearchStoreError { throw error }
+        catch { throw WebResearchStoreError.invalidInput }
+    }
+
+    private func validate(_ document: Document) throws {
+        guard document.schemaVersion == 1 else { throw WebResearchStoreError.unsupportedVersion(document.schemaVersion) }
+        guard document.sessions.count <= limits.maxSessions else { throw WebResearchStoreError.capacity }
+        guard Set(document.sessions.map(\.id)).count == document.sessions.count,
+              Set(document.sessions.map(\.revision)).count == document.sessions.count else { throw WebResearchStoreError.corrupt }
+        for stored in document.sessions {
+            try Task.checkCancellation()
+            guard stored.recoveredAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { throw WebResearchStoreError.corrupt }
+            try validateSession(stored.session)
+        }
+    }
+
+    private func read(_ folder: Int32) throws -> Document {
+        let descriptor = openat(folder, Self.fileName, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+        if descriptor < 0 {
+            if errno == ENOENT { return Document(schemaVersion: 1, sessions: []) }
+            throw WebResearchStoreError.unsafeStorage
+        }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close() }
+        try Self.checkRegular(descriptor)
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_size <= limits.maxFileBytes else { throw WebResearchStoreError.capacity }
+        let data = try handle.read(upToCount: limits.maxFileBytes + 1) ?? Data()
+        guard data.count <= limits.maxFileBytes else { throw WebResearchStoreError.capacity }
+        do {
+            let decoder = JSONDecoder()
+            let version = try decoder.decode(Version.self, from: data)
+            guard version.schemaVersion == 1 else { throw WebResearchStoreError.unsupportedVersion(version.schemaVersion) }
+            let document = try decoder.decode(Document.self, from: data)
+            try validate(document)
+            return document
+        } catch is CancellationError { throw CancellationError() }
+        catch WebResearchStoreError.invalidInput { throw WebResearchStoreError.corrupt }
+        catch let error as WebResearchStoreError { throw error }
+        catch { throw WebResearchStoreError.corrupt }
+    }
+
+    private func persist(_ document: Document, folder: Int32) throws {
+        try validate(document)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(document)
+        guard data.count <= limits.maxFileBytes else { throw WebResearchStoreError.capacity }
+        let temporary = ".research-sessions-\(UUID().uuidString).tmp"
+        let descriptor = openat(folder, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+        guard descriptor >= 0 else { throw WebResearchStoreError.unavailable }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+        defer { try? handle.close(); unlinkat(folder, temporary, 0) }
+        try handle.write(contentsOf: data)
+        try handle.synchronize()
+        try Task.checkCancellation()
+        guard renameat(folder, temporary, folder, Self.fileName) == 0 else { throw WebResearchStoreError.unavailable }
+        // Rename is the commit point. A late cancellation cannot undo it; sync the directory entry.
+        guard fsync(folder) == 0 else { throw WebResearchStoreError.unavailable }
+    }
+
+    private func transaction<T>(_ operation: (Int32) throws -> T) throws -> T {
+        try Task.checkCancellation()
+        do {
+            if !FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            }
+            let folder = open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            guard folder >= 0 else { throw WebResearchStoreError.unsafeStorage }
+            defer { close(folder) }
+            var info = stat()
+            guard fstat(folder, &info) == 0, info.st_uid == geteuid(), fchmod(folder, 0o700) == 0 else { throw WebResearchStoreError.unsafeStorage }
+            let lock = openat(folder, Self.lockName, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o600)
+            guard lock >= 0 else { throw WebResearchStoreError.unsafeStorage }
+            defer { close(lock) }
+            try Self.checkRegular(lock)
+            guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { throw WebResearchStoreError.busy }
+            defer { flock(lock, LOCK_UN) }
+            try removeAbandonedTemporaries(folder)
+            try Task.checkCancellation()
+            return try operation(folder)
+        } catch is CancellationError { throw CancellationError() }
+        catch let error as WebResearchStoreError { throw error }
+        catch { throw WebResearchStoreError.unavailable }
+    }
+
+    /// Remove only this writer's regular, private orphan files while holding its cross-owner lock.
+    /// They can contain deleted text after an interrupted pre-rename write; unknown files are untouched.
+    private func removeAbandonedTemporaries(_ folder: Int32) throws {
+        let duplicate = dup(folder)
+        guard duplicate >= 0 else { throw WebResearchStoreError.unavailable }
+        guard let stream = fdopendir(duplicate) else { close(duplicate); throw WebResearchStoreError.unavailable }
+        defer { closedir(stream) }
+        var visited = 0
+        while let entry = readdir(stream) {
+            try Task.checkCancellation(); visited += 1
+            guard visited <= 1_000 else { throw WebResearchStoreError.capacity }
+            let name = withUnsafePointer(to: &entry.pointee.d_name) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(entry.pointee.d_namlen) + 1) { String(cString: $0) }
+            }
+            let prefix = ".research-sessions-", suffix = ".tmp"
+            guard name.hasPrefix(prefix), name.hasSuffix(suffix),
+                  UUID(uuidString: String(name.dropFirst(prefix.count).dropLast(suffix.count))) != nil else { continue }
+            let descriptor = openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
+            guard descriptor >= 0 else { throw WebResearchStoreError.unsafeStorage }
+            defer { close(descriptor) }
+            try Self.checkRegular(descriptor)
+            guard unlinkat(folder, name, 0) == 0 else { throw WebResearchStoreError.unavailable }
+        }
+    }
+
+    private static func checkRegular(_ descriptor: Int32) throws {
+        var info = stat()
+        guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              info.st_uid == geteuid(), info.st_nlink == 1, fchmod(descriptor, 0o600) == 0 else { throw WebResearchStoreError.unsafeStorage }
+    }
+}

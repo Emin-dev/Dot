@@ -166,10 +166,13 @@ final class VoiceTimingTests: XCTestCase {
         XCTAssertEqual(capture.timingEvidence?.silenceSatisfiedAt, 59)
     }
     func testMissingAudioFailsClosedAfterBoundedGrace() {
-        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3, invitationSeconds: 6)
-        XCTAssertEqual(capture.evaluate(at: 6), .listening)
-        XCTAssertEqual(capture.evaluate(at: 7), .audioUnavailable)
-        XCTAssertNil(capture.timingEvidence)
+        for invitation in [nil, 6.0] {
+            var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3, invitationSeconds: invitation)
+            XCTAssertEqual(capture.evaluate(at: 0.999), .listening)
+            XCTAssertEqual(capture.evaluate(at: 1), .audioUnavailable)
+            XCTAssertEqual(capture.endReason, .missingAudio)
+            XCTAssertNil(capture.timingEvidence)
+        }
     }
     func testAutomaticInvitationNeverRequestsPermissionAndRequiresLiveRoute() {
         for permission in [VoiceMicrophonePermission.authorized, .undetermined, .denied] {
@@ -207,6 +210,7 @@ final class VoiceTimingTests: XCTestCase {
         capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 4)
         capture.observeAudio(firstSpeech: 4.1, lastSpeech: 5, through: 5)
         XCTAssertEqual(capture.evaluate(at: 8), .audioUnavailable)
+        XCTAssertEqual(capture.endReason, .invalidAudio)
         XCTAssertNil(capture.timingEvidence)
         XCTAssertEqual(capture.lastSpeechAt, 1)
     }
@@ -260,4 +264,154 @@ final class VoiceTimingTests: XCTestCase {
         XCTAssertEqual(expired.count, 0)
         XCTAssertTrue(expired.reachesLimit)
     }
+
+    func testSnapshotUsesActualInvitationDeadlineForEveryChoice() {
+        for invitation in VoiceTimingSettings.invitationChoices {
+            var capture = VoiceCaptureDeadline(startedAt: 100, silenceSeconds: 3, invitationSeconds: invitation)
+            capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 100.5)
+            let snapshot = capture.snapshot(at: 100.6)
+            XCTAssertEqual(snapshot.phase, .invitation)
+            XCTAssertEqual(snapshot.deadlineAt, 100 + invitation)
+            XCTAssertEqual(snapshot.remainingSeconds!, invitation - 0.6, accuracy: 0.00001)
+            XCTAssertEqual(snapshot.maximumRemainingSeconds, 59.4, accuracy: 0.00001)
+            XCTAssertEqual(snapshot.audioThrough, 100.5)
+            XCTAssertEqual(snapshot.sampledAt, 100.6)
+            XCTAssertEqual(snapshot.decision, .listening)
+        }
+    }
+
+    func testSnapshotFollowsSpeechResetsAndNeverRetainsInvitationDeadline() {
+        for silence in VoiceTimingSettings.silenceChoices {
+            var capture = VoiceCaptureDeadline(startedAt: 100, silenceSeconds: silence, invitationSeconds: 6)
+            capture.observeAudio(firstSpeech: 105.99, lastSpeech: 106.1, through: 106.1)
+            XCTAssertEqual(capture.snapshot(at: 106.1).phase, .speaking)
+            XCTAssertEqual(capture.snapshot(at: 106.1).deadlineAt, 106.1 + silence)
+            capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 106.3)
+            let trailing = capture.snapshot(at: 106.3)
+            XCTAssertEqual(trailing.phase, .trailingSilence)
+            XCTAssertEqual(trailing.remainingSeconds!, silence - 0.2, accuracy: 0.00001)
+            capture.observeAudio(firstSpeech: 106.4, lastSpeech: 106.5, through: 106.5)
+            XCTAssertEqual(capture.snapshot(at: 106.5).phase, .speaking)
+            XCTAssertEqual(capture.snapshot(at: 106.5).deadlineAt, 106.5 + silence)
+            XCTAssertEqual(capture.snapshot(at: 106.5).remainingSeconds!, silence, accuracy: 0.00001)
+        }
+    }
+
+    func testZeroCountdownStillWaitsForInFlightPCMAndLateOnsetResetsSnapshot() {
+        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3, invitationSeconds: 6)
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 5.95)
+        XCTAssertEqual(capture.evaluate(at: 6.05), .listening)
+        let pending = capture.snapshot(at: 6.05)
+        XCTAssertEqual(pending.remainingSeconds, 0)
+        XCTAssertEqual(pending.decision, .listening)
+        capture.observeAudio(firstSpeech: 5.99, lastSpeech: 6.03, through: 6.06)
+        XCTAssertEqual(capture.evaluate(at: 6.1), .listening)
+        let resumed = capture.snapshot(at: 6.1)
+        XCTAssertEqual(resumed.phase, .speaking)
+        XCTAssertEqual(resumed.deadlineAt!, 9.03, accuracy: 0.00001)
+        XCTAssertEqual(resumed.remainingSeconds!, 2.93, accuracy: 0.00001)
+    }
+
+    func testManualSnapshotHasNoInventedInvitationAndNonfiniteClockCannotPoisonUI() {
+        var capture = VoiceCaptureDeadline(startedAt: 100, silenceSeconds: 3)
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 100.1)
+        let snapshot = capture.snapshot(at: .nan)
+        XCTAssertEqual(snapshot.phase, .waitingForSpeech)
+        XCTAssertNil(snapshot.deadlineAt)
+        XCTAssertNil(snapshot.remainingSeconds)
+        XCTAssertEqual(snapshot.sampledAt, 100.1)
+        XCTAssertTrue(snapshot.maximumRemainingSeconds.isFinite)
+        XCTAssertEqual(capture.snapshot(at: 1).sampledAt, 100)
+    }
+
+    func testMissingAudioDuringSpeechDoesNotBecomeSatisfiedSilence() {
+        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
+        capture.observeAudio(firstSpeech: 0.1, lastSpeech: 0.5, through: 0.5)
+        XCTAssertEqual(capture.evaluate(at: 1.499), .listening)
+        XCTAssertEqual(capture.evaluate(at: 1.5), .audioUnavailable)
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 4)
+        XCTAssertEqual(capture.evaluate(at: 4), .audioUnavailable)
+        XCTAssertEqual(capture.endReason, .missingAudio)
+        XCTAssertNil(capture.timingEvidence)
+    }
+
+    func testTypedTerminalReasonsKeepQuietAndRecoveryOutcomesSeparate() {
+        for reason in VoiceCaptureEndReason.allCases {
+            if reason == .intentionalCancellation || reason == .noSpeech {
+                XCTAssertNil(reason.recoveryMessage)
+            } else { XCTAssertFalse(reason.recoveryMessage?.isEmpty ?? true) }
+        }
+        var quiet = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3, invitationSeconds: 3)
+        quiet.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 3)
+        XCTAssertEqual(quiet.evaluate(at: 3), .noSpeech)
+        XCTAssertEqual(quiet.endReason, .noSpeech)
+        quiet.cancel()
+        XCTAssertEqual(quiet.endReason, .intentionalCancellation)
+        var maximum = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
+        maximum.reachCaptureLimit()
+        XCTAssertEqual(maximum.endReason, .maximumDuration)
+    }
 }
+
+#if !SWIFT_PACKAGE
+import AVFoundation
+
+/// Deterministic AVAudioPCMBuffer replay; no microphone, recognizer, or model starts.
+final class CapturedPCMTimingTests: XCTestCase {
+    private func append(_ pcm: CapturedPCM, at start: Double, amplitude: Float, frames: UInt32 = 800) {
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 8_000, channels: 1, interleaved: false)!
+        let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+        buffer.frameLength = frames
+        buffer.floatChannelData!.pointee.initialize(repeating: amplitude, count: Int(frames))
+        pcm.append(buffer, at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
+    }
+
+    func testLockedSnapshotAndDecisionShareActualProcessedPCMDeadline() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 100, silence: 3, invitation: 6)
+        append(pcm, at: 100, amplitude: 0.1)
+        XCTAssertEqual(pcm.poll(at: 100.1).snapshot?.phase, .speaking)
+        for index in 1..<30 { append(pcm, at: 100 + Double(index) / 10, amplitude: 0) }
+        let pending = pcm.poll(at: 103.05)
+        XCTAssertEqual(pending.decision, .listening)
+        XCTAssertEqual(pending.snapshot?.decision, pending.decision)
+        XCTAssertEqual(pending.snapshot?.phase, .trailingSilence)
+        XCTAssertEqual(pending.snapshot!.deadlineAt!, 103.1, accuracy: 0.00001)
+        XCTAssertEqual(pending.snapshot!.remainingSeconds!, 0.05, accuracy: 0.00001)
+        append(pcm, at: 103, amplitude: 0)
+        let ended = pcm.poll(at: 103.2)
+        XCTAssertEqual(ended.decision, .silenceSatisfied)
+        XCTAssertEqual(ended.snapshot?.decision, ended.decision)
+        XCTAssertEqual(ended.snapshot?.deadlineAt, ended.evidence?.silenceSatisfiedAt)
+        XCTAssertNil(ended.endReason)
+        append(pcm, at: 103.1, amplitude: 0.1)
+        XCTAssertEqual(pcm.poll(at: 103.3).evidence, ended.evidence)
+    }
+
+    func testInvalidPCMAndMissingPCMHaveDifferentRecoveryCauses() {
+        let invalid = CapturedPCM(rate: 8_000)
+        invalid.begin(at: 100, silence: 3, invitation: nil)
+        append(invalid, at: 100, amplitude: .nan)
+        let rejected = invalid.poll(at: 100.2)
+        XCTAssertEqual(rejected.decision, .audioUnavailable)
+        XCTAssertEqual(rejected.endReason, .invalidAudio)
+        XCTAssertNil(rejected.evidence)
+        let missing = CapturedPCM(rate: 8_000)
+        missing.begin(at: 100, silence: 3, invitation: nil)
+        XCTAssertEqual(missing.poll(at: 101).endReason, .missingAudio)
+    }
+
+    func testCancelledPCMRejectsStaleTapAndClearsCapturedSamples() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 100, silence: 3, invitation: 6)
+        append(pcm, at: 100, amplitude: 0.1)
+        pcm.cancel()
+        append(pcm, at: 100.1, amplitude: 0.1)
+        let ended = pcm.poll(at: 100.2)
+        XCTAssertEqual(ended.decision, .cancelled)
+        XCTAssertEqual(ended.endReason, .intentionalCancellation)
+        XCTAssertNil(ended.evidence)
+        XCTAssertTrue(pcm.take().isEmpty)
+    }
+}
+#endif

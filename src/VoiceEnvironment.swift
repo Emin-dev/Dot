@@ -6,7 +6,7 @@ import CoreAudio
 @MainActor
 final class VoiceEnvironmentMonitor {
     var isActive: () -> Bool = { false }
-    var onChange: () -> Void = {}
+    var onChange: (VoiceCaptureEndReason) -> Void = { _ in }
     private var listeners: [(AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyListenerBlock)] = []
     private var permissionTimer: Timer?
     private var microphoneWasAuthorized = false
@@ -24,7 +24,7 @@ final class VoiceEnvironmentMonitor {
                 let authorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
                 let revoked = self.microphoneWasAuthorized && !authorized
                 self.microphoneWasAuthorized = authorized
-                if revoked { self.onChange() }
+                if revoked { self.onChange(.permissionLost) }
             }
         }
         permissionTimer = timer; RunLoop.main.add(timer, forMode: .common)
@@ -47,7 +47,7 @@ final class VoiceEnvironmentMonitor {
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self, self.running, self.generation == expected else { return }
-                if self.isActive() { self.onChange() }
+                if self.isActive() { self.onChange(.routeChanged) }
                 if routesChanged { self.removeListeners(); self.watchRoutes() }
             }
         }

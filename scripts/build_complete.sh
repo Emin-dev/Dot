@@ -17,14 +17,21 @@ python3 -B scripts/audit_runtime_payload.py "$DOT_RUNTIME_PAYLOAD"
 test -f "$DOT_WHISPER_FRAMEWORK/Modules/module.modulemap"
 test -f "$DOT_WHISPER_FRAMEWORK/Headers/whisper.h"
 FRAMEWORK_PARENT=$(dirname "$DOT_WHISPER_FRAMEWORK")
+INTENTS_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-intents-complete.XXXXXX")
+trap 'rm -rf "$INTENTS_BUILD"' EXIT
+SOURCES=(src/*.swift)
+python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "${SOURCES[@]}"
 APP=build-complete/Dot.app
 if [[ -e "$APP" ]]; then
   echo "Refusing to replace an existing complete build; preserve it and choose a fresh build workspace."; exit 1
 fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime" "$APP/Contents/Frameworks"
-swiftc -O -warnings-as-errors -D DOT_COMPLETE_BUNDLE -target arm64-apple-macosx26.4 \
+xcrun swiftc -O -warnings-as-errors -module-name Dot -D DOT_COMPLETE_BUNDLE -target arm64-apple-macosx26.4 \
+  -module-cache-path "$INTENTS_BUILD/module-cache" \
+  -emit-const-values -const-gather-protocols-list "$INTENTS_BUILD/protocols.json" \
+  -output-file-map "$INTENTS_BUILD/output-map.json" \
   -F "$FRAMEWORK_PARENT" -framework whisper -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
-  -o "$APP/Contents/MacOS/Dot" src/*.swift \
+  -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \
   -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit
 # This is an actual native-library reference check, not a canImport fallback build.
 nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
@@ -43,6 +50,8 @@ for s in 16 32 128 256 512; do
   d=$((s * 2)); sips -z "$d" "$d" icon.png --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Icon.icns"
+python3 -B scripts/package_app_intents.py extract --work-dir "$INTENTS_BUILD" --app "$APP" \
+  --target arm64-apple-macosx26.4 --deployment-target 26.4
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
 codesign --force --sign - "$APP/Contents/Frameworks/whisper.framework"
 assert_source_snapshot
@@ -54,7 +63,7 @@ framework = app / 'Contents/Frameworks/whisper.framework/whisper'
 digest = hashlib.sha256()
 with framework.open('rb') as stream:
     for chunk in iter(lambda: stream.read(1024 * 1024), b''): digest.update(chunk)
-record = {'commit': sys.argv[2],
+record = {'commit': sys.argv[2], 'source_dirty': False,
           'signing': 'ad-hoc', 'notarized': False, 'runtime_bundled': True,
           'llm_weights_download_on_first_launch': False, 'models_bundled': True,
           'runtime_manifest_sha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),

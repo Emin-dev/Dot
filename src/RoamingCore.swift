@@ -3,11 +3,13 @@ import CoreGraphics
 #endif
 import Foundation
 
+enum PetStatusLayout { static let controlHeight: CGFloat = 48 }
+
 enum PetLayout {
     static let petSize = CGSize(width: 140, height: 148)
     static let edgePadding: CGFloat = 4
-    static let panelSize = CGSize(width: petSize.width + edgePadding * 2, height: petSize.height + edgePadding * 2)
-    static var petBottom: CGFloat { edgePadding }
+    static let panelSize = CGSize(width: petSize.width + edgePadding * 2, height: petSize.height + edgePadding * 2 + PetStatusLayout.controlHeight)
+    static var petBottom: CGFloat { edgePadding + PetStatusLayout.controlHeight }
     static var petCenterY: CGFloat { petBottom + petSize.height / 2 }
 }
 

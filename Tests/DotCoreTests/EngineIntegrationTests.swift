@@ -43,10 +43,11 @@ private final class SplashFixtureProtocol: URLProtocol {
 }
 
 final class EngineIntegrationTests: XCTestCase {
-    @MainActor private func makeEngine(endpoint: String = "http://127.0.0.1:8000", model: String = "owner/model") -> EngineManager {
+    @MainActor private func makeEngine(endpoint: String = "http://127.0.0.1:8000", model: String = "owner/model",
+                                      clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }) -> EngineManager {
         SplashFixtureProtocol.ready = true; SplashFixtureProtocol.server = "Splash"; SplashFixtureProtocol.requests = []; SplashFixtureProtocol.declaredLength = nil; SplashFixtureProtocol.oversizedBody = false
         SplashFixtureProtocol.chatBody = ""; SplashFixtureProtocol.chatRequestBody = nil
-        return EngineManager(endpoint: endpoint, model: model, protocolClasses: [SplashFixtureProtocol.self])
+        return EngineManager(endpoint: endpoint, model: model, protocolClasses: [SplashFixtureProtocol.self], clock: clock)
     }
     @MainActor func testRealTransportValidatesStatusBeforeUse() async throws {
         let engine = makeEngine(); defer { engine.shutdown() }
@@ -94,6 +95,56 @@ final class EngineIntegrationTests: XCTestCase {
     }
     private func questionCall(_ arguments: String, name: String = "ask_user") throws -> String {
         try frame(["tool_calls": [["index": 0, "id": "call_turn_0", "type": "function", "function": ["name": name, "arguments": arguments]]]])
+    }
+    private func screenFixture(acquiredAt: Double) throws -> CapturedScreenImage {
+        let turn = UUID(); var gate = ScreenContextGate()
+        gate.begin(turn: turn, enabled: true, permissionGranted: true, modelHasVision: true)
+        try gate.capturedJPEG(Data([0xff, 0xd8, 0xff, 0xd9]), width: 1, height: 1,
+                              turn: turn, acquiredAt: acquiredAt, now: acquiredAt)
+        return try gate.consume(turn: turn, now: acquiredAt)
+    }
+    @MainActor func testFreshAcquiredImageAppearsOnlyInCurrentRequest() async throws {
+        let engine = makeEngine(clock: { 101 }); defer { engine.shutdown() }
+        SplashFixtureProtocol.chatBody = try frame(["content": "Fixture answer."]) + frame(finish: "stop") + "data: [DONE]\n\n"
+        let image = try screenFixture(acquiredAt: 100)
+        let history = [ChatMessage(role: "user", content: "Describe this fixture.")]
+        _ = try await engine.chat(history: history, onDelta: { _ in }, screenImage: { _ in image })
+        let first = try XCTUnwrap(SplashFixtureProtocol.chatRequestBody)
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: first) as? [String: Any])
+        let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
+        let blocks = try XCTUnwrap(messages.last?["content"] as? [[String: Any]])
+        let imageBlock = try XCTUnwrap(blocks.first { $0["type"] as? String == "image_url" })
+        let imageURL = try XCTUnwrap((imageBlock["image_url"] as? [String: Any])?["url"] as? String)
+        XCTAssertTrue(imageURL.hasPrefix("data:image/jpeg;base64,"))
+        _ = try await engine.chat(history: history, onDelta: { _ in })
+        let second = try XCTUnwrap(SplashFixtureProtocol.chatRequestBody)
+        let nextObject = try XCTUnwrap(JSONSerialization.jsonObject(with: second) as? [String: Any])
+        let nextMessages = try XCTUnwrap(nextObject["messages"] as? [[String: Any]])
+        XCTAssertEqual(nextMessages.last?["content"] as? String, "Describe this fixture.")
+    }
+    @MainActor func testExpiredImagePreventsChatSubmissionAfterEncoding() async throws {
+        let engine = makeEngine(clock: { 106 }); defer { engine.shutdown() }
+        let image = try screenFixture(acquiredAt: 100)
+        do {
+            _ = try await engine.chat(history: [ChatMessage(role: "user", content: "Fixture")],
+                                      onDelta: { _ in }, screenImage: { _ in image })
+            XCTFail("An expired acquisition reached transport")
+        } catch { XCTAssertEqual(error as? ScreenContextGate.Failure, .stale) }
+        XCTAssertFalse(SplashFixtureProtocol.requests.contains { $0.url?.path == "/v1/chat/completions" })
+    }
+    @MainActor func testImageExpiringDuringRequestAssemblyNeverReachesTransport() async throws {
+        var sample = 0
+        let clockValues = [100.0, 104.9, 105.01]
+        let engine = makeEngine(clock: { defer { sample += 1 }; return clockValues[min(sample, 2)] })
+        defer { engine.shutdown() }
+        let image = try screenFixture(acquiredAt: 100)
+        do {
+            _ = try await engine.chat(history: [ChatMessage(role: "user", content: "Fixture")],
+                                      onDelta: { _ in }, screenImage: { _ in image })
+            XCTFail("Assembly consumed the freshness budget")
+        } catch { XCTAssertEqual(error as? ScreenContextGate.Failure, .stale) }
+        XCTAssertEqual(sample, 3)
+        XCTAssertFalse(SplashFixtureProtocol.requests.contains { $0.url?.path == "/v1/chat/completions" })
     }
     @MainActor func testProductionChatRequestAndFragmentedFinalQuestionContract() async throws {
         let engine = makeEngine(); defer { engine.shutdown() }

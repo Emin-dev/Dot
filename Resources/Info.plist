@@ -6,6 +6,8 @@
 	<string>Dot</string>
 	<key>CFBundleDisplayName</key>
 	<string>Dot</string>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>Dot</string>
 	<key>CFBundleIdentifier</key>

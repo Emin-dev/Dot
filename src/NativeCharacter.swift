@@ -7,15 +7,17 @@ struct PetCharacter: View {
     var skin: DotSkin = .original
     var playbackLevel: Double? = nil
     var motionDetail: SkinMotionDetail = .full
+    var expressionRevision: UInt64 = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         Group {
             if skin == .original {
                 OriginalPetCharacter(phase: phase, level: level, still: still || reduceMotion || motionDetail == .still,
-                                     motionScale: motionDetail.movementScale)
+                                     motionScale: motionDetail.movementScale, playbackLevel: playbackLevel)
             } else {
                 NativeSkinCharacter(phase: phase, level: level, still: still || reduceMotion,
-                                    skin: skin, playbackLevel: playbackLevel, motionDetail: motionDetail)
+                                    skin: skin, playbackLevel: playbackLevel, motionDetail: motionDetail,
+                                    expressionRevision: expressionRevision)
             }
         }.accessibilityHidden(true)
     }
@@ -27,6 +29,7 @@ private struct OriginalPetCharacter: View {
     let level: Double
     let still: Bool
     let motionScale: Double
+    let playbackLevel: Double?
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
     private var ink: Color { colorScheme == .dark ? Color(red: 0.08, green: 0.13, blue: 0.17) : Color(red: 0.22, green: 0.36, blue: 0.41) }
@@ -49,7 +52,7 @@ private struct OriginalPetCharacter: View {
                     HStack(spacing: 22) { eye(time: time); eye(time: time) }.offset(y: -4)
                     if phase == .speaking {
                         Ellipse().fill(ink)
-                            .frame(width: 8, height: still ? 6 : 4 + 4 * abs(sin(time * 7)) * motionScale).offset(y: 12)
+                            .frame(width: 8, height: still ? 6 : 2 + 10 * (playbackLevel.map(NativeFacePose.unit) ?? 0.12)).offset(y: 12)
                     } else {
                         Smile().stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                             .frame(width: 9, height: 5).offset(y: 12)
@@ -106,7 +109,13 @@ struct NativeSkinAppearance: Equatable {
     let eyeHeight: Double
 
     func facialInk(darkAppearance: Bool, opaque: Bool) -> NativeSkinColor {
-        material == .glass && darkAppearance && !opaque ? .init(red: 0.87, green: 0.97, blue: 1) : ink
+        // A transparent companion can cross either a light or a dark window,
+        // independent of the OS appearance. Keep a dark centre plus a solid
+        // light edge instead of guessing the pixels behind it from colorScheme.
+        ink
+    }
+    func facialOutlineWidth(opaque: Bool, increasedContrast: Bool = false) -> Double {
+        material == .glass && !opaque ? (increasedContrast ? 1.8 : 1.2) : 0
     }
 
     static func forSkin(_ skin: DotSkin) -> Self {
@@ -134,7 +143,7 @@ struct NativeSkinAppearance: Equatable {
     }
 }
 
-enum NativeFaceState: CaseIterable {
+enum NativeFaceState: CaseIterable, Hashable {
     case idle, listening, thinking, speaking, blocked
     init(_ phase: PetPhase) {
         switch phase {
@@ -147,34 +156,19 @@ enum NativeFaceState: CaseIterable {
     }
 }
 
-/// These five authored state recipes are the first native slice, not the planned
-/// 120 reviewed expression/animation recipes per skin. No synthetic phoneme timing.
-struct NativeExpressionRecipe: Equatable {
-    let id: String
-    let state: NativeFaceState
-    let cycleSeconds: Double
-    let browTilt: Double
-    let gazeX: Double
-    let gazeY: Double
-    let mouthCurve: Double
-    var trigger: String { "Enter \(state)" }
-    var compatibleStates: [NativeFaceState] { [state] }
-    let cancellation = "Immediately replaced on phase, skin, motion preference or accessibility change"
-
-    static let initialRecipes: [Self] = [
-        .init(id: "quiet-breath", state: .idle, cycleSeconds: 4.8, browTilt: -3, gazeX: 0, gazeY: 0, mouthCurve: 4),
-        .init(id: "attentive-listen", state: .listening, cycleSeconds: 5.4, browTilt: -10, gazeX: 0, gazeY: -1, mouthCurve: 2),
-        .init(id: "considering", state: .thinking, cycleSeconds: 5.0, browTilt: -7, gazeX: 2, gazeY: -2, mouthCurve: 2.5),
-        .init(id: "audible-response", state: .speaking, cycleSeconds: 4.6, browTilt: -4, gazeX: 0, gazeY: 0, mouthCurve: 3),
-        .init(id: "patient-support", state: .blocked, cycleSeconds: 6.0, browTilt: -6, gazeX: 0, gazeY: 1, mouthCurve: 2.5)
-    ]
-    static func forState(_ state: NativeFaceState) -> Self { initialRecipes.first { $0.state == state }! }
-}
-
 struct NativeFacePose: Equatable {
     let bob: Double, tilt: Double, blink: Double, gazeX: Double, gazeY: Double
     let browTilt: Double, mouthWidth: Double, mouthHeight: Double, mouthCurve: Double
     let speakingOpening: Double, listeningLevel: Double
+    var eyes: Double = 1
+    var browLift: Double = 0
+    var browAsymmetry: Double = 0
+    var squash: Double = 1
+    var bodyAccent: Double = 0
+    var cheeks: Double = 0.16
+    var smileOpening: Double = 0
+    var teeth: Double = 0
+    var dimples: Double = 0
 
     static func unit(_ value: Double) -> Double { value.isFinite ? min(1, max(0, value)) : 0 }
 
@@ -182,21 +176,30 @@ struct NativeFacePose: Equatable {
     /// playbackLevel is optional: absent a real audio envelope, use a static speaking pose.
     static func sample(phase: PetPhase, time: TimeInterval, inputLevel: Double, playbackLevel: Double?,
                        still: Bool, motion: SkinMotionDetail = .full) -> Self {
-        let state = NativeFaceState(phase), recipe = NativeExpressionRecipe.forState(state)
+        sample(phase: phase, context: .init(state: NativeFaceState(phase), elapsed: time),
+               inputLevel: inputLevel, playbackLevel: playbackLevel, still: still, motion: motion)
+    }
+
+    static func sample(phase: PetPhase, context: NativeExpressionContext, inputLevel: Double,
+                       playbackLevel: Double?, still: Bool, motion: SkinMotionDetail = .full) -> Self {
+        let state = NativeFaceState(phase)
         let amount = still ? 0 : motion.movementScale
-        let clock = time.isFinite ? max(0, time) : 0
-        let cycle = clock.truncatingRemainder(dividingBy: recipe.cycleSeconds)
-        let blink = amount > 0 && cycle < 0.13 ? 0.15 : 1.0
+        // Ignore mismatched external state; the real app phase owns status.
+        let actualContext = NativeExpressionContext(state: state, elapsed: context.elapsed, visit: context.visit)
+        let selected = NativeExpressionLibrary.select(actualContext)
+        let expression = amount == 0 ? NativeExpressionPose.rest : NativeExpressionPose.rest.mixed(toward: selected.recipe.sample(elapsed: selected.elapsed), by: amount)
+        let blink = amount > 0 ? selected.recipe.blink(elapsed: selected.elapsed) : 1
         let speaking = state == .speaking
         let opening = speaking ? (amount == 0 ? 0.12 : playbackLevel.map(unit) ?? 0.12) : 0
         let listening = state == .listening && amount > 0 ? unit(inputLevel) : 0
-        return Self(bob: amount * sin(clock * 1.25) * (state == .idle ? 1.3 : 0.25),
-                    tilt: amount * sin(clock * 0.65) * (state == .listening ? 1.0 : 0.5),
-                    blink: blink, gazeX: recipe.gazeX + amount * sin(clock * 0.48) * 0.7,
-                    gazeY: recipe.gazeY, browTilt: recipe.browTilt,
-                    mouthWidth: speaking ? 7 + opening * 8 : 9,
+        return Self(bob: expression.lift, tilt: expression.tilt * 1.2, blink: blink,
+                    gazeX: expression.gazeX * 1.3, gazeY: expression.gazeY * 1.3, browTilt: -4,
+                    mouthWidth: speaking ? expression.mouthWidth * (1 + opening * 0.8) : expression.mouthWidth * 1.22,
                     mouthHeight: speaking ? 2 + opening * 12 : 1,
-                    mouthCurve: recipe.mouthCurve, speakingOpening: opening, listeningLevel: listening)
+                    mouthCurve: expression.smile, speakingOpening: opening, listeningLevel: listening,
+                    eyes: expression.eyes, browLift: expression.browLift * 1.5, browAsymmetry: expression.browAsymmetry,
+                    squash: expression.squash, bodyAccent: expression.accent, cheeks: expression.cheeks,
+                    smileOpening: expression.smileOpening, teeth: expression.teeth, dimples: expression.dimples)
     }
 }
 
@@ -207,23 +210,74 @@ private struct NativeSkinCharacter: View {
     let skin: DotSkin
     let playbackLevel: Double?
     let motionDetail: SkinMotionDetail
+    let expressionRevision: UInt64
+    @State private var expressionClock = NativeExpressionClock()
+    private var resetKey: NativeExpressionResetKey {
+        .init(state: NativeFaceState(phase), skin: skin, motion: motionDetail, still: still, revision: expressionRevision)
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: phase == .speaking || phase == .listening ? 1.0 / 24 : 1.0 / 12,
+                                paused: still || motionDetail == .still)) { _ in
+            let context = expressionClock.context(state: NativeFaceState(phase), now: ProcessInfo.processInfo.systemUptime)
+            let pose = NativeFacePose.sample(phase: phase, context: context, inputLevel: level,
+                                            playbackLevel: playbackLevel, still: still, motion: motionDetail)
+            NativeSkinFrame(phase: phase, skin: skin, pose: pose)
+        }
+        // One combined key avoids advancing the recipe twice when a turn changes
+        // phase and cancellation revision in the same SwiftUI transaction.
+        .onChange(of: resetKey) { _, _ in resetExpression() }
+        .onAppear { resetExpression() }
+        .onDisappear { resetExpression() }
+    }
+    private func resetExpression() { expressionClock.restart(state: NativeFaceState(phase), at: ProcessInfo.processInfo.systemUptime) }
+}
+
+private struct NativeExpressionResetKey: Equatable {
+    let state: NativeFaceState
+    let skin: DotSkin
+    let motion: SkinMotionDetail
+    let still: Bool
+    let revision: UInt64
+}
+
+/// Actual runtime frame, also available to deterministic native render review.
+/// It has no animation timer, audio access, model access or expression selector.
+struct NativeSkinFrame: View {
+    let phase: PetPhase
+    let skin: DotSkin
+    let pose: NativeFacePose
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
 
     var body: some View {
+        NativeSkinArtwork(phase: phase, skin: skin, pose: pose,
+                          opaque: reduceTransparency, increasedContrast: contrast == .increased)
+    }
+}
+
+/// Single artwork implementation with explicit accessibility policy. Native
+/// snapshots exercise this same path without changing global OS preferences.
+struct NativeSkinArtwork: View {
+    let phase: PetPhase
+    let skin: DotSkin
+    let pose: NativeFacePose
+    let opaque: Bool
+    let increasedContrast: Bool
+
+    var body: some View {
         let appearance = NativeSkinAppearance.forSkin(skin)
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still || motionDetail == .still)) { context in
-            let pose = NativeFacePose.sample(phase: phase, time: context.date.timeIntervalSinceReferenceDate,
-                                            inputLevel: level, playbackLevel: playbackLevel, still: still, motion: motionDetail)
-            ZStack {
+        ZStack {
                 Ellipse().fill(.black.opacity(skin == .veil ? 0.035 : 0.09))
                     .frame(width: 75, height: 8).blur(radius: 4).offset(y: 60)
                 ZStack {
-                    NativeSkinBody(skin: skin, appearance: appearance, opaque: reduceTransparency,
-                                   increasedContrast: contrast == .increased)
-                    NativeFace(phase: phase, skin: skin, appearance: appearance, pose: pose)
+                    NativeSkinBody(skin: skin, appearance: appearance, opaque: opaque,
+                                   increasedContrast: increasedContrast, accent: pose.bodyAccent)
+                    NativeFace(phase: phase, skin: skin, appearance: appearance, pose: pose,
+                               opaque: opaque, increasedContrast: increasedContrast)
                         .offset(y: skin == .sprout || skin == .ripple ? 7 : skin == .mochi ? 6 : 0)
-                }.rotationEffect(.degrees(pose.tilt)).offset(y: pose.bob)
+                }.scaleEffect(x: 1 / pose.squash, y: pose.squash)
+                    .rotationEffect(.degrees(pose.tilt)).offset(y: pose.bob)
                 if phase == .listening {
                     Circle().stroke(Color.accentColor.opacity(0.6), lineWidth: 1.5)
                         .frame(width: 123 + pose.listeningLevel * 4, height: 123 + pose.listeningLevel * 4)
@@ -234,7 +288,6 @@ private struct NativeSkinCharacter: View {
                     }.padding(4).background(.regularMaterial, in: Capsule()).offset(y: 44)
                 }
             }.frame(width: 132, height: 138)
-        }
     }
 }
 
@@ -243,6 +296,7 @@ struct NativeSkinBody: View {
     let appearance: NativeSkinAppearance
     let opaque: Bool
     let increasedContrast: Bool
+    var accent: Double = 0
     private var shape: NativeBodyShape { NativeBodyShape(silhouette: appearance.silhouette) }
     private var gradient: RadialGradient {
         RadialGradient(colors: [appearance.light.color, appearance.shade.color], center: .topLeading, startRadius: 5, endRadius: 128)
@@ -256,7 +310,14 @@ struct NativeSkinBody: View {
                 if skin != .veil {
                     shape.fill(.ultraThinMaterial).opacity(0.17)
                 }
-                shape.stroke(LinearGradient(colors: [.white.opacity(appearance.rimOpacity), .cyan.opacity(0.23), .purple.opacity(0.22), .white.opacity(appearance.rimOpacity)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: skin == .veil ? 1 : 1.6)
+                if increasedContrast {
+                    // A two-tone rim survives either bright or dark content.
+                    // Veil keeps its thinner contour and unchanged clearer body.
+                    shape.stroke(.black.opacity(0.85), lineWidth: skin == .veil ? 3.4 : 4.2)
+                    shape.stroke(.white, lineWidth: skin == .veil ? 1.4 : 2)
+                } else {
+                    shape.stroke(LinearGradient(colors: [.white.opacity(appearance.rimOpacity), .cyan.opacity(0.23), .purple.opacity(0.22), .white.opacity(appearance.rimOpacity)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: skin == .veil ? 1 : 1.6)
+                }
             } else {
                 shape.fill(gradient)
                 shape.stroke(.white.opacity(increasedContrast ? 0.9 : 0.55), lineWidth: increasedContrast ? 2 : 1)
@@ -271,18 +332,18 @@ struct NativeSkinBody: View {
                     Ellipse().fill(skin == .pip ? Color.orange.opacity(0.9) : appearance.shade.color)
                         .frame(width: skin == .pip ? 16 : 22, height: 10)
                 }
-            }.offset(y: 51)
+            }.rotationEffect(.degrees(accent * 3)).offset(y: 51)
         }
         if skin == .pip {
             ForEach([-1.0, 1.0], id: \.self) { side in
                 Ellipse().fill(gradient).frame(width: 22, height: 49)
-                    .rotationEffect(.degrees(side * -22)).offset(x: side * 46, y: 15)
+                    .rotationEffect(.degrees(side * (-22 + accent * 8))).offset(x: side * 46, y: 15)
             }
         }
         if skin == .sprout {
             ForEach([-1.0, 1.0], id: \.self) { side in
                 NativeBodyShape(silhouette: .leaf).fill(gradient).frame(width: 25, height: 53)
-                    .rotationEffect(.degrees(side * 58)).offset(x: side * 36, y: 30)
+                    .rotationEffect(.degrees(side * (58 + accent * 9))).offset(x: side * 36, y: 30)
             }
             Capsule().fill(appearance.shade.color).frame(width: 7, height: 21).rotationEffect(.degrees(12)).offset(y: 51)
         }
@@ -291,7 +352,7 @@ struct NativeSkinBody: View {
         if skin == .pip {
             Ellipse().fill(RadialGradient(colors: [.init(red: 1, green: 0.98, blue: 0.88), .init(red: 0.85, green: 0.86, blue: 0.73)], center: .top, startRadius: 3, endRadius: 92))
                 .frame(width: 74, height: 88).offset(y: 7)
-            Capsule().fill(appearance.shade.color).frame(width: 5, height: 17).rotationEffect(.degrees(25)).offset(x: 2, y: -51)
+            Capsule().fill(appearance.shade.color).frame(width: 5, height: 17).rotationEffect(.degrees(25 + accent * 10)).offset(x: 2, y: -51)
         } else if skin == .mochi {
             // One inexpensive static texture layer. No timers per strand or appendage.
             Canvas { context, size in
@@ -306,14 +367,15 @@ struct NativeSkinBody: View {
                 .overlay(RoundedRectangle(cornerRadius: 33).stroke(.white.opacity(0.2), lineWidth: 1))
                 .frame(width: 91, height: 82).offset(y: -1)
             ForEach([-1.0, 1.0], id: \.self) { side in
-                Capsule().fill(side < 0 ? Color.cyan : .purple).frame(width: 2, height: 23).offset(x: side * 49)
+                Capsule().fill(side < 0 ? Color.cyan : .purple).frame(width: 2, height: 23)
+                    .opacity(0.8 + side * accent * 0.2).offset(x: side * 49)
             }
         } else if skin == .halo {
             ForEach(0..<3) { index in
                 Circle().trim(from: 0.02 + Double(index) * 0.07, to: 0.52 + Double(index) * 0.07)
                     .stroke(LinearGradient(colors: [.white.opacity(0.8), .cyan.opacity(0.12)], startPoint: .topLeading, endPoint: .bottomTrailing), style: StrokeStyle(lineWidth: 3, lineCap: .round))
                     .frame(width: 96 - Double(index) * 7, height: 96 - Double(index) * 7)
-                    .rotationEffect(.degrees(Double(index) * 117))
+                    .rotationEffect(.degrees(Double(index) * 117 + accent * 12))
             }
         } else if skin == .sprout {
             Path { path in
@@ -323,7 +385,7 @@ struct NativeSkinBody: View {
         } else {
             Ellipse().fill(.white.opacity(skin == .veil ? 0.25 : 0.48))
                 .frame(width: skin == .veil ? 4 : 9, height: 25)
-                .rotationEffect(.degrees(35)).offset(x: skin == .ripple ? -2 : -32, y: -32)
+                .rotationEffect(.degrees(35 + accent * 5)).offset(x: (skin == .ripple ? -2 : -32) + accent * 2, y: -32)
         }
     }
 }
@@ -333,31 +395,30 @@ private struct NativeFace: View {
     let skin: DotSkin
     let appearance: NativeSkinAppearance
     let pose: NativeFacePose
-    @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    private var ink: Color { appearance.facialInk(darkAppearance: colorScheme == .dark, opaque: reduceTransparency).color }
-    private var outline: Color {
-        guard appearance.material == .glass && !reduceTransparency else { return .clear }
-        return colorScheme == .dark ? .black.opacity(0.75) : .white.opacity(0.85)
-    }
+    let opaque: Bool
+    let increasedContrast: Bool
+    private var ink: Color { appearance.ink.color }
+    private var edge: Double { appearance.facialOutlineWidth(opaque: opaque, increasedContrast: increasedContrast) }
     var body: some View {
         ZStack {
             ForEach([-1.0, 1.0], id: \.self) { side in
-                NativeMouth(curve: -2).stroke(ink.opacity(0.75), style: StrokeStyle(lineWidth: 1.7, lineCap: .round))
+                NativeFacialShape(shape: NativeMouth(curve: -2), ink: ink.opacity(edge > 0 ? 1 : 0.75), edge: edge, strokeWidth: 1.7)
                     .frame(width: 12, height: 3)
-                    .rotationEffect(.degrees(side * -pose.browTilt))
-                    .offset(x: side * appearance.eyeSpacing / 2, y: -24)
-                Ellipse().fill(ink)
+                    .rotationEffect(.degrees(side * -pose.browTilt + (side > 0 ? pose.browAsymmetry : 0)))
+                    .offset(x: side * appearance.eyeSpacing / 2, y: -24 + pose.browLift)
+                NativeFacialShape(shape: Ellipse(), ink: ink, edge: edge)
                     .overlay(alignment: .topLeading) {
                         Ellipse().fill(.white.opacity(0.88)).frame(width: 2.8, height: 4).padding(2)
                     }
-                    .frame(width: appearance.eyeWidth, height: appearance.eyeHeight)
+                    .frame(width: appearance.eyeWidth, height: appearance.eyeHeight * pose.eyes)
                     .scaleEffect(x: 1, y: pose.blink)
                     .offset(x: side * appearance.eyeSpacing / 2 + pose.gazeX, y: -9 + pose.gazeY)
                 if skin != .veil && skin != .nova {
-                    Ellipse().fill(Color.pink.opacity(0.16)).frame(width: 13, height: 6).blur(radius: 2)
+                    Ellipse().fill(Color.pink.opacity(pose.cheeks)).frame(width: 13, height: 6).blur(radius: 2)
                         .offset(x: side * 27, y: 7)
                 }
+                Circle().fill(ink.opacity(pose.dimples * 0.45)).frame(width: 1.6, height: 1.6)
+                    .offset(x: side * (pose.mouthWidth / 2 + 2.5), y: 12)
             }
             if skin == .pip {
                 RoundedRectangle(cornerRadius: 4).fill(Color.orange)
@@ -365,26 +426,67 @@ private struct NativeFace: View {
                         if phase == .speaking {
                             Ellipse().fill(Color.brown).frame(width: pose.mouthWidth * 0.8, height: max(1, pose.mouthHeight - 1))
                         } else {
-                            NativeMouth(curve: 2.5).stroke(Color.brown, style: StrokeStyle(lineWidth: 1, lineCap: .round))
+                            NativeMouth(curve: pose.mouthCurve * 0.6).stroke(Color.brown, style: StrokeStyle(lineWidth: 1, lineCap: .round))
                                 .frame(width: 8, height: 3)
                         }
                     }
                     .frame(width: max(12, pose.mouthWidth), height: max(8, pose.mouthHeight + 3)).offset(y: 11)
             } else if phase == .speaking {
-                Ellipse().fill(ink).frame(width: pose.mouthWidth, height: pose.mouthHeight)
+                NativeFacialShape(shape: Ellipse(), ink: ink, edge: edge).frame(width: pose.mouthWidth, height: pose.mouthHeight)
                     .overlay(alignment: .bottom) {
                         if pose.speakingOpening > 0.25 {
                             Ellipse().fill(Color(red: 0.94, green: 0.60, blue: 0.65))
                                 .frame(width: pose.mouthWidth * 0.55, height: 2).padding(.bottom, 1)
                         }
+                        if pose.teeth > 0 && pose.speakingOpening > 0.15 {
+                            Capsule().fill(.white.opacity(pose.teeth)).frame(width: pose.mouthWidth * 0.6, height: 1.6)
+                                .offset(y: -pose.mouthHeight / 2 + 2)
+                        }
                     }.offset(y: 12)
-                NativeMouth(curve: 3).stroke(ink, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                NativeFacialShape(shape: NativeMouth(curve: pose.mouthCurve * 0.7), ink: ink, edge: edge, strokeWidth: 1.5)
                     .frame(width: pose.mouthWidth + 3, height: 4).offset(y: 11)
+            } else if pose.smileOpening > 0.1 {
+                NativeFacialShape(shape: NativeSmileOpening(), ink: ink, edge: edge).frame(width: pose.mouthWidth, height: pose.smileOpening + 2)
+                    .overlay(alignment: .top) {
+                        Capsule().fill(.white.opacity(pose.teeth)).frame(width: pose.mouthWidth * 0.65, height: 1.7).padding(.top, 0.7)
+                    }.offset(y: 13)
             } else {
-                NativeMouth(curve: pose.mouthCurve).stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                NativeFacialShape(shape: NativeMouth(curve: pose.mouthCurve), ink: ink, edge: edge, strokeWidth: 1.8)
                     .frame(width: pose.mouthWidth, height: 5).offset(y: 12)
             }
-        }.shadow(color: outline, radius: 0.7)
+        }
+    }
+}
+
+/// A crisp two-tone contour remains legible over both extremes without an opaque
+/// face plate. The thin edge surrounds features only; Veil's body stays clear.
+private struct NativeFacialShape<Contour: Shape>: View {
+    let shape: Contour
+    let ink: Color
+    let edge: Double
+    var strokeWidth: Double? = nil
+    var body: some View {
+        ZStack {
+            if edge > 0 {
+                shape.stroke(.white, style: StrokeStyle(lineWidth: (strokeWidth ?? 0) + edge * 2, lineCap: .round))
+            }
+            if let strokeWidth {
+                shape.stroke(ink, style: StrokeStyle(lineWidth: strokeWidth, lineCap: .round))
+            } else {
+                shape.fill(ink)
+            }
+        }
+    }
+}
+
+private struct NativeSmileOpening: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: rect.height * 0.15))
+        path.addQuadCurve(to: CGPoint(x: rect.maxX, y: rect.height * 0.15), control: CGPoint(x: rect.midX, y: -rect.height * 0.1))
+        path.addQuadCurve(to: CGPoint(x: 0, y: rect.height * 0.15), control: CGPoint(x: rect.midX, y: rect.height * 1.7))
+        path.closeSubpath()
+        return path
     }
 }
 

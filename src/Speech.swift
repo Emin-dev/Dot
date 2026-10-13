@@ -3,7 +3,7 @@ import AVFoundation
 import Combine
 
 /// Bounded PCM storage. The real-time tap only downmixes/copies a small buffer.
-private final class CapturedPCM: @unchecked Sendable {
+final class CapturedPCM: @unchecked Sendable {
     private let lock = NSLock()
     private var samples: [Float] = []
     private var active = false
@@ -78,12 +78,11 @@ private final class CapturedPCM: @unchecked Sendable {
     }
     /// Evaluation and terminal close share the tap lock: no callback can append
     /// newly resumed speech between the main timer's decision and capture closure.
-    func poll(at now: Double) -> (Double, VoiceCaptureDecision, VoiceCaptureTimingEvidence?) {
+    func poll(at now: Double) -> (level: Double, decision: VoiceCaptureDecision, evidence: VoiceCaptureTimingEvidence?, snapshot: VoiceCaptureTimingSnapshot?, endReason: VoiceCaptureEndReason?) {
         lock.lock(); defer { lock.unlock() }
-        guard active else { return (loudness, deadline?.decision ?? .cancelled, deadline?.timingEvidence) }
-        let result = deadline?.evaluate(at: now) ?? .cancelled
-        if result != .listening { active = false }
-        return (loudness, result, deadline?.timingEvidence)
+        if active, deadline?.evaluate(at: now) != .listening { active = false }
+        return (loudness, deadline?.decision ?? .cancelled, deadline?.timingEvidence,
+                deadline?.snapshot(at: now), deadline?.endReason)
     }
     func take() -> [Float] { lock.lock(); defer { lock.unlock() }; active = false; let result = samples; samples = []; return result }
     func cancel() { lock.lock(); active = false; deadline?.cancel(); samples = []; lock.unlock() }
@@ -95,11 +94,14 @@ final class STTManager: ObservableObject {
     @Published private(set) var transcribing = false
     @Published private(set) var transcript = ""
     @Published private(set) var level = 0.0
+    @Published private(set) var captureState = VoiceCaptureState.idle
+    @Published private(set) var timingSnapshot: VoiceCaptureTimingSnapshot?
     var onFinal: ((UUID, String) -> Void)?
     var onRecording: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
     var onNoSpeech: ((UUID) -> Void)?
     var onCaptureCancelled: ((UUID) -> Void)?
+    var onCaptureEnded: ((UUID, VoiceCaptureEndReason) -> Void)?
     var onSpeechEnded: ((UUID, VoiceCaptureTimingEvidence) -> Void)?
     private let engine = AVAudioEngine()
     private let recognizer = WhisperRecognizer()
@@ -119,48 +121,56 @@ final class STTManager: ObservableObject {
     }
     func start(id: UUID, settings: VoiceTimingSettings, invitation: Bool) async {
         guard !Task.isCancelled else { return }
-        cancel(); capture = id
+        cancel(); capture = id; captureState = .preparing
         let silenceSeconds = settings.silenceSeconds
         let invitationSeconds = invitation ? settings.invitationSeconds : nil
-        if invitation, microphonePermission != .authorized { cancelCapture(id); return }
+        if invitation, microphonePermission != .authorized { endCapture(id, reason: .permissionLost); return }
         do {
             let payload = try await OfflinePayload.shared.validate()
-            guard !Task.isCancelled, capture == id else { return }
+            guard continueStarting(id) else { return }
             modelURL = payload.appendingPathComponent("STT/ggml-base.en.bin")
             guard WhisperRecognizer.available else { throw RecognitionFailure.unavailable }
-        } catch { fail(id, error.localizedDescription); return }
-        guard !Task.isCancelled, capture == id else { return }
+        } catch {
+            guard continueStarting(id) else { return }
+            if error is CancellationError { endCapture(id, reason: .intentionalCancellation) }
+            else { fail(id, error.localizedDescription) }
+            return
+        }
+        guard continueStarting(id) else { return }
         let mic: Bool
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: mic = true
         case .notDetermined:
             guard VoiceCaptureAccessPolicy.shouldRequestPermission(invitation: invitation, permission: .undetermined) else {
-                cancelCapture(id); return
+                endCapture(id, reason: .permissionLost); return
             }
+            captureState = .requestingPermission
             mic = await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
             }
         default: mic = false
         }
-        guard !Task.isCancelled, capture == id else { return }
+        guard continueStarting(id) else { return }
+        captureState = .preparing
         guard mic, microphonePermission == .authorized else {
-            if invitation { cancelCapture(id) }
-            else { fail(id, "Microphone access is off. Enable Dot in System Settings → Privacy & Security → Microphone.") }
+            endCapture(id, reason: .permissionLost)
             return
         }
         let input = engine.inputNode, format = engine.inputNode.outputFormat(forBus: 0)
         guard (8000...96000).contains(format.sampleRate), (1...8).contains(format.channelCount),
-              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else { fail(id, RecognitionFailure.format.localizedDescription); return }
+              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else { endCapture(id, reason: .invalidAudio); return }
         let pcm = CapturedPCM(rate: format.sampleRate); self.pcm = pcm
         transcript = ""; captureFormat = format
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, time in pcm.append(buffer, at: time) }
         tapInstalled = true
         do {
             engine.prepare(); try engine.start()
-            guard !Task.isCancelled, capture == id else { cancel(); return }
-            guard microphonePermission == .authorized else { cancelCapture(id); return }
-            pcm.begin(at: ProcessInfo.processInfo.systemUptime, silence: silenceSeconds, invitation: invitationSeconds)
-            recording = true
+            guard continueStarting(id) else { return }
+            guard microphonePermission == .authorized else { endCapture(id, reason: .permissionLost); return }
+            let now = ProcessInfo.processInfo.systemUptime
+            pcm.begin(at: now, silence: silenceSeconds, invitation: invitationSeconds)
+            timingSnapshot = pcm.poll(at: now).snapshot
+            recording = true; captureState = .capturing
             observeCaptureLifecycle(id)
             let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
                 Task { @MainActor [weak self] in self?.tick(id) }
@@ -171,35 +181,38 @@ final class STTManager: ObservableObject {
     }
     private func tick(_ id: UUID) {
         guard capture == id, recording, let pcm else { return }
-        guard VoiceCaptureAccessPolicy.mayCapture(permission: microphonePermission, routeAvailable: routeMatches && engine.isRunning) else {
-            cancelCapture(id); return
-        }
-        let (rms, decision, evidence) = pcm.poll(at: ProcessInfo.processInfo.systemUptime)
-        level = min(1, rms * 8)
-        switch decision {
+        guard microphonePermission == .authorized else { endCapture(id, reason: .permissionLost); return }
+        guard routeMatches else { endCapture(id, reason: .routeChanged); return }
+        guard engine.isRunning else { endCapture(id, reason: .missingAudio); return }
+        let observation = pcm.poll(at: ProcessInfo.processInfo.systemUptime)
+        level = min(1, observation.level * 8)
+        timingSnapshot = observation.snapshot
+        switch observation.decision {
         case .listening: break
         case .silenceSatisfied:
-            if let evidence { onSpeechEnded?(id, evidence) }
+            if let evidence = observation.evidence { onSpeechEnded?(id, evidence) }
             finishCapture(id)
-        case .noSpeech: cancel(); onNoSpeech?(id)
-        case .maximumDuration: fail(id, "Listening ended after one minute. Click me when you're ready.")
-        case .audioUnavailable, .cancelled: cancelCapture(id)
+        case .noSpeech, .maximumDuration, .audioUnavailable, .cancelled:
+            endCapture(id, reason: observation.endReason ?? .invalidAudio)
         }
     }
     private func finishCapture(_ id: UUID) {
         guard capture == id, let pcm, let modelURL else { return }
         stopAudio(); let samples = pcm.take(); self.pcm = nil
-        let token = RecognitionCancellation(); cancellation = token; transcribing = true
+        let token = RecognitionCancellation(); cancellation = token; transcribing = true; captureState = .transcribing
         inference = Task { [weak self] in
             guard let self else { return }
             do {
                 let text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
-                guard self.microphonePermission == .authorized, self.routeMatches else { self.cancelCapture(id); return }
-                self.transcript = text; self.cancel(); self.onFinal?(id, text)
+                guard self.microphonePermission == .authorized else { self.endCapture(id, reason: .permissionLost); return }
+                guard self.routeMatches else { self.endCapture(id, reason: .routeChanged); return }
+                self.transcript = text; self.resetCapture(); self.onFinal?(id, text)
             } catch {
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
-                self.fail(id, error.localizedDescription)
+                if case RecognitionFailure.empty = error { self.endCapture(id, reason: .noRecognizedWords) }
+                else if error is CancellationError { self.endCapture(id, reason: .intentionalCancellation) }
+                else { self.fail(id, error.localizedDescription) }
             }
         }
     }
@@ -217,31 +230,45 @@ final class STTManager: ObservableObject {
             && current.commonFormat == captureFormat.commonFormat && current.isInterleaved == captureFormat.isInterleaved
     }
     private func observeCaptureLifecycle(_ id: UUID) {
-        func observe(_ center: NotificationCenter, _ name: Notification.Name, object: Any? = nil) {
+        func observe(_ center: NotificationCenter, _ name: Notification.Name, reason: VoiceCaptureEndReason, object: Any? = nil) {
             let token = center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.cancelCapture(id) }
+                Task { @MainActor [weak self] in self?.endCapture(id, reason: reason) }
             }
             observers.append((center, token))
         }
-        observe(.default, .AVAudioEngineConfigurationChange, object: engine)
-        observe(.default, AVCaptureDevice.wasDisconnectedNotification)
-        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification)
+        observe(.default, .AVAudioEngineConfigurationChange, reason: .routeChanged, object: engine)
+        observe(.default, AVCaptureDevice.wasDisconnectedNotification, reason: .routeChanged)
+        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification, reason: .systemSleep)
     }
-    private func cancelCapture(_ id: UUID) {
+    private func continueStarting(_ id: UUID) -> Bool {
+        guard capture == id else { return false }
+        guard !Task.isCancelled else { endCapture(id, reason: .intentionalCancellation); return false }
+        return true
+    }
+    private func endCapture(_ id: UUID, reason: VoiceCaptureEndReason) {
         guard capture == id else { return }
-        cancel(); onCaptureCancelled?(id)
+        resetCapture()
+        if let onCaptureEnded { onCaptureEnded(id, reason) }
+        else if reason == .noSpeech { onNoSpeech?(id) }
+        else if let message = reason.recoveryMessage { onError?(id, message) }
+        else { onCaptureCancelled?(id) }
     }
-    private func fail(_ id: UUID, _ message: String) { guard capture == id else { return }; cancel(); onError?(id, message) }
+    private func fail(_ id: UUID, _ message: String) { guard capture == id else { return }; resetCapture(); onError?(id, message) }
     private func stopAudio() {
-        timer?.invalidate(); timer = nil; recording = false
+        timer?.invalidate(); timer = nil; recording = false; timingSnapshot = nil
         if engine.isRunning { engine.stop() }
         if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         level = 0
     }
-    func cancel() {
+    func cancel(reason: VoiceCaptureEndReason = .intentionalCancellation) {
+        if let capture { endCapture(capture, reason: reason) }
+        else { resetCapture() }
+    }
+    private func resetCapture() {
         capture = nil; cancellation?.cancel(); cancellation = nil
         observers.forEach { $0.0.removeObserver($0.1) }; observers.removeAll()
         inference?.cancel(); inference = nil; stopAudio(); pcm?.cancel(); pcm = nil; transcribing = false; captureFormat = nil
+        captureState = .idle
     }
     func shutdown() { cancel(); recognizer.shutdown() }
 }

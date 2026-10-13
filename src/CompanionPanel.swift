@@ -7,15 +7,21 @@ final class CompanionPanel: NSPanel {
     var optionsAction: (() -> Void)?
     var primaryAction: (() -> Void)?
     var primaryHitTest: ((NSPoint) -> Bool)?
+    var controlHitTest: ((NSPoint) -> Bool)?
     var pointerInteraction: ((Bool) -> Void)?
+    /// Native controls track without cancelling the turn and replacing their own button mid-click.
+    var controlInteraction: ((Bool) -> Void)?
     var constrainDrag: ((NSPoint, NSPoint) -> NSPoint)?
     var visibilityChanged: ((Bool) -> Void)?
     private var pointer = CompanionDragState()
+    private var nativeControlPressed = false
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     func cancelPointerGesture() {
-        let wasPressed = pointer.isPressed; pointer.cancel()
+        let wasPressed = pointer.isPressed, wasControl = nativeControlPressed
+        pointer.cancel(); nativeControlPressed = false
         if wasPressed { pointerInteraction?(false) }
+        if wasControl { controlInteraction?(false) }
     }
     private func openOptions() { cancelPointerGesture(); optionsAction?() }
     override func cancelOperation(_ sender: Any?) { cancelPointerGesture(); stopAction?() }
@@ -36,12 +42,17 @@ final class CompanionPanel: NSPanel {
         }
         if event.type == .leftMouseDown {
             cancelPointerGesture()
+            if controlHitTest?(event.locationInWindow) == true {
+                nativeControlPressed = true; makeKey(); controlInteraction?(true)
+                super.sendEvent(event); return
+            }
             guard primaryHitTest?(event.locationInWindow) == true else { return }
             makeKey()
             pointer.begin(point: convertPoint(toScreen: event.locationInWindow), origin: frame.origin)
             pointerInteraction?(true); return
         }
         if event.type == .leftMouseDragged {
+            if nativeControlPressed { super.sendEvent(event); return }
             let point = convertPoint(toScreen: event.locationInWindow)
             if let origin = pointer.update(point: point) {
                 setFrameOrigin(constrainDrag?(origin, point) ?? origin)
@@ -49,6 +60,10 @@ final class CompanionPanel: NSPanel {
             return
         }
         if event.type == .leftMouseUp {
+            if nativeControlPressed {
+                nativeControlPressed = false; controlInteraction?(false)
+                super.sendEvent(event); return
+            }
             let wasPressed = pointer.isPressed
             let click = pointer.release(point: convertPoint(toScreen: event.locationInWindow),
                                         inside: primaryHitTest?(event.locationInWindow) == true)
@@ -100,10 +115,18 @@ final class CompanionSurface {
 
 @MainActor
 enum CompanionStatusMenu {
-    static func make(target: AnyObject, show: Selector, quit: Selector) -> NSMenu {
+    static func make(target: AnyObject, show: Selector, quit: Selector, options: Selector? = nil, type: Selector? = nil) -> NSMenu {
         let menu = NSMenu()
         let recall = NSMenuItem(title: "Show Dot", action: show, keyEquivalent: "")
         recall.target = target; menu.addItem(recall)
+        if let options {
+            let item = NSMenuItem(title: "Options…", action: options, keyEquivalent: ",")
+            item.target = target; menu.addItem(item)
+        }
+        if let type {
+            let item = NSMenuItem(title: "Type to Dot…", action: type, keyEquivalent: "t")
+            item.target = target; menu.addItem(item)
+        }
         menu.addItem(.separator())
         let exit = NSMenuItem(title: "Quit Dot", action: quit, keyEquivalent: "q")
         exit.target = target; menu.addItem(exit)

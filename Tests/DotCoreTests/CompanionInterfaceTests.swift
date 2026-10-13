@@ -4,13 +4,23 @@ import AppKit
 
 @MainActor
 private final class StatusMenuTarget: NSObject {
-    var shows = 0, quits = 0
+    var shows = 0, quits = 0, options = 0, typed = 0
     var selectedSeconds = 0
     var selectedSkin = ""
     @objc func seconds(_ item: NSMenuItem) { selectedSeconds = item.tag }
     @objc func skin(_ item: NSMenuItem) { selectedSkin = item.representedObject as? String ?? "" }
     @objc func showPet() { shows += 1 }
     @objc func quitDot() { quits += 1 }
+    @objc func openOptions() { options += 1 }
+    @objc func typeMessage() { typed += 1 }
+}
+
+@MainActor
+private final class FooterEventView: NSView {
+    var down = 0, up = 0
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { down += 1 }
+    override func mouseUp(with event: NSEvent) { up += 1 }
 }
 
 final class CompanionInterfaceTests: XCTestCase {
@@ -66,6 +76,18 @@ final class CompanionInterfaceTests: XCTestCase {
         XCTAssertTrue(NSApp.sendAction(#selector(StatusMenuTarget.seconds(_:)), to: target, from: groups[1].items[1]))
         XCTAssertEqual(target.selectedSeconds, 6)
     }
+    @MainActor func testMenuOptionsAndTypedEntryHaveRealTargetsAndKeyboardShortcuts() {
+        _ = NSApplication.shared
+        let target = StatusMenuTarget()
+        let menu = CompanionStatusMenu.make(target: target, show: #selector(StatusMenuTarget.showPet),
+            quit: #selector(StatusMenuTarget.quitDot), options: #selector(StatusMenuTarget.openOptions),
+            type: #selector(StatusMenuTarget.typeMessage))
+        XCTAssertEqual(menu.items.filter { !$0.isSeparatorItem }.map(\.title), ["Show Dot", "Options…", "Type to Dot…", "Quit Dot"])
+        XCTAssertEqual(menu.items[1].keyEquivalent, ","); XCTAssertEqual(menu.items[2].keyEquivalent, "t")
+        XCTAssertTrue(NSApp.sendAction(menu.items[1].action!, to: target, from: menu.items[1]))
+        XCTAssertTrue(NSApp.sendAction(menu.items[2].action!, to: target, from: menu.items[2]))
+        XCTAssertEqual(target.options, 1); XCTAssertEqual(target.typed, 1)
+    }
     @MainActor func testAppearanceMenuKeepsOriginalDefaultAndAllAcceptedChoices() throws {
         _ = NSApplication.shared
         let domain = "DotAppearanceMenuTests." + UUID().uuidString
@@ -100,6 +122,26 @@ final class CompanionInterfaceTests: XCTestCase {
         sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel); XCTAssertEqual(talks, 0)
         sendPointer(.leftMouseUp, NSPoint(x: 22, y: 22), to: panel); XCTAssertEqual(talks, 1)
         sendPointer(.leftMouseUp, NSPoint(x: 22, y: 22), to: panel); XCTAssertEqual(talks, 1)
+    }
+    @MainActor func testFooterControlsReceiveMatchedNativeEventsWithoutStartingTalk() {
+        let panel = pointerPanel(); defer { panel.close() }
+        let view = FooterEventView(frame: NSRect(x: 0, y: 0, width: 100, height: 100))
+        panel.contentView = view; panel.controlHitTest = { $0.y >= 0 && $0.y < 40 }
+        var talks = 0, interactions: [Bool] = [], controls: [Bool] = []
+        panel.primaryAction = { talks += 1 }; panel.pointerInteraction = { interactions.append($0) }
+        panel.controlInteraction = { controls.append($0) }
+        panel.makeKeyAndOrderFront(nil)
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel)
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 20), to: panel)
+        XCTAssertEqual(view.down, 1); XCTAssertEqual(view.up, 1)
+        XCTAssertEqual(talks, 0); XCTAssertEqual(interactions, []); XCTAssertEqual(controls, [true, false])
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 80), to: panel)
+        sendPointer(.leftMouseUp, NSPoint(x: 20, y: 80), to: panel)
+        XCTAssertEqual(talks, 1); XCTAssertEqual(view.down, 1)
+        XCTAssertEqual(interactions, [true, false]); XCTAssertEqual(controls, [true, false])
+        sendPointer(.leftMouseDown, NSPoint(x: 20, y: 20), to: panel)
+        panel.cancelPointerGesture()
+        XCTAssertEqual(controls, [true, false, true, false])
     }
     @MainActor func testDraggingThenReturningNeverStartsTalk() {
         let panel = pointerPanel(); defer { panel.close() }; var talks = 0; var interactions: [Bool] = []

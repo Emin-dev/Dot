@@ -57,13 +57,17 @@ final class NativeSkinTests: XCTestCase {
         XCTAssertLessThan(veil.bodyOpacity, 0.05)
     }
 
-    func testGlassFaceContrastAdaptsWithoutLosingOpaqueFallbackInk() {
+    func testGlassFaceHasDualToneEdgeIndependentOfOSAppearance() {
         for skin in [DotSkin.dew, .ripple, .veil] {
             let appearance = NativeSkinAppearance.forSkin(skin)
             let light = appearance.facialInk(darkAppearance: false, opaque: false)
             let dark = appearance.facialInk(darkAppearance: true, opaque: false)
-            XCTAssertGreaterThan(dark.red, light.red)
-            XCTAssertGreaterThan(dark.green, light.green)
+            XCTAssertEqual(dark, light)
+            XCTAssertLessThan(dark.red, 0.25)
+            XCTAssertGreaterThanOrEqual(appearance.facialOutlineWidth(opaque: false), 1)
+            XCTAssertGreaterThan(appearance.facialOutlineWidth(opaque: false, increasedContrast: true),
+                                 appearance.facialOutlineWidth(opaque: false))
+            XCTAssertEqual(appearance.facialOutlineWidth(opaque: true), 0)
             XCTAssertEqual(appearance.facialInk(darkAppearance: true, opaque: true), light)
         }
     }
@@ -129,19 +133,6 @@ final class NativeSkinTests: XCTestCase {
         }
     }
 
-    func testAllInitialRecipesKeepFriendlyFaceAndExplicitLifecycle() {
-        XCTAssertEqual(Set(NativeExpressionRecipe.initialRecipes.map(\.id)).count, 5)
-        for state in NativeFaceState.allCases {
-            let recipe = NativeExpressionRecipe.forState(state)
-            XCTAssertEqual(recipe.compatibleStates, [state])
-            XCTAssertGreaterThan(recipe.cycleSeconds, 0)
-            XCTAssertFalse(recipe.trigger.isEmpty)
-            XCTAssertFalse(recipe.cancellation.isEmpty)
-            XCTAssertGreaterThan(recipe.mouthCurve, 0)
-            XCTAssertLessThanOrEqual(recipe.browTilt, 0)
-        }
-    }
-
     @MainActor func testEachSkinRendersNatively() throws {
         _ = NSApplication.shared
         for skin in DotSkin.allCases {
@@ -165,8 +156,86 @@ final class NativeSkinTests: XCTestCase {
         }
     }
 
+    @MainActor func testGlassFeaturesRemainVisibleAcrossOpposingAndSyntheticSceneBackdrops() throws {
+        _ = NSApplication.shared
+        let backdrops: [AnyView] = [AnyView(Color(white: 0.97)), AnyView(Color(white: 0.03)), AnyView(SyntheticContrastScene())]
+        for skin in [DotSkin.dew, .ripple, .veil] {
+            for scheme in [ColorScheme.light, .dark] {
+                for increased in [false, true] {
+                    for (index, backdrop) in backdrops.enumerated() {
+                        let pose = NativeFacePose.sample(phase: .idle, time: 0, inputLevel: 0, playbackLevel: nil, still: true)
+                        let content = NativeSkinArtwork(phase: .idle, skin: skin, pose: pose, opaque: false, increasedContrast: increased)
+                            .frame(width: 148, height: 156).background(backdrop).environment(\.colorScheme, scheme)
+                        let image = try renderPixels(content)
+                        let background = try renderPixels(backdrop.frame(width: 148, height: 156))
+                        let shift = skin == .ripple ? 7 : 0
+                        let regions = [CGRect(x: 51, y: 58 + shift, width: 18, height: 24),
+                                       CGRect(x: 63, y: 85 + shift, width: 23, height: 13),
+                                       CGRect(x: 48, y: 48 + shift, width: 50, height: 12)]
+                        for region in regions {
+                            var distinguishable = 0
+                            for y in Int(region.minY * 2)..<Int(region.maxY * 2) {
+                                for x in Int(region.minX * 2)..<Int(region.maxX * 2) {
+                                    let offset = (y * 296 + x) * 4
+                                    let foreground = luminance(image, offset: offset)
+                                    let behind = luminance(background, offset: offset)
+                                    if (max(foreground, behind) + 0.05) / (min(foreground, behind) + 0.05) >= 4.5 {
+                                        distinguishable += 1
+                                    }
+                                }
+                            }
+                            XCTAssertGreaterThan(distinguishable, 40, "\(skin) / \(scheme) / increased \(increased) / backdrop \(index) / \(region)")
+                        }
+                    }
+                }
+            }
+        }
+        // Controlled feature visibility is not certification over every image or
+        // evidence that macOS delivered a changed accessibility preference.
+    }
+
+    @MainActor private func renderPixels<V: View>(_ view: V) throws -> [UInt8] {
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        let image = try XCTUnwrap(renderer.cgImage)
+        XCTAssertEqual(image.width, 296); XCTAssertEqual(image.height, 312)
+        var data = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try XCTUnwrap(CGContext(data: &data, width: image.width, height: image.height, bitsPerComponent: 8,
+                                            bytesPerRow: image.width * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return data
+    }
+
+    private func luminance(_ data: [UInt8], offset: Int) -> Double {
+        func linear(_ value: UInt8) -> Double {
+            let channel = Double(value) / 255
+            return channel <= 0.04045 ? channel / 12.92 : pow((channel + 0.055) / 1.055, 2.4)
+        }
+        return linear(data[offset]) * 0.2126 + linear(data[offset + 1]) * 0.7152 + linear(data[offset + 2]) * 0.0722
+    }
+
     private func pose(_ phase: PetPhase, time: Double = 1, input: Double = 0, playback: Double? = nil) -> NativeFacePose {
         NativeFacePose.sample(phase: phase, time: time, inputLevel: input, playbackLevel: playback, still: false)
+    }
+}
+
+/// Generated scenery/text-like detail; contains no user screen or file content.
+private struct SyntheticContrastScene: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.24, green: 0.53, blue: 0.9), .white, Color(red: 0.2, green: 0.36, blue: 0.08)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            ForEach(0..<9) { index in
+                Ellipse().fill(index.isMultiple(of: 2) ? Color.green.opacity(0.65) : Color.orange.opacity(0.65))
+                    .frame(width: 60, height: 85).rotationEffect(.degrees(Double(index * 23)))
+                    .offset(x: Double((index * 37) % 121) - 60, y: Double((index * 29) % 121) - 60)
+            }
+            ForEach(0..<8) { index in
+                Rectangle().fill(index.isMultiple(of: 2) ? .white.opacity(0.9) : .black.opacity(0.8))
+                    .frame(width: 148, height: index.isMultiple(of: 2) ? 3 : 5).offset(y: Double(index * 19) - 70)
+            }
+        }.frame(width: 148, height: 156).clipped()
     }
 }
 #endif
