@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "status": "source-and-server-candidate-only",
+  "production_payload_assembled": false,
+  "searxng": {
+    "revision": "22c64b8d394b680c7ea96be25f36dad14126420a",
+    "license": "AGPL-3.0-or-later",
+    "source_url": "https://codeload.github.com/searxng/searxng/tar.gz/22c64b8d394b680c7ea96be25f36dad14126420a",
+    "source_sha256": "8a037582fea10538e54dbcb4fabb11038c912ba3c887fd403fcdd8e5ddc36df8",
+    "direct_requirements": [
+      "certifi==2026.7.22",
+      "babel==2.18.0",
+      "flask-babel==4.0.0",
+      "flask==3.1.3",
+      "jinja2==3.1.6",
+      "lxml==6.1.3",
+      "pygments==2.21.0",
+      "python-dateutil==2.9.0.post0",
+      "pyyaml==6.0.3",
+      "curl_cffi==0.16.3",
+      "valkey==6.1.1",
+      "markdown-it-py==4.2.0",
+      "msgspec==0.22.0",
+      "typer==0.27.2",
+      "isodate==0.7.2",
+      "whitenoise==6.12.0",
+      "typing-extensions==4.16.0"
+    ],
+    "transitive_target_wheel_closure_verified": false
+  },
+  "waitress": {
+    "version": "3.0.2",
+    "license": "ZPL-2.1",
+    "wheel_url": "https://files.pythonhosted.org/packages/8d/57/a27182528c90ef38d82b636a11f606b0cbb0e17588ed205435f8affe3368/waitress-3.0.2-py3-none-any.whl",
+    "wheel_sha256": "c56d67fd6e87c2ee598b76abdd4e96cfad1f24cacdea5078d382b1f9d7b5ed2e",
+    "source_url": "https://files.pythonhosted.org/packages/bf/cb/04ddb054f45faa306a230769e868c28b8065ea196891f09004ebace5b184/waitress-3.0.2.tar.gz",
+    "source_sha256": "682aaaf2af0c44ada4abfb70ded36393f0e307f4ab9456a215ce0020baefc31f"
+  },
+  "python": {
+    "architecture": "arm64",
+    "target": "macOS",
+    "artifact": null,
+    "sha256": null,
+    "status": "not-selected-or-assembled"
+  },
+  "engines": [
+    "duckduckgo"
+  ]
+}

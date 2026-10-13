@@ -1,0 +1,29 @@
+(version 1)
+; Separate short-lived reader. No models, launcher, application data, user files,
+; state directories, DNS, inbound sockets, proxies or trust-daemon egress.
+(allow default)
+(deny file-read*)
+(deny file-map-executable)
+(deny file-write*)
+(deny network*)
+(deny process-exec)
+(allow process-exec (literal (param "DOT_SOURCE_PYTHON")))
+(allow file-read-metadata
+  (path-ancestors (param "DOT_SOURCE_PYTHON_ROOT"))
+  (path-ancestors (param "DOT_SOURCE_HELPER"))
+  (literal "/etc") (literal "/var") (literal "/tmp"))
+(allow file-read*
+  (literal "/")
+  (subpath "/System/Library") (subpath "/Library/Apple/System")
+  (subpath "/usr/lib")
+  (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
+  (literal "/private/etc/localtime")
+  (literal "/private/etc/ssl/cert.pem") (literal "/etc/ssl/cert.pem")
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom")
+  (subpath (param "DOT_SOURCE_PYTHON_ROOT"))
+  (literal (param "DOT_SOURCE_HELPER")))
+(allow file-map-executable
+  (subpath "/System/Library") (subpath "/Library/Apple/System") (subpath "/usr/lib")
+  (subpath (param "DOT_SOURCE_PYTHON_ROOT")))
+(allow file-write-data (literal "/dev/null"))
+(allow network-outbound (remote tcp (param "DOT_SOURCE_ENDPOINT")))

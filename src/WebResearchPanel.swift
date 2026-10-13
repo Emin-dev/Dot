@@ -14,6 +14,7 @@ final class WebResearchModel: ObservableObject {
     @Published private(set) var summaries: [WebResearchSessionSummary] = []
     @Published private(set) var selected: WebResearchStoredSession?
     @Published private(set) var activity: Activity?
+    @Published private(set) var shuttingDown = false
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var providerName: String?
@@ -57,8 +58,16 @@ final class WebResearchModel: ObservableObject {
         return session.queries.count + synthesis.followUpQueries.count <= session.limits.maxQueries
             && session.searchAttempts + synthesis.followUpQueries.count <= session.limits.maxSearchAttempts
     }
+    var canRetryReviewedService: Bool {
+        guard acceptingActions, !busy, configured, let session = selected?.session,
+              session.stage == .paused, session.retryRequiresReview == true,
+              session.providerID == providerName,
+              session.retryNotBefore.map({ $0 <= Date() }) ?? true else { return false }
+        return session.searchAttempts < session.limits.maxSearchAttempts
+            && session.queries.contains { $0.status == .pending && $0.attempts < 2 }
+    }
     var configurationSummary: String {
-        guard let providerName else { return "Search is not configured. Choose a provider and set up its key locally before starting. Saved research remains available." }
+        guard let providerName else { return "Search is not ready. The verified local search runtime must be available before starting. Saved research remains available." }
         guard configured else { return "\(providerName) does not have confirmed result-retention rights for saved research." }
         let storage = transient ? "Temporary: held in memory until dot quits; no restart recovery or automatic saving." : "Research is saved locally."
         return "Search: \(providerName) · answers use local Qwen · up to \(limits.maxSearchAttempts) search attempts per session. " + storage
@@ -92,13 +101,14 @@ final class WebResearchModel: ObservableObject {
     /// selects a service, provisions a key or falls back to a paid/remote answer provider itself.
     func configure(provider: (any WebSearchProvider)?, synthesize: Synthesis?,
                    limits: WebResearchLimits = WebResearchLimits(), retryPolicy: WebResearchRetryPolicy = .preserveUncertain) {
-        guard !busy else { return }
+        guard !busy, !shuttingDown else { return }
         self.provider = provider; providerName = provider?.providerID; self.synthesize = synthesize
         self.limits = limits; self.retryPolicy = retryPolicy; error = nil
     }
 
-    func open() { acceptingActions = true; if !busy { reload() } }
+    func open() { guard !shuttingDown else { return }; acceptingActions = true; if !busy { reload() } }
     func close() { acceptingActions = false; foregroundPause() }
+    func closeAdmissions() { shuttingDown = true; close() }
     func cancel() { foregroundPause() }
     func flush() async { while let work = operation { await work.value } }
 
@@ -181,6 +191,18 @@ final class WebResearchModel: ObservableObject {
             let current = try await store.load(id: selected.id)
             try model.check(token); model.activeStored = current; model.researchSessionID = current.id; model.selected = current
             try await model.research(current, store: store, token: token)
+        }
+    }
+    func retryReviewedService() {
+        guard canRetryReviewedService, let selected else { return }
+        begin(.retrieving) { model, store, token in
+            let current = try await store.load(id: selected.id)
+            try model.check(token)
+            guard current.revision == selected.revision else { throw WebResearchStoreError.conflict }
+            let updated = try await store.save(current.session.allowingReviewedProviderRetry(), expectedRevision: current.revision)
+            model.activeStored = updated; model.researchSessionID = updated.id
+            try model.check(token); model.selected = updated
+            try await model.research(updated, store: store, token: token)
         }
     }
     func followUp() {
@@ -417,6 +439,7 @@ final class WebResearchPanel: NSObject, NSWindowDelegate {
         window.center(); panel = window; return window
     }
     func show() {
+        guard !model.shuttingDown else { return }
         invalidateDeletion()
         let window = prepare(); model.open(); onVisibility?(true)
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
@@ -424,6 +447,7 @@ final class WebResearchPanel: NSObject, NSWindowDelegate {
     func foregroundPause() { invalidateDeletion(); model.foregroundPause() }
     func cancel() { invalidateDeletion(); model.cancel() }
     func close() { invalidateDeletion(); model.close(); panel?.close() }
+    func closeAdmissions() { invalidateDeletion(); model.closeAdmissions(); panel?.close() }
     func windowWillClose(_ notification: Notification) { invalidateDeletion(); model.close(); onVisibility?(false) }
     private func invalidateDeletion() { confirmation.invalidate(); model.cancelDeletion() }
     func requestDeletion() {
@@ -498,6 +522,10 @@ struct WebResearchView: View {
             HStack {
                 Button("Refresh") { model.reload() }.disabled(model.busy)
                 Button("Resume") { model.resume() }.disabled(!model.canResume)
+                if model.selected?.session.retryRequiresReview == true {
+                    Button("Retry service") { model.retryReviewedService() }.disabled(!model.canRetryReviewedService)
+                        .help("Retry only after checking local search readiness. Existing attempt limits and provider cooldowns still apply; this does not bypass website challenges.")
+                }
                 Button("Follow-up searches") { model.followUp() }.disabled(!model.canFollowUp)
                 Spacer()
                 Button("Copy") { model.copySelected() }.disabled(!model.canCopy)

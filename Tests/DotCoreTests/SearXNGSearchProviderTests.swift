@@ -202,7 +202,7 @@ final class SearXNGSearchProviderTests: XCTestCase {
     }
     func testInvalidQueriesAndUnownedGenerationDispatchNothing() async throws {
         let lease = SearXNGFixtureLease(), provider = try provider(lease: lease)
-        for (query, limit) in [(" ", 1), (String(repeating: "界", count: 683), 1), (String(repeating: "a", count: 500), 1), (String(repeating: "e\u{301}", count: 250), 1), ("bad-limit", 0), ("bad-limit", 9), ("!brave query", 1), ("query !!external", 1)] {
+        for (query, limit) in [(" ", 1), ("contains\u{0}nul", 1), (String(repeating: "界", count: 683), 1), (String(repeating: "a", count: 500), 1), (String(repeating: "e\u{301}", count: 250), 1), ("bad-limit", 0), ("bad-limit", 9), ("!brave query", 1), ("query !!external", 1)] {
             do { _ = try await provider.search(query: query, limit: limit); XCTFail("Invalid query accepted") }
             catch { XCTAssertEqual(error as? SearXNGSearchError, .invalidQuery) }
             XCTAssertTrue(SearXNGFixture.requests(query).isEmpty)

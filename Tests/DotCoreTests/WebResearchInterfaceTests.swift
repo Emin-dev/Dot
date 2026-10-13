@@ -8,13 +8,16 @@ private actor PanelSearchFixture: WebSearchProvider {
     nonisolated let permitsResultPersistence: Bool
     var calls: [String] = []
     var hold: String?
+    var needsReview = false
     private var continuation: CheckedContinuation<Void, Never>?
     init(retention: Bool = true) { permitsResultPersistence = retention }
     func suspend(_ query: String) { hold = query }
+    func requireReview(_ value: Bool) { needsReview = value }
     func waiting() -> Bool { continuation != nil }
     func release() { hold = nil; continuation?.resume(); continuation = nil }
     func search(query: String, limit: Int) async throws -> [WebSearchResult] {
         calls.append(query)
+        if needsReview { throw SearXNGSearchError.unavailable }
         if hold == query { await withCheckedContinuation { continuation = $0 } }
         let path = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
         return [WebSearchResult(url: URL(string: "https://example.org/\(path)")!, title: query, snippet: "Untrusted search hint", publicationDateHint: nil)]
@@ -196,6 +199,47 @@ final class WebResearchInterfaceTests: XCTestCase {
             XCTAssertEqual(calls, ["Fixture question", "Fixture question original sources evidence"])
             XCTAssertEqual(model.selected?.session.stage, .awaitingLocalSynthesis)
             XCTAssertTrue(model.notice?.contains("not configured") == true)
+        }
+    }
+
+    @MainActor func testServiceReviewNeedsExplicitRetryAndPreservesAttemptBudget() async throws {
+        try await withStore { store, _ in
+            let provider = PanelSearchFixture(); await provider.requireReview(true)
+            let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture(), synthesize: { Self.answer($0) })
+            draft(model); model.start(); await model.flush()
+            XCTAssertFalse(model.canResume); XCTAssertTrue(model.canRetryReviewedService)
+            XCTAssertEqual(model.selected?.session.searchAttempts, 1)
+            await provider.requireReview(false)
+            model.resume(); await model.flush()
+            let before = await provider.calls; XCTAssertEqual(before, ["primary"])
+            model.retryReviewedService(); await model.flush()
+            let after = await provider.calls; XCTAssertEqual(after, ["primary", "primary", "secondary"])
+            XCTAssertEqual(model.selected?.session.searchAttempts, 3)
+            XCTAssertEqual(model.selected?.session.stage, .completed)
+            XCTAssertFalse(model.canRetryReviewedService)
+        }
+    }
+
+    @MainActor func testShutdownCannotReopenWebResearchDuringOrAfterDrain() async throws {
+        try await withStore { store, _ in
+            _ = NSApplication.shared
+            let provider = PanelSearchFixture(); await provider.suspend("primary")
+            let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture())
+            let panel = WebResearchPanel(model: model)
+            var presentations = 0; panel.onVisibility = { if $0 { presentations += 1 } }
+            draft(model); model.start(); try await eventually { await provider.waiting() }
+            panel.closeAdmissions(); panel.show(); model.open(); model.start(); model.resume()
+            XCTAssertTrue(model.shuttingDown); XCTAssertFalse(model.canStart); XCTAssertFalse(model.canResume)
+            var drained = false
+            let flush = Task { await model.flush(); drained = true }
+            for _ in 0..<20 { await Task.yield() }
+            XCTAssertFalse(drained)
+            await provider.release(); await flush.value
+            panel.show(); model.open(); model.start(); model.resume(); await model.flush()
+            XCTAssertEqual(presentations, 0)
+            let calls = await provider.calls; XCTAssertEqual(calls, ["primary"])
+            let saved = try await store.list(); XCTAssertEqual(saved.count, 1)
+            XCTAssertFalse(model.canStart); XCTAssertFalse(model.canResume)
         }
     }
 

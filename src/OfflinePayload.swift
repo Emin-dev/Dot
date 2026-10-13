@@ -32,6 +32,18 @@ enum OfflineFailure: LocalizedError {
 
 actor OfflinePayload {
     static let shared = OfflinePayload()
+    /// A new, independently sandboxed source-fetch process uses only the audited
+    /// interpreter/stdlib. It never joins Splash's process, environment or model.
+    nonisolated static func sourceReader() -> ResearchWebReader {
+        let resources = Bundle.main.resourceURL
+        return ResearchWebReader(transport: ResearchPinnedHTTPTransport(verifiedRuntime: {
+            guard let resources else { throw OfflineFailure.incomplete }
+            let payload = try await OfflinePayload.shared.validate()
+            return try ResearchFetchRuntime(auditedPythonRoot: payload.appendingPathComponent("Splash/python"),
+                signedHelper: resources.appendingPathComponent("Research/dot_source_fetch.py"),
+                signedProfile: resources.appendingPathComponent("Research/source_fetch.sb"))
+        }))
+    }
     private var validation: (id: UUID, task: Task<URL, Error>)?
     private var verified: URL?
     private let root: URL?

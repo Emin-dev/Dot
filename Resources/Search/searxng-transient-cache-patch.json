@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "upstream_revision": "22c64b8d394b680c7ea96be25f36dad14126420a",
+  "path": "searx/engines/duckduckgo.py",
+  "original_sha256": "6fd40c78b09f52a7c7ea58e25c3e974c1b182502a877406eaac1654ff33f9262",
+  "patched_sha256": "e4683ebd1207d9011016123ba09f8dc72af19638f164304ef94d5349cb09489f",
+  "before": "def set_vqd(query: str | int, value: str, params: \"OnlineParams\") -> None:\n    cache = get_cache()\n    key = cache.secret_hash(f\"{query}//{params['headers']['User-Agent']}\")\n    cache.set(key=key, value=value, expire=3600)\n",
+  "after": "def set_vqd(query: str | int, value: str, params: \"OnlineParams\") -> None:\n    \"\"\"Dot modification, 2026-10-13: do not retain query-derived VQD tokens.\n\n    The owned Dot gateway supports page one only; cached VQD is used solely by\n    later-page requests, which that gateway rejects before engine dispatch.\n    This source delta must accompany the exact corresponding SearXNG source.\n    \"\"\"\n    return None\n",
+  "reason": "The owned page-one-only research gateway must not persist query-derived VQD tokens."
+}

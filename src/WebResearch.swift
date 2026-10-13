@@ -196,6 +196,17 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
         return data
     }
 
+    /// An explicit user retry after reviewing service readiness. This changes no
+    /// attempt/evidence budget and cannot shorten a provider's known cooldown.
+    func allowingReviewedProviderRetry(now: Date = Date()) throws -> Self {
+        try validate()
+        guard stage == .paused, retryRequiresReview == true,
+              retryNotBefore.map({ $0 <= now }) ?? true else { throw WebResearchError.invalidSession }
+        var copy = self
+        copy.retryRequiresReview = false; copy.retryNotBefore = nil; copy.updatedAt = now
+        try copy.validate(); return copy
+    }
+
     static func decodeCheckpoint(_ data: Data) throws -> Self {
         guard data.count <= 8_388_608 else { throw WebResearchError.limitExceeded }
         guard let session = try? JSONDecoder().decode(Self.self, from: data) else { throw WebResearchError.invalidSession }

@@ -21,6 +21,8 @@ final class ResearchNotebookModel: ObservableObject {
     @Published private(set) var folder: URL?
     @Published private(set) var notebooks: [ResearchNotebook] = []
     @Published private(set) var activity: Activity?
+    @Published private(set) var draining = false
+    @Published private(set) var shuttingDown = false
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     private let store: (any ResearchNotebookAccess)?
@@ -34,11 +36,12 @@ final class ResearchNotebookModel: ObservableObject {
     var busy: Bool { activity != nil }
     var selected: ResearchNotebook? { notebooks.first { $0.id == selection } }
     var canCreate: Bool {
-        acceptingActions && !busy && store != nil && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        acceptingActions && !busy && !draining && store != nil && !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (folder != nil || !urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 
     init(store: (any ResearchNotebookAccess)? = nil, directory: URL? = nil,
+         webReader: ResearchWebReader = ResearchWebReader(),
          copyText: @escaping (String) -> Void = { text in
              NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
          }, openSource: @escaping (SourceDestination) -> Bool = { destination in
@@ -53,7 +56,7 @@ final class ResearchNotebookModel: ObservableObject {
         self.openSource = openSource
         if let store { self.store = store }
         else {
-            do { self.store = try ResearchNotebookStore(directory: directory) }
+            do { self.store = try ResearchNotebookStore(directory: directory, webReader: webReader) }
             catch { self.store = nil; self.error = "Local research notebooks could not be opened." }
         }
     }
@@ -80,12 +83,18 @@ final class ResearchNotebookModel: ObservableObject {
         guard acceptingActions, !busy else { return }
         self.folder = folder; error = nil; notice = nil
     }
-    func open() { acceptingActions = true; if !busy { reload() } }
+    func open() { guard !shuttingDown else { return }; acceptingActions = true; if !busy && !draining { reload() } }
+    func closeAdmissions() { shuttingDown = true; close() }
     func close() { acceptingActions = false; cancel() }
     func cancel() {
         cancelDeletion()
-        revision = UUID(); copyRevision = UUID(); operation?.cancel(); operation = nil
-        activity = nil; notice = "Stopped. Refresh to check any results already saved."; error = nil
+        revision = UUID(); copyRevision = UUID(); operation?.cancel()
+        // Retain an admitted store operation until its write has really settled.
+        // Cancellation invalidates presentation, but cannot promise write rollback.
+        draining = operation != nil
+        activity = nil
+        notice = draining ? "Stopping. Waiting for any admitted local write to settle." : "Stopped. Refresh to check any results already saved."
+        error = nil
     }
     func flush() async { await operation?.value }
     func reload() {
@@ -166,11 +175,18 @@ final class ResearchNotebookModel: ObservableObject {
     }
     private func run(_ activity: Activity,
                      body: @escaping (any ResearchNotebookAccess) async throws -> ([ResearchNotebook], UUID?, String?)) {
-        guard acceptingActions, !busy, let store else { return }
+        guard acceptingActions, !busy, operation == nil, let store else { return }
         cancelDeletion()
         let expected = UUID(); revision = expected
         self.activity = activity; error = nil; notice = nil
         operation = Task { [weak self] in
+            defer {
+                self?.operation = nil
+                if self?.draining == true {
+                    self?.draining = false
+                    self?.notice = "Stopped. Refresh to check any results already saved."
+                }
+            }
             do {
                 try Task.checkCancellation()
                 let (notebooks, preferred, notice) = try await body(store)
@@ -200,6 +216,7 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     }
     convenience init(directory: URL? = nil) { self.init(model: ResearchNotebookModel(directory: directory)) }
     func show() {
+        guard !model.shuttingDown else { return }
         invalidateSheets()
         if panel == nil {
             let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: 620),
@@ -216,6 +233,7 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     }
     func cancel() { invalidateSheets(); model.cancel() }
     func close() { invalidateSheets(); model.close(); panel?.close() }
+    func closeAdmissions() { invalidateSheets(); model.closeAdmissions(); panel?.close() }
     func windowWillClose(_ notification: Notification) { invalidateSheets(); model.close(); onVisibility?(false) }
     private func invalidateSheets() {
         confirmation.invalidate(); model.cancelDeletion()

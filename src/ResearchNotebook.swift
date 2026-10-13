@@ -184,8 +184,8 @@ enum ResearchExtraction {
 }
 
 final class ResearchWebReader: @unchecked Sendable {
-    private let configuration: URLSessionConfiguration
-    init(configuration: URLSessionConfiguration = .ephemeral) { self.configuration = configuration }
+    private let transport: any ResearchHTTPTransport
+    init(transport: any ResearchHTTPTransport = ResearchPinnedHTTPTransport()) { self.transport = transport }
     static func allowed(_ url: URL) -> Bool {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
               url.absoluteString.utf8.count <= 8_192, url.user == nil, url.password == nil,
@@ -197,7 +197,7 @@ final class ResearchWebReader: @unchecked Sendable {
               labels.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 63 && $0.first != "-" && $0.last != "-" && $0.utf8.allSatisfy { (97...122).contains($0) || (48...57).contains($0) || $0 == 45 } }) else { return false }
         if ["localhost", "local", "internal", "home.arpa"].contains(where: { host == $0 || host.hasSuffix("." + $0) }) { return false }
         // inet_aton handles decimal, octal, hexadecimal and short IPv4 forms without
-        // DNS. This lexical boundary is not DNS-rebinding/private-address isolation.
+        // DNS. Connection-time address enforcement belongs to ResearchPinnedHTTPTransport.
         var address = in_addr()
         if host.withCString({ inet_aton($0, &address) }) != 0 || host.allSatisfy({ $0.isNumber || $0 == "." }) { return false }
         return true
@@ -205,30 +205,16 @@ final class ResearchWebReader: @unchecked Sendable {
     func read(_ url: URL) async throws -> ResearchSource {
         try Task.checkCancellation()
         guard Self.allowed(url) else { throw ResearchNotebookError.invalidInput }
-        let config = configuration.copy() as! URLSessionConfiguration
-        config.httpShouldSetCookies = false; config.httpCookieStorage = nil; config.urlCredentialStorage = nil
-        config.httpAdditionalHeaders = nil
-        config.urlCache = nil; config.requestCachePolicy = .reloadIgnoringLocalCacheData
-        config.timeoutIntervalForRequest = 15; config.timeoutIntervalForResource = 30
-        let redirects = ResearchRedirectPolicy()
-        let session = URLSession(configuration: config)
-        defer { session.invalidateAndCancel() }
         do {
-            var request = URLRequest(url: url)
-            request.setValue("text/html, text/plain, application/pdf", forHTTPHeaderField: "Accept")
-            let (bytes, response) = try await session.bytes(for: request, delegate: redirects)
-            guard let response = response as? HTTPURLResponse, (200...299).contains(response.statusCode),
+            let result = try await transport.fetch(url)
+            let data = result.data, response = result.response
+            guard (200...299).contains(response.statusCode),
                   response.expectedContentLength <= ResearchExtraction.maxBytes,
                   let finalURL = response.url, Self.allowed(finalURL) else { throw ResearchNotebookError.networkFailure }
+            guard data.count <= ResearchExtraction.maxBytes else { throw ResearchNotebookError.limitExceeded }
             let mime = response.mimeType?.lowercased() ?? ""
             let pdf = mime == "application/pdf"
             guard pdf || ["text/html", "text/plain", "text/markdown", "application/json"].contains(mime) else { throw ResearchNotebookError.unsupportedSource }
-            var data = Data()
-            for try await byte in bytes {
-                if data.count % 16_384 == 0 { try Task.checkCancellation() }
-                guard data.count < ResearchExtraction.maxBytes else { throw ResearchNotebookError.limitExceeded }
-                data.append(byte)
-            }
             try Task.checkCancellation()
             let extracted = try ResearchExtraction.extract(data, pdf: pdf, html: mime == "text/html", encodingName: response.textEncodingName)
             let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -244,20 +230,6 @@ final class ResearchWebReader: @unchecked Sendable {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled { throw CancellationError() }
             throw ResearchNotebookError.networkFailure
         }
-    }
-}
-
-final class ResearchRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-    func allowRedirect(to url: URL) -> Bool {
-        lock.lock(); defer { lock.unlock() }
-        count += 1; return count <= 3 && ResearchWebReader.allowed(url)
-    }
-    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        let allowed = request.url.map(allowRedirect) == true
-        completionHandler(allowed ? request : nil)
     }
 }
 

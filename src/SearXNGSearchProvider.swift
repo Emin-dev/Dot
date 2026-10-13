@@ -191,7 +191,7 @@ private actor SearXNGSearchClient {
     func search(query: String, limit: Int) async throws -> WebSearchResponse {
         try Task.checkCancellation()
         guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              query.utf8.count <= 2_048, (1...8).contains(limit),
+              query.utf8.count <= 2_048, !query.contains("\u{0}"), (1...8).contains(limit),
               (!engineIDs.contains("duckduckgo") || query.unicodeScalars.count < 500),
               !query.split(whereSeparator: { $0.isWhitespace }).contains(where: { $0.hasPrefix("!") }) else {
             throw SearXNGSearchError.invalidQuery

@@ -412,7 +412,7 @@ final class WebResearchTests: XCTestCase {
 
     func testExistingNativeReaderIntegrationProducesHashedPageEvidence() async throws {
         let configuration = URLSessionConfiguration.ephemeral; configuration.protocolClasses = [WorkflowPageFixture.self]
-        let workflow = WebResearchWorkflow(provider: ResearchSearchFixture(), reader: ResearchWebReader(configuration: configuration))
+        let workflow = WebResearchWorkflow(provider: ResearchSearchFixture(), reader: ResearchWebReader(transport: ResearchURLSessionFixtureTransport(configuration: configuration)))
         let fetched = try await workflow.run(session()) { _ in }
         XCTAssertEqual(fetched.sources.count, 2)
         XCTAssertTrue(fetched.sources.allSatisfy { $0.text.contains("Evidence for") && !$0.text.contains("ignored()") })
@@ -472,6 +472,23 @@ final class WebResearchTests: XCTestCase {
         let again = try await workflow.run(first) { _ in }
         XCTAssertEqual(again, first)
         let calls = await provider.calls; XCTAssertEqual(calls, ["primary"])
+    }
+
+    func testExplicitReviewedRetryKeepsAttemptBudgetAndCannotBypassKnownCooldown() async throws {
+        let provider = CooldownResearchFixture(deadline: nil)
+        let workflow = WebResearchWorkflow(provider: provider, reader: ResearchReadFixture())
+        let paused = try await workflow.run(session()) { _ in }
+        let retry = try paused.allowingReviewedProviderRetry()
+        XCTAssertEqual(retry.searchAttempts, paused.searchAttempts)
+        XCTAssertEqual(retry.queries, paused.queries); XCTAssertEqual(retry.reads, paused.reads)
+        XCTAssertEqual(retry.retryRequiresReview, false)
+        let blockedAgain = try await workflow.run(retry) { _ in }
+        XCTAssertEqual(blockedAgain.searchAttempts, 2)
+        XCTAssertEqual(blockedAgain.retryRequiresReview, true)
+        let calls = await provider.calls; XCTAssertEqual(calls, ["primary", "primary"])
+        var delayed = paused; delayed.retryNotBefore = Date(timeIntervalSinceNow: 3_600)
+        XCTAssertThrowsError(try delayed.allowingReviewedProviderRetry())
+        XCTAssertThrowsError(try session().allowingReviewedProviderRetry())
     }
 
     func testProviderReviewBlockIsDurableWithinCheckpointAndCannotLoopThroughQueries() async throws {

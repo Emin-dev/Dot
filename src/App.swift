@@ -21,7 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let historyPanel = ConversationHistoryPanel()
     private let typedPanel = TypedInteractionPanel()
     private let sourcePanel = SourceReferencePanel()
-    private let researchPanel = ResearchPanel()
+    private let researchPanel = ResearchPanel(model: ResearchNotebookModel(webReader: OfflinePayload.sourceReader()))
     private let actionPanel = NativeActionPanel()
     private var webResearchPanel: WebResearchPanel?
     private var visibleUtilities = Set<String>()
@@ -36,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let model = ChatModel(); self.model = model
-        let webResearch = WebResearchPanel(model: WebResearchModel(synthesize: { [weak model] session in
+        let webResearch = WebResearchPanel(model: WebResearchModel(reader: OfflinePayload.sourceReader(), synthesize: { [weak model] session in
             guard let model else { throw CancellationError() }
             return try await model.engine.researchSynthesis(session: session)
         }))
@@ -176,6 +176,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model?.cancelForInteraction(); researchPanel.show()
     }
     @objc private func runWebResearch() {
+        guard !terminating else { return }
         model?.cancelForInteraction(); webResearchPanel?.show()
     }
     @objc private func readSource() {
@@ -280,9 +281,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
-        terminating = true; sourcePanel.stop(); researchPanel.close(); webResearchPanel?.close(); actionPanel.closeAdmissions(); DotIntentRouter.shared.clear(); model?.beginShutdown()
+        terminating = true; sourcePanel.stop(); researchPanel.closeAdmissions(); webResearchPanel?.closeAdmissions(); actionPanel.closeAdmissions(); DotIntentRouter.shared.clear(); model?.beginShutdown()
         Task {
             await model?.textHistory.flush()
+            await researchPanel.model.flush()
             await webResearchPanel?.model.flush()
             await actionPanel.model.flush()
             sender.reply(toApplicationShouldTerminate: true)

@@ -1,0 +1,34 @@
+# Connection-pinned source reading
+
+The source reader runs separately from inference. App wiring first requires the normal complete payload integrity audit, then reuses only its Python executable and standard library in a new isolated process. It does not share Splash's running process, environment, models or launcher. The fetch helper and profile are signed application resources. Missing or invalid payloads fail closed; system Python, URLSession and curl are not production fallbacks.
+
+## Transport and trust policy
+
+`/usr/bin/curl --resolve` correctly pins its explicit HTTP connection while preserving TLS SNI and hostname validation. Seven Linux probes confirmed host preservation, mismatch rejection before HTTP, direct/no-proxy/config/auth/cookie behavior and decompression. However, macOS's TLS trust path can fetch missing intermediates through SecTrust outside that pinned connection. Apple also patches its system LibreSSL to consult native trust. Neither a DNS preflight nor a private-IP post-hoc metric solves that problem. An undocumented trust override is not a maintainable security boundary. 
+
+The selected exchange uses Python's standard `socket`, `ssl` and `http.client`, with the already-audited bundled OpenSSL backend. It is launched with `-I -S -B`, no shell, no site packages and an explicit environment allowlist. It opens a socket for one verified numeric address, checks the connected peer, wraps it with original-host SNI/certificate verification, and hands HTTP framing to the stdlib. No URL hostname is passed to a resolver during connect. The stdlib helper creates no persistent files and has no cookie, proxy, credential, keychain, auth negotiation, redirect or retry facility.
+
+TLS policy is explicit: certificate chain, hostname and validity checks with TLS 1.2+ and the OS `/etc/ssl/cert.pem` file trust anchors. It fails on a missing chain rather than fetching AIA. Standard OpenSSL/Python does not perform online OCSP/CRL fetching here; this is a deliberate no-network trust policy, not a claim that online revocation checking is retained. No insecure flag or certificate-verification bypass is used. Sites relying on user-keychain-only roots or missing intermediates may fail closed. The exact bundled OpenSSL and CA-file behavior still needs native/runtime acceptance.
+
+Sources checked:
+- Apple DNS utility implementation, showing both AF_INET6 and AF_INET lookups and the exact output keys: https://github.com/apple-oss-distributions/DSTools/blob/main/dscacheutil/dscacheutil.m
+- Apple trust network fetching behavior: https://developer.apple.com/documentation/security/sectrustsetnetworkfetchallowed(_:_:)
+- Apple's curl build/backend information: https://github.com/apple-oss-distributions/curl and https://github.com/apple-oss-distributions/curl/blob/main/curl.plist
+- curl verification and native-trust behavior: https://curl.se/docs/sslcerts.html
+- IANA special-purpose policy references: https://www.iana.org/assignments/iana-ipv4-special-registry and https://www.iana.org/assignments/iana-ipv6-special-registry
+
+## Enforced bounds and failure policy
+
+- Lexical URL checks retained: HTTP/HTTPS, no userinfo/numeric/local host forms, hostname/label/port/8,192-byte URL bounds; canonical lowercased host and fragment removal.
+- OS `/usr/bin/dscacheutil` resolves both address families in a separate process, at most five seconds, 16 KiB output and 64 addresses. Every answer is checked; mixed public/private answers fail as a whole. No unbounded resolver thread is left behind.
+- IPv4 special, private, reserved, multicast and documentation networks are denied. IPv6 permits ordinary 2000::/3 global unicast only, excluding protocol assignments, documentation, 6to4, old 6bone and known ISATAP forms; mapped/compatible IPv4, NAT64, Teredo, scoped, ULA and multicast forms are denied. This conservative policy also denies globally reachable special-purpose exceptions. It is an application allow policy, not a statement that every DNS record or address in the Internet has been enumerated.
+- One literal connection, no alternate-address retry, no second DNS resolution; every manual redirect re-resolves and repins, including same-host redirects. Maximum three redirects, no HTTPS downgrade, no cookie/auth forwarding.
+- One overall 30-second monotonic network budget, bounded nonblocking pipes, 64 KiB headers/8 KiB line cap, four MiB encoded and four MiB decoded body cap. The helper skips redirect/error bodies. Process cancellation/deadline/overflow kills only the exact owned child PID. The parent always discards partial/late output after cancellation.
+- Stdlib framing is preserved; 103 Early Hints is consumed without fetching hinted resources, 101 upgrades rejected, unsupported Transfer-Encoding and conflicting Content-Length rejected, duplicate consequential headers rejected. Truncated compression/declared bodies fail closed.
+- The fetch sandbox reads only the audited Python root, exact helper and required public system TLS/runtime material. It permits only the exact selected destination/port and no inbound sockets, DNS, user files, models, launchers or writable state directory. It does not claim complete Mach/process containment; exact native canaries are required before certifying those OS-specific restrictions.
+
+## Verification scope
+
+Portable fixtures exercise actual helper HTTP/chunked/gzip reads, bounds, private-pin rejection, original-host TLS mismatch before HTTP, and missing-intermediate AIA with zero requests to a private listener. Native Swift fixtures cover mixed DNS, repeated/same-host redirect rebinding, metadata, process deadline/cancellation and default-unattached failure. The exact Seatbelt canary runs only on macOS and is never reported as passed from a Linux skip.
+
+The source implementation, hosted synthetic canaries, audited complete runtime and actual sourced-answer acceptance are separate gates. Source URL and public trust-store compatibility, IPv6 policy syntax and complete-bundle behavior must be recorded for the exact final artifact. This change does not establish live search, upstream snippet-retention rights or final installer acceptance.

@@ -34,7 +34,7 @@ final class ResearchNotebookTests: XCTestCase {
     }
     private func web() -> ResearchWebReader {
         let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [ResearchFixtureProtocol.self]
-        return ResearchWebReader(configuration: config)
+        return ResearchWebReader(transport: ResearchURLSessionFixtureTransport(configuration: config))
     }
     private func pdf(_ text: String, pages: Int = 1) -> Data {
         let contentID = 3 + pages, fontID = contentID + 1
@@ -193,12 +193,11 @@ final class ResearchNotebookTests: XCTestCase {
         XCTAssertTrue(ResearchWebReader.allowed(URL(string: "https://xn--bcher-kva.de/a")!))
     }
     func testRedirectsAreBoundedAndRevalidateDestination() {
-        let policy = ResearchRedirectPolicy(), destination = URL(string: "https://example.org/a")!
-        XCTAssertTrue(policy.allowRedirect(to: destination))
-        XCTAssertTrue(policy.allowRedirect(to: destination))
-        XCTAssertTrue(policy.allowRedirect(to: destination))
-        XCTAssertFalse(policy.allowRedirect(to: destination))
-        XCTAssertFalse(ResearchRedirectPolicy().allowRedirect(to: URL(string: "http://127.0.0.1")!))
+        let destination = URL(string: "https://example.org/a")!
+        for count in 1...3 { XCTAssertNoThrow(try ResearchPinnedHTTPTransport.redirect(from: destination, to: destination, count: count)) }
+        XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: destination, count: 4))
+        XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: URL(string: "http://127.0.0.1")!, count: 1))
+        XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: URL(string: "http://example.org")!, count: 1))
     }
     func testNotebookPersistsCopiesExportsAndDeletesWithoutModelExecution() async throws {
         try await withDirectory { root in

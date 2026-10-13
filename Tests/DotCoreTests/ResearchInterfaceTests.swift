@@ -65,6 +65,38 @@ final class ResearchInterfaceTests: XCTestCase {
         XCTAssertEqual(model.notebooks.count, 1, "Refresh honestly reveals an operation committed before its cancelled callback returned")
     }
 
+    @MainActor func testCancelledAdmittedNotebookWriteRemainsDrainableAndSingleFlight() async throws {
+        let fixture = ControlledResearchStore(); await fixture.pauseCreate()
+        let model = ResearchNotebookModel(store: fixture)
+        model.urlText = "https://example.org/source"; model.create()
+        try await eventually { await fixture.createCount == 1 }
+        model.cancel(); XCTAssertFalse(model.busy); XCTAssertTrue(model.draining)
+        XCTAssertFalse(model.canCreate)
+        var drained = false
+        let flush = Task { await model.flush(); drained = true }
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(drained, "Quit must wait for an admitted, cancellation-ignoring write")
+        model.create(); model.reload()
+        let count = await fixture.createCount; XCTAssertEqual(count, 1)
+        await fixture.releaseCreate(); await flush.value
+        XCTAssertTrue(drained); XCTAssertFalse(model.draining); XCTAssertTrue(model.notebooks.isEmpty)
+        model.reload(); await model.flush(); XCTAssertEqual(model.notebooks.count, 1)
+    }
+
+    @MainActor func testNotebookShutdownCannotReopenAdmissionsWhileDraining() async throws {
+        let fixture = ControlledResearchStore(); await fixture.pauseCreate()
+        let model = ResearchNotebookModel(store: fixture)
+        model.urlText = "https://example.org/source"; model.create()
+        try await eventually { await fixture.createCount == 1 }
+        model.closeAdmissions(); model.open(); model.create()
+        XCTAssertTrue(model.shuttingDown); XCTAssertFalse(model.canCreate)
+        await fixture.releaseCreate(); await model.flush()
+        model.open(); model.create(); model.reload(); await model.flush()
+        let count = await fixture.createCount; XCTAssertEqual(count, 1)
+        XCTAssertTrue(model.notebooks.isEmpty, "Cancelled callbacks cannot present success after shutdown")
+        let saved = await fixture.records; XCTAssertEqual(saved.count, 1)
+    }
+
     @MainActor func testDelayedCopyCannotWriteAfterCancellationOrClosing() async throws {
         for close in [false, true] {
             let fixture = ControlledResearchStore(records: [notebook()])
