@@ -55,11 +55,11 @@ The owner requested this quality review be added to GitHub before continuing imp
 
 **Current practical verification limits:** the separate `6aa5b89` candidate was launched and all 11 actual native windows captured without clipping; isolated offline-payload readiness was 18.64 seconds. No inference or speech was started in that check. It also emitted intermittent layout/shortcut-registration diagnostics, retained for investigation. Accessibility and synthetic-input access were unavailable, so actual menu and physical voice acceptance did not run. Fresh browser inventory was empty. These limits do not revoke owner design acceptance or block available source/native checks. No current-device voice-loop or latency claim follows from prior synthetic/earlier-revision results.
 
-## Active integration checkpoint — 2026-10-13 18:27 UTC
+## Active integration checkpoint — 2026-10-13 18:39 UTC
 
-Current development checks passed **294 SwiftPM and 464 native XCTest**, plus the previously recorded 136 Python and 52 static guards. Suites overlap; these are not a unique-test total or an exact accepted candidate. Later UI/source changes require their own rerun. Actual native UI inspection found a footer press could cancel the turn before its native button finished tracking; the fix preserves the pressed control and separately suppresses automatic follow-up. A tightened-policy real Kokoro startup failed before Qwen loaded, so required-access diagnosis continues without restoring broad private/network grants.
+The [helper boundary increment and exact verification](verification/helper-boundaries.md) passed required clean-source checks: 136 Python, 175 SwiftPM, 277 native XCTest, 49 guards, both sandboxes, Debug/Release/development packaging and signature checks, zero warnings. Actual fixed-model/British-voice component acceptance also passed the tightened policies after a narrow private eSpeak mapping fix. It is not a complete new candidate or installation.
 
-The source-reading notebook panel is now wired into native Options with 10 passing interface tests (supplied sources, not automatic search). HTML/URL/cancellation correctness and actual public source receipts are being checked. Provider choice remains pending in the coordinating chat, no live paid calls. See [CONTINUATION](CONTINUATION.md) for refreshed durable recovery manifest, exact base, all six lane assignments and next steps. App source remains unpublished, installed app unchanged; no implementation completion box is advanced solely for this checkpoint.
+Broader unfinished source passed 521 native tests; a runtime QoS warning remains under diagnosis. The footer control fix passed 20 meaningful native interaction assertions, but own-window visual capture remains inconclusive (`ScreenCaptureKit -3811`, bitmap omissions). Source reading passed official HTML/PDF checks. Search provider selection is still pending; no paid/live provider calls. See [CONTINUATION](CONTINUATION.md) for exact revisions, durable 64-file recovery, ownership and next steps. Full checklist completion boxes remain bounded by their actual acceptance requirements.
 
 ## Short improvement checklist
 
@@ -344,4 +344,3 @@ The [first interactive preview](design/dot-ui-options.html) is retained as histo
 - File-change notifications: https://developer.apple.com/documentation/coreservices/file_system_events
 
 Public component benchmarks nominate candidates; they do not establish the fastest complete Dot pipeline or validate the desired British voice on the owner Mac.
-
