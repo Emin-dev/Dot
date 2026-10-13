@@ -38,6 +38,12 @@ Updated 2026-10-13. This is a public contributor handoff, not a release certific
 - [ ] Regression tests for silence timeout, cancellation, permission denial/revocation, repeated drain callbacks, new turns and acoustic echo. The current local followup state-machine scaffold is not production microphone wiring.
 - [ ] More expressive but accessible pet behavior, after the above repairs. Preserve Reduce Motion, hover catchability, pin and explicit interruption.
 
+## Performance research, after current repairs
+
+- [ ] Measure full click-to-audible latency, recording contention, cold/warm engine reuse and per-stage timing; improve safe worker reuse and overlap where measurements justify it.
+- [ ] Evaluate bounded app-lifetime warmup and cache reuse without bypassing content integrity or holding unbounded resources. Full verification remains mandatory for the current mutable bundle.
+- [ ] Research Apple-native APIs/Core ML for suitable speech components, including Core ML Kokoro and Parakeet candidates. This is research only: do not change the current speech models/runtime or the required Splash-only Qwen engine without a reviewed, measured migration decision.
+
 ## Larger capabilities still missing
 
 - [ ] Host-validated file/workspace access, coding/research tools, browser/app actions and computer control. Current Dot has no general action adapter or unrestricted shell execution.
@@ -51,8 +57,8 @@ Updated 2026-10-13. This is a public contributor handoff, not a release certific
 
 ## Hardware and distribution targets
 
-- Requested target: native macOS, **M4 Pro-class or newer** Apple Silicon and **at least 32 GB RAM**. This is a target, not a verified support claim or a currently implemented hardware gate. It does not imply support for every base M4/M5 Mac.
-- The selected Splash runtime requires macOS 26.4 or newer. Its published Q4 guidance is at least 36 GB, with 48 GB recommended. A 32 GB device has not passed this app's full workload/resource acceptance. M4 Pro commonly ships in 24/48 GB configurations, so the requested threshold normally means a 48 GB Pro configuration.
+- Requested target: native macOS, **M4 Pro-class or newer** Apple Silicon and **at least 36 GB RAM**. This is a target, not a verified support claim or a currently implemented hardware gate. It does not imply support for every base M4/M5 Mac.
+- The selected Splash runtime requires macOS 26.4 or newer. Its published Q4 guidance is at least 36 GB, with 48 GB recommended. A 36 GB device has not passed this app's full workload/resource acceptance. M4 Pro commonly ships in 24/48 GB configurations, so the requested threshold normally means a 48 GB Pro configuration.
 - The owner's reported test hardware is M5 Pro/48 GB; OS and actual app behavior were tested, but no blanket claim for all other Macs follows.
 - Keep a complete all-in-one offline build. A future public small installer may automatically provision verified assets with visible progress if a single large download is impractical, as requested; no such public downloader is implemented today. Do not revive external folder/server setup.
 - [ ] Clean supported second-Mac installation, relocation, offline voice/vision, denial/recovery, resources and mic/speaker quality acceptance.

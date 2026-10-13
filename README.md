@@ -25,7 +25,7 @@ Conversation state stays in memory and disappears on quit. No analytics or conve
 
 ## Development and verification
 
-The UI development target builds on macOS 15+. The complete Splash runtime requires macOS 26.4+. The requested product target is M4 Pro-class or newer with at least 32 GB RAM, but 32 GB has not been validated: upstream Q4 guidance is 36 GB minimum and 48 GB recommended. The personal test hardware is reported as M5 Pro/48 GB. See [hardware and release gaps](docs/PROGRESS.md#hardware-and-distribution-targets); other-Mac support is not yet certified.
+The UI development target builds on macOS 15+. The complete Splash runtime requires macOS 26.4+. The requested product target is M4 Pro-class or newer with at least 36 GB RAM, with 48 GB recommended. The 36 GB target follows upstream Q4 guidance but has not passed Dot’s full workload acceptance. The personal test hardware is reported as M5 Pro/48 GB. See [hardware and release gaps](docs/PROGRESS.md#hardware-and-distribution-targets); other-Mac support is not yet certified.
 
 - Open `Dot.xcodeproj`, choose shared `Dot` scheme, then Product → Test.
 - `swift test` runs the portable pure-core suite. The Xcode target additionally runs mocked network and pipe tests.
