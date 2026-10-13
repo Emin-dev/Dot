@@ -25,7 +25,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Voice" "$APP/Contents/Re
 swiftc -O -warnings-as-errors -D DOT_COMPLETE_BUNDLE -target arm64-apple-macosx26.4 \
   -F "$FRAMEWORK_PARENT" -framework whisper -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$APP/Contents/MacOS/Dot" src/*.swift \
-  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework CryptoKit
+  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit
 # This is an actual native-library reference check, not a canImport fallback build.
 nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
 /usr/bin/ditto "$DOT_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/whisper.framework"

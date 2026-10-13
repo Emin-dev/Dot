@@ -4,19 +4,21 @@ import OSLog
 
 @MainActor
 final class ChatModel: ObservableObject {
-    @Published private(set) var phase: PetPhase = .idle
+    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() } } }
     private var answer = ""
     @Published var pinned = UserDefaults.standard.bool(forKey: "petPinned") {
-        didSet { UserDefaults.standard.set(pinned, forKey: "petPinned") }
+        didSet { UserDefaults.standard.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
-    @Published var hovered = false
-    @Published var interactionPaused = false
+    @Published var hovered = false { didSet { if hovered { placementInvalidated?() } } }
+    @Published var interactionPaused = false { didSet { if interactionPaused { placementInvalidated?() } } }
+    var placementInvalidated: (() -> Void)?
+    @Published var placementCapturing = false
     var showOptions: (() -> Void)?
     let stt = STTManager()
     let tts = TTSManager()
     let engine = EngineManager()
     let screen = ScreenContext()
-    @Published var screenEnabled = ScreenPrivacyPreference.enabled() { didSet { ScreenPrivacyPreference.setEnabled(screenEnabled); screen.enabled = screenEnabled; cancelTurn() } }
+    @Published var screenEnabled = ScreenPrivacyPreference.enabled() { didSet { ScreenPrivacyPreference.setEnabled(screenEnabled); screen.enabled = screenEnabled; placementInvalidated?(); cancelTurn() } }
     @Published private(set) var screenContextUsed = false
     @Published private(set) var capturingScreen = false
     private var gate = TurnGate()
@@ -227,9 +229,9 @@ struct PetView: View {
                     }
                 }
                 .overlay(alignment: .topTrailing) {
-                    if model.capturingScreen || model.screenContextUsed {
-                        Image(systemName: model.capturingScreen ? "eye.fill" : "eye")
-                            .font(.system(size: 12)).accessibilityLabel(model.capturingScreen ? "Reading screen locally" : "Screen used for this reply")
+                    if model.capturingScreen || model.placementCapturing || model.screenContextUsed {
+                        Image(systemName: (model.capturingScreen || model.placementCapturing) ? "eye.fill" : "eye")
+                            .font(.system(size: 12)).accessibilityLabel(model.placementCapturing ? "Checking a clear place locally" : model.capturingScreen ? "Reading screen locally" : "Screen used for this reply")
                     }
                 }
         }
@@ -237,7 +239,7 @@ struct PetView: View {
         .contentShape(Ellipse())
         .onHover { model.hovered = $0 }
         .accessibilityLabel("Dot companion")
-        .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen, screenUsed: model.screenContextUsed))
+        .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen || model.placementCapturing, screenUsed: model.screenContextUsed))
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click or Shift F10 for options. Escape stops the current action.")
         .accessibilityAction(named: Text("Options")) { model.showOptions?() }
         .padding(PetLayout.edgePadding)

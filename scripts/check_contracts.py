@@ -45,6 +45,10 @@ checks = {
     'screen permission precedes microphone and rechecks without another prompt': chat.index('self.screen.prepare(turn: id)') < chat.index('await self.stt.start(id: id)') and 'permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess)' in read('src/ScreenContext.swift'),
     'warmup starts only after explicit microphone capture and is reused': 'stt.onRecording =' in chat and speech.index('recording = true') < speech.index('onRecording?(id)') and 'try await self.warmup.wait(turn: id)' in chat and 'warmup.cancel()' in chat,
     'full integrity checks run in exactly two bounded verification branches': 'PayloadVerification.run(runtime: self.runtimeCheck' in read('src/OfflinePreparation.swift') and read('src/OfflinePreparation.swift').count('group.addTask {') == 2 and 'try await OfflinePayload.verifyHash(path' in read('src/OfflinePreparation.swift'),
+    'placement never requests permission or sends pixels to inference': 'CGRequestScreenCaptureAccess' not in read('src/PlacementCapture.swift') and 'URLSession' not in read('src/PlacementCapture.swift') and 'EngineManager' not in read('src/PlacementCapture.swift'),
+    'placement uses exact display and fails closed without a snapshot': 'content.displays.first(where: { $0.displayID == id })' in read('src/PlacementCapture.swift') and 'content.displays.first else' not in read('src/PlacementCapture.swift') and 'let snapshot, snapshot.valid' in read('src/RoamingCore.swift'),
+    'placement honors persistent screen switch and shows local analysis': 'let eligible = !paused && model.screenEnabled' in read('src/App.swift') and 'model.placementCapturing' in chat and 'placementInvalidated?()' in chat,
+    'placement bounds single-flight cadence and removes random targets': 'active == nil' in read('src/RoamingCore.swift') and 'nextAllowed = now + 10' in read('src/RoamingCore.swift') and 'unit()' not in read('src/RoamingCore.swift') and 'safePath(from: frame' in read('src/RoamingCore.swift'),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

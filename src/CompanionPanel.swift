@@ -80,5 +80,17 @@ final class CompanionSurface {
         window.contentView = content; window.orderFrontRegardless()
         return window
     }
-    func recall() { panel?.makeKeyAndOrderFront(nil) }
+    func recall(visibleFrames: [CGRect]? = nil) {
+        guard let panel else { return }
+        let frames = visibleFrames ?? NSScreen.screens.map { $0.visibleFrame }
+        // Explicit recall is a user-requested visibility recovery, never a claim of sensed empty content.
+        if !frames.contains(where: { $0.contains(panel.frame) }), let visible = frames.first {
+            if let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) {
+                panel.setFrameOrigin(RoamingCore.clamp(panel.frame.origin, to: bounds))
+            } else if PlacementSnapshot.validRect(visible) {
+                panel.setFrameOrigin(CGPoint(x: visible.midX - panel.frame.width / 2, y: visible.midY - panel.frame.height / 2))
+            }
+        }
+        panel.makeKeyAndOrderFront(nil)
+    }
 }

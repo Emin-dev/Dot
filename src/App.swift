@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let surface = CompanionSurface()
     private var panel: CompanionPanel? { surface.panel }
     private var model: ChatModel?
+    private let placement = PlacementCapture()
     private var movement: Timer?
     private var statusItem: NSStatusItem?
     private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime)
@@ -26,6 +27,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let model = ChatModel(); self.model = model
+        placement.onCaptureChanged = { [weak model] active in model?.placementCapturing = active }
+        model.placementInvalidated = { [weak self] in self?.cancelMovement() }
         let panel = surface.present(content: NSHostingView(rootView: PetView(model: model, stt: model.stt)), size: PetLayout.panelSize)
         panel.stopAction = { [weak self] in self?.stopCurrentAction() }
         panel.optionsAction = { [weak self] in self?.showOptions() }
@@ -37,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.pointerInteraction = { [weak self, weak model] active in
             model?.interactionPaused = active
+            self?.placement.invalidate()
             self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: !active)
         }
         panel.constrainDrag = { [weak panel] origin, cursor in
@@ -70,6 +74,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.cancelMovement(); self?.moveGently() }
         })
+        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification,
+                     NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
+            observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.cancelMovement() }
+            })
+        }
         scheduleMovement(interval: 0.5)
     }
 
@@ -80,12 +90,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(timer, forMode: .common); movement = timer
     }
-    private func cancelMovement() { roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
+    private func cancelMovement() { placement.invalidate(); roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
 
     @objc private func showPet() { cancelMovement(); surface.recall() }
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func stopCurrentAction() {
+        cancelMovement()
         if model?.phase.isActive == true { model?.cancelTurn() }
         OfflinePreparation.shared.pause()
     }
@@ -134,16 +145,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let paused = !panel.isVisible || panel.isKeyWindow || model.hovered || model.interactionPaused
             || model.pinned || model.phase.isActive || menuTracking > 0 || NSEvent.pressedMouseButtons != 0
             || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || NSWorkspace.shared.isVoiceOverEnabled
-        let visible = panel.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? panel.frame
+        guard let screen = panel.screen, let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else {
+            cancelMovement(); return
+        }
+        let eligible = !paused && model.screenEnabled && model.phase == .idle && OfflinePreparation.shared.ready
+        if !eligible { placement.invalidate() }
+        let snapshot = eligible ? placement.current(screen: screen) : nil
+        if eligible && snapshot == nil { placement.request(screen: screen, eligible: eligible) }
+        let visible = screen.visibleFrame
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: NSEvent.mouseLocation,
-                               paused: paused, now: ProcessInfo.processInfo.systemUptime)
+                               paused: !eligible, now: ProcessInfo.processInfo.systemUptime, displayID: displayID, snapshot: snapshot)
         if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
         let interval = roam.isTravelling ? 1.0 / 60 : 0.5
         if interval != movementInterval { scheduleMovement(interval: interval) }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        movement?.invalidate(); model?.shutdown()
+        movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
             NSWorkspace.shared.notificationCenter.removeObserver(observation)

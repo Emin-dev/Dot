@@ -36,38 +36,64 @@ struct CompanionDragState {
     mutating func cancel() { start = nil; dragging = false }
 }
 
-/// Deterministic within-display wandering. Coordinates are AppKit points, not pixels.
+/// A bounded, ephemeral map in AppKit points. No pixels or recognized text are retained.
+struct PlacementSnapshot: Equatable {
+    static let lifetime = 1.5
+    static let maximumRegions = 8192
+    let displayID: UInt32
+    let displayFrame: CGRect
+    let visibleFrame: CGRect
+    let capturedAt: Double
+    let protected: [CGRect]
+    func valid(displayID: UInt32, visible: CGRect, now: Double) -> Bool {
+        self.displayID == displayID && visibleFrame == visible && now.isFinite && capturedAt.isFinite
+            && now >= capturedAt && now - capturedAt <= Self.lifetime
+            && Self.validRect(displayFrame) && Self.validRect(visible) && displayFrame.contains(visible)
+            && protected.count <= Self.maximumRegions && protected.allSatisfy(Self.validRect)
+    }
+    static func validRect(_ rect: CGRect) -> Bool {
+        [rect.minX, rect.minY, rect.maxX, rect.maxY, rect.width, rect.height].allSatisfy { $0.isFinite }
+            && rect.width > 0 && rect.height > 0 && !rect.isInfinite && !rect.isNull
+    }
+    static func visionRect(_ box: CGRect, display: CGRect) -> CGRect? {
+        guard validRect(box), validRect(display), CGRect(x: 0, y: 0, width: 1, height: 1).contains(box) else { return nil }
+        return CGRect(x: display.minX + box.minX * display.width, y: display.minY + box.minY * display.height,
+                      width: box.width * display.width, height: box.height * display.height)
+    }
+    static func quartzRect(_ box: CGRect, primaryTop: CGFloat) -> CGRect? {
+        guard validRect(box), primaryTop.isFinite else { return nil }
+        return CGRect(x: box.minX, y: primaryTop - box.maxY, width: box.width, height: box.height)
+    }
+    static func rasterRect(_ box: CGRect, width: Int, height: Int, display: CGRect) -> CGRect? {
+        guard width > 0, height > 0, validRect(display), validRect(box),
+              CGRect(x: 0, y: 0, width: width, height: height).contains(box) else { return nil }
+        return CGRect(x: display.minX + box.minX / CGFloat(width) * display.width,
+                      y: display.maxY - box.maxY / CGFloat(height) * display.height,
+                      width: box.width / CGFloat(width) * display.width, height: box.height / CGFloat(height) * display.height)
+    }
+}
+
+/// Conservative short relocations; no random or unsensed fallback. Manual dragging is separate.
 struct RoamingCore {
     private struct Trip {
         let start: CGPoint
         let target: CGPoint
-        let duration: Double
-        var elapsed: Double
+        let snapshot: PlacementSnapshot
+        var elapsed = 0.0
     }
-    private var random: UInt64
     private var nextDecision: Double
     private var minimumRestUntil = 0.0
     private var lastTick: Double?
     private var trip: Trip?
-    private var recentCells: [Int] = []
-    private var wasPaused = false
     private(set) var isTravelling = false
-    init(seed: UInt64, now: Double) {
-        random = seed; nextDecision = now + 8
-    }
+    init(seed: UInt64, now: Double) { nextDecision = now + 8 }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
-        if longRest { minimumRestUntil = now + 30 + unit() * 30 }
-        nextDecision = max(minimumRestUntil, now + 8 + unit() * 7)
-    }
-    private mutating func unit() -> Double {
-        random &+= 0x9e3779b97f4a7c15
-        var value = random
-        value = (value ^ (value >> 30)) &* 0xbf58476d1ce4e5b9
-        value = (value ^ (value >> 27)) &* 0x94d049bb133111eb
-        return Double((value ^ (value >> 31)) >> 11) / 9_007_199_254_740_992
+        if longRest { minimumRestUntil = now + 45 }
+        nextDecision = max(minimumRestUntil, now + 8)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
+        guard PlacementSnapshot.validRect(visible), window.width.isFinite, window.height.isFinite else { return nil }
         let area = visible.insetBy(dx: 16, dy: 16)
         guard window.width > 0, window.height > 0,
               area.width >= window.width, area.height >= window.height else { return nil }
@@ -83,65 +109,91 @@ struct RoamingCore {
         let t = min(1, max(0, ((point.x - start.x) * dx + (point.y - start.y) * dy) / length))
         return hypot(point.x - start.x - t * dx, point.y - start.y - t * dy)
     }
-    mutating func step(frame: CGRect, visible: CGRect, cursor: CGPoint, paused: Bool, now: Double) -> CGPoint {
+    static func clear(_ frame: CGRect, regions: [CGRect]) -> Bool {
+        !regions.contains { frame.intersects($0) }
+    }
+    /// Axis-only motion permits escape from existing overlap without increasing it or crossing new content.
+    static func safePath(from frame: CGRect, to target: CGPoint, regions: [CGRect]) -> Bool {
+        let dx = target.x - frame.minX, dy = target.y - frame.minY
+        guard (dx == 0) != (dy == 0) else { return false }
+        let end = CGRect(origin: target, size: frame.size)
+        guard clear(end, regions: regions) else { return false }
+        let swept = frame.union(end)
+        for rect in regions where swept.intersects(rect) {
+            guard frame.intersects(rect) else { return false }
+            if dx > 0 && frame.minX < rect.minX && frame.maxX < rect.maxX { return false }
+            if dx < 0 && frame.maxX > rect.maxX && frame.minX > rect.minX { return false }
+            if dy > 0 && frame.minY < rect.minY && frame.maxY < rect.maxY { return false }
+            if dy < 0 && frame.maxY > rect.maxY && frame.minY > rect.minY { return false }
+        }
+        return true
+    }
+    mutating func step(frame: CGRect, visible: CGRect, cursor: CGPoint, paused: Bool, now: Double,
+                       displayID: UInt32 = 0, snapshot: PlacementSnapshot? = nil) -> CGPoint {
         let dt = min(0.08, max(0, now - (lastTick ?? now))); lastTick = now
-        guard let bounds = Self.originBounds(window: frame.size, visible: visible) else {
-            cancel(now: now); return frame.origin
+        guard !paused, PlacementSnapshot.validRect(frame), cursor.x.isFinite, cursor.y.isFinite,
+              let snapshot, snapshot.valid(displayID: displayID, visible: visible, now: now),
+              let bounds = Self.originBounds(window: frame.size, visible: visible),
+              Self.clamp(frame.origin, to: bounds) == frame.origin,
+              !frame.insetBy(dx: -32, dy: -32).contains(cursor) else {
+            if trip != nil { cancel(now: now) }
+            return frame.origin // Permission/pause/staleness never causes an unsensed clamp.
         }
-        let origin = Self.clamp(frame.origin, to: bounds)
-        // The visible character sits at bottom center; transparent upper padding isn't its body.
-        let body = CGRect(x: origin.x + frame.width / 2 - PetLayout.petSize.width / 2, y: origin.y + PetLayout.petBottom, width: PetLayout.petSize.width, height: PetLayout.petSize.height)
-        let interrupted = paused || body.insetBy(dx: -32, dy: -32).contains(cursor)
-        if interrupted {
-            if !wasPaused || trip != nil { cancel(now: now) }
-            wasPaused = true; return origin
-        }
-        if wasPaused { wasPaused = false; cancel(now: now); return origin }
+        let origin = frame.origin
         if var active = trip {
-            guard bounds.contains(active.target),
-                  Self.distanceToSegment(cursor, CGPoint(x: origin.x + frame.width / 2, y: origin.y + PetLayout.petCenterY),
-                                         CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + PetLayout.petCenterY)) >= 120 else {
+            guard active.snapshot == snapshot,
+                  Self.safePath(from: frame, to: active.target, regions: snapshot.protected),
+                  Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY),
+                    CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + frame.height / 2)) >= 120 else {
                 cancel(now: now); return origin
             }
             active.elapsed += dt
-            let t = min(1, active.elapsed / active.duration), eased = t * t * (3 - 2 * t)
-            let result = Self.clamp(CGPoint(x: active.start.x + (active.target.x - active.start.x) * eased,
-                                           y: active.start.y + (active.target.y - active.start.y) * eased), to: bounds)
-            if t >= 1 { trip = nil; isTravelling = false; nextDecision = now + 8 + unit() * 10 }
-            else { trip = active }
+            let t = min(1, active.elapsed / 0.6), eased = t * t * (3 - 2 * t)
+            let result = CGPoint(x: active.start.x + (active.target.x - active.start.x) * eased,
+                                 y: active.start.y + (active.target.y - active.start.y) * eased)
+            if t >= 1 { cancel(now: now) } else { trip = active }
             return result
         }
-        guard now >= nextDecision else { return origin }
-        let action = unit()
-        guard action < 0.7 else { nextDecision = now + (action < 0.9 ? 8 + unit() * 10 : 20 + unit() * 20); return origin }
-        let minimum = min(220, 0.25 * min(visible.width, visible.height))
-        for _ in 0..<24 {
-            let mode = unit()
-            let cell = Int(unit() * 9)
-            if mode < 0.6 && recentCells.contains(cell) { continue }
-            var x = unit(), y = unit()
-            if mode < 0.6 { x = (Double(cell % 3) + x) / 3; y = (Double(cell / 3) + y) / 3 }
-            else if mode < 0.9 {
-                switch Int(unit() * 4) { case 0: x *= 0.12; case 1: x = 0.88 + x * 0.12; case 2: y *= 0.12; default: y = 0.88 + y * 0.12 }
-            }
-            var target = CGPoint(x: bounds.minX + x * bounds.width, y: bounds.minY + y * bounds.height)
+        guard now >= nextDecision, now - snapshot.capturedAt <= PlacementSnapshot.lifetime - 0.7,
+              !Self.clear(frame, regions: snapshot.protected) else { return origin }
+        let overlapping = snapshot.protected.filter { frame.intersects($0) }
+        guard !overlapping.isEmpty else { return origin }
+        var candidates = [
+            CGPoint(x: overlapping.map { $0.minX - frame.width - 1 }.min()!, y: origin.y),
+            CGPoint(x: overlapping.map { $0.maxX + 1 }.max()!, y: origin.y),
+            CGPoint(x: origin.x, y: overlapping.map { $0.minY - frame.height - 1 }.min()!),
+            CGPoint(x: origin.x, y: overlapping.map { $0.maxY + 1 }.max()!)
+        ]
+        candidates.sort { hypot($0.x - origin.x, $0.y - origin.y) < hypot($1.x - origin.x, $1.y - origin.y) }
+        for target in candidates {
             let distance = hypot(target.x - origin.x, target.y - origin.y)
-            guard distance >= minimum else { continue }
-            if distance > 840 {
-                target = CGPoint(x: origin.x + (target.x - origin.x) * 840 / distance,
-                                 y: origin.y + (target.y - origin.y) * 840 / distance)
-            }
-            let startCenter = CGPoint(x: origin.x + frame.width / 2, y: origin.y + PetLayout.petCenterY)
-            let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + PetLayout.petCenterY)
+            guard distance > 0, distance <= 96, Self.clamp(target, to: bounds) == target,
+                  Self.safePath(from: frame, to: target, regions: snapshot.protected) else { continue }
+            let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + frame.height / 2)
             guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 180,
-                  Self.distanceToSegment(cursor, startCenter, endCenter) >= 120 else { continue }
-            let actualCell = min(2, Int((target.x - bounds.minX) / max(1, bounds.width) * 3))
-                + 3 * min(2, Int((target.y - bounds.minY) / max(1, bounds.height) * 3))
-            recentCells.append(actualCell); if recentCells.count > 3 { recentCells.removeFirst() }
-            trip = Trip(start: origin, target: target, duration: min(7, max(2.5, hypot(target.x - origin.x, target.y - origin.y) / 120)), elapsed: 0)
-            isTravelling = true; return origin
+                  Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 120 else { continue }
+            trip = Trip(start: origin, target: target, snapshot: snapshot); isTravelling = true; return origin
         }
-        nextDecision = now + 8 + unit() * 10
+        nextDecision = now + 10
         return origin
+    }
+}
+
+/// Cancellation invalidates results without admitting a second overlapping capture.
+struct PlacementScanGate {
+    private(set) var snapshot: PlacementSnapshot?
+    private(set) var active: UUID?
+    private var generation = UUID()
+    private var nextAllowed = 0.0
+    mutating func begin(now: Double, eligible: Bool) -> UUID? {
+        guard eligible, now.isFinite, active == nil, now >= nextAllowed else { return nil }
+        generation = UUID(); active = generation; nextAllowed = now + 10; snapshot = nil
+        return generation
+    }
+    mutating func invalidate() { generation = UUID(); snapshot = nil }
+    mutating func finish(token: UUID, result: PlacementSnapshot?) {
+        guard active == token else { return }
+        active = nil
+        if generation == token { snapshot = result }
     }
 }

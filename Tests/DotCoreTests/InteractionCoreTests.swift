@@ -136,65 +136,118 @@ final class VoiceEventTests: XCTestCase {
 final class RoamingTests: XCTestCase {
     private let visible = CGRect(x: -1440, y: 30, width: 1440, height: 900)
     private let cursor = CGPoint(x: 5000, y: 5000)
-    func testNegativeMonitorBoundsClampWholeWindow() {
-        let bounds = RoamingCore.originBounds(window: CGSize(width: 320, height: 420), visible: visible)!
-        let point = RoamingCore.clamp(CGPoint(x: 9000, y: -9000), to: bounds)
-        XCTAssertEqual(point.x, -336); XCTAssertEqual(point.y, 46)
+    private let frame = CGRect(x: -800, y: 100, width: 148, height: 156)
+    private let obstacle = CGRect(x: -820, y: 100, width: 40, height: 156)
+    private func map(_ regions: [CGRect]? = nil, at: Double = 9) -> PlacementSnapshot {
+        PlacementSnapshot(displayID: 7, displayFrame: visible, visibleFrame: visible, capturedAt: at, protected: regions ?? [obstacle])
     }
-    func testTinyDisplayCannotStartTrip() {
+    func testNegativeMonitorBoundsClampWholeWindowForManualDrag() {
+        let bounds = RoamingCore.originBounds(window: CGSize(width: 320, height: 420), visible: visible)!
+        XCTAssertEqual(RoamingCore.clamp(CGPoint(x: 9000, y: -9000), to: bounds), CGPoint(x: -336, y: 46))
+    }
+    func testTinyOrNonfiniteDisplayCannotStartTrip() {
         XCTAssertNil(RoamingCore.originBounds(window: CGSize(width: 320, height: 420), visible: CGRect(x: 0, y: 0, width: 200, height: 300)))
+        XCTAssertFalse(PlacementSnapshot.validRect(CGRect(x: 0, y: 0, width: CGFloat.infinity, height: 300)))
     }
     func testSegmentDistanceRejectsCrossingCursor() {
         XCTAssertEqual(RoamingCore.distanceToSegment(CGPoint(x: 50, y: 0), .zero, CGPoint(x: 100, y: 0)), 0)
         XCTAssertEqual(RoamingCore.distanceToSegment(CGPoint(x: 50, y: 150), .zero, CGPoint(x: 100, y: 0)), 150)
     }
-    func testSeededWanderStaysVisibleAndVisitsVariedPositions() {
+    func testNoAnalysisNeverMovesEvenOutsideCurrentDisplay() {
         var planner = RoamingCore(seed: 42, now: 0)
-        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        var visited: Set<String> = []
-        for tick in 0..<24000 {
-            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick) / 60)
-            XCTAssertTrue(visible.contains(frame))
-            visited.insert("\(Int(frame.minX / 100)):\(Int(frame.minY / 100))")
-        }
-        XCTAssertGreaterThan(visited.count, 8)
-    }
-    func testPauseNeverMovesAndReleaseWaits() {
-        var planner = RoamingCore(seed: 1, now: 0)
-        let frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        for tick in 0..<100 {
-            XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: Double(tick)), frame.origin)
+        let elsewhere = CGRect(x: 5000, y: 5000, width: 148, height: 156)
+        for time in [9.0, 100.0, 10000.0] {
+            XCTAssertEqual(planner.step(frame: elsewhere, visible: visible, cursor: cursor, paused: false, now: time), elsewhere.origin)
             XCTAssertFalse(planner.isTravelling)
         }
-        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 100), frame.origin)
+    }
+    func testClearCurrentPositionStaysRatherThanRandomlyWandering() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map([])), frame.origin)
         XCTAssertFalse(planner.isTravelling)
     }
-    func testApproachingPointerStopsWithoutFleeing() {
-        var planner = RoamingCore(seed: 2, now: 0)
-        let frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        let near = CGPoint(x: frame.midX, y: frame.minY + 85)
-        for tick in 0..<200 { XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: near, paused: false, now: Double(tick)), frame.origin) }
-    }
-    func testLongWakeIntervalDoesNotTeleport() {
-        var planner = RoamingCore(seed: 42, now: 0)
-        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        for tick in 0..<10000 {
-            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick) / 60)
-            if planner.isTravelling {
-                let old = frame.origin
-                let next = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 100000)
-                XCTAssertLessThan(hypot(next.x - old.x, next.y - old.y), 20); return
-            }
+    func testShortEscapeReducesExistingOverlapWithoutCrossingContent() {
+        var planner = RoamingCore(seed: 42, now: 0), moving = frame
+        let snapshot = map(); var priorArea = frame.intersection(obstacle).width * frame.intersection(obstacle).height
+        for tick in 0...40 {
+            let now = 9 + Double(tick) / 60
+            moving.origin = planner.step(frame: moving, visible: visible, cursor: cursor, paused: false, now: now, displayID: 7, snapshot: snapshot)
+            let overlap = moving.intersection(obstacle), area = overlap.isNull ? 0 : overlap.width * overlap.height
+            XCTAssertLessThanOrEqual(area, priorArea); priorArea = area
+            XCTAssertTrue(visible.contains(moving))
         }
-        XCTFail("seed never travelled")
+        XCTAssertEqual(moving.origin, CGPoint(x: -779, y: 100)); XCTAssertEqual(priorArea, 0)
     }
-    func testCancellationInvalidatesTrajectory() {
-        var planner = RoamingCore(seed: 42, now: 0)
-        let frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9)
-        planner.cancel(now: 10)
+    func testWholeWindowAndSweptPathRejectNewContent() {
+        let target = CGPoint(x: -779, y: 100)
+        XCTAssertTrue(RoamingCore.safePath(from: frame, to: target, regions: [obstacle]))
+        XCTAssertFalse(RoamingCore.safePath(from: frame, to: target, regions: [obstacle, CGRect(x: -640, y: 200, width: 1, height: 1)]))
+        let start = CGRect(x: 0, y: 0, width: 10, height: 10)
+        XCTAssertFalse(RoamingCore.safePath(from: start, to: CGPoint(x: 40, y: 0), regions: [CGRect(x: 20, y: 1, width: 2, height: 2)]))
+        XCTAssertFalse(RoamingCore.safePath(from: start, to: CGPoint(x: 40, y: 40), regions: []))
+    }
+    func testNoClearAreaHasNoFallback() {
+        var planner = RoamingCore(seed: 1, now: 0)
+        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map([visible])), frame.origin)
         XCTAssertFalse(planner.isTravelling)
-        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 10.1), frame.origin)
+    }
+    func testPausePointerStaleAndWrongDisplayStopAtPresentedPosition() {
+        for reason in 0..<5 {
+            var planner = RoamingCore(seed: 42, now: 0), moving = frame
+            let snapshot = map()
+            _ = planner.step(frame: moving, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: snapshot)
+            XCTAssertTrue(planner.isTravelling)
+            moving.origin = planner.step(frame: moving, visible: visible, cursor: cursor, paused: false, now: 9.1, displayID: 7, snapshot: snapshot)
+            let next = planner.step(frame: moving, visible: visible, cursor: reason == 1 ? CGPoint(x: moving.midX, y: moving.midY) : cursor,
+                paused: reason == 0, now: reason == 2 ? 20 : 9.2, displayID: reason == 3 ? 8 : 7, snapshot: reason == 4 ? nil : snapshot)
+            XCTAssertEqual(next, moving.origin); XCTAssertFalse(planner.isTravelling)
+        }
+    }
+    func testChangedDisplayGeometryDoesNotUnsafelyClamp() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map())
+        XCTAssertEqual(planner.step(frame: frame, visible: CGRect(x: 0, y: 0, width: 1200, height: 900), cursor: cursor, paused: false, now: 9.1, displayID: 7, snapshot: map()), frame.origin)
+        XCTAssertFalse(planner.isTravelling)
+    }
+    func testLongWakeIntervalRejectsExpiredMapInsteadOfTeleporting() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map())
+        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 10000, displayID: 7, snapshot: map()), frame.origin)
+    }
+    func testGeometryTransformsAcrossAboveAndLeftMonitors() {
+        let screen = CGRect(x: -1440, y: 900, width: 1440, height: 900)
+        XCTAssertEqual(PlacementSnapshot.quartzRect(CGRect(x: -1440, y: -900, width: 1440, height: 900), primaryTop: 900), screen)
+        let normalized = CGRect(x: 0.25, y: 0.75, width: 0.25, height: 0.25)
+        let expected = CGRect(x: -1080, y: 1575, width: 360, height: 225)
+        XCTAssertEqual(PlacementSnapshot.visionRect(normalized, display: screen), expected)
+        XCTAssertEqual(PlacementSnapshot.rasterRect(CGRect(x: 500, y: 0, width: 500, height: 250), width: 2000, height: 1000, display: screen), expected)
+    }
+    func testMalformedOversizedFutureMapsReject() {
+        XCTAssertFalse(map(at: 10).valid(displayID: 7, visible: visible, now: 9))
+        XCTAssertFalse(map(Array(repeating: obstacle, count: 8193)).valid(displayID: 7, visible: visible, now: 9))
+        XCTAssertNil(PlacementSnapshot.visionRect(CGRect(x: -0.1, y: 0, width: 0.5, height: 0.5), display: visible))
+    }
+}
+
+final class PlacementScanTests: XCTestCase {
+    func testOneFlightAndTenSecondCadence() throws {
+        var gate = PlacementScanGate()
+        let token = try XCTUnwrap(gate.begin(now: 1, eligible: true))
+        XCTAssertNil(gate.begin(now: 20, eligible: true))
+        gate.finish(token: token, result: nil)
+        XCTAssertNil(gate.begin(now: 10, eligible: true)); XCTAssertNotNil(gate.begin(now: 11, eligible: true))
+    }
+    func testOptOutOrInteractionDropsLateResultWithoutOverlappingCapture() throws {
+        var gate = PlacementScanGate()
+        let token = try XCTUnwrap(gate.begin(now: 1, eligible: true)); gate.invalidate()
+        XCTAssertNil(gate.begin(now: 20, eligible: true))
+        let frame = CGRect(x: 0, y: 0, width: 1000, height: 1000)
+        gate.finish(token: token, result: PlacementSnapshot(displayID: 1, displayFrame: frame, visibleFrame: frame, capturedAt: 1, protected: []))
+        XCTAssertNil(gate.snapshot); XCTAssertNil(gate.active)
+    }
+    func testDeniedPausedAndNonfiniteStartNeverCapture() {
+        var gate = PlacementScanGate()
+        XCTAssertNil(gate.begin(now: 1, eligible: false)); XCTAssertNil(gate.begin(now: .nan, eligible: true))
     }
 }
 
@@ -244,40 +297,6 @@ final class ScreenContextTests: XCTestCase {
         try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: id, now: 1)
         gate.begin(turn: id, enabled: false, permissionGranted: true, modelHasVision: true)
         XCTAssertThrowsError(try gate.consumeDataURL(turn: id, now: 2)) { XCTAssertEqual($0 as? ScreenContextGate.Failure, .disabled) }
-    }
-}
-
-extension RoamingTests {
-    func testPauseInterruptsAnActiveTripAtCurrentPosition() {
-        var planner = RoamingCore(seed: 42, now: 0)
-        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        for tick in 0..<10000 {
-            let now = Double(tick) / 60
-            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: now)
-            if planner.isTravelling {
-                let origin = frame.origin
-                XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: now + 0.1), origin)
-                XCTAssertFalse(planner.isTravelling)
-                XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: now + 30), origin)
-                return
-            }
-        }
-        XCTFail("seed never travelled")
-    }
-    func testDisplayRemovalCancelsAndClampsToRemainingScreen() {
-        var planner = RoamingCore(seed: 42, now: 0)
-        var frame = CGRect(x: -800, y: 100, width: 320, height: 420)
-        for tick in 0..<10000 {
-            let now = Double(tick) / 60
-            frame.origin = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: now)
-            if planner.isTravelling {
-                let replacement = CGRect(x: 0, y: 0, width: 1200, height: 900)
-                planner.cancel(now: now)
-                frame.origin = planner.step(frame: frame, visible: replacement, cursor: cursor, paused: false, now: now + 0.1)
-                XCTAssertTrue(replacement.contains(frame)); XCTAssertFalse(planner.isTravelling); return
-            }
-        }
-        XCTFail("seed never travelled")
     }
 }
 
@@ -430,7 +449,8 @@ final class CompanionDragTests: XCTestCase {
             _ = roam.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: 0)
             roam.cancel(now: 1, longRest: true)
             for tick in 2...30 {
-                XCTAssertEqual(roam.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick)), frame.origin)
+                XCTAssertEqual(roam.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: Double(tick), displayID: 1,
+                    snapshot: PlacementSnapshot(displayID: 1, displayFrame: visible, visibleFrame: visible, capturedAt: Double(tick), protected: [CGRect(x: 180, y: 200, width: 40, height: 156)])), frame.origin)
                 XCTAssertFalse(roam.isTravelling)
             }
         }

@@ -3,6 +3,16 @@ import XCTest
 import AppKit
 
 final class CompanionInterfaceTests: XCTestCase {
+    @MainActor func testExplicitRecallRecoversRemovedDisplayWithoutScreenCapture() {
+        _ = NSApplication.shared
+        let surface = CompanionSurface()
+        let panel = surface.present(content: NSView(), size: PetLayout.panelSize)
+        defer { panel.close() }
+        panel.setFrameOrigin(CGPoint(x: 5000, y: -5000))
+        let visible = CGRect(x: -1200, y: 40, width: 1200, height: 800)
+        surface.recall(visibleFrames: [visible])
+        XCTAssertTrue(visible.contains(panel.frame))
+    }
     @MainActor private func pointerPanel() -> CompanionPanel {
         _ = NSApplication.shared
         let panel = CompanionPanel(contentRect: NSRect(x: 100, y: 100, width: 100, height: 100), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -363,6 +373,45 @@ final class TurnWarmupTests: XCTestCase {
         try await warmup.wait(turn: second)
         for _ in 0..<200 { if await barrier.ended { break }; try await Task.sleep(nanoseconds: 5_000_000) }
         let ended = await barrier.ended; XCTAssertTrue(ended)
+    }
+}
+
+final class PlacementPixelTests: XCTestCase {
+    private func fixture(width: Int = 64, height: Int = 64) -> [UInt8] {
+        [UInt8](repeating: 255, count: width * height * 4)
+    }
+    func testSolidOpaqueBackgroundHasNoContrastRegions() throws {
+        XCTAssertEqual(try PlacementCapture.contrastRegions(fixture(), width: 64, height: 64,
+            display: CGRect(x: 0, y: 0, width: 128, height: 128)), [])
+    }
+    func testColoredSinglePixelAndTileBoundaryRemainProtected() throws {
+        var bytes = fixture(); let index = (8 * 64 + 8) * 4
+        bytes[index] = 120 // Equal green/blue still detects a purely chromatic edge.
+        let regions = try PlacementCapture.contrastRegions(bytes, width: 64, height: 64, display: CGRect(x: -128, y: 100, width: 128, height: 128))
+        XCTAssertTrue(regions.contains { $0.contains(CGPoint(x: -112, y: 212)) })
+        var blocks = fixture()
+        for row in 0..<64 { for col in 0..<32 { blocks[(row * 64 + col) * 4] = 100 } }
+        XCTAssertEqual(try PlacementCapture.contrastRegions(blocks, width: 64, height: 64,
+            display: CGRect(x: 0, y: 0, width: 64, height: 64)).count, 4)
+    }
+    func testTransparentMalformedOrOversizedPixelsAreUncertain() {
+        var bytes = fixture(); bytes[3] = 0
+        let display = CGRect(x: 0, y: 0, width: 100, height: 100)
+        XCTAssertThrowsError(try PlacementCapture.contrastRegions(bytes, width: 64, height: 64, display: display))
+        XCTAssertThrowsError(try PlacementCapture.contrastRegions([], width: 64, height: 64, display: display))
+        XCTAssertThrowsError(try PlacementCapture.contrastRegions([], width: 100000, height: 100000, display: display))
+    }
+    func testCGImageRendererPreservesTopDownRowsForPlacementMapping() throws {
+        var bytes = fixture(); let topPixel = (8 * 64 + 8) * 4
+        bytes[topPixel] = 255; bytes[topPixel + 1] = 0; bytes[topPixel + 2] = 0
+        let provider = try XCTUnwrap(CGDataProvider(data: Data(bytes) as CFData))
+        let image = try XCTUnwrap(CGImage(width: 64, height: 64, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: 256,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let rendered = try PlacementCapture.topDownRGBA(image)
+        XCTAssertEqual(Array(rendered[topPixel..<topPixel + 4]), [255, 0, 0, 255])
+        let bottomPixel = ((63 - 8) * 64 + 8) * 4
+        XCTAssertEqual(Array(rendered[bottomPixel..<bottomPixel + 4]), [255, 255, 255, 255])
     }
 }
 #endif

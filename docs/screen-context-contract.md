@@ -2,7 +2,7 @@
 
 # Screen context: implemented capture and bounded contract
 
-Use ScreenCaptureKit's single-frame SCScreenshotManager path on supported macOS. Obtain SCShareableContent after the user grants the operating-system Screen Recording prompt; filter out Dot's own windows. Do not call permission-request APIs at launch, grant permission automatically, add background recording, monitor keystrokes, or persist screenshots. The full product should ask at the first explicit screen-aware voice turn and show a visible screen-context indicator plus Pause control. Screenshot selection/capture errors are separate from model errors.
+Use ScreenCaptureKit's single-frame SCScreenshotManager path on supported macOS. Obtain SCShareableContent after the user grants the operating-system Screen Recording prompt; filter out Dot's own windows. Do not call permission-request APIs at launch, grant permission automatically, start continuous recording, monitor keystroke contents, or persist screenshots. The full product should ask at the first explicit screen-aware voice turn and show a visible screen-context indicator plus Pause control. Screenshot selection/capture errors are separate from model errors.
 
 Capture one current frame immediately after the explicit voice capture ends and immediately before its model request. Reduce the current display frame to at most 2,097,152 pixels and encode JPEG at most 2,000,000 bytes. Preserve aspect ratio; reject malformed image data. ScreenContextGate adds turn-ID, consent, capability, five-second freshness, single-use and cancellation checks. It validates envelope/magic, not full JPEG decoding: the capture adapter must validate decoded dimensions and encoded output before passing it. Tests use tiny synthetic envelope fixtures and do not prove ScreenCaptureKit capture or permission UX.
 
@@ -15,3 +15,7 @@ Denied, paused, missing, stale or unsupported screen context must be visible. Ne
 Apple APIs: [ScreenCaptureKit](https://developer.apple.com/documentation/screencapturekit), [SCScreenshotManager](https://developer.apple.com/documentation/screencapturekit/scscreenshotmanager), [SCShareableContent](https://developer.apple.com/documentation/screencapturekit/scshareablecontent).
 
 Pinned Splash source: [image decoding](https://github.com/incoai/splash/blob/f91c91e21dda483f8c59a248a444d0989a560d31/server/images.py), [request shapes](https://github.com/incoai/splash/blob/f91c91e21dda483f8c59a248a444d0989a560d31/server/api_shapes.py), [capability gate](https://github.com/incoai/splash/blob/f91c91e21dda483f8c59a248a444d0989a560d31/server/frontend.py#L308-L389).
+
+## Local placement analysis
+
+The requested content-aware movement also uses sparse single-frame ScreenCaptureKit analysis while idle, under the same persistent Screen context opt-out and existing OS permission. This supersedes the earlier conversation-only capture description. It never requests permission, sends placement images to the model, retains recognized text, or writes screenshots. Whole-window geometry, Vision text rectangles and bounded RGB occupancy checks form an ephemeral map. An eye indicator shows the analysis. See [placement policy](roaming-policy.md) for cadence, cancellation, freshness, conservative no-move fallback and limitations. Aggregate input-idle age is used without reading key contents.
