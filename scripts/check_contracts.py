@@ -37,6 +37,7 @@ checks = {
     'owned runtime transport is TLS pinned': 'https://127.0.0.1:' in read('src/BundledSplash.swift') and 'RuntimeCertificatePin.matches' in engine,
     'runtime listener retained across child exec': 'pass_fds=(listener.fileno(),)' in read('Resources/Runtime/dot_runtime.py') and 'relay.close()' in read('Resources/Runtime/dot_runtime.py'),
     'status and SSE enforce client byte budgets': 'boundedStatus' in engine and 'BoundedSSELines()' in engine and 'ResponseTextBudget()' in engine,
+    'screen first grant rechecks access without prompt loops': 'ScreenPermissionAccess.allowed(preflight: CGPreflightScreenCaptureAccess' in read('src/ScreenContext.swift') and 'request: CGRequestScreenCaptureAccess' in read('src/ScreenContext.swift'),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

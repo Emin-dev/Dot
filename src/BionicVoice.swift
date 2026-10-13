@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import OSLog
 
 @MainActor
 final class TTSManager {
@@ -28,6 +29,7 @@ final class TTSManager {
 /// No socket adoption, shell interpolation, model download or external-service fallback.
 @MainActor
 final class BionicVoice {
+    private static let log = Logger(subsystem: "app.dot", category: "runtime")
     var onDrained: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
@@ -78,11 +80,14 @@ final class BionicVoice {
         // Library diagnostics may contain paths. They never go into application logs.
         child.standardError = FileHandle.nullDevice
         let token = UUID(); session = token
-        child.terminationHandler = { [weak self] _ in
+        child.terminationHandler = { [weak self] finished in
+            let status = (finished.terminationReason == .uncaughtSignal ? -1 : 1) * Int(finished.terminationStatus)
             Task { @MainActor in
                 try? FileManager.default.removeItem(at: dir)
                 guard let self, self.session == token else { return }
-                self.fail("My bundled voice stopped. Click me to try again.")
+                let diagnostic = RuntimeDiagnostic(stage: .voice, reason: .processExited, exitStatus: status)
+                Self.log.error("\(diagnostic.logLine, privacy: .public)")
+                self.fail(diagnostic.localizedDescription)
             }
         }
         let writer: VoicePipeWriter

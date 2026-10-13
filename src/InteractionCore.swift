@@ -259,3 +259,75 @@ struct ResponseTextBudget {
         bytes += count
     }
 }
+
+/// Only fixed identifiers and bounded numeric exit codes cross the diagnostic boundary.
+/// Library stderr, paths, prompts and credentials never become display/log text.
+struct RuntimeDiagnostic: LocalizedError, Equatable {
+    enum Stage: String, Decodable { case snapshot, tls, launcher, supervisor, voice }
+    enum Reason: String, Decodable {
+        case moduleMissing = "module_missing", permissionDenied = "permission_denied"
+        case outOfMemory = "out_of_memory", fileMissing = "file_missing"
+        case argumentRejected = "argument_rejected", deviceUnsupported = "device_unsupported"
+        case processExited = "process_exited", startupFailed = "startup_failed"
+    }
+    let stage: Stage
+    let reason: Reason
+    let exitStatus: Int?
+    static func parse(_ data: Data) -> Self? {
+        struct Event: Decodable {
+            let `protocol`: Int
+            let event: String
+            let stage: Stage
+            let reason: Reason
+            let exit_status: Int?
+        }
+        guard data.count <= 8192, let event = try? JSONDecoder().decode(Event.self, from: data),
+              event.protocol == 1, event.event == "failed",
+              event.exit_status.map({ (-255...255).contains($0) }) ?? true else { return nil }
+        return Self(stage: event.stage, reason: event.reason, exitStatus: event.exit_status)
+    }
+    var logLine: String {
+        "stage=\(stage.rawValue) reason=\(reason.rawValue) exit=\(exitStatus.map(String.init) ?? "unknown")"
+    }
+    var errorDescription: String? {
+        let detail: String
+        switch reason {
+        case .moduleMissing: detail = "a bundled dependency could not load"
+        case .permissionDenied: detail = "a required local operation was denied"
+        case .outOfMemory: detail = "memory allocation failed"
+        case .fileMissing: detail = "a required bundled file could not be opened"
+        case .argumentRejected: detail = "the bundled launcher rejected an option"
+        case .deviceUnsupported: detail = "the runtime rejected this device"
+        case .processExited: detail = "the owned process stopped"
+        case .startupFailed: detail = "initialization failed"
+        }
+        return "\(stage == .voice ? "Voice" : "Splash") \(stage.rawValue): \(detail)\(exitStatus.map { " (exit \($0))" } ?? ""). Click to retry."
+    }
+}
+
+/// Exit notifications are not proof that the final protocol callback has run.
+struct RuntimeExitState {
+    private var diagnostic: RuntimeDiagnostic?
+    private var status: Int?
+    private var eof = false
+    mutating func received(_ value: RuntimeDiagnostic) { diagnostic = value }
+    mutating func exited(status: Int) { self.status = status }
+    mutating func finishedOutput() { eof = true }
+    var resolved: RuntimeDiagnostic? {
+        if let diagnostic { return diagnostic }
+        return eof && status != nil ? fallback : nil
+    }
+    var fallback: RuntimeDiagnostic {
+        RuntimeDiagnostic(stage: .supervisor, reason: status == nil ? .startupFailed : .processExited, exitStatus: status)
+    }
+}
+
+/// One explicit-turn OS request at most. A successful first grant may proceed
+/// only when the fresh preflight confirms access; refusal never becomes a capture.
+enum ScreenPermissionAccess {
+    static func allowed(preflight: () -> Bool, request: () -> Bool) -> Bool {
+        if preflight() { return true }
+        guard request() else { return false }
+        return preflight()
+    }
+}

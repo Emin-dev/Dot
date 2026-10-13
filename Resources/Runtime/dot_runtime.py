@@ -26,6 +26,53 @@ _process = importlib.util.module_from_spec(_process_spec); _process_spec.loader.
 child_exited = _process.child_exited
 
 
+class FailureTail:
+    """Keep only a small private tail; publish fixed codes, never library text."""
+    limit = 8192
+    def __init__(self): self.data = bytearray()
+    def append(self, data):
+        self.data.extend(data[-self.limit:]); del self.data[:-self.limit]
+    def drain(self, stream, maximum_reads=4):
+        # One bounded nonblocking drain per loop; a noisy child cannot starve Stop.
+        for _ in range(maximum_reads):
+            try: data = os.read(stream.fileno(), 4096)
+            except BlockingIOError: return True
+            if not data: return False
+            self.append(data)
+        return True
+    def reason(self):
+        value = bytes(self.data).lower()
+        for code, markers in (
+            ('module_missing', (b'modulenotfounderror', b'no module named')),
+            ('permission_denied', (b'permission denied', b'operation not permitted')),
+            ('out_of_memory', (b'out of memory', b'memoryerror', b'failed to allocate')),
+            ('file_missing', (b'no such file or directory', b'filenotfounderror')),
+            ('argument_rejected', (b'unrecognized arguments', b'unknown option')),
+            ('device_unsupported', (b'unsupported device', b'unsupported gpu')),
+        ):
+            if any(marker in value for marker in markers): return code
+        return 'process_exited'
+
+
+class RuntimeDiagnosticError(Exception):
+    def __init__(self, stage, reason):
+        self.stage, self.reason = stage, reason
+        super().__init__('bundled_runtime_failed')
+
+
+def exception_reason(error):
+    if isinstance(error, FileNotFoundError): return 'file_missing'
+    if isinstance(error, PermissionError): return 'permission_denied'
+    if isinstance(error, MemoryError): return 'out_of_memory'
+    return 'startup_failed'
+
+
+def report_failure(stage, reason, status=None):
+    value = {'protocol': PROTOCOL, 'event': 'failed', 'stage': stage, 'reason': reason}
+    if status is not None and -255 <= status <= 255: value['exit_status'] = status
+    print(json.dumps(value), flush=True)
+
+
 def local_snapshot(models, state, manifest):
     target = [(item['path'].removeprefix('llm-target/'), models / item['path'])
               for item in manifest['files'] if item['path'].startswith('llm-target/')]
@@ -101,12 +148,14 @@ def main():
         stopped = True
     signal.signal(signal.SIGTERM, request_stop); signal.signal(signal.SIGINT, request_stop)
     child = None; listener = None; relay = None
+    stage = 'snapshot'; tail = FailureTail(); unexpected_exit = False
     try:
         manifest = json.loads(Path(args.manifest).read_text())
         draft = local_snapshot(models, state, manifest)
         runtime = payload / 'Splash'
         # Never release/rebind this backend socket. Only the patched Splash child accepts.
         listener = tls.owned_listener(); port = listener.getsockname()[1]
+        stage = 'tls'
         relay = tls.TLSRelay(listener, state)
         home = state / 'home'; home.mkdir()
         api_key = secrets.token_hex(32)
@@ -119,21 +168,37 @@ def main():
                    'serve', '--model', MODEL, '--revision', REVISION, '--draft-model', str(draft),
                    '--offline', '--no-webui', '--host', '127.0.0.1', '--port', str(port), '--listen-fd', str(listener.fileno()), '--max-cache-disk', '0']
         if stopped: return 0
+        stage = 'launcher'
         child = subprocess.Popen(command, cwd=runtime, env=environment, stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True, pass_fds=(listener.fileno(),))
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True, pass_fds=(listener.fileno(),))
+        os.set_blocking(child.stderr.fileno(), False)
+        stderr_open = True
         print(json.dumps({'protocol': PROTOCOL, 'event': 'started', 'pid': child.pid, 'port': relay.port, 'backend_port': port, 'api_key': api_key, 'tls_certificate_sha256': relay.certificate_sha256}), flush=True)
         while not stopped:
-            if child_exited(child): break
-            readable, _, _ = select.select([sys.stdin], [], [], 0.2)
-            if readable:
+            if child_exited(child):
+                tail.drain(child.stderr); unexpected_exit = True; break
+            watched = [sys.stdin] + ([child.stderr] if stderr_open else [])
+            readable, _, _ = select.select(watched, [], [], 0.2)
+            if child.stderr in readable: stderr_open = tail.drain(child.stderr)
+            if sys.stdin in readable:
                 # Any explicit control byte or parent EOF requests shutdown.
                 if sys.stdin.buffer.read(1) is not None: break
+    except Exception as error:
+        raise RuntimeDiagnosticError(stage, exception_reason(error)) from None
     finally:
         try:
             try:
                 if relay is not None: relay.close()
             finally:
-                if child is not None: stop_group(child)
+                if child is not None:
+                    try: stop_group(child)
+                    finally:
+                        if child.stderr is not None:
+                            try:
+                                # No owned writer survives successful group cleanup. Preserve
+                                # at most 256 KB of queued bytes, retaining only the last 8 KB.
+                                if unexpected_exit: tail.drain(child.stderr, maximum_reads=64)
+                            finally: child.stderr.close()
                 # A failed relay shutdown retains its socket through live worker references.
                 if listener is not None and (relay is None or relay.closed): listener.close()
         finally:
@@ -144,11 +209,17 @@ def main():
                 if stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == (identity.st_dev, identity.st_ino):
                     shutil.rmtree(state)
             except FileNotFoundError: pass
+    if unexpected_exit:
+        report_failure('launcher', tail.reason(), child.returncode)
+        return 2
     return 0
 
 
 if __name__ == '__main__':
     try: raise SystemExit(main())
-    except Exception:
-        print(json.dumps({'protocol': PROTOCOL, 'event': 'failed'}), flush=True)
+    except RuntimeDiagnosticError as error:
+        report_failure(error.stage, error.reason)
+        raise SystemExit(2)
+    except Exception as error:
+        report_failure('supervisor', exception_reason(error))
         raise SystemExit(2)

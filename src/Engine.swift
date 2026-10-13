@@ -89,7 +89,7 @@ final class EngineManager: ObservableObject {
         let readinessDeadline = ProcessInfo.processInfo.systemUptime + 180
         for attempt in 0..<attempts {
             try Task.checkCancellation()
-            if let ownedPID, !BundledSplash.shared.owns(pid: ownedPID) { throw OfflineFailure.runtime }
+            if let ownedPID, !BundledSplash.shared.owns(pid: ownedPID) { throw await BundledSplash.shared.failure() }
             var request = URLRequest(url: base.appendingPathComponent("status")); request.timeoutInterval = 2
             if ownedPID != nil, let key = BundledSplash.shared.apiKey { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
             do {

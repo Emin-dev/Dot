@@ -91,6 +91,35 @@ class RuntimeOwnershipTests(unittest.TestCase):
         process = self.launch(); process.communicate(timeout=8)
         self.assertEqual(process.returncode, 2); self.assertEqual(marker.read_text(), 'private existing data')
 
+    def test_child_failure_is_classified_without_private_stderr(self):
+        import select
+        secret = 'FIXTURE_PRIVATE_CONTENT'
+        (self.payload / 'Splash/install/launcher.py').write_text(
+            "import os,sys\nsys.stderr.write(os.environ['SPLASH_API_KEY'] + ' " + secret + " ModuleNotFoundError: local_fixture\\n')\nsys.exit(7)\n")
+        process = self.launch()
+        try:
+            started = json.loads(process.stdout.readline()); self.assertEqual(started['event'], 'started')
+            self.assertTrue(select.select([process.stdout], [], [], 8)[0])
+            failed_line = process.stdout.readline(); failed = json.loads(failed_line)
+            self.assertEqual(failed['event'], 'failed'); self.assertEqual(failed['reason'], 'module_missing')
+            self.assertEqual(failed['exit_status'], 7)
+            self.assertNotIn(secret, failed_line); self.assertNotIn(started['api_key'], failed_line)
+            _, errors = process.communicate(timeout=8)
+            self.assertEqual(process.returncode, 2, errors); self.assertFalse(self.state.exists())
+        finally:
+            if process.poll() is None: process.terminate(); process.communicate(timeout=8)
+    def test_noisy_stderr_does_not_block_parent_eof(self):
+        (self.payload / 'Splash/install/launcher.py').write_text(
+            "import sys\nwhile True: sys.stderr.write('x'*4096); sys.stderr.flush()\n")
+        process = self.launch()
+        try:
+            self.assertEqual(json.loads(process.stdout.readline())['event'], 'started')
+            process.stdin.close(); process.stdin = None
+            _, errors = process.communicate(timeout=8)
+            self.assertEqual(process.returncode, 0, errors); self.assertFalse(self.state.exists())
+        finally:
+            if process.poll() is None: process.terminate(); process.communicate(timeout=8)
+
 class RuntimeSignalTests(unittest.TestCase):
     def test_term_resistant_descendant_is_killed_before_leader_reaped(self):
         import os, select, signal, subprocess

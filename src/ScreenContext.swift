@@ -11,8 +11,9 @@ final class ScreenContext {
     func capture(turn: UUID, modelHasVision: Bool) async throws -> String? {
         guard enabled else { return nil }
         guard modelHasVision else { throw ScreenFailure.unsupported }
-        guard CGPreflightScreenCaptureAccess() else {
-            _ = CGRequestScreenCaptureAccess() // Displays the OS request; never grants it.
+        try Task.checkCancellation()
+        guard ScreenPermissionAccess.allowed(preflight: CGPreflightScreenCaptureAccess,
+                                             request: CGRequestScreenCaptureAccess) else {
             throw ScreenFailure.permission
         }
         try Task.checkCancellation()

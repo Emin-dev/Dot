@@ -107,3 +107,60 @@ final class OfflineIntegrationTests: XCTestCase {
     }
 }
 #endif
+
+#if !SWIFT_PACKAGE
+@MainActor private final class RuntimeDeliveryFixture {
+    var state = RuntimeExitState()
+    var delivered: [Bool] = []
+}
+final class RuntimeProtocolReaderTests: XCTestCase {
+    @MainActor private func checkSingleEOF(closedHandle: Bool) async throws {
+        let pipe = Pipe(), reader = RuntimeProtocolReader(), fixture = RuntimeDeliveryFixture()
+        if closedHandle { try pipe.fileHandleForReading.close() }
+        try pipe.fileHandleForWriting.close()
+        let receive: @MainActor @Sendable (Data) -> Void = { data in fixture.delivered.append(data.isEmpty) }
+        DispatchQueue.global().async {
+            for _ in 0..<8 { reader.read(from: pipe.fileHandleForReading, deliver: receive) }
+        }
+        for _ in 0..<100 where fixture.delivered.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        try await Task.sleep(nanoseconds: 50_000_000)
+        XCTAssertEqual(fixture.delivered, [true])
+        try? pipe.fileHandleForReading.close()
+    }
+    @MainActor func testClosedHandleIsOneSafeEOF() async throws { try await checkSingleEOF(closedHandle: true) }
+    @MainActor func testRepeatedPipeEOFIsDeliveredOnlyOnce() async throws { try await checkSingleEOF(closedHandle: false) }
+    @MainActor func testExitedFastChildDeliversFinalBytesBeforeEOF() async throws {
+        let pipe = Pipe(), child = Process()
+        child.executableURL = URL(fileURLWithPath: "/usr/bin/printf")
+        child.arguments = ["%s", "{\"protocol\":1,\"event\":\"started\"}\n{\"protocol\":1,\"event\":\"failed\",\"stage\":\"launcher\",\"reason\":\"module_missing\",\"exit_status\":7}\n"]
+        child.standardOutput = pipe; child.standardError = FileHandle.nullDevice
+        try child.run()
+        defer { if child.isRunning { child.terminate() } }
+        for _ in 0..<100 where child.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertFalse(child.isRunning)
+        try? pipe.fileHandleForWriting.close()
+        let fixture = RuntimeDeliveryFixture()
+        fixture.state.exited(status: Int(child.terminationStatus))
+        XCTAssertNil(fixture.state.resolved)
+        let reader = RuntimeProtocolReader()
+        let receive: @MainActor @Sendable (Data) -> Void = { data in
+            fixture.delivered.append(data.isEmpty)
+            if data.isEmpty { fixture.state.finishedOutput() }
+            else {
+                for line in data.split(separator: 10) {
+                    if let value = RuntimeDiagnostic.parse(Data(line)) { fixture.state.received(value) }
+                }
+            }
+        }
+        DispatchQueue.global().async {
+            reader.read(from: pipe.fileHandleForReading, deliver: receive)
+            reader.read(from: pipe.fileHandleForReading, deliver: receive)
+        }
+        for _ in 0..<100 where fixture.delivered.count < 2 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(fixture.delivered, [false, true])
+        XCTAssertEqual(fixture.state.resolved?.reason, .moduleMissing)
+        XCTAssertEqual(fixture.state.resolved?.exitStatus, 7)
+        try pipe.fileHandleForReading.close()
+    }
+}
+#endif

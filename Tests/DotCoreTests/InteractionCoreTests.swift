@@ -466,3 +466,85 @@ final class CompanionDragTests: XCTestCase {
         XCTAssertTrue(gesture.release(point: CGPoint(x: 10, y: 10), inside: true))
     }
 }
+
+final class RuntimeDiagnosticTests: XCTestCase {
+    func testFixedFailureCodeBecomesActionableText() throws {
+        let diagnostic = try XCTUnwrap(RuntimeDiagnostic.parse(Data(#"{"protocol":1,"event":"failed","stage":"launcher","reason":"module_missing","exit_status":7}"#.utf8)))
+        XCTAssertEqual(diagnostic.exitStatus, 7)
+        XCTAssertTrue(diagnostic.localizedDescription.contains("bundled dependency"))
+        XCTAssertEqual(diagnostic.logLine, "stage=launcher reason=module_missing exit=7")
+    }
+    func testUnknownTextCannotReachErrorOrLog() throws {
+        for field in ["reason", "stage"] {
+            var object: [String: Any] = ["protocol": 1, "event": "failed", "stage": "launcher", "reason": "process_exited"]
+            object[field] = "/private/SECRET"
+            XCTAssertNil(RuntimeDiagnostic.parse(try JSONSerialization.data(withJSONObject: object)))
+        }
+    }
+    func testMalformedAndUnboundedDiagnosticsRejected() {
+        for status in ["256", "-256", "true", #""private""#] {
+            let json = #"{"protocol":1,"event":"failed","stage":"launcher","reason":"process_exited","exit_status":VALUE}"#.replacingOccurrences(of: "VALUE", with: status)
+            XCTAssertNil(RuntimeDiagnostic.parse(Data(json.utf8)))
+        }
+        XCTAssertNil(RuntimeDiagnostic.parse(Data(repeating: 32, count: 8193)))
+        XCTAssertNil(RuntimeDiagnostic.parse(Data(#"{"protocol":2,"event":"failed","stage":"launcher","reason":"process_exited"}"#.utf8)))
+    }
+    func testNegativeSignalAndMissingExitRemainBounded() throws {
+        let data = Data(#"{"protocol":1,"event":"failed","stage":"launcher","reason":"process_exited","exit_status":-9,"stderr":"SECRET"}"#.utf8)
+        let value = try XCTUnwrap(RuntimeDiagnostic.parse(data))
+        XCTAssertFalse(value.logLine.contains("SECRET"))
+        XCTAssertTrue(value.localizedDescription.contains("exit -9"))
+    }
+}
+
+final class RuntimeExitStateTests: XCTestCase {
+    func testExitBeforeFinalProtocolCannotPublishGenericFailure() throws {
+        var state = RuntimeExitState()
+        state.exited(status: 2)
+        XCTAssertNil(state.resolved)
+        // Fast child: both lines can be in the same pipe read after the exit callback.
+        let lines = "{\"protocol\":1,\"event\":\"started\"}\n{\"protocol\":1,\"event\":\"failed\",\"stage\":\"launcher\",\"reason\":\"module_missing\",\"exit_status\":7}\n"
+        for line in lines.split(separator: "\n") {
+            if let event = RuntimeDiagnostic.parse(Data(line.utf8)) { state.received(event) }
+        }
+        state.finishedOutput()
+        XCTAssertEqual(try XCTUnwrap(state.resolved).reason, .moduleMissing)
+        XCTAssertEqual(state.resolved?.exitStatus, 7)
+    }
+    func testUnclassifiedExitRequiresEOFInEitherOrder() {
+        var exitFirst = RuntimeExitState(); exitFirst.exited(status: 2)
+        XCTAssertNil(exitFirst.resolved); exitFirst.finishedOutput()
+        XCTAssertEqual(exitFirst.resolved?.reason, .processExited)
+        var eofFirst = RuntimeExitState(); eofFirst.finishedOutput()
+        XCTAssertNil(eofFirst.resolved); eofFirst.exited(status: 2)
+        XCTAssertEqual(eofFirst.resolved, exitFirst.resolved)
+    }
+    func testTimedOutDrainOnlyExposesNumericFallback() {
+        var state = RuntimeExitState(); state.exited(status: -9)
+        XCTAssertNil(state.resolved)
+        XCTAssertEqual(state.fallback.logLine, "stage=supervisor reason=process_exited exit=-9")
+    }
+}
+
+final class ScreenPermissionAccessTests: XCTestCase {
+    func testAlreadyGrantedDoesNotPrompt() {
+        var requests = 0
+        XCTAssertTrue(ScreenPermissionAccess.allowed(preflight: { true }, request: { requests += 1; return true }))
+        XCTAssertEqual(requests, 0)
+    }
+    func testSuccessfulFirstGrantContinuesSameTurn() {
+        var checks = [false, true], requests = 0
+        XCTAssertTrue(ScreenPermissionAccess.allowed(preflight: { checks.removeFirst() }, request: { requests += 1; return true }))
+        XCTAssertTrue(checks.isEmpty); XCTAssertEqual(requests, 1)
+    }
+    func testRefusalCannotCaptureOrReprompt() {
+        var checks = 0, requests = 0
+        XCTAssertFalse(ScreenPermissionAccess.allowed(preflight: { checks += 1; return false }, request: { requests += 1; return false }))
+        XCTAssertEqual(checks, 1); XCTAssertEqual(requests, 1)
+    }
+    func testGrantWithoutEffectiveAccessStillFailsHonestly() {
+        var checks = 0, requests = 0
+        XCTAssertFalse(ScreenPermissionAccess.allowed(preflight: { checks += 1; return false }, request: { requests += 1; return true }))
+        XCTAssertEqual(checks, 2); XCTAssertEqual(requests, 1)
+    }
+}

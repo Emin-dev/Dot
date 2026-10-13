@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import OSLog
 
 @MainActor
 final class ChatModel: ObservableObject {
@@ -27,10 +28,11 @@ final class ChatModel: ObservableObject {
     private var firstReasoning = false
     private var firstAnswer = false
     private var firstAudio = false
+    private static let timingLog = Logger(subsystem: "app.dot", category: "timing")
     private func timing(_ stage: String) {
         // Durations only. Never log speech, prompts, replies or model paths.
         let milliseconds = Int((ProcessInfo.processInfo.systemUptime - clickedAt) * 1000)
-        print("DOT_TIMING \(stage)=\(milliseconds)ms")
+        Self.timingLog.notice("DOT_TIMING \(stage, privacy: .public)=\(milliseconds)ms")
     }
 
     init() {
