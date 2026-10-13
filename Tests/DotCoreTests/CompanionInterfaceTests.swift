@@ -394,10 +394,35 @@ final class PlacementPixelTests: XCTestCase {
         XCTAssertEqual(try PlacementCapture.contrastRegions(blocks, width: 64, height: 64,
             display: CGRect(x: 0, y: 0, width: 64, height: 64)).count, 4)
     }
-    func testTransparentMalformedOrOversizedPixelsAreUncertain() {
-        var bytes = fixture(); bytes[3] = 0
+    func testNonOpaquePixelProtectsWholeTileAndLeavesDistantOpaqueTileClear() throws {
+        for alpha in [UInt8(253), UInt8(0)] {
+            var bytes = fixture(); bytes[(8 * 64 + 8) * 4 + 3] = alpha
+            let result = try PlacementCapture.analyzePixels(bytes, width: 64, height: 64,
+                display: CGRect(x: 0, y: 0, width: 64, height: 64))
+            XCTAssertEqual(result.unknownTiles, 1); XCTAssertEqual(result.firstNonOpaqueAlpha, Int(alpha))
+            XCTAssertEqual(result.regions, [CGRect(x: -12, y: 20, width: 56, height: 56)])
+            XCTAssertFalse(result.regions.contains { $0.contains(CGPoint(x: 63, y: 1)) })
+        }
+    }
+    func testTransparentTextAndBoundaryHaloRemainProtected() throws {
+        var bytes = fixture()
+        for x in 27...35 { let offset = (31 * 64 + x) * 4; bytes[offset] = 0; bytes[offset + 3] = 253 }
+        let result = try PlacementCapture.analyzePixels(bytes, width: 64, height: 64,
+            display: CGRect(x: 0, y: 0, width: 64, height: 64))
+        XCTAssertEqual(result.unknownTiles, 4); XCTAssertEqual(result.regions.count, 4)
+        XCTAssertTrue(result.regions.contains { $0.contains(CGPoint(x: 31, y: 33)) })
+    }
+    func testEntireTransparentImageIsOccupiedAndOpaqueBlankRemainsClear() throws {
+        var bytes = fixture()
+        for index in stride(from: 3, to: bytes.count, by: 4) { bytes[index] = 0 }
+        let display = CGRect(x: 0, y: 0, width: 64, height: 64)
+        let unknown = try PlacementCapture.analyzePixels(bytes, width: 64, height: 64, display: display)
+        XCTAssertEqual(unknown.unknownTiles, 4); XCTAssertEqual(unknown.regions.count, 4)
+        let opaque = try PlacementCapture.analyzePixels(fixture(), width: 64, height: 64, display: display)
+        XCTAssertTrue(opaque.regions.isEmpty); XCTAssertEqual(opaque.unknownTiles, 0); XCTAssertNil(opaque.firstNonOpaqueAlpha)
+    }
+    func testMalformedOrOversizedPixelsStillFailClosed() {
         let display = CGRect(x: 0, y: 0, width: 100, height: 100)
-        XCTAssertThrowsError(try PlacementCapture.contrastRegions(bytes, width: 64, height: 64, display: display))
         XCTAssertThrowsError(try PlacementCapture.contrastRegions([], width: 64, height: 64, display: display))
         XCTAssertThrowsError(try PlacementCapture.contrastRegions([], width: 100000, height: 100000, display: display))
     }

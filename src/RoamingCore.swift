@@ -55,6 +55,27 @@ struct PlacementSnapshot: Equatable {
         [rect.minX, rect.minY, rect.maxX, rect.maxY, rect.width, rect.height].allSatisfy { $0.isFinite }
             && rect.width > 0 && rect.height > 0 && !rect.isInfinite && !rect.isNull
     }
+    /// Protected-window order is irrelevant; retain duplicate coverage and reject every real geometry change.
+    static func sameGeometry(_ lhs: [CGRect], _ rhs: [CGRect]) -> Bool {
+        lhs.count == rhs.count && preservesGeometry(lhs, in: rhs)
+    }
+    /// A capture may add occupied regions, but may never lose or alter a previously observed region.
+    static func preservesGeometry(_ prior: [CGRect], in current: [CGRect]) -> Bool {
+        guard prior.count <= current.count, current.count <= maximumRegions,
+              prior.allSatisfy(validRect), current.allSatisfy(validRect) else { return false }
+        func ordered(_ a: CGRect, _ b: CGRect) -> Bool {
+            if a.minX != b.minX { return a.minX < b.minX }
+            if a.minY != b.minY { return a.minY < b.minY }
+            if a.width != b.width { return a.width < b.width }
+            return a.height < b.height
+        }
+        let old = prior.sorted(by: ordered)
+        var matched = 0
+        for rect in current.sorted(by: ordered) where matched < old.count {
+            if rect == old[matched] { matched += 1 }
+        }
+        return matched == old.count
+    }
     static func visionRect(_ box: CGRect, display: CGRect) -> CGRect? {
         guard validRect(box), validRect(display), CGRect(x: 0, y: 0, width: 1, height: 1).contains(box) else { return nil }
         return CGRect(x: display.minX + box.minX * display.width, y: display.minY + box.minY * display.height,
@@ -195,5 +216,49 @@ struct PlacementScanGate {
         guard active == token else { return }
         active = nil
         if generation == token { snapshot = result }
+    }
+}
+
+/// Public placement diagnostics accept only fixed categories and bounded numeric measurements.
+struct PlacementDiagnostic: Equatable {
+    enum Stage: String { case windows, shareable, capture, analysis, validation }
+    enum Outcome: String { case ready, rejected, cancelled, failed }
+    enum Reason: String {
+        case permission, inputChanged = "input_changed", displayMissing = "display_missing"
+        case windowsChanged = "windows_changed", expired, invalidMap = "invalid_map"
+        case windowMetadata = "window_metadata", imageBounds = "image_bounds", textAnalysis = "text_analysis"
+        case pixelAnalysis = "pixel_analysis", cancelled, framework
+    }
+    let stage: Stage
+    let outcome: Outcome
+    let reason: Reason?
+    let elapsedMilliseconds: Int
+    let captureMilliseconds: Int
+    let analysisMilliseconds: Int
+    let regions: Int
+    let errorCode: Int?
+    let imageWidth: Int
+    let imageHeight: Int
+    let observedAlpha: Int?
+    let unknownTiles: Int
+    let addedWindows: Int
+    init(stage: Stage, outcome: Outcome, reason: Reason? = nil, elapsed: Double = 0,
+         capture: Double = 0, analysis: Double = 0, regions: Int = 0, errorCode: Int? = nil, imageWidth: Int = 0, imageHeight: Int = 0, observedAlpha: Int? = nil, unknownTiles: Int = 0, addedWindows: Int = 0) {
+        self.stage = stage; self.outcome = outcome; self.reason = reason
+        self.elapsedMilliseconds = Self.milliseconds(elapsed)
+        self.captureMilliseconds = Self.milliseconds(capture)
+        self.analysisMilliseconds = Self.milliseconds(analysis)
+        self.regions = min(PlacementSnapshot.maximumRegions, max(0, regions))
+        self.imageWidth = min(65536, max(0, imageWidth)); self.imageHeight = min(65536, max(0, imageHeight))
+        self.addedWindows = min(512, max(0, addedWindows))
+        self.unknownTiles = min(PlacementSnapshot.maximumRegions, max(0, unknownTiles))
+        self.observedAlpha = observedAlpha.flatMap { (0...255).contains($0) ? $0 : nil }
+        self.errorCode = errorCode.flatMap { (-1_000_000...1_000_000).contains($0) ? $0 : nil }
+    }
+    private static func milliseconds(_ value: Double) -> Int {
+        value.isFinite ? Int(min(60, max(0, value)) * 1000) : 0
+    }
+    var logLine: String {
+        "DOT_PLACEMENT stage=\(stage.rawValue) outcome=\(outcome.rawValue) reason=\(reason?.rawValue ?? "none") elapsed=\(elapsedMilliseconds)ms capture=\(captureMilliseconds)ms analysis=\(analysisMilliseconds)ms regions=\(regions) code=\(errorCode.map(String.init) ?? "none") image=\(imageWidth)x\(imageHeight) alpha=\(observedAlpha.map(String.init) ?? "none") unknown_tiles=\(unknownTiles) added_windows=\(addedWindows)"
     }
 }

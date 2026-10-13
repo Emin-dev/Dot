@@ -615,3 +615,62 @@ final class ScreenPermissionTurnTests: XCTestCase {
         XCTAssertFalse(permission.mayCapture(turn: turn, preflight: { XCTFail("unexpected check"); return true }))
     }
 }
+
+final class PlacementDiagnosticTests: XCTestCase {
+    func testFixedFailureRecordsStageAndCodeWithoutFreeText() {
+        let diagnostic = PlacementDiagnostic(stage: .capture, outcome: .failed, reason: .framework, elapsed: 0.05, errorCode: -3801)
+        XCTAssertEqual(diagnostic.logLine, "DOT_PLACEMENT stage=capture outcome=failed reason=framework elapsed=50ms capture=0ms analysis=0ms regions=0 code=-3801 image=0x0 alpha=none unknown_tiles=0 added_windows=0")
+    }
+    func testExpiryAndInterruptionAreRejectionsNotFrameworkFailures() {
+        for reason in [PlacementDiagnostic.Reason.expired, .inputChanged, .windowsChanged] {
+            XCTAssertTrue(PlacementDiagnostic(stage: .validation, outcome: .rejected, reason: reason).logLine.contains("outcome=rejected"))
+        }
+    }
+    func testMeasurementsAreFiniteAndBounded() {
+        let diagnostic = PlacementDiagnostic(stage: .analysis, outcome: .cancelled, reason: .cancelled,
+            elapsed: .infinity, capture: -1, analysis: 100000, regions: Int.max, errorCode: Int.min,
+            imageWidth: Int.max, imageHeight: -1, observedAlpha: 256, unknownTiles: Int.max, addedWindows: Int.max)
+        XCTAssertEqual(diagnostic.elapsedMilliseconds, 0); XCTAssertEqual(diagnostic.captureMilliseconds, 0)
+        XCTAssertEqual(diagnostic.analysisMilliseconds, 60000); XCTAssertEqual(diagnostic.regions, 8192)
+        XCTAssertEqual(diagnostic.unknownTiles, 8192); XCTAssertEqual(diagnostic.addedWindows, 512)
+        XCTAssertNil(diagnostic.errorCode)
+        XCTAssertEqual(diagnostic.imageWidth, 65536); XCTAssertEqual(diagnostic.imageHeight, 0); XCTAssertNil(diagnostic.observedAlpha)
+    }
+}
+
+final class PlacementGeometryComparisonTests: XCTestCase {
+    private let a = CGRect(x: -100, y: 20, width: 90, height: 60)
+    private let b = CGRect(x: 300, y: -50, width: 40, height: 75)
+    func testOrderOnlyChangeRetainsDuplicateMultiplicity() {
+        XCTAssertTrue(PlacementSnapshot.sameGeometry([a, b, a], [a, a, b]))
+        XCTAssertTrue(PlacementSnapshot.sameGeometry([], []))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([a, b, a], [a, b, b]))
+    }
+    func testMoveResizeAddAndRemoveAreChanges() {
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([a, b], [a.offsetBy(dx: 1, dy: 0), b]))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([a, b], [a.insetBy(dx: 0, dy: 1), b]))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([a], [a, b]))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([a, b], [a]))
+    }
+    func testAddedWindowsRetainEveryPriorProtectedRectangle() {
+        XCTAssertTrue(PlacementSnapshot.preservesGeometry([a], in: [b, a]))
+        XCTAssertTrue(PlacementSnapshot.preservesGeometry([a, a], in: [a, b, a]))
+        XCTAssertTrue(PlacementSnapshot.preservesGeometry([], in: [a]))
+    }
+    func testAdditionsNeverHideRemovalMoveResizeOrDuplicateLoss() {
+        XCTAssertFalse(PlacementSnapshot.preservesGeometry([a, b], in: [a, a]))
+        XCTAssertFalse(PlacementSnapshot.preservesGeometry([a, a], in: [a, b]))
+        XCTAssertFalse(PlacementSnapshot.preservesGeometry([a], in: [a.offsetBy(dx: 1, dy: 0), b]))
+        XCTAssertFalse(PlacementSnapshot.preservesGeometry([a], in: [a.insetBy(dx: 1, dy: 0), b]))
+        XCTAssertFalse(PlacementSnapshot.preservesGeometry([a, b], in: [a]))
+        XCTAssertFalse(PlacementSnapshot.preservesGeometry([a], in: [.null, a]))
+    }
+    func testMalformedOrUnboundedGeometryCannotCompareEqual() {
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([.null], [.null]))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([.zero], [.zero]))
+        XCTAssertFalse(PlacementSnapshot.sameGeometry([CGRect(x: .infinity, y: 0, width: 1, height: 1)],
+                                                     [CGRect(x: .infinity, y: 0, width: 1, height: 1)]))
+        let tooMany = Array(repeating: a, count: PlacementSnapshot.maximumRegions + 1)
+        XCTAssertFalse(PlacementSnapshot.sameGeometry(tooMany, tooMany))
+    }
+}
