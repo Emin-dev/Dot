@@ -1,5 +1,7 @@
 # dot face motion study — validation
 
+**Owner design acceptance:** the owner subsequently accepted the corrected preview and said “yes all good build app now.” This is design acceptance and continued implementation authorization, not a fresh browser technical pass or native/hardware acceptance. The rerun author checks and earlier browser-version limits below remain unchanged.
+
 Design prototype only. No app source, installed app, microphone, speech engine, model, or repository was changed by this work.
 
 ## Ten selectable identities
