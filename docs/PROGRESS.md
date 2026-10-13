@@ -1,6 +1,6 @@
 # Dot: implementation and next steps
 
-Updated 2026-10-13 after the installed movement-repair check. This is a public contributor handoff, not a release certification. Start here before changing behavior; update the checklist with evidence when a task is completed.
+Updated 2026-10-13. **[Canonical product roadmap and build checklist](BUILD_CHECKLIST.md)** records the agreed future behavior, full stack, open decisions and explicit permission gate before implementation. This page is the verified status ledger, not a release certification. The documentation update changes no app behavior. Update checkboxes only with evidence.
 
 ## Current source and personal test app
 
@@ -33,29 +33,20 @@ Updated 2026-10-13 after the installed movement-repair check. This is a public c
 - [ ] Broader mixed-monitor, dynamic desktop and sustained CPU/UX acceptance. A map can validly yield no safe route; Dot then stays still. Initial launch position is not guaranteed content-safe, and this is not perfect semantic understanding of useful content.
 - [ ] Fresh owner-led smoke test of the newly installed personal build, including speech, interruption, screen context, dragging and placement during normal work.
 
-## Requested interaction work, next
+## Agreed future work — pending implementation
 
-- [ ] Ship the reviewed compact-error prototype: short typed status, contextual retry, sanitized Copy details and a clear menu-bar Show Dot / Quit Dot menu. It is local and uninstalled; current main still has the older menu behavior. No scrollable error page or additional app window.
-- [ ] Question-only hands-free replies: explicit model/app question intent, final successful generation and all question audio played, then up to six seconds to begin speaking. Once speech starts, keep three seconds of trailing silence. Ordinary question marks, quotes or rhetorical questions must not activate the microphone.
-- [ ] Finish and execute regression tests for silence timeout, cancellation, permission denial/revocation, repeated drain callbacks, new turns and acoustic echo. The reviewed local policy/parser scaffold is inert: it validates one completed `ask_user` intent and revocable continuation authority, but has no Engine/STT/TTS integration or automatic microphone path. Its new native Swift tests have not run.
-- [ ] More expressive but accessible pet behavior, after the above repairs. Preserve Reduce Motion, hover catchability, pin and explicit interruption.
+The [canonical checklist](BUILD_CHECKLIST.md) is the source of truth for contracts and open choices. These summaries supersede earlier narrower roadmap wording; none is a completion claim.
 
-## Performance research, after current repairs
-
-- [ ] Measure full click-to-audible latency, recording contention, cold/warm engine reuse and per-stage timing; improve safe worker reuse and overlap where measurements justify it.
-- [ ] Evaluate bounded app-lifetime warmup and cache reuse without bypassing content integrity or holding unbounded resources. Full verification remains mandatory for the current mutable bundle.
-- [ ] Research Apple-native APIs/Core ML for suitable speech components, including Core ML Kokoro and Parakeet candidates. This is research only: do not change the current speech models/runtime or the required Splash-only Qwen engine without a reviewed, measured migration decision.
-
-## Larger capabilities still missing
-
-- [ ] Host-validated file/workspace access, coding/research tools, browser/app actions and computer control. Current Dot has no general action adapter or unrestricted shell execution.
-- [ ] Version-matched read/search access to Dot’s own source for explaining and improving the installed version.
-- [ ] Siri/AppIntents integration; it is not currently implemented.
-- [ ] Previews/confirmation before important actions and undo where possible.
-- [ ] Persistent local text conversation history with compact Read/Copy/Delete controls, as requested. Current history remains in memory only. Do not persist raw microphone audio or screenshots, and keep the interface tiny without an extra app window.
-- [ ] Durable user-controlled personal memory beyond that text history, with explicit storage/deletion controls.
-- [ ] Optional Rust backend migration under parity tests. Current backend orchestration is Swift plus isolated Python/native inference components; no Rust performance claim is justified yet.
-- [ ] The specifically requested T3-Video-Wan2.2 5B video feature. Its Apple Silicon runtime and resource fit are not verified. Keep it separate from the working English-only voice stack; do not silently substitute its model or the selected Splash/Qwen engine.
+- [ ] Integrate and test the preserved compact-error/Show Dot–Quit Dot UI work. The latest nine-file patch is already rebased on `1d04b89`, reviewed, unpublished and uninstalled, with result tree `d0f53b46f9b4573fb6d4383caae8185ddab31dbe`. Its receipt records historical 129 Python/48 static passes; new native Swift/UI tests have not run. Question policy/parser scaffolding remains inert, without Engine/STT/TTS or automatic microphone integration.
+- [ ] Native options: trailing silence 2/3/5/8 seconds, default 3; question invitation 3/6/9/12/20 seconds to begin speaking, default 6; proactive Low 10 / Normal 4 / High 1 minute, default High. Resumed speech resets silence. No reasoning/research on an unfinished turn. Random proactive questions use the same validated final-audio/echo/cancellation mic gate; no unrelated random mic activation.
+- [ ] Proactive screen awareness, broad relevant accessible file/context use, background discovery and researched factual answers. Relevant screen/file data in web requests is explicitly authorized; local reasoning does not make online queries network-free. Provider, time budget and provisional-answer choices remain open.
+- [ ] Richer expressions and movement; normal routes avoid useful content and swept-path hazards, with a distinct tiny slow local fallback after at most one minute still. Fallback form, amplitude, cursor/accessibility behavior and possible overlap remain open. Current installed conservative holding behavior remains unchanged.
+- [ ] Preserve existing visual design and compare ten new alternatives, several with native Liquid Glass/transparency and circular/fluid voice-mode treatments, larger expressive faces and speech-aligned mouth motion. No design is approved or implemented. Settings presentation and animation detail remain to design.
+- [ ] Apple-native frameworks first; staged Rust core/coordination/tool/research/history services with thin Swift adapters. Retain Splash/Qwen. Benchmark streaming Parakeet EOU/Apple SpeechAnalyzer and native Core ML Kokoro against the British `bf_isabella` quality reference; no fastest pipeline or automatic Rust speedup is established.
+- [ ] Measure full speech-end-to-audible latency including selected silence, post-silence processing, p50/p95, cold/warm readiness, quality, interruption and shared GPU/ANE/RAM/heat/battery use. Evaluate resident models, prefix caching, streaming, lower copying/IPC and scheduling without weakening integrity or cancellation.
+- [ ] Mac/Accessibility/browser/file/coding tools with verified execution, bounded recovery, cancellation/action history and undo where possible. Maximum autonomy/no repeated app confirmations is the requested direction; actual OS/provider constraints remain. Do not present historic blanket confirmation rules as newly agreed policy.
+- [ ] Durable local text history Read/Copy/Delete, editable memory, project/task context and preference learning; current history is RAM-only. Existing plans exclude stored mic audio/screenshots; learned-fact retention and long-report presentation remain open.
+- [ ] Version-matched own-source access, Siri/App Intents and separate T3-Video-Wan2.2-5B research. Video is not a fast voice-path dependency.
 
 ## Hardware and distribution targets
 
@@ -68,10 +59,10 @@ Updated 2026-10-13 after the installed movement-repair check. This is a public c
 
 ## Verification and working order
 
-1. Keep installed `b26a145` available for the owner's smoke test; resolve any concrete regression before replacing it. Reconcile the existing unpublished compact-UI/question-policy work with its maintainer before starting a competing rewrite.
-2. Finish compact errors and explicit-intent question followup; test actual audio completion and six-second/three-second behavior before enabling it.
-3. Implement bounded action capabilities with explicit host validation and permission-aware user intent.
-4. Validate hardware/distribution targets and produce a clearly labeled downloadable artifact.
+1. Publish and explain the roadmap, research open choices, show the existing design plus ten new options, and ask remaining questions.
+2. Present the concise stack/features checklist and ask for final permission to build. Documentation is authorized now; app implementation, builds and installation wait for that explicit go-ahead.
+3. After permission, coordinate the [future parallel lanes](BUILD_CHECKLIST.md#future-parallel-work-lanes), preserve the installed baseline and unpublished patch, and integrate measured slices with exact tests/device evidence.
+4. Record source, automated tests, native acceptance, installation and owner acceptance separately; complete hardware/distribution gates before claiming a public release.
 
 Use `python3 -B -m unittest discover -s Tests/Python -v`, `swift test`, and `bash scripts/verify_macos.sh`. Real payload assembly uses `scripts/build_complete.sh`; complete packaging requires exact-artifact native evidence via `scripts/package_complete.sh`. Never replace full payload hashes with size/mtime-only trust, weaken sandbox/TLS checks to make a test pass, or claim model-free CI proves physical microphone/speaker or screen permission behavior.
 

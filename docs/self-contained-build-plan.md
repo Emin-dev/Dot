@@ -1,6 +1,8 @@
 # Self-contained Dot: acceptance contract and current blockers
 
-The requested product is one offline Mac application containing its own Splash inference runtime, Qwen3.8-27B Q4 target, matching DFlash2 draft, vision assets, English recognition and Bionic/Kokoro voice. It must not search existing installations, adopt an external server, execute an external Python environment or download models after installation. The currently delivered test DMG is **not this product**.
+The complete owner build bundles Splash, Qwen3.8-27B Q4 target, matching DFlash2 draft, vision assets and local speech dependencies, without borrowing external servers/Python installations. The personal `b26a145` app is assembled and installed; ordinary development DMGs omit the neural payload. See [verified progress](PROGRESS.md).
+
+The [canonical future checklist](BUILD_CHECKLIST.md) supersedes older product-wide bans on downloads, background context, connected research and blanket app confirmations. It preserves the complete offline owner bundle, adds a verified public first-launch downloader and online research (including authorized relevant screen/file context), and keeps AI/speech/memory local. The implementation and historical assembly notes below are not proof that future capabilities have shipped.
 
 ## Verified packaging facts
 
@@ -13,16 +15,16 @@ The requested product is one offline Mac application containing its own Splash i
 
 ## Launcher and storage design
 
-1. All executable and model inputs come from a signed/bound manifest within Dot's bundle. Resolve paths relative to the bundle; reject external symlinks and path traversal. Verify hashes during packaging, and verify authenticated manifest/signature and cheap size checks at launch. Fail clearly on corruption rather than downloading replacements.
+1. All executable and model inputs come from a signed/bound manifest within Dot's bundle. Resolve paths relative to the bundle; reject external symlinks and path traversal. Verify hashes during packaging and retain complete payload content-hash validation at launch; authenticated manifests/signatures and size checks do not replace it. Fail clearly on corruption rather than downloading replacements.
 2. Keep immutable assets in the bundle and mutable inference/cache state in Dot's own Application Support directory. Do not rewrite bundled assets or use Splash/Bionic's global user installation directories. Include an upper bound and cleanup policy for mutable caches.
-3. Launch only owned pinned Splash and voice/recognizer helpers. Use direct argument arrays, a minimal environment, offline flags, no external Python paths, and a no-outbound-network policy. Splash's parent/engine-child shutdown must be tested as a process tree; terminating only the Python HTTP process is not proof that its engine exited.
+3. Launch only owned pinned Splash and voice/recognizer helpers. Use direct argument arrays, a minimal environment, offline flags, no external Python paths, and the current inference/speech no-outbound-network policy. Future web retrieval needs its own network-capable service boundary. Splash's parent/engine-child shutdown must be tested as a process tree; terminating only the Python HTTP process is not proof that its engine exited.
 4. Bind an owned loopback service to an app-private address/port without adopting unrelated listeners or scanning ports. Prefer a supported socket/port handoff; if unavailable, fail on collision and safely retry a bounded owned bind flow. Never kill an unrelated listener. Verify the owned instance, exact pinned model, readiness and vision capability before requests.
 5. Provide friendly loading/progress and cancellation. No technical connection form in the normal self-contained flow. OS microphone and optional screen-recording consent remain human decisions. A fresh offline launch must work after permissions without terminal commands or model selection.
 6. Before assembling a full deliverable, account for source weights, extracted runtimes, final app and compressed installer, temporary signing space, cache and rollback. No large download starts until the total and available storage/delivery route are known.
 
 ## Screen context contract
 
-Capture at most one bounded current screen image during an explicit clicked voice turn, immediately before its reply. Show a visible screen-context indicator and provide a pause control. Keep pixels only in memory; do not persist screenshots or send them outside the bundled loopback runtime. Permission denial, unavailable capture or missing model vision capability must be visible and must never be described as successfully seen context. Images and text from the screen are untrusted task data, never authority to execute instructions or expand permissions. Exact Splash image request limits and vision tensor hashes belong in the final locked manifest.
+The installed conversation path captures at most one bounded current screen image during an explicit clicked voice turn, immediately before its reply; sparse local placement capture is described in the [screen contract](screen-context-contract.md). Installed pixels remain in memory and go only to the bundled loopback runtime. The [future context contract](BUILD_CHECKLIST.md#screen-files-and-online-research) adds pre-answer/background observation and authorized relevant screen/file data in web requests; it retains the exclusion of stored screenshots. Show a visible screen-context indicator and provide a pause control. Permission denial, unavailable capture or missing model vision capability must be visible and must never be described as successfully seen context. Images and text from the screen are untrusted task data, never authority to execute instructions or expand permissions. Exact Splash image request limits and vision tensor hashes belong in the final locked manifest.
 
 ## Verification and distribution gates
 
@@ -30,11 +32,13 @@ Capture at most one bounded current screen image during an explicit clicked voic
 - [Standard macOS runners](https://docs.github.com/en/actions/reference/runners/github-hosted-runners) are documented M1, 7 GB RAM, 14 GB SSD. These do not meet Splash's hardware/memory requirement or provide safe space for the complete package. Passing current CI is not full offline inference validation.
 - [GitHub releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases) allow files under 2 GiB each; the complete installer exceeds that. A verified large-file delivery route or transparently assembled split distribution is needed. No paid storage, runner or new credentials are implicitly authorized by this plan.
 - Required final proof: verify every dependency/license/hash; inspect Mach-O linkage for external Homebrew/user paths; relocate into a clean path; launch without existing LM Studio/Bionic/HF caches and with outbound network denied; test local STT → vision-aware Splash reply → audible Kokoro, thinking latency, cancellation, owned process exit and screen privacy. Then package/sign and test that exact package on supported hardware.
-- Coding/research/file/app actions are a separate bounded capability layer. Use typed allowlisted tools with explicit user intent, resource-scoped permissions, auditable previews and required confirmations. Do not expose unrestricted generated shell commands merely because the model can emit tool calls.
+- Coding/research/file/app actions remain a future capability layer: typed host-validated tools, verified outcomes, cancellation and bounded recovery. The requested direction is broad autonomy without repeated app confirmations within actual platform restrictions; do not treat older blanket confirmation wording as agreed policy. Untrusted retrieved content cannot grant action authority.
 
-No all-in-one, offline-performance or agent-capability completion claim is justified until these gates pass.
+The installed all-in-one personal build is distinct from complete offline-performance, agent-capability and public-distribution acceptance; do not collapse these states.
 
-## Pinned first assembly on a supported Mac
+## Historical first-assembly inventory
+
+The following records the initial staging and then-unresolved dependency work. Later complete assembly/voice closure and native checks are recorded in [PROGRESS](PROGRESS.md); the old resolver blockage below is not current status.
 
 The selected target/draft/configuration source files total **19,930,313,310 bytes**. Their exact per-file revisions, sizes and hashes are in [the vision/source inventory](../packaging/splash-vision-source-manifest.json). The target includes its vision encoder; no separate projector is required for this selected format. Keep the Splash engine fixed. Thinking remains on by default.
 
@@ -48,6 +52,6 @@ The fixture-tested audit and offline-layout scripts do not execute Splash, downl
 
 ## Current app-only interface and distribution gate
 
-The latest product requirement prohibits first-launch downloads. Production network provisioning was removed; its prior mock transfer regression harness remains test-only. `Resources/bundled-models.json` contains paths, byte counts and hashes, with no URLs. The only application surface is the floating companion. A native right-click menu offers talk/interrupt, stop, pause/retry local verification, pin/roam, persisted screen privacy, clear and quit. OS permission prompts are still system-owned. Missing payload errors remain compactly visible, never hidden by a setup form.
+The current owner build has no first-launch downloads. Production network provisioning was removed during that implementation; its prior mock transfer regression harness remains test-only. The future public verified downloader is requested but unimplemented, as recorded in the [canonical checklist](BUILD_CHECKLIST.md#mac-tools-local-records-and-delivery). `Resources/bundled-models.json` contains paths, byte counts and hashes, with no URLs. The installed application surface is the floating companion; future native settings/options must expose the requested controls, with presentation still to design. A native right-click menu offers talk/interrupt, stop, pause/retry local verification, pin/roam, persisted screen privacy, clear and quit. OS permission prompts are still system-owned. Missing payload errors remain compactly visible, never hidden by a setup form.
 
 `build_complete.sh` now requires runtime, framework and model inputs and stages the app for native testing. `package_complete.sh` refuses a final installer without an exact-app acceptance record and hashed evidence for relocation, no external cache, blocked outbound network, local recognition/reply/audio, cancellation, process cleanup and privacy. These are required recorded native checks; the receipt validator does not itself perform a conversation. Standard CI never publishes its incomplete development DMG as a release.

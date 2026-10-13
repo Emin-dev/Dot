@@ -1,5 +1,7 @@
 # Conservative local placement
 
+This is the installed baseline. The [future movement checklist](BUILD_CHECKLIST.md#proactive-personality-movement-and-visual-design) retains normal route avoidance but adds a distinct tiny, slow local idle-motion fallback after at most one minute still. Its character-versus-panel form, speed/amplitude, cursor and accessibility behavior remain open; zero overlap is not guaranteed by that exception. No fallback is implemented by this docs update. The stillness rules below describe current behavior, not the complete future requirement.
+
 Autonomous random roaming is removed. Dot keeps its current position when it is clear. If a fresh local map shows overlap, it may make one short, deterministic, axis-aligned escape of at most 96 points over 0.6 seconds. The complete 148×156-point panel must end outside all protected regions. Its swept footprint cannot encounter new regions or increase overlap with existing ones. If no such route exists, Dot stays still; manual drag remains available.
 
 The map protects entire visible non-Dot application/window rectangles, local Vision text rectangles, and high-contrast RGB image tiles (including their boundaries). All regions receive 12-point padding. Protecting whole windows deliberately sacrifices movement freedom: a full-screen app may leave no usable place. This is a conservative approximation, not a guarantee that all meaningful content has been identified. Initial launch/recall position is not content-certified; it is presented without waiting for analysis or asking for permission.

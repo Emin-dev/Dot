@@ -1,6 +1,6 @@
 # Dot bundled offline voice: technical research
 
-Research date: 12 October 2026. Status: feasible architecture; dependency closure, licensing closure, imports, signing and end-to-end audio remain unverified. This is not a release lock.
+Research date: 12 October 2026. Historical snapshot: at that research stage dependency closure, licensing closure, imports, signing and end-to-end audio were unverified. Later personal-app assembly and component evidence is recorded in [PROGRESS](PROGRESS.md); this inventory is not a live status feed or release lock. The [future roadmap](BUILD_CHECKLIST.md) governs speech candidates, the stricter product hardware target and public downloader; the no-provisioning design below describes the complete offline owner bundle.
 
 ## Product requirement
 

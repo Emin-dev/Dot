@@ -1,5 +1,7 @@
 # Startup and first-turn latency
 
+This records the installed Swift warmup design and historical measurements. The [future performance checklist](BUILD_CHECKLIST.md#architecture-and-performance) adds staged Rust services, speech candidates and joint pipeline benchmarks. Selected continuous silence (2/3/5/8 seconds, default 3) must precede reasoning/research on the utterance; model preparation or streaming transcription is not permission to reason early. No future latency result is established here.
+
 ## Observed baseline
 
 The owner's Mac measured the unchanged `ba6cc7a55d9ab6d56057ef083d2492e7e52da1b4` app on 2026-10-13. One same-payload, cache-warm sample took 8.495 seconds to verify the runtime and 8.571 seconds to verify models, serially (17.066 seconds total). An earlier combined sample was 24.260 seconds. These are integrity-check durations, not exact first-paint measurements.

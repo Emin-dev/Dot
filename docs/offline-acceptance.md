@@ -1,6 +1,8 @@
 # Native offline acceptance before packaging
 
-This is a record of real test evidence, not a way to turn an untested build green. No complete app has passed this contract yet. The voice dependency resolver is stopped after a tool cancellation, and its unresolved closure cannot be replaced with Splash's incompatible Python dependencies.
+This is a record of real test evidence, not a way to turn an untested build green. The earlier stopped voice resolver is historical: the complete personal `b26a145` app has since been assembled, installed and component-tested; see [verified progress](PROGRESS.md). Full network-disconnected end-to-end and exact public-installer acceptance are not established by those component checks. The procedure below remains the exact-artifact gate.
+
+The [future roadmap](BUILD_CHECKLIST.md) preserves offline core AI/speech/memory and the complete owner bundle while adding connected research and a public verified first-launch downloader. Test local offline operation separately from research/network behavior; do not describe web research as network-free.
 
 1. Build the exact committed source with `build_complete.sh`, supplying the verified runtime payload, the complete model payload and official macOS Whisper framework. All immutable runtime native code must have been finalized before its audited manifest was created.
 2. On a supported Mac, relocate that signed app into a new path with spaces. Validate it without external Bionic/LM Studio/Hugging Face state and with outbound network denied. Do not remove personal caches: use a clean isolated state directory/account or a verified sandbox. Record the actual OS and hardware, framework/runtime/model hashes, test actions and results. Never record private screen pixels or conversation content in generic build logs.

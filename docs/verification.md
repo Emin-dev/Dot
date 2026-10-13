@@ -1,5 +1,7 @@
 # Verification ledger
 
+This is a historical ledger: dates and exact revisions define each result. See [current verified progress](PROGRESS.md) for the installed baseline and [the canonical checklist](BUILD_CHECKLIST.md#definition-of-tested-completion) for future work and completion criteria. Older unverified statements below describe their original stages, not a reversal of later evidence.
+
 Base: 56041cf00d1d6b7c2f87590fdd1fbbbbb216e996. Separate cloud reconstruction; no byte-identity claim for earlier uncommitted Mac patches.
 
 At initial preparation: source, plist/XML, workflow and shell static checks only on Linux. No Swift compiler or Xcode exists on that cloud computer. GitHub macOS checks and their exact final commit SHA must be recorded before delivery. Never substitute prior CI or Mac tests.

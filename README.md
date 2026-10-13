@@ -1,4 +1,8 @@
-# Dot — floating local companion
+# dot — floating local companion
+
+**[Product roadmap and build checklist](docs/BUILD_CHECKLIST.md)** — agreed future stack, features, configurable timing/activity, design choices and the explicit permission gate before implementation. [Verified progress](docs/PROGRESS.md) keeps source, tests, installed behavior and unpublished work separate.
+
+The description below is the current installed baseline. The target adds proactive screen/file context, online research, native settings/options and staged Rust services; those capabilities are not installed by this documentation update.
 
 A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Drag to move without starting the microphone. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.
 
@@ -6,11 +10,11 @@ A native macOS floating companion. Click to talk; click during an answer to inte
 
 The merged source implements a single floating dot with a small right-click menu. There are no app settings, setup, folder-selection or chat windows, or persistent text label below the dot. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
 
-**The complete personal build at [`b26a145`](https://github.com/Emin-dev/Dot/commit/b26a14505bd2bc8e57264f1dfc934f778a8bd781) is installed and open on the owner’s Mac; a generally validated public installer is not available yet.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
+**The complete personal build at [`b26a145`](https://github.com/Emin-dev/Dot/commit/b26a14505bd2bc8e57264f1dfc934f778a8bd781) was installed and opened on the owner’s Mac on 2026-10-13; a generally validated public installer is not available yet.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
 
-The shipped product must contain Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. There is no first-launch downloader, external folder picker, borrowed Python installation or server discovery. At launch, Dot verifies the embedded payload, with pause/retry in its context menu. Missing or damaged files remain a visible error; the app never downloads a repair. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
+The current complete personal build contains Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. There is currently no first-launch downloader, external folder picker, borrowed Python installation or server discovery. The future public variant adds verified first-launch provisioning; the owner bundle remains complete and offline-capable. At launch, Dot verifies the embedded payload, with pause/retry in its context menu. Missing or damaged files remain a visible error; the app never downloads a repair. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
 
-## Interaction and privacy
+## Installed interaction and privacy
 
 - Splash is the only LLM runtime. The exact target is `mlx-community/Qwen3.8-27B-4bit`; this is a checkpoint publisher name, not use of the MLX inference engine. No automatic model or runtime substitution.
 - Thinking remains on at low effort, with a 1,536-token budget. Reasoning is not spoken.
@@ -21,7 +25,7 @@ The shipped product must contain Splash 1.3.1, English Whisper base.en, the Bion
 - Random roaming is disabled. Conservative local placement protects other windows, text and visually occupied regions; missing/stale/uncertain screen analysis means staying still. Short clear escape paths pause for interaction, speech, pinning and Reduce Motion. Manual drag works without screen access. Reduce Transparency provides an opaque body.
 - File, browser and autonomous computer actions are not implemented. Dot does not execute instructions from screen content.
 
-Conversation state stays in memory and disappears on quit. No analytics or conversation upload. The app has no model provisioning network path. Its owned Splash endpoint is loopback-only; the voice helper denies network access.
+Conversation state stays in memory and disappears on quit. No analytics or conversation upload. The app has no model provisioning network path. Its owned Splash endpoint is loopback-only; the voice helper denies network access. The [future research/context contract](docs/BUILD_CHECKLIST.md#screen-files-and-online-research) adds online retrieval and explicitly authorized use of relevant screen/file data in web requests while retaining local AI, speech and memory.
 
 ## Development and verification
 
