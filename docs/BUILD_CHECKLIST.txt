@@ -55,13 +55,11 @@ The owner requested this quality review be added to GitHub before continuing imp
 
 **Current practical verification limits:** the separate `6aa5b89` candidate was launched and all 11 actual native windows captured without clipping; isolated offline-payload readiness was 18.64 seconds. No inference or speech was started in that check. It also emitted intermittent layout/shortcut-registration diagnostics, retained for investigation. Accessibility and synthetic-input access were unavailable, so actual menu and physical voice acceptance did not run. Fresh browser inventory was empty. These limits do not revoke owner design acceptance or block available source/native checks. No current-device voice-loop or latency claim follows from prior synthetic/earlier-revision results.
 
-## Active integration checkpoint — 2026-10-13 18:16 UTC
+## Active integration checkpoint — 2026-10-13 18:27 UTC
 
-Published app source is still the merged `6aa5b89` milestone; current integration is unfinished. See [CONTINUATION](CONTINUATION.md) for exact ownership, durable 65-file recovery snapshot, hashes and executable next steps. Current focused evidence includes 136 Python tests, 52 static guards, screenshot/capture/history checks and native expression renders. A native aggregate compiled; two fixture failures were fixed and passed targeted reruns, while one corrected coordinator expectation still awaits rerun. This is not an exact tested current candidate.
+Current development checks passed **294 SwiftPM and 464 native XCTest**, plus the previously recorded 136 Python and 52 static guards. Suites overlap; these are not a unique-test total or an exact accepted candidate. Later UI/source changes require their own rerun. Actual native UI inspection found a footer press could cancel the turn before its native button finished tracking; the fix preserves the pressed control and separately suppresses automatic follow-up. A tightened-policy real Kokoro startup failed before Qwen loaded, so required-access diagnosis continues without restoring broad private/network grants.
 
-A separate real `6aa5b89` test used actual fixed Qwen/Splash and British Kokoro playback followed by the actual authorized microphone; an unanswered invitation closed with `no_speech` after 6,124 ms. This bounded result does not cover spoken replies, echo, Bluetooth, p50/p95 or the newer helper policies. Current helper file/network fixtures passed and actual runtime acceptance under them is underway. Installed `b26a145` is unchanged.
-
-The search-provider question is pending in the coordinating conversation (Tavily free-only versus budgeted raw Perplexity Search); no provider or paid use has been selected. Provider-neutral search/read/evidence and native source UI work continue independently. Local Qwen remains the reasoning engine; actual read evidence and explicit retention rights are required.
+The source-reading notebook panel is now wired into native Options with 10 passing interface tests (supplied sources, not automatic search). HTML/URL/cancellation correctness and actual public source receipts are being checked. Provider choice remains pending in the coordinating chat, no live paid calls. See [CONTINUATION](CONTINUATION.md) for refreshed durable recovery manifest, exact base, all six lane assignments and next steps. App source remains unpublished, installed app unchanged; no implementation completion box is advanced solely for this checkpoint.
 
 ## Short improvement checklist
 
@@ -346,3 +344,4 @@ The [first interactive preview](design/dot-ui-options.html) is retained as histo
 - File-change notifications: https://developer.apple.com/documentation/coreservices/file_system_events
 
 Public component benchmarks nominate candidates; they do not establish the fastest complete Dot pipeline or validate the desired British voice on the owner Mac.
+
