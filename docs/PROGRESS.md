@@ -1,12 +1,12 @@
 # Dot: implementation and next steps
 
-Updated 2026-10-13. This is a public contributor handoff, not a release certification. Start here before changing behavior; update the checklist with evidence when a task is completed.
+Updated 2026-10-13 after the installed movement-repair check. This is a public contributor handoff, not a release certification. Start here before changing behavior; update the checklist with evidence when a task is completed.
 
 ## Current source and personal test app
 
 - Default and only remote branch: `main`. The reviewed development history is merged and preserved. Do not recreate a parallel release branch just to update this checklist.
-- Current tested personal-app source: `ade313c38503d84fc7e201be2110a4a2aaa1cefb`, now in main. Later main changes before the next feature patch are documentation only.
-- A complete, locally signed personal app is installed on the owner's Mac. It contains the model/runtime assets and does not need an external voice folder or model server. The owner reports voice working. Actual screen-aware turns now reach generation and playback after a code-identity/OS-permission repair.
+- Current installed personal-app source: [`b26a14505bd2bc8e57264f1dfc934f778a8bd781`](https://github.com/Emin-dev/Dot/commit/b26a14505bd2bc8e57264f1dfc934f778a8bd781). It was fully assembled, signed with the same approved development identity, installed and opened on 2026-10-13. Subsequent documentation-only commits do not change that installed source identity.
+- The complete personal app contains the model/runtime assets and needs no external voice folder or model server. The owner reported voice working, and earlier real screen-aware turns reached generation and playback after the code-identity/OS-permission repair. The installed movement repair now also accepts a real permitted placement map; a fresh owner-led spoken/placement smoke test remains distinct from these component checks.
 - There is no generally validated complete public installer yet. `build.sh` and ordinary CI produce a clearly incomplete UI/development DMG without the neural payload. Do not offer that artifact as a working AI companion.
 
 ## Implemented and verified
@@ -22,20 +22,22 @@ Updated 2026-10-13. This is a public contributor handoff, not a release certific
 - [x] Full embedded runtime/model integrity verification on each app process, bounded parallel verification, and recording-time backend warmup. Existing verification measurements improved from median 13.13 to 7.27 seconds in six cached-filesystem samples; this is not an end-to-end response-speed guarantee.
 - [x] Owned runtime cleanup, authenticated pinned local TLS, client response limits, private voice-output canonicalization, and relocated long-path voice initialization.
 - [x] Native component acceptance: real voice PCM/playback/drain, cancellation/EOF, relocated voice, production Swift model text and synthetic-image answers, loopback identity and owned process shutdown.
-- [x] Latest main CI before the next feature patch: 168 XCTest, 95 SwiftPM, 129 Python and 40 static checks, with no build/package warnings. These are model-free CI checks, separate from device acceptance.
+- [x] Exact installed-source [CI](https://github.com/Emin-dev/Dot/actions/runs/38417684255): 190 XCTest, 109 SwiftPM, 129 Python and 44 static checks, with zero build/test/package warnings. The Mac repeated those checks and passed real Whisper linking and complete-payload assembly. Model-free CI remains separate from live device acceptance.
 
-## Current repair, not installed yet
+## Installed safe-placement repair
 
-- [ ] Replace random bounds/cursor-only movement. Conversation vision did not control placement; the installed app can still wander over useful content.
-- [ ] Review/test the local placement candidate: protect whole other-app windows, text and visually occupied regions; require fresh permitted local analysis and clear full-panel routes; stay still on uncertainty; preserve manual drag.
-- [ ] Validate image orientation, mixed-monitor coordinates, permission-off behavior, stale-result cancellation and runtime cost natively. Never describe a single-frame approximation as perfect semantic avoidance.
-- [ ] Update privacy wording for sparse local placement analysis. It must use the existing opt-out, discard pixels, and never prompt for permission from an idle scan.
+- [x] Random bounds/cursor-only wandering is removed. Movement now requires fresh permitted local analysis; it protects other-app windows, detected text, visually occupied tiles and cursor clearance across the full panel/path. Manual dragging remains independent.
+- [x] Nonopaque pixels protect their entire padded tile as unknown occupancy instead of rejecting the whole map. New windows appearing during capture are accepted only when every earlier rectangle remains unchanged; all new rectangles are also protected. Any later geometry change still invalidates the map.
+- [x] Native image-row orientation and synthetic occupancy tests passed. A real additive-window capture and a real map from the installed app passed on the owner's Mac. Original capture timestamps, bounded cadence, cancellation and the persistent Screen context switch remain enforced.
+- [x] Privacy documentation covers sparse local placement analysis: no idle permission prompt, no retained screenshots/OCR text, and no placement image sent to the LLM.
+- [ ] Broader mixed-monitor, dynamic desktop and sustained CPU/UX acceptance. A map can validly yield no safe route; Dot then stays still. Initial launch position is not guaranteed content-safe, and this is not perfect semantic understanding of useful content.
+- [ ] Fresh owner-led smoke test of the newly installed personal build, including speech, interruption, screen context, dragging and placement during normal work.
 
 ## Requested interaction work, next
 
-- [ ] Compact typed errors and one clear recovery action, with optional copied diagnostic detail. No scrollable error page or additional app window.
+- [ ] Ship the reviewed compact-error prototype: short typed status, contextual retry, sanitized Copy details and a clear menu-bar Show Dot / Quit Dot menu. It is local and uninstalled; current main still has the older menu behavior. No scrollable error page or additional app window.
 - [ ] Question-only hands-free replies: explicit model/app question intent, final successful generation and all question audio played, then up to six seconds to begin speaking. Once speech starts, keep three seconds of trailing silence. Ordinary question marks, quotes or rhetorical questions must not activate the microphone.
-- [ ] Regression tests for silence timeout, cancellation, permission denial/revocation, repeated drain callbacks, new turns and acoustic echo. The current local followup state-machine scaffold is not production microphone wiring.
+- [ ] Finish and execute regression tests for silence timeout, cancellation, permission denial/revocation, repeated drain callbacks, new turns and acoustic echo. The reviewed local policy/parser scaffold is inert: it validates one completed `ask_user` intent and revocable continuation authority, but has no Engine/STT/TTS integration or automatic microphone path. Its new native Swift tests have not run.
 - [ ] More expressive but accessible pet behavior, after the above repairs. Preserve Reduce Motion, hover catchability, pin and explicit interruption.
 
 ## Performance research, after current repairs
@@ -66,7 +68,7 @@ Updated 2026-10-13. This is a public contributor handoff, not a release certific
 
 ## Verification and working order
 
-1. Finish and independently review safe placement, then run the full native checks and user test without losing the current working personal app.
+1. Keep installed `b26a145` available for the owner's smoke test; resolve any concrete regression before replacing it. Reconcile the existing unpublished compact-UI/question-policy work with its maintainer before starting a competing rewrite.
 2. Finish compact errors and explicit-intent question followup; test actual audio completion and six-second/three-second behavior before enabling it.
 3. Implement bounded action capabilities with explicit host validation and permission-aware user intent.
 4. Validate hardware/distribution targets and produce a clearly labeled downloadable artifact.
