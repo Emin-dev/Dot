@@ -17,7 +17,7 @@ final class ResearchNotebookModel: ObservableObject {
     @Published var urlText = "" {
         didSet { if urlText.utf8.count > 81_920 { urlText = Self.boundedUTF8(urlText, bytes: 81_920); error = "The source URL list is too long." } }
     }
-    @Published var selection: UUID? { didSet { if selection != oldValue { copyRevision = UUID() } } }
+    @Published var selection: UUID? { didSet { if selection != oldValue { copyRevision = UUID(); cancelDeletion() } } }
     @Published private(set) var folder: URL?
     @Published private(set) var notebooks: [ResearchNotebook] = []
     @Published private(set) var activity: Activity?
@@ -30,6 +30,7 @@ final class ResearchNotebookModel: ObservableObject {
     private var revision = UUID()
     private var copyRevision = UUID()
     private var acceptingActions = true
+    private var pendingDeletion: (prompt: UUID, notebook: ResearchNotebook, revision: UUID)?
     var busy: Bool { activity != nil }
     var selected: ResearchNotebook? { notebooks.first { $0.id == selection } }
     var canCreate: Bool {
@@ -82,6 +83,7 @@ final class ResearchNotebookModel: ObservableObject {
     func open() { acceptingActions = true; if !busy { reload() } }
     func close() { acceptingActions = false; cancel() }
     func cancel() {
+        cancelDeletion()
         revision = UUID(); copyRevision = UUID(); operation?.cancel(); operation = nil
         activity = nil; notice = "Stopped. Refresh to check any results already saved."; error = nil
     }
@@ -104,12 +106,23 @@ final class ResearchNotebookModel: ObservableObject {
             return (try await store.read(), notebook.id, "Source brief saved on this Mac.")
         }
     }
-    func deleteSelected() {
-        guard let id = selected?.id else { return }
+    func requestDeleteSelected() -> LocalRecordDeletionPrompt? {
+        guard acceptingActions, !busy, let selected else { return nil }
+        let prompt = LocalRecordDeletionPrompt(title: "Delete this source notebook?",
+            message: "The notebook “\(selected.title)” and its saved source excerpts will be permanently deleted. Original files and websites are unaffected. This cannot be undone.")
+        pendingDeletion = (prompt.id, selected, revision); return prompt
+    }
+    func cancelDeletion() { pendingDeletion = nil }
+    @discardableResult func confirmDeletion(_ prompt: UUID) -> Bool {
+        guard let request = pendingDeletion, request.prompt == prompt else { return false }
+        pendingDeletion = nil
+        guard acceptingActions, !busy, revision == request.revision, selected == request.notebook else { return false }
+        let id = request.notebook.id
         run(.deleting) { store in
             try await store.delete(id: id)
             return (try await store.read(), nil, "Notebook deleted.")
         }
+        return true
     }
     func exportSelected(to destination: URL) {
         guard let id = selected?.id else { return }
@@ -154,6 +167,7 @@ final class ResearchNotebookModel: ObservableObject {
     private func run(_ activity: Activity,
                      body: @escaping (any ResearchNotebookAccess) async throws -> ([ResearchNotebook], UUID?, String?)) {
         guard acceptingActions, !busy, let store else { return }
+        cancelDeletion()
         let expected = UUID(); revision = expected
         self.activity = activity; error = nil; notice = nil
         operation = Task { [weak self] in
@@ -179,18 +193,22 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     let model: ResearchNotebookModel
     private var panel: NSPanel?
     private var presentation = UUID()
+    private let confirmation: LocalRecordDeletionConfirmation
     var onVisibility: ((Bool) -> Void)?
-    init(model: ResearchNotebookModel) { self.model = model; super.init() }
+    init(model: ResearchNotebookModel, confirmation: LocalRecordDeletionConfirmation? = nil) {
+        self.model = model; self.confirmation = confirmation ?? LocalRecordDeletionConfirmation(); super.init()
+    }
     convenience init(directory: URL? = nil) { self.init(model: ResearchNotebookModel(directory: directory)) }
     func show() {
-        presentation = UUID()
+        invalidateSheets()
         if panel == nil {
             let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: 620),
                                  styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
             window.title = "Dot · Source notebooks"; window.minSize = NSSize(width: 560, height: 430)
             window.isReleasedWhenClosed = false; window.delegate = self
             window.contentView = NSHostingView(rootView: ResearchNotebookView(model: model,
-                chooseFolder: { [weak self] in self?.chooseFolder() }, export: { [weak self] in self?.chooseExport() }))
+                chooseFolder: { [weak self] in self?.chooseFolder() }, export: { [weak self] in self?.chooseExport() },
+                delete: { [weak self] in self?.requestDeletion() }))
             window.center(); panel = window
         }
         model.open(); onVisibility?(true)
@@ -200,8 +218,15 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     func close() { invalidateSheets(); model.close(); panel?.close() }
     func windowWillClose(_ notification: Notification) { invalidateSheets(); model.close(); onVisibility?(false) }
     private func invalidateSheets() {
+        confirmation.invalidate(); model.cancelDeletion()
         presentation = UUID()
         if let panel, let sheet = panel.attachedSheet { panel.endSheet(sheet, returnCode: .cancel) }
+    }
+    func requestDeletion() {
+        guard let panel, let prompt = model.requestDeleteSelected() else { return }
+        confirmation.present(prompt, for: panel) { [weak model] confirmed in
+            if confirmed { model?.confirmDeletion(prompt.id) } else { model?.cancelDeletion() }
+        }
     }
     private func chooseFolder() {
         guard let panel, !model.busy else { return }
@@ -230,6 +255,7 @@ private struct ResearchNotebookView: View {
     @ObservedObject var model: ResearchNotebookModel
     let chooseFolder: () -> Void
     let export: () -> Void
+    let delete: () -> Void
     @State private var showReceipts = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -320,7 +346,7 @@ private struct ResearchNotebookView: View {
                 Spacer()
                 Button("Copy") { Task { await model.copySelected() } }.disabled(model.selected == nil || model.busy)
                 Button("Export…", action: export).disabled(model.selected == nil || model.busy)
-                Button("Delete", role: .destructive) { model.deleteSelected() }.disabled(model.selected == nil || model.busy)
+                Button("Delete", role: .destructive, action: delete).disabled(model.selected == nil || model.busy)
             }
         }.padding(14)
     }

@@ -77,6 +77,60 @@ final class WebResearchInterfaceTests: XCTestCase {
             conflicts: [WebResearchConflict(id: UUID(), claimIDs: [first.id, second.id], explanation: "Fixture disagreement", resolution: nil)],
             followUpQueries: ["third"])
     }
+    @MainActor private func confirmDelete(_ model: WebResearchModel) {
+        guard let prompt = model.requestDeleteSelected() else { return XCTFail("Missing delete confirmation") }
+        XCTAssertTrue(model.confirmDeletion(prompt.id))
+    }
+
+    @MainActor func testResearchControllerRequiresConfirmationAndRejectsLateClosedSheet() async throws {
+        try await withStore { store, _ in
+            _ = NSApplication.shared
+            _ = try await store.create(question: "Keep this research", queries: ["first", "second"],
+                limits: WebResearchLimits(), retryPolicy: .preserveUncertain)
+            let model = WebResearchModel(store: store)
+            var replies: [LocalRecordDeletionConfirmation.Reply] = []
+            let panel = WebResearchPanel(model: model, confirmation: LocalRecordDeletionConfirmation(present: { _, _, reply in replies.append(reply) }))
+            panel.show(); await model.flush()
+            defer { panel.close() }
+            panel.requestDeletion(); XCTAssertEqual(replies.count, 1)
+            replies[0](false); await model.flush(); XCTAssertEqual(model.summaries.count, 1)
+            panel.requestDeletion(); XCTAssertEqual(replies.count, 2)
+            panel.close(); panel.show(); await model.flush()
+            replies[1](true); await model.flush(); XCTAssertEqual(model.summaries.count, 1)
+            panel.requestDeletion(); XCTAssertEqual(replies.count, 3)
+            replies[2](true); await model.flush(); XCTAssertTrue(model.summaries.isEmpty)
+        }
+    }
+
+    @MainActor func testResearchConfirmationIsSingleUseAndCannotDeleteAChangedRevision() async throws {
+        try await withStore { store, _ in
+            let saved = try await store.create(question: "First question", queries: ["first", "second"],
+                limits: WebResearchLimits(), retryPolicy: .preserveUncertain)
+            let model = WebResearchModel(store: store)
+            model.open(); await model.flush()
+            let cancelled = try XCTUnwrap(model.requestDeleteSelected())
+            XCTAssertEqual(model.selected?.id, saved.id)
+            model.cancelDeletion(); XCTAssertFalse(model.confirmDeletion(cancelled.id))
+            let stale = try XCTUnwrap(model.requestDeleteSelected())
+            _ = try await store.save(saved.session, expectedRevision: saved.revision)
+            XCTAssertTrue(model.confirmDeletion(stale.id))
+            await model.flush()
+            XCTAssertNotNil(model.error)
+            let preserved = try await store.load(id: saved.id)
+            XCTAssertEqual(preserved.id, saved.id)
+            model.reload(); await model.flush()
+            let closing = try XCTUnwrap(model.requestDeleteSelected())
+            model.close(); model.open(); await model.flush()
+            XCTAssertFalse(model.confirmDeletion(closing.id))
+            let deselected = try XCTUnwrap(model.requestDeleteSelected())
+            model.select(nil); XCTAssertFalse(model.confirmDeletion(deselected.id))
+            model.select(saved.id); await model.flush()
+            let accepted = try XCTUnwrap(model.requestDeleteSelected())
+            XCTAssertTrue(model.confirmDeletion(accepted.id)); XCTAssertFalse(model.confirmDeletion(accepted.id))
+            await model.flush(); XCTAssertTrue(model.summaries.isEmpty)
+        }
+    }
+
     @MainActor private func draft(_ model: WebResearchModel) { model.question = "Fixture question"; model.queryText = "primary\nsecondary" }
     @MainActor private func eventually(_ predicate: () async -> Bool) async throws {
         for _ in 0..<2_000 {
@@ -96,7 +150,7 @@ final class WebResearchInterfaceTests: XCTestCase {
             let planned = try await store.create(question: "Saved plan", queries: ["one", "two"])
             model.open(); await model.flush()
             XCTAssertEqual(model.selected?.id, planned.id); XCTAssertFalse(model.canResume)
-            model.deleteSelected(); await model.flush(); XCTAssertNil(model.selected)
+            confirmDelete(model); await model.flush(); XCTAssertNil(model.selected)
         }
     }
 
@@ -118,7 +172,7 @@ final class WebResearchInterfaceTests: XCTestCase {
             model.openSource(id: completed.session.sources[0].id); XCTAssertEqual(opened, [completed.session.sources[0].originalURL])
             let reopened = WebResearchModel(directory: directory)
             reopened.open(); await reopened.flush(); XCTAssertEqual(reopened.selected, completed)
-            reopened.deleteSelected(); await reopened.flush(); XCTAssertTrue(reopened.summaries.isEmpty)
+            confirmDelete(reopened); await reopened.flush(); XCTAssertTrue(reopened.summaries.isEmpty)
         }
     }
 
@@ -228,6 +282,23 @@ final class WebResearchInterfaceTests: XCTestCase {
             let calls = await provider.calls; XCTAssertEqual(calls, ["primary", "secondary", "third"])
             XCTAssertEqual(model.selected?.session.stage, .completed)
             XCTAssertEqual(Array(model.selected!.session.sources.prefix(2)), original)
+        }
+    }
+
+    @MainActor func testFollowUpAtSourceCapKeepsAnswerRevisionAndMakesNoNewCalls() async throws {
+        try await withStore { store, _ in
+            var limits = WebResearchLimits(); limits.maxSources = 2
+            let provider = PanelSearchFixture()
+            let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture(),
+                synthesize: { Self.answer($0) }, limits: limits)
+            draft(model); model.start(); await model.flush()
+            let original = try XCTUnwrap(model.selected)
+            XCTAssertEqual(original.session.stage, .completed)
+            XCTAssertFalse(model.canFollowUp)
+            model.followUp(); await model.flush()
+            XCTAssertEqual(model.selected, original)
+            let saved = try await store.load(id: original.id); XCTAssertEqual(saved, original)
+            let calls = await provider.calls; XCTAssertEqual(calls, ["primary", "secondary"])
         }
     }
 

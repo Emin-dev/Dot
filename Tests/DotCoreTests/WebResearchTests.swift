@@ -274,8 +274,62 @@ final class WebResearchTests: XCTestCase {
         XCTAssertThrowsError(try fetched.evidenceJSON(maxBytes: 10))
         let reader = ResearchReadFixture(); await reader.configure(text: String(repeating: "x", count: 10_000))
         let long = try await ready(reader: reader)
-        XCTAssertThrowsError(try long.evidenceJSON(maxBytes: 4_096))
+        XCTAssertLessThanOrEqual(try long.evidenceJSON(maxBytes: 4_096).utf8.count, 4_096)
         XCTAssertTrue(try long.evidenceJSON().contains("extractShortened"))
+    }
+
+    func testEvidenceEnvelopeBudgetsEncodedMultilingualAndEscapedText() async throws {
+        let search = ResearchSearchFixture(), reader = ResearchReadFixture()
+        func hit(_ path: String) -> WebSearchResult {
+            WebSearchResult(url: URL(string: "https://example.org/\(path)")!, title: path, snippet: "Discovery only", publicationDateHint: nil)
+        }
+        await search.configure(custom: ["primary": (0..<4).map { hit("a\($0)") }, "secondary": (0..<4).map { hit("b\($0)") }])
+        for unit in ["界", "👨‍👩‍👧‍👦", "e\u{301}", "\"\\\n\t\u{0001}"] {
+            let sourceText = String(repeating: unit, count: 4_000)
+            await reader.configure(text: sourceText)
+            let fetched = try await WebResearchWorkflow(provider: search, reader: reader).run(session()) { _ in }
+            XCTAssertEqual(fetched.sources.count, 8)
+            for maxBytes in [4_096, 65_536] {
+                let text = try fetched.evidenceJSON(maxBytes: maxBytes)
+                XCTAssertLessThanOrEqual(text.utf8.count, maxBytes)
+                let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+                let extracts = try XCTUnwrap(root["sources"] as? [[String: Any]])
+                XCTAssertEqual(extracts.count, 8)
+                for extract in extracts {
+                    let excerpt = try XCTUnwrap(extract["excerpt"] as? String)
+                    XCTAssertFalse(excerpt.isEmpty)
+                    XCTAssertEqual(excerpt, String(sourceText.prefix(excerpt.count)))
+                    XCTAssertFalse(excerpt.contains("\u{fffd}"))
+                    XCTAssertEqual(extract["extractShortened"] as? Bool, excerpt != sourceText)
+                }
+                XCTAssertFalse(text.contains("Discovery only"))
+            }
+            XCTAssertEqual(try WebResearchSession.decodeCheckpoint(fetched.encodedCheckpoint()), fetched)
+        }
+    }
+
+    func testEvidenceEnvelopeFailsHonestlyWhenMetadataOrOneGraphemeCannotFit() async throws {
+        let reader = ResearchReadFixture()
+        await reader.configure(text: "a" + String(repeating: "\u{301}", count: 40_000))
+        let grapheme = try await ready(reader: reader)
+        XCTAssertThrowsError(try grapheme.evidenceJSON()) {
+            XCTAssertEqual($0 as? WebResearchError, .limitExceeded)
+        }
+        var metadata = try await ready()
+        // Valid source receipts may have metadata larger than a small model envelope.
+        metadata.reads = metadata.reads.map { read in
+            let source = read.source!
+            var copy = read
+            copy.source = ResearchSource(id: source.id, originalURL: source.originalURL, finalURL: source.finalURL,
+                title: String(repeating: "x", count: 8_192), kind: source.kind, retrievedAt: source.retrievedAt,
+                modifiedAt: source.modifiedAt, bytesRead: source.bytesRead, sha256: source.sha256,
+                pagesRead: source.pagesRead, text: source.text, truncated: source.truncated)
+            return copy
+        }
+        XCTAssertNoThrow(try metadata.encodedCheckpoint())
+        XCTAssertThrowsError(try metadata.evidenceJSON(maxBytes: 4_096)) {
+            XCTAssertEqual($0 as? WebResearchError, .limitExceeded)
+        }
     }
 
     func testFollowUpQueriesPreserveReceiptsAndClearPriorSynthesis() async throws {
@@ -289,6 +343,50 @@ final class WebResearchTests: XCTestCase {
         XCTAssertEqual(final.sources.count, 3)
         XCTAssertEqual(final.sources[0], first.sources[0])
         XCTAssertThrowsError(try final.addingQueries(["primary"]))
+    }
+
+    func testSourceCapRejectsFollowUpWithoutDiscardingCompletedAnswer() async throws {
+        let search = ResearchSearchFixture(), reader = ResearchReadFixture()
+        func hit(_ path: String) -> WebSearchResult {
+            WebSearchResult(url: URL(string: "https://example.org/\(path)")!, title: path, snippet: "", publicationDateHint: nil)
+        }
+        await search.configure(custom: ["primary": (0..<4).map { hit("a\($0)") }, "secondary": (0..<4).map { hit("b\($0)") }])
+        let fetched = try await WebResearchWorkflow(provider: search, reader: reader).run(session()) { _ in }
+        let completed = try fetched.completing(with: result(fetched)), before = try completed.encodedCheckpoint()
+        XCTAssertEqual(completed.reads.count, 8); XCTAssertFalse(completed.hasAdditionalSourceCapacity)
+        XCTAssertThrowsError(try completed.addingQueries(["third"])) {
+            XCTAssertEqual($0 as? WebResearchError, .limitExceeded)
+        }
+        XCTAssertEqual(try completed.encodedCheckpoint(), before)
+        XCTAssertEqual(completed.stage, .completed); XCTAssertNotNil(completed.synthesis)
+        let calls = await search.calls; XCTAssertEqual(calls, ["primary", "secondary"])
+    }
+
+    func testFailedReadAndExhaustedTextBudgetsDoNotCreateUnaccountedCapacity() async throws {
+        var limits = WebResearchLimits(); limits.maxSources = 2
+        let reader = ResearchReadFixture(); await reader.configure(fail: ["/secondary"])
+        let failed = try await WebResearchWorkflow(provider: ResearchSearchFixture(), reader: reader).run(session(limits: limits)) { _ in }
+        XCTAssertEqual(failed.sources.count, 1); XCTAssertEqual(failed.reads.count, 2)
+        XCTAssertFalse(failed.hasAdditionalSourceCapacity)
+        XCTAssertThrowsError(try failed.addingQueries(["third"]))
+
+        limits = WebResearchLimits(); limits.maxSourceTextBytes = 1_024
+        await reader.configure(text: String(repeating: "x", count: 512))
+        let fullText = try await WebResearchWorkflow(provider: ResearchSearchFixture(), reader: reader).run(session(limits: limits)) { _ in }
+        XCTAssertEqual(fullText.sources.count, 2); XCTAssertLessThan(fullText.reads.count, fullText.limits.maxSources)
+        XCTAssertFalse(fullText.hasAdditionalSourceCapacity)
+        XCTAssertThrowsError(try fullText.addingQueries(["third"]))
+
+        let search = ResearchSearchFixture()
+        func hit(_ path: String) -> WebSearchResult {
+            WebSearchResult(url: URL(string: "https://example.org/\(path)")!, title: path, snippet: "", publicationDateHint: nil)
+        }
+        await search.configure(custom: ["primary": [hit("a1"), hit("a2")], "secondary": [hit("b1"), hit("b2")]])
+        await reader.configure(byteCount: ResearchExtraction.maxBytes)
+        let fullBytes = try await WebResearchWorkflow(provider: search, reader: reader).run(session()) { _ in }
+        XCTAssertEqual(fullBytes.sources.count, 4); XCTAssertLessThan(fullBytes.reads.count, fullBytes.limits.maxSources)
+        XCTAssertFalse(fullBytes.hasAdditionalSourceCapacity)
+        XCTAssertThrowsError(try fullBytes.addingQueries(["third"]))
     }
 
     func testUnconfirmedResultRetentionStopsBeforeAnySavedHitsOrRequests() async throws {

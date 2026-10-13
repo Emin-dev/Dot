@@ -3,6 +3,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 LOGS=$(mktemp -d "${TMPDIR:-/tmp}/dot-checks.XXXXXX")
+xcodebuild -version
+xcrun swift --version
+xcrun --sdk macosx --show-sdk-version
 # Test-only interpreter, explicitly selected before XCTest; never a product runtime fallback.
 TEST_PYTHON=$(python3 -B -c 'import sys,ssl; assert sys.version_info >= (3,11), "Tests require Python3.11+"; assert ssl.OPENSSL_VERSION.startswith("OpenSSL ") and ssl.OPENSSL_VERSION_INFO >= (1,1,1), "Tests require supported OpenSSL"; print(sys.executable)')
 "$TEST_PYTHON" -B -c 'import sys,ssl; print("Test Python:",sys.version); print("Test TLS:",ssl.OPENSSL_VERSION)'

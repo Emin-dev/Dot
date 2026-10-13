@@ -110,12 +110,12 @@ final class HistoryInterfaceTests: XCTestCase {
         model.recordAssistant(turn: first, text: "Delete me", event: .generated)
         await model.flush()
         let id = try XCTUnwrap(model.records.first?.id)
-        model.delete(id: id)
+        confirmDelete(model, id: id)
         model.recordAssistant(turn: first, event: .playbackStarted)
         model.recordAssistant(turn: first, event: .playbackCompleted)
         model.beginAssistant(turn: second)
         model.recordAssistant(turn: second, event: .playbackStarted)
-        model.clear()
+        confirmClear(model)
         model.recordAssistant(turn: second, text: "Late data", event: .generated)
         model.recordAssistant(turn: second, event: .playbackCompleted)
         await model.flush()
@@ -156,6 +156,55 @@ final class HistoryInterfaceTests: XCTestCase {
         await model.copy(id: record.id)
         XCTAssertEqual(copied.count, 1)
     }
+    @MainActor private func confirmDelete(_ model: ConversationHistoryModel, id: UUID) {
+        guard let prompt = model.requestDelete(id: id) else { return XCTFail("Missing delete confirmation") }
+        XCTAssertTrue(model.confirmDeletion(prompt.id))
+    }
+    @MainActor private func confirmClear(_ model: ConversationHistoryModel) {
+        guard let prompt = model.requestClear() else { return XCTFail("Missing clear confirmation") }
+        XCTAssertTrue(model.confirmDeletion(prompt.id))
+    }
+
+    @MainActor func testDeletionRequiresSingleUseConfirmationAndNewWritesRevokeIt() async throws {
+        let directory = try directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationHistoryModel(directory: directory)
+        model.append(role: .user, text: "First", turn: UUID()); await model.flush()
+        let original = model.records, id = try XCTUnwrap(original.first?.id)
+        let cancelled = try XCTUnwrap(model.requestDelete(id: id))
+        XCTAssertEqual(model.records, original)
+        model.cancelDeletion(); XCTAssertFalse(model.confirmDeletion(cancelled.id))
+        let stale = try XCTUnwrap(model.requestClear())
+        model.append(role: .user, text: "Newer", turn: UUID()); await model.flush()
+        XCTAssertFalse(model.confirmDeletion(stale.id)); XCTAssertEqual(model.records.count, 2)
+        let accepted = try XCTUnwrap(model.requestDelete(id: id))
+        XCTAssertTrue(model.confirmDeletion(accepted.id)); XCTAssertFalse(model.confirmDeletion(accepted.id))
+        await model.flush(); XCTAssertEqual(model.records.map(\.text), ["Newer"])
+        let closing = try XCTUnwrap(model.requestClear())
+        model.closeAdmissions(); XCTAssertFalse(model.confirmDeletion(closing.id))
+        await model.flush(); XCTAssertEqual(model.records.count, 1)
+    }
+
+    @MainActor func testPanelDeletionCancelAndLateResponseAfterReopenPreserveRecords() async throws {
+        _ = NSApplication.shared
+        let directory = try directory(); defer { try? FileManager.default.removeItem(at: directory) }
+        let model = ConversationHistoryModel(directory: directory)
+        model.append(role: .user, text: "Keep until confirmed", turn: UUID()); await model.flush()
+        var replies: [LocalRecordDeletionConfirmation.Reply] = []
+        let confirmer = LocalRecordDeletionConfirmation(present: { _, _, reply in replies.append(reply) })
+        let panel = ConversationHistoryPanel(confirmation: confirmer)
+        panel.show(model: model); await model.flush()
+        let window = try XCTUnwrap(NSApp.windows.first { ($0.delegate as AnyObject?) === panel })
+        defer { window.close() }
+        let id = try XCTUnwrap(model.records.first?.id)
+        panel.requestDeletion(id: id); XCTAssertEqual(replies.count, 1)
+        replies[0](false); await model.flush(); XCTAssertEqual(model.records.count, 1)
+        panel.requestDeletion(id: id); XCTAssertEqual(replies.count, 2)
+        window.close(); panel.show(model: model); await model.flush()
+        replies[1](true); await model.flush(); XCTAssertEqual(model.records.count, 1)
+        panel.requestDeletion(id: id); XCTAssertEqual(replies.count, 3)
+        replies[2](true); replies[2](true); await model.flush(); XCTAssertTrue(model.records.isEmpty)
+    }
+
     private func directory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("dot-history-interface-" + UUID().uuidString, isDirectory: true)
@@ -202,14 +251,14 @@ final class HistoryInterfaceTests: XCTestCase {
         await model.flush()
         let removed = try XCTUnwrap(model.records.first?.id)
         model.append(role: .assistant, text: "Keep this", turn: turn)
-        model.delete(id: removed)
+        confirmDelete(model, id: removed)
         model.reload()
         await model.flush()
         XCTAssertEqual(model.records.map(\.text), ["Keep this"])
         XCTAssertEqual(deletionNotifications, 1); XCTAssertNil(model.error)
 
         model.append(role: .user, text: "Before clear", turn: turn)
-        model.clear()
+        confirmClear(model)
         model.append(role: .assistant, text: "After clear", turn: turn)
         await model.flush()
         XCTAssertEqual(model.records.map(\.text), ["After clear"])
@@ -255,7 +304,7 @@ final class HistoryInterfaceTests: XCTestCase {
         XCTAssertNotNil(model.error); XCTAssertEqual(model.records, before)
         XCTAssertEqual(try Data(contentsOf: file), corrupt)
 
-        model.clear(); await model.flush()
+        confirmClear(model); await model.flush()
         XCTAssertNil(model.error); XCTAssertTrue(model.records.isEmpty); XCTAssertFalse(model.busy)
         model.append(role: .user, text: "Recovered", turn: turn)
         await model.flush()
@@ -317,7 +366,7 @@ final class HistoryInterfaceTests: XCTestCase {
         XCTAssertEqual(model.records, before)
         model.reload(); await model.flush()
         XCTAssertNil(model.error)
-        model.delete(id: selected)
+        confirmDelete(model, id: selected)
         await model.copy(id: selected)
         XCTAssertEqual(copied.count, 1, "A copy ordered after deletion must not return stale cached text")
         XCTAssertNotNil(model.error); XCTAssertFalse(model.records.contains { $0.id == selected })
@@ -336,7 +385,7 @@ final class HistoryInterfaceTests: XCTestCase {
         model.append(role: .assistant, text: "Also admitted", turn: UUID())
         model.closeAdmissions()
         model.append(role: .user, text: "Rejected after closing", turn: UUID())
-        model.delete(id: original); model.clear(); model.reload()
+        XCTAssertNil(model.requestDelete(id: original)); XCTAssertNil(model.requestClear()); model.reload()
         await model.copy(id: original)
         await model.flush()
         XCTAssertTrue(model.closing); XCTAssertFalse(model.busy)

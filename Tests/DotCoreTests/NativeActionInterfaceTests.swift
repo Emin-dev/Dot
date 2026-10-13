@@ -195,6 +195,98 @@ final class NativeActionInterfaceTests: XCTestCase {
         XCTAssertEqual(resumed?.receipt.status, .handedOff)
     }
 
+    @MainActor func testShutdownCannotReopenAndFlushWaitsForDurableLateSuccess() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = ActionPanelWorkspace(mode: .lateSuccess)
+        let model = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
+        let running = Task { await model.execute(.launchApplication(bundleID: "fixture.shutdown")) }
+        await workspace.waitForLaunch()
+        model.closeAdmissions(); model.open()
+        XCTAssertTrue(model.shuttingDown); XCTAssertTrue(model.busy); XCTAssertTrue(model.cancelling)
+        model.bundleID = "fixture.must-not-start"
+        XCTAssertFalse(model.canRun)
+        var flushed = false
+        let waiting = Task { await model.flush(); flushed = true }
+        await Task.yield()
+        XCTAssertFalse(flushed, "Quit must not finish while the admitted action still awaits its result")
+        await workspace.completeLaunch()
+        let result = await running.value
+        await waiting.value
+        XCTAssertTrue(flushed); XCTAssertFalse(model.busy)
+        XCTAssertEqual(result?.receipt.status, .succeeded)
+        XCTAssertEqual(result?.receipt.cancellationRequested, true)
+        XCTAssertEqual(result?.historySaved, true)
+        model.open()
+        let blocked = await model.execute(.openWebURL("https://example.com"))
+        XCTAssertNil(blocked, "A later panel opening must not undo application shutdown")
+        let reopened = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
+        await reopened.reloadReceipts()
+        XCTAssertEqual(reopened.receipts.map(\.id), [try XCTUnwrap(result?.receipt.id)])
+        let urls = await workspace.urls
+        XCTAssertTrue(urls.isEmpty)
+    }
+
+    @MainActor func testShutdownCancelsWaitingHandoffAndPersistsReceiptBeforeFlushReturns() async throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let workspace = ActionPanelWorkspace(mode: .cancelWaiting)
+        let model = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
+        let running = Task { await model.execute(.launchApplication(bundleID: "fixture.shutdown-cancel")) }
+        await workspace.waitForLaunch()
+        model.closeAdmissions()
+        await model.flush()
+        let result = await running.value
+        XCTAssertEqual(result?.receipt.status, .cancelled)
+        XCTAssertEqual(result?.historySaved, true)
+        XCTAssertFalse(model.busy); XCTAssertFalse(model.cancelling)
+        let reopened = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
+        await reopened.reloadReceipts()
+        XCTAssertEqual(reopened.receipts.map(\.id), [try XCTUnwrap(result?.receipt.id)])
+    }
+
+    @MainActor func testOldNativePickerCallbacksCannotChangeReopenedPanelOrShutDownModel() async throws {
+        _ = NSApplication.shared
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let application = root.appendingPathComponent("Fixture.app")
+        let contents = application.appendingPathComponent("Contents")
+        try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
+        let info = try PropertyListSerialization.data(fromPropertyList: ["CFBundleIdentifier": "fixture.picker", "CFBundlePackageType": "APPL"], format: .xml, options: 0)
+        try info.write(to: contents.appendingPathComponent("Info.plist"))
+        let model = NativeActionPanelModel(applicationStorage: root.appendingPathComponent("Receipts"), workspace: ActionPanelWorkspace())
+        var folderReplies: [NativeActionPanel.PickerReply] = [], applicationReplies: [NativeActionPanel.PickerReply] = []
+        let panel = NativeActionPanel(model: model, picker: { kind, _, reply in
+            switch kind { case .folder: folderReplies.append(reply); case .application: applicationReplies.append(reply) }
+        })
+        panel.show(); await Task.yield(); await model.flush()
+        let window = try XCTUnwrap(NSApp.windows.first { ($0.delegate as AnyObject?) === panel })
+        defer { window.close() }
+        panel.chooseFolder(); panel.chooseApplication()
+        XCTAssertEqual(folderReplies.count, 1); XCTAssertEqual(applicationReplies.count, 1)
+        window.close(); panel.show(); await Task.yield(); await model.flush()
+        folderReplies[0](root); applicationReplies[0](application)
+        await Task.yield(); await model.flush()
+        XCTAssertNil(model.documentRoot); XCTAssertEqual(model.bundleID, "")
+        panel.chooseFolder(); panel.chooseApplication()
+        XCTAssertEqual(folderReplies.count, 2); XCTAssertEqual(applicationReplies.count, 2)
+        panel.closeAdmissions()
+        folderReplies[1](root); applicationReplies[1](application)
+        await Task.yield(); await model.flush()
+        XCTAssertNil(model.documentRoot); XCTAssertEqual(model.bundleID, "")
+    }
+
+    @MainActor func testPanelCannotReopenAfterApplicationShutdown() async throws {
+        _ = NSApplication.shared
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let model = NativeActionPanelModel(applicationStorage: root, workspace: ActionPanelWorkspace())
+        let panel = NativeActionPanel(model: model)
+        panel.show(); await model.flush()
+        let window = try XCTUnwrap(NSApp.windows.first { ($0.delegate as AnyObject?) === panel })
+        panel.closeAdmissions(); await model.flush()
+        panel.show()
+        XCTAssertTrue(model.shuttingDown)
+        XCTAssertFalse(window.isVisible)
+        XCTAssertFalse(model.canRun)
+    }
+
     @MainActor func testRootSelectionFailurePreservesScopeAndSuccessDropsPriorUndoSelection() async throws {
         let root = try directory(), next = try directory()
         defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: next) }

@@ -280,10 +280,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
-        terminating = true; sourcePanel.stop(); researchPanel.close(); webResearchPanel?.close(); actionPanel.stop(); DotIntentRouter.shared.clear(); model?.beginShutdown()
+        terminating = true; sourcePanel.stop(); researchPanel.close(); webResearchPanel?.close(); actionPanel.closeAdmissions(); DotIntentRouter.shared.clear(); model?.beginShutdown()
         Task {
             await model?.textHistory.flush()
             await webResearchPanel?.model.flush()
+            await actionPanel.model.flush()
             sender.reply(toApplicationShouldTerminate: true)
         }
         return .terminateLater

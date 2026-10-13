@@ -27,7 +27,7 @@ final class ResearchInterfaceTests: XCTestCase {
         let reopened = ResearchNotebookModel(directory: saved, copyText: { _ in XCTFail("Unexpected copy") })
         reopened.open(); await reopened.flush()
         XCTAssertEqual(reopened.selected, notebook)
-        reopened.deleteSelected(); await reopened.flush()
+        confirmDelete(reopened); await reopened.flush()
         XCTAssertTrue(reopened.notebooks.isEmpty); XCTAssertNil(reopened.selection); XCTAssertNil(reopened.error)
         model.reload(); await model.flush(); XCTAssertTrue(model.notebooks.isEmpty)
     }
@@ -88,7 +88,7 @@ final class ResearchInterfaceTests: XCTestCase {
         model.open(); await model.flush()
         let copying = Task { await model.copySelected() }
         try await eventually { await fixture.copyCount == 1 }
-        model.deleteSelected(); await model.flush()
+        confirmDelete(model); await model.flush()
         await fixture.releaseCopies(); await copying.value
         XCTAssertTrue(model.notebooks.isEmpty); XCTAssertTrue(copied.isEmpty)
         XCTAssertEqual(model.notice, "Notebook deleted.")
@@ -165,6 +165,48 @@ final class ResearchInterfaceTests: XCTestCase {
         opens = false; model.openOriginal(sourceID: sourceID)
         XCTAssertEqual(model.error, "The original source could not be opened.")
         XCTAssertNil(model.notice)
+    }
+
+    @MainActor private func confirmDelete(_ model: ResearchNotebookModel) {
+        guard let prompt = model.requestDeleteSelected() else { return XCTFail("Missing delete confirmation") }
+        XCTAssertTrue(model.confirmDeletion(prompt.id))
+    }
+
+    @MainActor func testNotebookControllerRequiresConfirmationAndRejectsLateClosedSheet() async throws {
+        _ = NSApplication.shared
+        let fixture = ControlledResearchStore(records: [notebook()])
+        let model = ResearchNotebookModel(store: fixture)
+        var replies: [LocalRecordDeletionConfirmation.Reply] = []
+        let panel = ResearchPanel(model: model, confirmation: LocalRecordDeletionConfirmation(present: { _, _, reply in replies.append(reply) }))
+        panel.show(); await model.flush()
+        defer { panel.close() }
+        panel.requestDeletion(); XCTAssertEqual(replies.count, 1)
+        replies[0](false); await model.flush(); XCTAssertEqual(model.notebooks.count, 1)
+        panel.requestDeletion(); XCTAssertEqual(replies.count, 2)
+        panel.close(); panel.show(); await model.flush()
+        replies[1](true); await model.flush(); XCTAssertEqual(model.notebooks.count, 1)
+        panel.requestDeletion(); XCTAssertEqual(replies.count, 3)
+        replies[2](true); await model.flush(); XCTAssertTrue(model.notebooks.isEmpty)
+    }
+
+    @MainActor func testNotebookConfirmationCannotRetargetOrSurviveCloseOrRepeat() async throws {
+        let first = notebook(), second = notebook()
+        let fixture = ControlledResearchStore(records: [first, second])
+        let model = ResearchNotebookModel(store: fixture)
+        model.open(); await model.flush(); model.selection = first.id
+        let pending = try XCTUnwrap(model.requestDeleteSelected())
+        XCTAssertEqual(model.notebooks.count, 2)
+        model.selection = second.id; model.selection = first.id
+        XCTAssertFalse(model.confirmDeletion(pending.id))
+        let closing = try XCTUnwrap(model.requestDeleteSelected())
+        model.close(); model.open(); await model.flush()
+        XCTAssertFalse(model.confirmDeletion(closing.id))
+        model.selection = first.id
+        let cancelled = try XCTUnwrap(model.requestDeleteSelected())
+        model.cancelDeletion(); XCTAssertFalse(model.confirmDeletion(cancelled.id))
+        let accepted = try XCTUnwrap(model.requestDeleteSelected())
+        XCTAssertTrue(model.confirmDeletion(accepted.id)); XCTAssertFalse(model.confirmDeletion(accepted.id))
+        await model.flush(); XCTAssertEqual(model.notebooks.map(\.id), [second.id])
     }
 
     private func temporaryDirectory() throws -> URL {

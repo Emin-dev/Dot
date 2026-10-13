@@ -27,6 +27,7 @@ final class NativeActionPanelModel: ObservableObject {
         }
     }
     @Published private(set) var cancelling = false
+    @Published private(set) var shuttingDown = false
     @Published private(set) var error: String?
     @Published private(set) var notice: String?
     @Published private(set) var lastResult: NativeActionResult?
@@ -145,8 +146,10 @@ final class NativeActionPanelModel: ObservableObject {
         guard canUndoSelected, let selection else { return nil }
         return await execute(.undo(receiptID: selection))
     }
-    func open() { acceptingActions = true }
+    func open() { if !shuttingDown { acceptingActions = true } }
     func close() { acceptingActions = false; stop() }
+    /// Unlike closing a window, application shutdown cannot reopen action admissions.
+    func closeAdmissions() { shuttingDown = true; close() }
     func stop() {
         guard let work else { return }
         cancelling = true; notice = "Stopping. A request already sent to macOS may still complete."
@@ -156,7 +159,7 @@ final class NativeActionPanelModel: ObservableObject {
         if busy { await withCheckedContinuation { flushWaiters.append($0) } }
     }
     func reloadReceipts() async {
-        guard !busy else { return }
+        guard acceptingActions, !busy else { return }
         busy = true; defer { busy = false }
         if applicationExecutor == nil, let applicationStorage,
            FileManager.default.fileExists(atPath: applicationStorage.path) {
@@ -220,11 +223,20 @@ extension NativeActionReceipt {
 
 @MainActor
 final class NativeActionPanel: NSObject, NSWindowDelegate {
+    enum PickerKind { case folder, application }
+    typealias PickerReply = @MainActor (URL?) -> Void
+    typealias Picker = @MainActor (PickerKind, NSPanel, @escaping PickerReply) -> Void
     let model: NativeActionPanelModel
     var onVisibility: ((Bool) -> Void)?
     private var panel: NSPanel?
-    init(model: NativeActionPanelModel? = nil) { self.model = model ?? NativeActionPanelModel(); super.init() }
+    private var presentation = UUID()
+    private let pickerOverride: Picker?
+    init(model: NativeActionPanelModel? = nil, picker: Picker? = nil) {
+        self.model = model ?? NativeActionPanelModel(); pickerOverride = picker; super.init()
+    }
     func show() {
+        guard !model.shuttingDown else { return }
+        invalidateSheets()
         if panel == nil {
             let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 620),
                 styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
@@ -237,27 +249,48 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
         model.open(); onVisibility?(true); panel?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
         Task { await model.reloadReceipts() }
     }
-    func stop() { model.stop() }
-    func windowWillClose(_ notification: Notification) { model.close(); onVisibility?(false) }
-    private func chooseFolder() {
-        guard !model.busy, let panel else { return }
+    func stop() { invalidateSheets(); model.stop() }
+    func closeAdmissions() { invalidateSheets(); model.closeAdmissions(); panel?.close() }
+    func windowWillClose(_ notification: Notification) { invalidateSheets(); model.close(); onVisibility?(false) }
+    private func invalidateSheets() {
+        presentation = UUID()
+        if let panel, let sheet = panel.attachedSheet { panel.endSheet(sheet, returnCode: .cancel) }
+    }
+    func chooseFolder() {
+        guard !model.shuttingDown, !model.busy, let panel, panel.isVisible, panel.attachedSheet == nil else { return }
+        presentation = UUID()
+        let expected = presentation
+        let receive: PickerReply = { [weak self, weak panel] url in
+            guard let url else { return }
+            Task { @MainActor [weak self, weak panel] in
+                guard let self, let panel, self.presentation == expected, self.panel === panel,
+                      panel.isVisible, !self.model.shuttingDown, !self.model.busy else { return }
+                _ = await self.model.selectFolder(url)
+            }
+        }
+        if let pickerOverride { pickerOverride(.folder, panel, receive); return }
         let picker = NSOpenPanel(); picker.canChooseFiles = false; picker.canChooseDirectories = true
         picker.allowsMultipleSelection = false; picker.prompt = "Use folder"
         picker.message = "Choose the folder for document actions and their local recovery receipts."
-        picker.beginSheetModal(for: panel) { [weak self] response in
-            guard response == .OK, let url = picker.url else { return }
-            Task { @MainActor in _ = await self?.model.selectFolder(url) }
-        }
+        picker.beginSheetModal(for: panel) { response in receive(response == .OK ? picker.url : nil) }
     }
-    private func chooseApplication() {
-        guard !model.busy, let panel else { return }
+    func chooseApplication() {
+        guard !model.shuttingDown, !model.busy, let panel, panel.isVisible, panel.attachedSheet == nil else { return }
+        presentation = UUID()
+        let expected = presentation
+        let receive: PickerReply = { [weak self, weak panel] url in
+            guard let url, let identifier = Bundle(url: url)?.bundleIdentifier else { return }
+            Task { @MainActor [weak self, weak panel] in
+                guard let self, let panel, self.presentation == expected, self.panel === panel,
+                      panel.isVisible, !self.model.shuttingDown, !self.model.busy else { return }
+                self.model.bundleID = identifier
+            }
+        }
+        if let pickerOverride { pickerOverride(.application, panel, receive); return }
         let picker = NSOpenPanel(); picker.canChooseFiles = true; picker.canChooseDirectories = false
         picker.allowsMultipleSelection = false; picker.allowedContentTypes = [.applicationBundle]
         picker.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true); picker.prompt = "Choose app"
-        picker.beginSheetModal(for: panel) { [weak self] response in
-            guard response == .OK, let url = picker.url, let identifier = Bundle(url: url)?.bundleIdentifier else { return }
-            Task { @MainActor in self?.model.bundleID = identifier }
-        }
+        picker.beginSheetModal(for: panel) { response in receive(response == .OK ? picker.url : nil) }
     }
 }
 

@@ -9,6 +9,9 @@ jobs:
   checks:
     runs-on: macos-15
     timeout-minutes: 10
+    env:
+      # macOS 26 App Intents metadata requires the installed Xcode 26 SDK.
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Homebrew Python links TLS outside its root and correctly fails Seatbelt.

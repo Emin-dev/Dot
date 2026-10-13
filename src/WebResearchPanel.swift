@@ -31,6 +31,7 @@ final class WebResearchModel: ObservableObject {
     private var acceptingActions = true
     private var activeStored: WebResearchStoredSession?
     private var researchSessionID: UUID?
+    private var pendingDeletion: (prompt: UUID, stored: WebResearchStoredSession, operation: UUID)?
 
     var busy: Bool { activity != nil }
     var maxQueries: Int { limits.maxQueries }
@@ -48,7 +49,8 @@ final class WebResearchModel: ObservableObject {
     }
     var canFollowUp: Bool {
         guard acceptingActions, !busy, configured, let session = selected?.session, let synthesis = session.synthesis,
-              session.providerID == providerName, !synthesis.followUpQueries.isEmpty else { return false }
+              session.providerID == providerName, !synthesis.followUpQueries.isEmpty,
+              session.hasAdditionalSourceCapacity else { return false }
         return session.queries.count + synthesis.followUpQueries.count <= session.limits.maxQueries
             && session.searchAttempts + synthesis.followUpQueries.count <= session.limits.maxSearchAttempts
     }
@@ -97,6 +99,7 @@ final class WebResearchModel: ObservableObject {
     /// Keeps the operation occupied until its request/synthesis exits and a paused receipt is saved.
     /// Foreground conversation can continue independently; Resume cannot overlap stale work.
     func foregroundPause() {
+        cancelDeletion()
         guard let previous = operation, !cancellationRequested else { return }
         cancellationRequested = true; previous.cancel(); activity = .pausing
         let token = operationID
@@ -140,6 +143,7 @@ final class WebResearchModel: ObservableObject {
     }
     func select(_ id: UUID?) {
         guard acceptingActions, !busy else { return }
+        cancelDeletion()
         guard let id else { selected = nil; return }
         begin(.loading) { model, store, token in
             let loaded = try await store.load(id: id); try model.check(token)
@@ -184,14 +188,26 @@ final class WebResearchModel: ObservableObject {
             try await model.research(updated, store: store, token: token)
         }
     }
-    func deleteSelected() {
-        guard let selected else { return }
+    func requestDeleteSelected() -> LocalRecordDeletionPrompt? {
+        guard acceptingActions, !busy, let selected else { return nil }
+        let prompt = LocalRecordDeletionPrompt(title: "Delete this research session?",
+            message: "The saved answer, searches and source excerpts for “\(selected.session.question)” will be permanently deleted. Original websites are unaffected. This cannot be undone.")
+        pendingDeletion = (prompt.id, selected, operationID); return prompt
+    }
+    func cancelDeletion() { pendingDeletion = nil }
+    @discardableResult func confirmDeletion(_ prompt: UUID) -> Bool {
+        guard let request = pendingDeletion, request.prompt == prompt else { return false }
+        pendingDeletion = nil
+        guard acceptingActions, !busy, operationID == request.operation,
+              selected?.id == request.stored.id, selected?.revision == request.stored.revision else { return false }
+        let target = request.stored
         begin(.deleting) { model, store, token in
-            try await store.delete(id: selected.id, expectedRevision: selected.revision)
+            try await store.delete(id: target.id, expectedRevision: target.revision)
             try model.check(token); model.selected = nil
             try await model.refresh(store: store, preferred: nil, token: token)
             model.notice = "Research deleted from this store."
         }
+        return true
     }
     func copySelected() {
         guard let selected else { return }
@@ -273,6 +289,7 @@ final class WebResearchModel: ObservableObject {
     private func begin(_ activity: Activity,
                        body: @escaping @MainActor (WebResearchModel, any WebResearchSessionAccess, UUID) async throws -> Void) {
         guard acceptingActions, !busy, let store else { return }
+        cancelDeletion()
         let token = UUID(); operationID = token; cancellationRequested = false
         self.activity = activity; error = nil; notice = nil; activeStored = nil; researchSessionID = nil
         operation = Task { [weak self] in
@@ -373,25 +390,36 @@ final class WebResearchPanel: NSObject, NSWindowDelegate {
     let model: WebResearchModel
     var onVisibility: ((Bool) -> Void)?
     private var panel: WebResearchWindow?
-    init(model: WebResearchModel) { self.model = model; super.init() }
+    private let confirmation: LocalRecordDeletionConfirmation
+    init(model: WebResearchModel, confirmation: LocalRecordDeletionConfirmation? = nil) {
+        self.model = model; self.confirmation = confirmation ?? LocalRecordDeletionConfirmation(); super.init()
+    }
     func prepare() -> NSPanel {
         if let panel { return panel }
         let window = WebResearchWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 660),
             styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
         window.title = "Dot · Web research"; window.minSize = NSSize(width: 560, height: 480)
         window.isReleasedWhenClosed = false; window.delegate = self
-        window.pause = { [weak model] in model?.foregroundPause() }
-        window.contentView = NSHostingView(rootView: WebResearchView(model: model))
+        window.pause = { [weak self] in self?.foregroundPause() }
+        window.contentView = NSHostingView(rootView: WebResearchView(model: model, delete: { [weak self] in self?.requestDeletion() }))
         window.center(); panel = window; return window
     }
     func show() {
+        invalidateDeletion()
         let window = prepare(); model.open(); onVisibility?(true)
         window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
     }
-    func foregroundPause() { model.foregroundPause() }
-    func cancel() { model.cancel() }
-    func close() { model.close(); panel?.close() }
-    func windowWillClose(_ notification: Notification) { model.close(); onVisibility?(false) }
+    func foregroundPause() { invalidateDeletion(); model.foregroundPause() }
+    func cancel() { invalidateDeletion(); model.cancel() }
+    func close() { invalidateDeletion(); model.close(); panel?.close() }
+    func windowWillClose(_ notification: Notification) { invalidateDeletion(); model.close(); onVisibility?(false) }
+    private func invalidateDeletion() { confirmation.invalidate(); model.cancelDeletion() }
+    func requestDeletion() {
+        guard let panel, let prompt = model.requestDeleteSelected() else { return }
+        confirmation.present(prompt, for: panel) { [weak model] confirmed in
+            if confirmed { model?.confirmDeletion(prompt.id) } else { model?.cancelDeletion() }
+        }
+    }
 }
 
 private final class WebResearchWindow: NSPanel {
@@ -401,6 +429,7 @@ private final class WebResearchWindow: NSPanel {
 
 struct WebResearchView: View {
     @ObservedObject var model: WebResearchModel
+    let delete: () -> Void
     @State private var detail = "Answer"
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -460,7 +489,7 @@ struct WebResearchView: View {
                 Button("Follow-up searches") { model.followUp() }.disabled(!model.canFollowUp)
                 Spacer()
                 Button("Copy") { model.copySelected() }.disabled(model.busy || model.selected == nil)
-                Button("Delete", role: .destructive) { model.deleteSelected() }.disabled(model.busy || model.selected == nil)
+                Button("Delete", role: .destructive, action: delete).disabled(model.busy || model.selected == nil)
             }
         }.padding(14)
     }

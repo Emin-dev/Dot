@@ -1,6 +1,50 @@
 import SwiftUI
 import AppKit
 
+/// A single explicit confirmation for a specific local-record mutation. The model
+/// separately validates its single-use token; dismissing a sheet grants no authority.
+struct LocalRecordDeletionPrompt: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+}
+
+@MainActor
+final class LocalRecordDeletionConfirmation {
+    typealias Reply = @MainActor (Bool) -> Void
+    typealias Present = @MainActor (LocalRecordDeletionPrompt, NSWindow, @escaping Reply) -> Void
+    private let presentOverride: Present?
+    private var generation = UUID()
+    private weak var window: NSWindow?
+    private var alert: NSAlert?
+    init(present: Present? = nil) { presentOverride = present }
+    func present(_ prompt: LocalRecordDeletionPrompt, for window: NSWindow, reply: @escaping Reply) {
+        invalidate()
+        guard window.isVisible, window.attachedSheet == nil else { reply(false); return }
+        let expected = generation
+        let receive: Reply = { [weak self, weak window] confirmed in
+            guard let self, let window, self.generation == expected, window.isVisible else { return }
+            self.generation = UUID(); self.alert = nil; self.window = nil
+            reply(confirmed)
+        }
+        if let presentOverride { presentOverride(prompt, window, receive); return }
+        let alert = NSAlert()
+        alert.alertStyle = .warning; alert.messageText = prompt.title; alert.informativeText = prompt.message
+        alert.addButton(withTitle: "Cancel")
+        let delete = alert.addButton(withTitle: "Delete")
+        delete.hasDestructiveAction = true; delete.keyEquivalent = ""
+        self.alert = alert; self.window = window
+        alert.beginSheetModal(for: window) { response in receive(response == .alertSecondButtonReturn) }
+    }
+    func invalidate() {
+        generation = UUID()
+        if let alert, let window, window.attachedSheet === alert.window {
+            window.endSheet(alert.window, returnCode: .cancel)
+        }
+        alert = nil; window = nil
+    }
+}
+
 /// Durable text is separate from the short, in-memory prompt context.
 @MainActor
 final class ConversationHistoryModel: ObservableObject {
@@ -14,6 +58,8 @@ final class ConversationHistoryModel: ObservableObject {
     private var writes: Task<Void, Never>?
     private var revision = UUID()
     private var assistantIDs: [UUID: UUID] = [:]
+    private enum DeletionTarget { case record(UUID), all }
+    private var pendingDeletion: (prompt: UUID, target: DeletionTarget, revision: UUID)?
 
     init(directory: URL? = nil, copyText: @escaping (String) -> Void = { text in
         NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
@@ -42,13 +88,36 @@ final class ConversationHistoryModel: ObservableObject {
         }
     }
     func reload() { enqueue { _ in } }
-    func delete(id: UUID) {
+    func requestDelete(id: UUID) -> LocalRecordDeletionPrompt? {
+        guard !closing, store != nil, let record = records.first(where: { $0.id == id }) else { return nil }
+        let prompt = LocalRecordDeletionPrompt(title: "Delete this history entry?",
+            message: "The saved \(record.role == .user ? "user" : "assistant") text from \(record.date.formatted(date: .abbreviated, time: .shortened)) will be permanently deleted. This cannot be undone.")
+        pendingDeletion = (prompt.id, .record(id), revision); return prompt
+    }
+    func requestClear() -> LocalRecordDeletionPrompt? {
+        guard !closing, store != nil else { return nil }
+        let prompt = LocalRecordDeletionPrompt(title: "Delete all local text history?",
+            message: "All saved conversation text and any unreadable history file will be permanently deleted. This cannot be undone.")
+        pendingDeletion = (prompt.id, .all, revision); return prompt
+    }
+    func cancelDeletion() { pendingDeletion = nil }
+    @discardableResult func confirmDeletion(_ prompt: UUID) -> Bool {
+        guard let request = pendingDeletion, request.prompt == prompt else { return false }
+        pendingDeletion = nil
+        guard !closing, revision == request.revision else { return false }
+        switch request.target {
+        case .record(let id): delete(id: id)
+        case .all: clear()
+        }
+        return true
+    }
+    private func delete(id: UUID) {
         guard !closing else { return }
         assistantIDs = assistantIDs.filter { $0.value != id }
         onDelete?()
         enqueue { store in try await store.delete(id: id) }
     }
-    func clear() {
+    private func clear() {
         guard !closing else { return }
         assistantIDs.removeAll()
         onDelete?()
@@ -67,13 +136,14 @@ final class ConversationHistoryModel: ObservableObject {
             if revision == expected { self.error = "This history entry could not be copied. Refresh and try again." }
         }
     }
-    func closeAdmissions() { closing = true; revision = UUID(); assistantIDs.removeAll() }
+    func closeAdmissions() { cancelDeletion(); closing = true; revision = UUID(); assistantIDs.removeAll() }
     func flush() async {
         await writes?.value
         if closing { busy = false }
     }
     private func enqueue(_ operation: @escaping @MainActor (ConversationHistoryStore) async throws -> Void) {
         guard let store, !closing else { return }
+        cancelDeletion()
         let previous = writes; busy = true
         let expected = UUID(); revision = expected
         writes = Task { [weak self] in
@@ -97,25 +167,51 @@ final class ConversationHistoryModel: ObservableObject {
 @MainActor
 final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
+    private weak var model: ConversationHistoryModel?
+    private let confirmation: LocalRecordDeletionConfirmation
+    init(confirmation: LocalRecordDeletionConfirmation? = nil) {
+        self.confirmation = confirmation ?? LocalRecordDeletionConfirmation(); super.init()
+    }
     var onVisibility: ((Bool) -> Void)?
     func show(model: ConversationHistoryModel) {
+        invalidateDeletion()
+        let changedModel = self.model !== model
+        self.model = model
         if panel == nil {
             let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
                 styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
             window.title = "Dot · Local text history"
             window.minSize = NSSize(width: 400, height: 340)
             window.isReleasedWhenClosed = false; window.delegate = self
-            window.contentView = NSHostingView(rootView: ConversationHistoryView(model: model))
+            window.contentView = NSHostingView(rootView: ConversationHistoryView(model: model,
+                delete: { [weak self] id in self?.requestDeletion(id: id) },
+                clear: { [weak self] in self?.requestDeletion(id: nil) }))
             window.center(); panel = window
+        }
+        if changedModel, let panel {
+            panel.contentView = NSHostingView(rootView: ConversationHistoryView(model: model,
+                delete: { [weak self] id in self?.requestDeletion(id: id) },
+                clear: { [weak self] in self?.requestDeletion(id: nil) }))
         }
         model.reload(); onVisibility?(true)
         panel?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
     }
-    func windowWillClose(_ notification: Notification) { onVisibility?(false) }
+    func windowWillClose(_ notification: Notification) { invalidateDeletion(); onVisibility?(false) }
+    private func invalidateDeletion() { confirmation.invalidate(); model?.cancelDeletion() }
+    func requestDeletion(id: UUID?) {
+        guard let model, let panel, !model.busy, !model.closing else { return }
+        let prompt = id.flatMap { model.requestDelete(id: $0) } ?? (id == nil ? model.requestClear() : nil)
+        guard let prompt else { return }
+        confirmation.present(prompt, for: panel) { [weak model] confirmed in
+            if confirmed { model?.confirmDeletion(prompt.id) } else { model?.cancelDeletion() }
+        }
+    }
 }
 
 private struct ConversationHistoryView: View {
     @ObservedObject var model: ConversationHistoryModel
+    let delete: (UUID) -> Void
+    let clear: () -> Void
     @State private var selection: UUID?
     private var selected: ConversationHistoryRecord? { model.records.first { $0.id == selection } }
     var body: some View {
@@ -166,9 +262,9 @@ private struct ConversationHistoryView: View {
                 Button("Refresh") { model.reload() }.disabled(model.busy)
                 Spacer()
                 Button("Copy") { if let selection { Task { await model.copy(id: selection) } } }.disabled(selected == nil)
-                Button("Delete") { if let selection { model.delete(id: selection); self.selection = nil } }
+                Button("Delete", role: .destructive) { if let selection { delete(selection) } }
                     .disabled(selected == nil || model.busy)
-                Button("Delete all", role: .destructive) { model.clear(); selection = nil }
+                Button("Delete all", role: .destructive, action: clear)
                     .disabled(model.busy || (model.records.isEmpty && model.error == nil))
             }
         }.padding(14).disabled(model.closing)
