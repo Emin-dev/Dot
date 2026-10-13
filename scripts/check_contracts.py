@@ -31,8 +31,8 @@ checks = {
     'no persistent visual caption; accessible errors remain': 'Text(status)' not in chat and 'Text(detail)' not in chat and 'CompanionAccessibility.value(status: status, detail: detail' in chat,
     'compact issue and screen indicators remain': 'exclamationmark.circle.fill' in chat and 'eye.fill' in chat,
     'zero-progress and paused readiness stay visible': 'Circle().stroke(Color.accentColor.opacity(0.45)' in chat and 'pause.circle.fill' in chat and 'hourglass' in chat,
-    'isolated voice Python explicitly disables bytecode writes': 'python.path, "-I", "-B", "-u", helper.path' in read('src/BionicVoice.swift'),
-    'voice sandbox uses private writes and OpenMP environment fallback': '(deny file-write*)' in read('Resources/Voice/voice.sb') and '(subpath (param "DOT_OUTPUT"))' in read('Resources/Voice/voice.sb') and '(deny file-read-data (literal "/tmp") (literal "/private/tmp"))' in read('Resources/Voice/voice.sb') and '"DOT_OUTPUT="' in read('src/BionicVoice.swift'),
+    'isolated voice Python explicitly disables bytecode writes': 'python.path, "-I", "-B", "-u", helper.path' in read('src/VoiceAudioReader.swift') and 'child.arguments = launch.arguments' in read('src/BionicVoice.swift'),
+    'voice sandbox uses private writes and OpenMP environment fallback': '(deny file-write*)' in read('Resources/Voice/voice.sb') and '(subpath (param "DOT_OUTPUT"))' in read('Resources/Voice/voice.sb') and '(deny file-read-data (literal "/tmp") (literal "/private/tmp"))' in read('Resources/Voice/voice.sb') and '"DOT_OUTPUT="' in read('src/VoiceAudioReader.swift') and 'child.environment = launch.environment' in read('src/BionicVoice.swift'),
     'installer requires native offline acceptance': 'offline_acceptance.py' in read('scripts/package_complete.sh') and 'hdiutil create' not in read('scripts/build_complete.sh'),
     'owned runtime transport is TLS pinned': 'https://127.0.0.1:' in read('src/BundledSplash.swift') and 'RuntimeCertificatePin.matches' in engine,
     'runtime listener retained across child exec': 'pass_fds=(listener.fileno(),)' in read('Resources/Runtime/dot_runtime.py') and 'relay.close()' in read('Resources/Runtime/dot_runtime.py'),
@@ -41,6 +41,7 @@ checks = {
     'runtime protocol reads available pipe bytes without waiting for EOF': 'Darwin.read(descriptor' in read('src/BundledSplash.swift') and 'O_NONBLOCK' in read('src/BundledSplash.swift') and 'FD_CLOEXEC' in read('src/BundledSplash.swift') and 'read(upToCount:' not in read('src/BundledSplash.swift'),
     'runtime startup timeout closes only current owned generation': re.search(r'let error = await failure\(\).*?guard token == expected, !Task.isCancelled.*?outcome=timeout.*?shutdown\(\).*?throw error', read('src/BundledSplash.swift'), re.S) is not None,
     'turn failure logging excludes cancellation and uses finite identifiers': 'error is CancellationError' in chat and '(error as? URLError)?.code == .cancelled' in chat and 'PipelineDiagnostic.failure(stage: stage, reason: reason' in chat and 'self.logFailure(error, stage: stage)' in chat,
+    'voice sandbox uses POSIX canonical private output consistently': 'realpath(directory.path, nil)' in read('src/VoiceAudioReader.swift') and 'before.st_ino == after.st_ino' in read('src/VoiceAudioReader.swift') and '"HOME": path, "TMPDIR": path' in read('src/VoiceAudioReader.swift') and 'VoiceLaunchConfiguration(python: python' in read('src/BionicVoice.swift') and 'DOT_OUTPUT=" + dir.resolvingSymlinksInPath()' not in read('src/BionicVoice.swift'),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

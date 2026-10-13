@@ -68,14 +68,22 @@ final class BionicVoice {
               ["model/config.json", "model/kokoro-v1_0.pth", "model/voices/bf_isabella.pt"].allSatisfy({
                   FileManager.default.isReadableFile(atPath: base.appendingPathComponent($0).path)
               }) else { throw VoiceFailure.setup }
-        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dot-voice-" + UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        let requested = FileManager.default.temporaryDirectory.appendingPathComponent("dot-voice-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        guard let identity = try? VoiceLaunchConfiguration.privateIdentity(requested) else { throw VoiceFailure.setup }
+        let launch: VoiceLaunchConfiguration
+        do {
+            launch = try VoiceLaunchConfiguration(python: python, helper: helper, profile: profile, root: base, output: requested)
+            guard try VoiceLaunchConfiguration.privateIdentity(launch.directory) == identity else { throw VoiceFailure.setup }
+        } catch {
+            VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
+            throw VoiceFailure.setup
+        }
+        let dir = launch.directory
         let child = Process(), stdin = Pipe(), stdout = Pipe()
         child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-        child.arguments = ["-D", "DOT_OUTPUT=" + dir.resolvingSymlinksInPath().path, "-f", profile.path,
-                           python.path, "-I", "-B", "-u", helper.path, "--root", base.path, "--output", dir.path]
-        child.environment = ["PATH": "/usr/bin:/bin", "HOME": dir.path, "TMPDIR": dir.path,
-                             "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1", "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"]
+        child.arguments = launch.arguments
+        child.environment = launch.environment
         child.standardInput = stdin; child.standardOutput = stdout
         // Library diagnostics may contain paths. They never go into application logs.
         child.standardError = FileHandle.nullDevice
