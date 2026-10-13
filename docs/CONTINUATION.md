@@ -25,6 +25,10 @@ Recovery snapshot: `/private/tmp/dot-checkpoints/20261013T175819Z` contains 47 c
 | History lane (`planning_publication`) | ConversationHistory/HistoryPanel schema and tests: generation/playback status, migration/legacy unknown, interrupted/failed text. LocalMemory draft preserved, panel not yet written. |
 | Runtime lane (`native_verification`) | Bounded real shipping-runtime harness; owns the only heavy model testing slot and cleanup. PersistentTasks draft preserved, task panel/tests not yet written. |
 
+**Durable restart recovery:** the same verified snapshot is also stored in the saved workspace at `~/Documents/Codex/2026-10-12/task/work/checkpoints/20261013T175819Z` (the workspace `work/.gitignore` excludes `checkpoints/`). Its base remains `a23435443ec2d7f925c34149777c7d0add455e03`; all 47 file hashes and manifest bytes were rechecked after copying. Manifest SHA-256 is `bfda5b54a5e8eb97902fd375ea25756c479aea0e66e428429c4959c30d96502c`. Temporary snapshots are retained too. This source-only recovery copy excludes microphone/screenshot/runtime/model/credential data and is not published as working app code.
+
+To recover: inspect the durable manifest and verify file hashes, then compare its base and each saved file with live main, the current worktree and active writers. Reconcile intended changes in a clean temporary detached checkout if necessary; validate the saved patch before applying it. Never copy the snapshot over a newer or dirty checkout, reset main, recreate feature branches or infer that this per-file capture is a tested commit. Re-run appropriate checks after reconciliation. Future checkpoints must retain a verified durable workspace copy as well as any temporary copy.
+
 Do not edit another lane's files concurrently. Before handing off a frozen file, communicate ownership explicitly. No new user-owned chats, extra branches, force pushes or dirty resets.
 
 ## Current evidence and gaps
