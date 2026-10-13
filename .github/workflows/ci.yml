@@ -1,7 +1,7 @@
 name: Native companion checks
 on:
   push:
-    branches: [main, 'codex/dot-floating-splash-*']
+    branches: [main]
   pull_request:
 permissions:
   contents: read
@@ -29,18 +29,15 @@ jobs:
           python-version: '3.13'
       - name: Test, compile and package with zero warnings
         run: bash scripts/verify_macos.sh
-      - name: Export bounded test DMG in log
+      - name: Record development packaging receipt
         run: |
           python3 - <<'PY'
-          import base64, hashlib, pathlib
+          import hashlib, json, pathlib
           p = pathlib.Path('build/Dot.dmg')
-          data = p.read_bytes()
-          assert len(data) <= 2_000_000, 'Refusing oversized log export'
-          print('DOT_DMG_SHA256=' + hashlib.sha256(data).hexdigest())
-          print('DOT_DMG_BYTES=' + str(len(data)))
-          print('DOT_DMG_BASE64_BEGIN')
-          encoded = base64.b64encode(data).decode('ascii')
-          for start in range(0, len(encoded), 100):
-              print(encoded[start:start + 100])
-          print('DOT_DMG_BASE64_END')
+          assert p.is_file() and p.stat().st_size > 0, 'Missing development packaging result'
+          with p.open('rb') as stream:
+            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+          print(json.dumps({'artifact_kind': 'model-free-development-only',
+                            'sha256': digest, 'bytes': p.stat().st_size,
+                            'final_installer': False}, sort_keys=True))
           PY
