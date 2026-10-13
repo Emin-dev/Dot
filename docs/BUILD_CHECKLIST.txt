@@ -368,6 +368,21 @@ The [first interactive preview](design/dot-ui-options.html) is retained as histo
 
 Public component benchmarks nominate candidates; they do not establish the fastest complete Dot pipeline or validate the desired British voice on the owner Mac.
 
+## Long-task progress ring and spoken checkpoints
+
+Requested 2026-10-13. These requirements are accepted for implementation, not completed behavior. Tasks expected to take **more than two minutes**, such as research and coding, should show a simple progressing ring around dot, without a progress bar or visible percentage numbers. Give an initial time estimate and brief spoken updates at the start and the 50%, 80% and 95% milestones, explaining completed work and what comes next. Short questions are excluded.
+
+- [ ] Use one slim halo inset within the existing character hit and placement bounds. Do not add a ring for every background task. Keep the actual task stage readable on focus and available to accessibility. If an initially short task exceeds two minutes, promote it once to long-task presentation.
+- [ ] Derive a determinate arc from measurable completed work and an explicit remaining plan, never elapsed time alone. When scope is unknown, show a distinct restrained activity arc and the actual stage rather than inventing 50%, 80% or 95% progress. Map the requested speech checkpoints to real plan milestones and deduplicate them per task and plan version.
+- [ ] Start with the goal, first step and a calibrated estimate range; say timing is unknown when no reasonable estimate exists. Each milestone update should be one brief sentence covering done and next, with a revised estimate only when it materially changes. Do not speak percentage numbers.
+- [ ] Use the 95% milestone only when final verification is genuinely underway. Complete the ring and show success only after the result is verified. Newly discovered work must revise the stage and estimate transparently; no artificial near-complete stall.
+- [ ] Never overlap these updates with the user speaking, listening capture or another voice response. Coalesce crossed thresholds and avoid catch-up bursts after resume or restart. Stop cancels queued updates; mute, quiet and calls are respected. Supply an equivalent text status.
+- [ ] Show paused, blocked and failed states distinctly, with an actionable reason. Preserve Stop and Resume where supported. Declarative progress updates do not open an automatic microphone invitation.
+- [ ] Make contrast independent of color alone, keep static status under Reduce Motion, and expose task/stage to VoiceOver without constant announcements. Stop hidden animation and measure energy use.
+- [ ] Test threshold deduplication, jumps, revised estimates, unknown scope, foreground interruptions, mute, cancellation, restart, multiple tasks, stale events and false completion. Native review across all eleven skins, contrast and clipping belongs to the later owner-Mac acceptance list.
+
+The halo layout and speech mapping are product implementation recommendations. Accurate determinate progress is supported by [Apple's progress guidance](https://developer.apple.com/design/human-interface-guidelines/progress-indicators) and [Foundation Progress](https://developer.apple.com/documentation/Foundation/Progress); honor [Reduce Motion](https://developer.apple.com/documentation/swiftui/environmentvalues/accessibilityreducemotion). These sources do not prescribe this exact visual or spoken design.
+
 ## Final pending owner-Mac acceptance
 
 The owner explicitly deferred checks requiring their Mac until later and asked cloud work to continue. These remain **pending/unverified**, not waived or passed. They do not block independent implementation, portable tests or hosted model-free macOS CI. Recheck this list against the exact final artifact; mark each item only with observed evidence.

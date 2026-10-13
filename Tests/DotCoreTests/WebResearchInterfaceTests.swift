@@ -353,5 +353,27 @@ final class WebResearchInterfaceTests: XCTestCase {
             first.close()
         }
     }
+    @MainActor func testTransientResearchCompletesWithoutDiskWritesClipboardOrRestartRestoration() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dot-transient-canary-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var copied: [String] = []
+        let provider = PanelSearchFixture(retention: false)
+        let model = WebResearchModel(provider: provider, directory: directory, retention: .transient,
+            reader: PanelReaderFixture(), synthesize: { Self.answer($0) }, copyText: { copied.append($0) })
+        XCTAssertTrue(model.transient); XCTAssertTrue(model.configured)
+        XCTAssertTrue(model.configurationSummary.contains("no restart recovery"))
+        draft(model); model.start(); await model.flush()
+        XCTAssertEqual(model.selected?.session.stage, .completed)
+        XCTAssertEqual(model.selected?.session.storageMode, .transient)
+        XCTAssertFalse(model.canCopy)
+        model.copySelected(); await model.flush(); XCTAssertTrue(copied.isEmpty)
+        model.close(); await model.flush(); model.open(); await model.flush()
+        XCTAssertEqual(model.selected?.session.stage, .completed, "Memory-only pause can resume within this app lifetime")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        let restarted = WebResearchModel(directory: directory, retention: .transient)
+        restarted.open(); await restarted.flush(); XCTAssertTrue(restarted.summaries.isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
 }
 #endif

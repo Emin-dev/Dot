@@ -38,6 +38,7 @@ enum WebResearchStoreError: Error, Equatable, LocalizedError {
 }
 
 protocol WebResearchSessionAccess: Sendable {
+    var retention: WebResearchRetention { get }
     func list() async throws -> [WebResearchSessionSummary]
     func load(id: UUID) async throws -> WebResearchStoredSession
     func create(question: String, queries: [String], limits: WebResearchLimits,
@@ -46,6 +47,8 @@ protocol WebResearchSessionAccess: Sendable {
     func delete(id: UUID, expectedRevision: UUID) async throws
     func deleteAll() async throws
 }
+
+extension WebResearchSessionAccess { var retention: WebResearchRetention { .permittedPersistence } }
 
 /// Inject one shared owner into the research UI/task coordinator. This actor performs no network,
 /// inference, source interpretation or clipboard work. Only bounded session text/receipts enter it.
@@ -114,23 +117,13 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
     /// Compare-and-swap on an existing record only; never an upsert. Callers must keep the returned
     /// revision after every serialized checkpoint. A deleted/recovered/replaced revision is rejected.
     func save(_ session: WebResearchSession, expectedRevision: UUID) throws -> WebResearchStoredSession {
-        try transaction { folder in
+        guard session.storageMode == .permittedPersistence else { throw WebResearchStoreError.invalidInput }
+        return try transaction { folder in
             var document = try readAndRecover(folder)
             guard let index = document.sessions.firstIndex(where: { $0.id == session.id }) else { throw WebResearchStoreError.notFound }
             let previous = document.sessions[index]
             guard previous.revision == expectedRevision else { throw WebResearchStoreError.conflict }
-            guard previous.session.question == session.question, previous.session.createdAt == session.createdAt,
-                  previous.session.limits == session.limits,
-                  previous.session.providerID == nil || previous.session.providerID == session.providerID,
-                  session.searchAttempts >= previous.session.searchAttempts,
-                  previous.session.queries.allSatisfy({ old in
-                      guard let next = session.queries.first(where: { $0.id == old.id }) else { return false }
-                      return next.text == old.text && next.attempts >= old.attempts
-                          && (old.status != .completed || (next.status == .completed && next.results == old.results && next.completedAt == old.completedAt))
-                  }), previous.session.reads.allSatisfy({ old in
-                      guard let next = session.reads.first(where: { $0.id == old.id }) else { return false }
-                      return next.url == old.url && (old.status != .completed || (next.status == .completed && next.source == old.source))
-                  }) else { throw WebResearchStoreError.invalidInput }
+            guard validResearchReplacement(previous: previous.session, next: session) else { throw WebResearchStoreError.invalidInput }
             try validateSession(session)
             let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: previous.recoveredAt)
             document.sessions[index] = stored
@@ -191,6 +184,7 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
     }
 
     private func validateSession(_ session: WebResearchSession) throws {
+        guard session.storageMode == .permittedPersistence else { throw WebResearchStoreError.invalidInput }
         do {
             let data = try session.encodedCheckpoint()
             guard data.count <= limits.maxSessionBytes else { throw WebResearchStoreError.capacity }
@@ -309,4 +303,88 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
         guard fstat(descriptor, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
               info.st_uid == geteuid(), info.st_nlink == 1, fchmod(descriptor, 0o600) == 0 else { throw WebResearchStoreError.unsafeStorage }
     }
+}
+
+/// Volatile research has no directory, file, cache, or export destination. Dropping this
+/// owner (including app exit) drops its contents; it cannot provide restart recovery.
+actor TransientWebResearchStore: WebResearchSessionAccess {
+    nonisolated let retention = WebResearchRetention.transient
+    private var sessions: [UUID: WebResearchStoredSession] = [:]
+    private let maximumSessions = 20
+    private let maximumBytes = 16_777_216
+    private let now: @Sendable () -> Date
+    init(now: @escaping @Sendable () -> Date = { Date() }) { self.now = now }
+
+    func list() throws -> [WebResearchSessionSummary] {
+        try Task.checkCancellation()
+        return sessions.values.sorted {
+            $0.session.updatedAt == $1.session.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.session.updatedAt > $1.session.updatedAt
+        }.map { stored in
+            let session = stored.session
+            return WebResearchSessionSummary(id: stored.id, revision: stored.revision, question: session.question,
+                stage: session.stage, createdAt: session.createdAt, updatedAt: session.updatedAt,
+                recoveredAt: nil, sourcesRead: session.sources.count, searchAttempts: session.searchAttempts)
+        }
+    }
+    func load(id: UUID) throws -> WebResearchStoredSession {
+        try Task.checkCancellation()
+        guard let session = sessions[id] else { throw WebResearchStoreError.notFound }
+        return session
+    }
+    func create(question: String, queries: [String], limits: WebResearchLimits = WebResearchLimits(),
+                retryPolicy: WebResearchRetryPolicy = .preserveUncertain) throws -> WebResearchStoredSession {
+        try Task.checkCancellation()
+        let session = try WebResearchSession(question: question, queries: queries, limits: limits,
+            retryPolicy: retryPolicy, now: now(), retention: .transient)
+        let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: nil)
+        var next = sessions; next[stored.id] = stored
+        try validateCapacity(next); sessions = next
+        return stored
+    }
+    func save(_ session: WebResearchSession, expectedRevision: UUID) throws -> WebResearchStoredSession {
+        try Task.checkCancellation()
+        guard session.storageMode == .transient else { throw WebResearchStoreError.invalidInput }
+        guard let previous = sessions[session.id] else { throw WebResearchStoreError.notFound }
+        guard previous.revision == expectedRevision else { throw WebResearchStoreError.conflict }
+        guard validResearchReplacement(previous: previous.session, next: session) else { throw WebResearchStoreError.invalidInput }
+        let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: nil)
+        var next = sessions; next[stored.id] = stored
+        try validateCapacity(next); sessions = next
+        return stored
+    }
+    func delete(id: UUID, expectedRevision: UUID) throws {
+        try Task.checkCancellation()
+        guard let previous = sessions[id] else { throw WebResearchStoreError.notFound }
+        guard previous.revision == expectedRevision else { throw WebResearchStoreError.conflict }
+        sessions.removeValue(forKey: id)
+    }
+    func deleteAll() throws { try Task.checkCancellation(); sessions.removeAll() }
+    private func validateCapacity(_ proposed: [UUID: WebResearchStoredSession]) throws {
+        guard proposed.count <= maximumSessions else { throw WebResearchStoreError.capacity }
+        var bytes = 0
+        for stored in proposed.values {
+            try Task.checkCancellation()
+            guard stored.session.storageMode == .transient else { throw WebResearchStoreError.invalidInput }
+            do { bytes += try stored.session.encodedCheckpoint().count }
+            catch { throw WebResearchStoreError.invalidInput }
+            guard bytes <= maximumBytes else { throw WebResearchStoreError.capacity }
+        }
+    }
+}
+
+private func validResearchReplacement(previous: WebResearchSession, next: WebResearchSession) -> Bool {
+    guard previous.question == next.question, previous.createdAt == next.createdAt,
+                  previous.limits == next.limits, previous.storageMode == next.storageMode,
+                  previous.providerID == nil || previous.providerID == next.providerID,
+                  next.searchAttempts >= previous.searchAttempts,
+                  previous.queries.allSatisfy({ old in
+                      guard let next = next.queries.first(where: { $0.id == old.id }) else { return false }
+                      return next.text == old.text && next.attempts >= old.attempts
+                          && (old.status != .completed || (next.status == .completed && next.results == old.results && next.completedAt == old.completedAt
+                              && next.coverage == old.coverage && next.unavailableEngineIDs == old.unavailableEngineIDs))
+                  }), previous.reads.allSatisfy({ old in
+                      guard let next = next.reads.first(where: { $0.id == old.id }) else { return false }
+                      return next.url == old.url && (old.status != .completed || (next.status == .completed && next.source == old.source))
+                  }) else { return false }
+    return true
 }

@@ -35,10 +35,13 @@ final class WebResearchModel: ObservableObject {
 
     var busy: Bool { activity != nil }
     var maxQueries: Int { limits.maxQueries }
-    var configured: Bool { provider != nil && provider?.permitsResultPersistence == true }
+    var transient: Bool { store?.retention == .transient }
+    var configured: Bool { provider != nil && (transient || provider?.permitsResultPersistence == true) }
+    var canCopy: Bool { !transient && !busy && selected != nil }
     var canStart: Bool { acceptingActions && !busy && store != nil && configured && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var canResume: Bool {
-        guard acceptingActions, !busy, let session = selected?.session, session.stage != .completed else { return false }
+        guard acceptingActions, !busy, let session = selected?.session, session.stage != .completed,
+              session.retryRequiresReview != true, session.retryNotBefore.map({ $0 <= Date() }) ?? true else { return false }
         if session.stage == .awaitingLocalSynthesis { return synthesize != nil && Self.hasSynthesisEvidence(session) }
         guard configured, session.providerID == nil || session.providerID == providerName else { return false }
         return session.queries.contains { $0.status == .pending }
@@ -57,7 +60,8 @@ final class WebResearchModel: ObservableObject {
     var configurationSummary: String {
         guard let providerName else { return "Search is not configured. Choose a provider and set up its key locally before starting. Saved research remains available." }
         guard configured else { return "\(providerName) does not have confirmed result-retention rights for saved research." }
-        return "Search: \(providerName) · answers use local Qwen · up to \(limits.maxSearchAttempts) search attempts per session."
+        let storage = transient ? "Temporary: held in memory until dot quits; no restart recovery or automatic saving." : "Research is saved locally."
+        return "Search: \(providerName) · answers use local Qwen · up to \(limits.maxSearchAttempts) search attempts per session. " + storage
     }
     var retrySummary: String {
         retryPolicy == .preserveUncertain
@@ -66,7 +70,8 @@ final class WebResearchModel: ObservableObject {
     }
 
     init(provider: (any WebSearchProvider)? = nil, store: (any WebResearchSessionAccess)? = nil,
-         directory: URL? = nil, reader: any WebResearchSourceReading = ResearchWebReader(),
+         directory: URL? = nil, retention: WebResearchRetention = .permittedPersistence,
+         reader: any WebResearchSourceReading = ResearchWebReader(),
          synthesize: Synthesis? = nil, limits: WebResearchLimits = WebResearchLimits(),
          retryPolicy: WebResearchRetryPolicy = .preserveUncertain,
          copyText: @escaping (String) -> Void = { text in
@@ -76,6 +81,7 @@ final class WebResearchModel: ObservableObject {
         self.synthesize = synthesize; self.limits = limits; self.retryPolicy = retryPolicy
         self.copyText = copyText; self.openURL = openURL
         if let store { self.store = store }
+        else if retention == .transient { self.store = TransientWebResearchStore() }
         else {
             do { self.store = try WebResearchSessionStore(directory: directory) }
             catch { self.store = nil; self.error = "Local research storage could not be opened." }
@@ -190,8 +196,9 @@ final class WebResearchModel: ObservableObject {
     }
     func requestDeleteSelected() -> LocalRecordDeletionPrompt? {
         guard acceptingActions, !busy, let selected else { return nil }
-        let prompt = LocalRecordDeletionPrompt(title: "Delete this research session?",
-            message: "The saved answer, searches and source excerpts for “\(selected.session.question)” will be permanently deleted. Original websites are unaffected. This cannot be undone.")
+        let prompt = LocalRecordDeletionPrompt(title: transient ? "Remove this temporary research?" : "Delete this research session?",
+            message: transient ? "This answer and its evidence will be removed from memory. They are not saved on disk and cannot be resumed after removal."
+                : "The saved answer, searches and source excerpts for “\(selected.session.question)” will be permanently deleted. Original websites are unaffected. This cannot be undone.")
         pendingDeletion = (prompt.id, selected, operationID); return prompt
     }
     func cancelDeletion() { pendingDeletion = nil }
@@ -210,6 +217,7 @@ final class WebResearchModel: ObservableObject {
         return true
     }
     func copySelected() {
+        guard !transient else { notice = "Temporary research is not automatically copied or exported. Result-retention permissions have not been established."; return }
         guard let selected else { return }
         begin(.copying) { model, store, token in
             let current = try await store.load(id: selected.id)
@@ -229,7 +237,7 @@ final class WebResearchModel: ObservableObject {
     private func research(_ original: WebResearchStoredSession, store: any WebResearchSessionAccess, token: UUID) async throws {
         var stored = original
         if stored.session.stage != .awaitingLocalSynthesis {
-            guard let provider, provider.permitsResultPersistence else { throw WebResearchError.resultRetentionUnavailable }
+            guard let provider, transient || provider.permitsResultPersistence else { throw WebResearchError.resultRetentionUnavailable }
             var session = stored.session
             if session.retryPolicy != retryPolicy {
                 session.retryPolicy = retryPolicy
@@ -244,18 +252,20 @@ final class WebResearchModel: ObservableObject {
             }
             try check(token)
             guard result.stage == .awaitingLocalSynthesis else {
-                notice = "Paused with an interrupted search outcome. " + retrySummary
+                if result.retryRequiresReview == true { notice = "Research paused because its search service needs attention. No more searches were sent." }
+                else if let date = result.retryNotBefore { notice = "Research paused until " + date.formatted() + ". Resume later; remaining searches have not been sent." }
+                else { notice = "Paused with an interrupted search outcome. " + retrySummary }
                 try await refresh(store: store, preferred: stored.id, token: token); return
             }
             guard let latest = activeStored else { throw WebResearchStoreError.notFound }; stored = latest
         }
         try check(token)
         guard Self.hasSynthesisEvidence(stored.session) else {
-            notice = "Saved the available evidence. At least two completed searches and two readable sources are needed before local synthesis."
+            notice = "The available evidence is " + (transient ? "held temporarily in memory" : "saved locally") + ". At least two completed searches and two readable sources are needed before local synthesis."
             try await refresh(store: store, preferred: stored.id, token: token); return
         }
         guard let synthesize else {
-            notice = "Sources saved. Local Qwen synthesis is not configured for this panel yet."
+            notice = "Sources are ready. Local Qwen synthesis is not configured for this panel yet."
             try await refresh(store: store, preferred: stored.id, token: token); return
         }
         activity = .synthesizing
@@ -264,7 +274,7 @@ final class WebResearchModel: ObservableObject {
         let completed = try stored.session.completing(with: result)
         try await checkpoint(completed, store: store, token: token)
         try await refresh(store: store, preferred: stored.id, token: token)
-        notice = "Research answer saved locally. Citation excerpts match sources; conclusions still require judgment."
+        notice = (transient ? "Temporary research answer ready. It will be lost when dot quits." : "Research answer saved locally.") + " Citation excerpts match sources; conclusions still require judgment."
     }
 
     private func checkpoint(_ session: WebResearchSession, store: any WebResearchSessionAccess, token: UUID) async throws {
@@ -317,13 +327,14 @@ final class WebResearchModel: ObservableObject {
         while count > 0 { if let text = String(bytes: data[..<count], encoding: .utf8) { return text }; count -= 1 }
         return ""
     }
-    static func stageLabel(_ stage: WebResearchStage) -> String {
+    func stageLabel(_ stage: WebResearchStage) -> String { Self.stageLabel(stage, retention: transient ? .transient : .permittedPersistence) }
+    static func stageLabel(_ stage: WebResearchStage, retention: WebResearchRetention = .permittedPersistence) -> String {
         switch stage {
         case .planned: return "Planned"
         case .retrieving: return "Searching and reading"
         case .paused: return "Paused"
-        case .awaitingLocalSynthesis: return "Sources saved · awaiting local reasoning"
-        case .completed: return "Answer saved · citations checked"
+        case .awaitingLocalSynthesis: return retention == .transient ? "Temporary sources · awaiting local reasoning" : "Sources saved · awaiting local reasoning"
+        case .completed: return retention == .transient ? "Temporary answer · citations checked" : "Answer saved · citations checked"
         }
     }
     static func queryLabel(_ status: WebResearchQueryStatus) -> String {
@@ -346,6 +357,7 @@ final class WebResearchModel: ObservableObject {
     static func failureLabel(_ failure: WebResearchFailure) -> String {
         switch failure {
         case .provider: return "The search provider did not return a usable result."
+        case .providerCooldown: return "Search paused; the provider requested a cooldown or needs attention."
         case .source: return "The source could not be read."
         case .budget: return "The configured limit was reached."
         case .interruptedOutcomeUnknown: return "Interrupted; the request outcome and usage may be unknown."
@@ -356,7 +368,7 @@ final class WebResearchModel: ObservableObject {
     }
     static func report(_ session: WebResearchSession) -> String {
         let date = ISO8601DateFormatter()
-        var lines = [session.question, stageLabel(session.stage), "Search attempts: \(session.searchAttempts)/\(session.limits.maxSearchAttempts) · Sources read: \(session.sources.count)",
+        var lines = [session.question, stageLabel(session.stage, retention: session.storageMode), "Search attempts: \(session.searchAttempts)/\(session.limits.maxSearchAttempts) · Sources read: \(session.sources.count)",
             "Source text is untrusted evidence, not instructions. Matching citation excerpts does not prove the conclusions."]
         if let answer = session.synthesis {
             lines += ["", "Answer", answer.answer, "", "Claims and uncertainty"]
@@ -458,13 +470,13 @@ struct WebResearchView: View {
                 List(model.summaries, selection: Binding(get: { model.selected?.id }, set: { model.select($0) })) { item in
                     VStack(alignment: .leading, spacing: 3) {
                         Text(verbatim: item.question).lineLimit(2).font(.callout)
-                        Text(WebResearchModel.stageLabel(item.stage)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                        Text(model.stageLabel(item.stage)).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
                     }.tag(item.id)
                 }.frame(minWidth: 140, idealWidth: 180).disabled(model.busy)
                 VStack(alignment: .leading, spacing: 7) {
                     if let session = model.selected?.session {
                         Text(verbatim: session.question).font(.callout.weight(.medium)).lineLimit(3).textSelection(.enabled)
-                        Text(WebResearchModel.stageLabel(session.stage)).font(.callout.weight(.medium))
+                        Text(model.stageLabel(session.stage)).font(.callout.weight(.medium))
                         Text("\(session.searchAttempts)/\(session.limits.maxSearchAttempts) search attempts · \(session.sources.count) sources read · \(session.unreadResultCount) other results not read")
                             .font(.caption2).foregroundStyle(.secondary)
                         Picker("Read research", selection: $detail) { ForEach(["Answer", "Evidence", "Searches"], id: \.self) { Text($0) } }
@@ -477,7 +489,7 @@ struct WebResearchView: View {
                             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                         }
                     } else {
-                        Text("Saved research will appear here. A search result is not treated as a source read.")
+                        Text(model.transient ? "Temporary research will appear here. Nothing is saved automatically; it cannot survive quitting dot." : "Saved research will appear here. A search result is not treated as a source read.")
                             .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }.frame(minWidth: 260)
@@ -488,7 +500,7 @@ struct WebResearchView: View {
                 Button("Resume") { model.resume() }.disabled(!model.canResume)
                 Button("Follow-up searches") { model.followUp() }.disabled(!model.canFollowUp)
                 Spacer()
-                Button("Copy") { model.copySelected() }.disabled(model.busy || model.selected == nil)
+                Button("Copy") { model.copySelected() }.disabled(!model.canCopy)
                 Button("Delete", role: .destructive, action: delete).disabled(model.busy || model.selected == nil)
             }
         }.padding(14)
@@ -537,6 +549,7 @@ struct WebResearchView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(verbatim: query.text).font(.callout).textSelection(.enabled)
                 Text("\(WebResearchModel.queryLabel(query.status)) · \(query.attempts) attempt(s) · \(query.results.count) search results").font(.caption)
+                if query.coverage == .partial { Text("Partial search coverage. Some configured engines were unavailable.").font(.caption2).foregroundStyle(.secondary) }
                 if let failure = query.failure { Text(WebResearchModel.failureLabel(failure)).font(.caption2).foregroundStyle(.secondary) }
             }
         }

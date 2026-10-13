@@ -12,6 +12,13 @@ from unittest.mock import patch
 
 
 class AppIntentsPackagingTests(unittest.TestCase):
+    def test_build_routes_use_supported_frontend_const_gather_flag(self):
+        root = Path(__file__).resolve().parents[2]
+        for name in ('build.sh', 'scripts/build_complete.sh'):
+            source = (root / name).read_text()
+            self.assertIn('-emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend', source)
+            self.assertNotIn('-const-gather-protocols-list', source)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

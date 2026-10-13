@@ -28,7 +28,7 @@ fi
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime" "$APP/Contents/Frameworks"
 xcrun swiftc -O -warnings-as-errors -module-name Dot -D DOT_COMPLETE_BUNDLE -target arm64-apple-macosx26.4 \
   -module-cache-path "$INTENTS_BUILD/module-cache" \
-  -emit-const-values -const-gather-protocols-list "$INTENTS_BUILD/protocols.json" \
+  -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend "$INTENTS_BUILD/protocols.json" \
   -output-file-map "$INTENTS_BUILD/output-map.json" \
   -F "$FRAMEWORK_PARENT" -framework whisper -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \

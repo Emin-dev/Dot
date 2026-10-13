@@ -18,7 +18,7 @@ python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "$
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 xcrun swiftc -O -warnings-as-errors -module-name Dot -target "$TARGET" \
   -module-cache-path "$INTENTS_BUILD/module-cache" \
-  -emit-const-values -const-gather-protocols-list "$INTENTS_BUILD/protocols.json" \
+  -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend "$INTENTS_BUILD/protocols.json" \
   -output-file-map "$INTENTS_BUILD/output-map.json" -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \
   -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit
 mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"

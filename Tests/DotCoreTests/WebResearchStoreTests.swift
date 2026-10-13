@@ -371,4 +371,53 @@ final class WebResearchStoreTests: XCTestCase {
             let list = try await store.list(); XCTAssertTrue(list.isEmpty)
         }
     }
+    func testTransientStoreHasNoDiskDestinationOrRestartRecoveryAndUsesCAS() async throws {
+        let memory = TransientWebResearchStore()
+        let initial = try await memory.create(question: "Temporary question", queries: ["first", "second"])
+        XCTAssertEqual(memory.retention, .transient)
+        XCTAssertEqual(initial.session.storageMode, .transient)
+        let active = try await memory.save(inFlight(initial.session), expectedRevision: initial.revision)
+        XCTAssertNotEqual(initial.revision, active.revision)
+        await expect(.conflict) { _ = try await memory.save(initial.session, expectedRevision: initial.revision) }
+        let loaded = try await memory.load(id: active.id); XCTAssertEqual(loaded, active)
+        let restarted = TransientWebResearchStore(), empty = try await restarted.list()
+        XCTAssertTrue(empty.isEmpty)
+        try await memory.delete(id: active.id, expectedRevision: active.revision)
+        await expect(.notFound) { _ = try await memory.save(active.session, expectedRevision: active.revision) }
+    }
+
+    func testTransientSessionCannotTouchDurableStoreAndPersistentSessionCannotEnterMemoryStore() async throws {
+        try await withDirectory { directory in
+            let target = directory.appendingPathComponent("must-not-be-created")
+            let disk = try WebResearchSessionStore(directory: target), memory = TransientWebResearchStore()
+            let temporary = try await memory.create(question: "Never write this", queries: ["first", "second"])
+            await expect(.invalidInput) { _ = try await disk.save(temporary.session, expectedRevision: temporary.revision) }
+            XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+            let saved = try WebResearchSession(question: "Saved mode", queries: ["first", "second"])
+            await expect(.invalidInput) { _ = try await memory.save(saved, expectedRevision: UUID()) }
+            let remaining = try await memory.list(); XCTAssertEqual(remaining.count, 1)
+        }
+    }
+
+    func testLegacySessionWithoutRetentionFieldRemainsReadableAsSavedMode() throws {
+        let session = try WebResearchSession(question: "Legacy saved session", queries: ["first", "second"])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: session.encodedCheckpoint()) as? [String: Any])
+        json.removeValue(forKey: "retention")
+        let decoded = try WebResearchSession.decodeCheckpoint(JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(decoded.storageMode, .permittedPersistence)
+        XCTAssertEqual(decoded.question, session.question)
+        XCTAssertNil(decoded.retention)
+    }
+
+    func testPartialCoverageCannotBeRewrittenAfterCompletedQueryIsSaved() async throws {
+        let memory = TransientWebResearchStore()
+        let initial = try await memory.create(question: "Coverage", queries: ["first", "second"])
+        var partial = ready(initial.session)
+        partial.queries[0].coverage = .partial; partial.queries[0].unavailableEngineIDs = ["duckduckgo"]
+        let saved = try await memory.save(partial, expectedRevision: initial.revision)
+        var changed = partial; changed.queries[0].coverage = .complete; changed.queries[0].unavailableEngineIDs = []
+        await expect(.invalidInput) { _ = try await memory.save(changed, expectedRevision: saved.revision) }
+        let actual = try await memory.load(id: saved.id); XCTAssertEqual(actual, saved)
+    }
+
 }

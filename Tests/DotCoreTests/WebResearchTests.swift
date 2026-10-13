@@ -451,4 +451,52 @@ final class WebResearchTests: XCTestCase {
         XCTAssertTrue(fetched.sources.isEmpty)
         XCTAssertTrue(fetched.reads.allSatisfy { $0.status == .failed && $0.failure == .source })
     }
+    func testTransientWorkflowAllowsUnconfirmedRetentionButMarksItsWholeSessionTransient() async throws {
+        let provider = ResearchSearchFixture(retention: false)
+        let initial = try WebResearchSession(question: "Temporary", queries: ["primary", "secondary"], retention: .transient)
+        let result = try await WebResearchWorkflow(provider: provider, reader: ResearchReadFixture()).run(initial) { checkpoint in
+            XCTAssertEqual(checkpoint.storageMode, .transient)
+        }
+        XCTAssertEqual(result.stage, .awaitingLocalSynthesis); XCTAssertEqual(result.sources.count, 2)
+        XCTAssertEqual(result.storageMode, .transient)
+    }
+
+    func testProviderCooldownPausesRemainingPlanAndDoesNotDispatchBeforeDeadline() async throws {
+        let deadline = Date(timeIntervalSince1970: 10_000)
+        let provider = CooldownResearchFixture(deadline: deadline)
+        let workflow = WebResearchWorkflow(provider: provider, reader: ResearchReadFixture(), now: { Date(timeIntervalSince1970: 100) })
+        let first = try await workflow.run(session()) { _ in }
+        XCTAssertEqual(first.stage, .paused); XCTAssertEqual(first.retryNotBefore, deadline)
+        XCTAssertEqual(first.queries[0].status, .pending); XCTAssertEqual(first.queries[0].failure, .providerCooldown)
+        XCTAssertEqual(first.queries[1].attempts, 0)
+        let again = try await workflow.run(first) { _ in }
+        XCTAssertEqual(again, first)
+        let calls = await provider.calls; XCTAssertEqual(calls, ["primary"])
+    }
+
+    func testProviderReviewBlockIsDurableWithinCheckpointAndCannotLoopThroughQueries() async throws {
+        let provider = CooldownResearchFixture(deadline: nil)
+        let workflow = WebResearchWorkflow(provider: provider, reader: ResearchReadFixture())
+        let result = try await workflow.run(session()) { _ in }
+        XCTAssertEqual(result.retryRequiresReview, true); XCTAssertEqual(result.stage, .paused)
+        let restored = try WebResearchSession.decodeCheckpoint(result.encodedCheckpoint())
+        _ = try await workflow.run(restored) { _ in }
+        let calls = await provider.calls; XCTAssertEqual(calls, ["primary"])
+    }
+
+}
+
+private actor CooldownResearchFixture: WebSearchProvider {
+    nonisolated let providerID = "cooldown-fixture"
+    nonisolated let permitsResultPersistence = true
+    var calls: [String] = []
+    let deadline: Date?
+    init(deadline: Date?) { self.deadline = deadline }
+    struct Blocked: WebSearchTemporarilyUnavailable {
+        let retryDate: Date?
+        var retryRequiresReview: Bool { retryDate == nil }
+    }
+    func search(query: String, limit: Int) async throws -> [WebSearchResult] {
+        calls.append(query); throw Blocked(retryDate: deadline)
+    }
 }
