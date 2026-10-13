@@ -12,6 +12,12 @@ Updated 2026-10-13. **[Canonical roadmap/checklist](BUILD_CHECKLIST.md)** record
 
 **Owner design acceptance:** after viewing the corrected preview, the owner said **“yes all good build app now.”** The corrected design is accepted and implementation continues without another approval gate. This is separate from technical browser verification: no fresh browser pass was available for the correction, so earlier 736/390/320 px checks still apply only to the pre-correction version. It is not acceptance of the native candidate or installed hardware behavior.
 
+## Current continuation checkpoint
+
+See [CONTINUATION](CONTINUATION.md) for active lane ownership, exact source/test state, preserved unfinished work, recovery paths and next executable steps. Meaningful documentation checkpoints are requested approximately every ten minutes while implementation runs; they do not require publishing unfinished code.
+
+New bounded baseline evidence: a separate harness assembled from exact `6aa5b89` sources and existing verified resources exercised real bundled `bf_isabella`, native Whisper, owned Qwen/Splash and actual Bionic AVAudioPlayer output. It recognized a public synthetic speech fixture, received a validated final question, observed two real playback segments without an intermediate invitation, then one final-playback callback and one invitation 419 ms later. Payload readiness was 17.067 s; one cold generation/readiness sample was 20.894 s. These are harness/component observations, not physical microphone/echo, p50/p95, current-working-source, delivered-candidate or human-hearing acceptance. Helpers were cleaned up and installed/frozen binaries remained unchanged. Actual capture testing and the new reliability integration remain in progress.
+
 ## Reliability review now governs the next stage
 
 The owner requested publication of the [rechecked 13-item reliability review and acceptance order](BUILD_CHECKLIST.md#reliability-review-and-next-acceptance-order) before implementation continues. Findings were checked against published main `29cfafc` and preserved unfinished work. Priority is visible truthful voice state/recovery/accessibility, screenshot/history/cancellation correctness, exact assembled-runtime/acoustic/boundary checks, then one complete cited research workflow before broader autonomy. This preserves full build authorization, existing work, Original default, fixed Qwen/Splash/British voice and main-only integration.
