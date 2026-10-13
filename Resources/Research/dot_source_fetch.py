@@ -1,7 +1,7 @@
 """One pinned public-source GET; stdlib only, no discovery/redirects/retries/state.
 
 The parent validates DNS and owns the process deadline. This helper independently
-validates the literal, connects without hostname resolution, verifies the original
+validates the inherited connected socket against the literal, verifies the original
 TLS hostname, and streams a bounded body. It never reads proxy/config/cookie/auth
 state. OpenSSL verifies using a file trust store without network issuer fetching.
 """
@@ -110,16 +110,19 @@ class BoundedResponse(http.client.HTTPResponse):
             self.headers = self.msg = None
 
 
-def connect_numeric(address, port, timeout):
+def inherited_connection(address, port, timeout):
+    """Take ownership of stdin; never create a new socket or resolve a hostname."""
     if not public_address(address):
         raise ValueError('private_address')
     family = socket.AF_INET6 if ':' in address else socket.AF_INET
-    connection = socket.socket(family, socket.SOCK_STREAM)
+    connection = socket.socket(fileno=0)
     try:
-        connection.settimeout(timeout)
-        connection.connect((address, port))  # Literal only; no getaddrinfo or hostname retry.
-        if ipaddress.ip_address(connection.getpeername()[0]) != ipaddress.ip_address(address):
+        peer = connection.getpeername()
+        if (connection.family != family or connection.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM
+                or ipaddress.ip_address(peer[0]) != ipaddress.ip_address(address) or peer[1] != port
+                or (family == socket.AF_INET6 and peer[3] != 0)):
             raise ValueError('wrong_peer')
+        connection.settimeout(timeout)
         return connection
     except BaseException:
         connection.close()
@@ -136,7 +139,7 @@ def tls_context():
     return context
 
 
-def fetch(url, address, timeout, body, metadata, *, connector=connect_numeric, context_factory=tls_context):
+def fetch(url, address, timeout, body, metadata, *, connector=inherited_connection, context_factory=tls_context):
     parsed = parse_url(url)
     if not public_address(address) or not 0 < timeout <= 30:
         raise ValueError('invalid_pin')

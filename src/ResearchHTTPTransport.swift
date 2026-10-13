@@ -11,7 +11,8 @@ protocol ResearchHTTPTransport: Sendable {
 }
 
 /// The OS resolver and isolated stdlib reader are separate bounded processes.
-/// The reader receives only a vetted numeric address; it cannot resolve again.
+/// The host connects once to a vetted numeric address and passes that socket.
+/// The reader cannot resolve or create connections inside its network-deny sandbox.
 /// Neither URLSession nor system curl is a fallback (macOS curl trust may fetch AIA).
 struct ResearchPinnedHTTPTransport: ResearchHTTPTransport {
     typealias Resolver = @Sendable (String, TimeInterval) async throws -> [String]
@@ -148,11 +149,14 @@ enum ResearchSystemHTTP {
 
     static func exchange(_ url: URL, _ address: String, _ deadline: TimeInterval, runtime: ResearchFetchRuntime) async throws -> ResearchHTTPResult {
         guard ResearchWebReader.allowed(url), ResearchPublicAddress.allowed(address) else { throw ResearchNotebookError.networkFailure }
+        let socket = try await ResearchPinnedSocket.connect(address: address,
+            port: url.port ?? (url.scheme == "https" ? 443 : 80), deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 10))
+        defer { try? socket.close() }
         let remaining = deadline - ProcessInfo.processInfo.systemUptime
         guard remaining > 0 else { throw ResearchNotebookError.networkFailure }
         let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec",
             arguments: try runtime.arguments(url: url, address: address, remaining: remaining), deadline: deadline,
-            stdoutLimit: ResearchExtraction.maxBytes, stderrLimit: 65_536)
+            stdoutLimit: ResearchExtraction.maxBytes, stderrLimit: 65_536, standardInput: socket)
         if result.status == 63 { throw ResearchNotebookError.limitExceeded }
         guard result.status == 0 else { throw ResearchNotebookError.networkFailure }
         let response = try parseMetadata(result.stderr, url: url)
@@ -168,6 +172,71 @@ enum ResearchSystemHTTP {
             throw ResearchNotebookError.networkFailure
         }
         return response
+    }
+}
+
+/// One numeric TCP attempt. No resolver, proxy, retry or request bytes in the host.
+/// Nonblocking connect yields while waiting; all failure/cancellation paths close
+/// the descriptor. Ownership transfers to the caller only after success.
+enum ResearchPinnedSocket {
+    static func connect(address: String, port: Int, deadline: TimeInterval) async throws -> FileHandle {
+        try Task.checkCancellation()
+        guard ResearchPublicAddress.allowed(address), (1...65_535).contains(port), deadline.isFinite,
+              ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
+        let family = address.contains(":") ? AF_INET6 : AF_INET
+        let descriptor = Darwin.socket(family, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { throw ResearchNotebookError.networkFailure }
+        var transferred = false
+        defer { if !transferred { Darwin.close(descriptor) } }
+        let flags = fcntl(descriptor, F_GETFL), descriptorFlags = fcntl(descriptor, F_GETFD)
+        guard flags >= 0, descriptorFlags >= 0,
+              fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0,
+              fcntl(descriptor, F_SETFD, descriptorFlags | FD_CLOEXEC) == 0 else { throw ResearchNotebookError.networkFailure }
+        let result: Int32
+        if family == AF_INET {
+            var endpoint = sockaddr_in()
+            endpoint.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            endpoint.sin_family = sa_family_t(AF_INET); endpoint.sin_port = UInt16(port).bigEndian
+            guard address.withCString({ inet_pton(AF_INET, $0, &endpoint.sin_addr) }) == 1 else { throw ResearchNotebookError.networkFailure }
+            result = withUnsafePointer(to: &endpoint) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+        } else {
+            var endpoint = sockaddr_in6()
+            endpoint.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            endpoint.sin6_family = sa_family_t(AF_INET6); endpoint.sin6_port = UInt16(port).bigEndian
+            guard address.withCString({ inet_pton(AF_INET6, $0, &endpoint.sin6_addr) }) == 1 else { throw ResearchNotebookError.networkFailure }
+            result = withUnsafePointer(to: &endpoint) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
+            }
+        }
+        guard result == 0 || (result == -1 && errno == EINPROGRESS) else { throw ResearchNotebookError.networkFailure }
+        try await waitUntilConnected(descriptor, deadline: deadline)
+        transferred = true
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    static func waitUntilConnected(_ descriptor: Int32, deadline: TimeInterval) async throws {
+        while true {
+            try Task.checkCancellation()
+            guard deadline.isFinite, ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
+            var event = pollfd(fd: descriptor, events: Int16(POLLOUT), revents: 0)
+            let ready = Darwin.poll(&event, 1, 0)
+            if ready < 0 {
+                if errno == EINTR { continue }
+                throw ResearchNotebookError.networkFailure
+            }
+            if ready > 0 {
+                guard event.revents & Int16(POLLNVAL | POLLHUP) == 0,
+                      event.revents & Int16(POLLOUT | POLLERR) != 0 else { throw ResearchNotebookError.networkFailure }
+                var error: Int32 = 0, length = socklen_t(MemoryLayout<Int32>.size)
+                guard getsockopt(descriptor, SOL_SOCKET, SO_ERROR, &error, &length) == 0, error == 0 else { throw ResearchNotebookError.networkFailure }
+                try Task.checkCancellation()
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
+                return
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 }
 
@@ -197,10 +266,8 @@ struct ResearchFetchRuntime: Sendable {
 
     func arguments(url: URL, address: String, remaining: TimeInterval) throws -> [String] {
         guard ResearchWebReader.allowed(url), ResearchPublicAddress.allowed(address), remaining > 0 else { throw ResearchNotebookError.networkFailure }
-        let port = url.port ?? (url.scheme == "https" ? 443 : 80)
-        let endpoint = address.contains(":") ? "[\(address)]:\(port)" : "\(address):\(port)"
         return ["-f", profile, "-D", "DOT_SOURCE_PYTHON=" + python, "-D", "DOT_SOURCE_PYTHON_ROOT=" + pythonRoot,
-                "-D", "DOT_SOURCE_HELPER=" + helper, "-D", "DOT_SOURCE_ENDPOINT=" + endpoint,
+                "-D", "DOT_SOURCE_HELPER=" + helper,
                 python, "-I", "-S", "-B", helper, url.absoluteString, address,
                 String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), min(30, remaining))]
     }
@@ -214,13 +281,14 @@ enum ResearchBoundedProcess {
     static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/var/empty", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"]
 
     static func run(executable: String, arguments: [String], deadline: TimeInterval,
-                    stdoutLimit: Int, stderrLimit: Int) async throws -> Output {
+                    stdoutLimit: Int, stderrLimit: Int, standardInput: FileHandle? = nil) async throws -> Output {
         try Task.checkCancellation()
         guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
         let process = Process(), output = Pipe(), errors = Pipe()
         process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
         process.environment = environment; process.currentDirectoryURL = URL(fileURLWithPath: "/")
-        process.standardInput = FileHandle.nullDevice; process.standardOutput = output; process.standardError = errors
+        // The caller owns this handle and closes it after the bounded child ends.
+        process.standardInput = standardInput ?? FileHandle.nullDevice; process.standardOutput = output; process.standardError = errors
         defer {
             if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             try? output.fileHandleForReading.close(); try? output.fileHandleForWriting.close()

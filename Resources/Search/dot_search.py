@@ -244,15 +244,27 @@ def owned_listener():
         raise
 
 
+def listener_is_listening(listener):
+    # Darwin does not implement SO_ACCEPTCONN. TCP_CONNECTION_INFO starts with
+    # the read-only uint8_t tcpi_state; TCPS_LISTEN is 1. Never probe with listen().
+    if sys.platform == "darwin":
+        return listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\x01"
+    return listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1
+
+
 def adopt_listener(descriptor, port):
     listener = socket.socket(fileno=descriptor)
-    if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
-            or listener.getsockname() != ("127.0.0.1", port)
-            or not listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)):
+    try:
+        if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
+                or listener.getsockname() != ("127.0.0.1", port)
+                or not listener_is_listening(listener)):
+            raise ValueError("invalid_listener")
+        listener.set_inheritable(False)
+        return listener
+    except BaseException:
+        # Validation errors, including unsupported probes, cannot close a caller's fd.
         listener.detach()
-        raise ValueError("invalid_listener")
-    listener.set_inheritable(False)
-    return listener
+        raise
 
 
 def child_exited(child):

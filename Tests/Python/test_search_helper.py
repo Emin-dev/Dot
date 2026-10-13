@@ -63,6 +63,103 @@ def fixture_app(environ, start_response):
     return [b'{"results":[{"url":"https://example.org/","title":"Fixture","content":"synthetic"}],"unresponsive_engines":[]}']
 
 
+class ListenerTests(unittest.TestCase):
+    def test_platform_probe_accepts_only_exact_listening_state(self):
+        cases = (("darwin", (socket.IPPROTO_TCP, 0x106, 1),
+                  (b"\x01", b"\x00", b"\x04", b"", b"\x01\x00")),
+                 ("linux", (socket.SOL_SOCKET, socket.SO_ACCEPTCONN), (1, 0, 2)))
+        for platform, arguments, states in cases:
+            for index, state in enumerate(states):
+                with self.subTest(platform=platform, state=state):
+                    listener = mock.Mock()
+                    listener.getsockopt.return_value = state
+                    with mock.patch.object(search.sys, "platform", platform), \
+                            mock.patch.object(search.socket, "TCP_CONNECTION_INFO", 0x106, create=True):
+                        self.assertEqual(search.listener_is_listening(listener), index == 0)
+                    listener.getsockopt.assert_called_once_with(*arguments)
+                    listener.bind.assert_not_called()
+                    listener.listen.assert_not_called()
+                    listener.close.assert_not_called()
+
+    def test_unsupported_probe_raises_without_fallback_or_mutation(self):
+        for platform in ("darwin", "linux"):
+            with self.subTest(platform=platform):
+                listener = mock.Mock()
+                error = OSError(42, "unsupported socket option")
+                listener.getsockopt.side_effect = error
+                with mock.patch.object(search.sys, "platform", platform), \
+                        mock.patch.object(search.socket, "TCP_CONNECTION_INFO", 0x106, create=True):
+                    with self.assertRaises(OSError) as failure:
+                        search.listener_is_listening(listener)
+                self.assertIs(failure.exception, error)
+                self.assertEqual(listener.getsockopt.call_count, 1)
+                listener.bind.assert_not_called()
+                listener.listen.assert_not_called()
+                listener.close.assert_not_called()
+
+    def test_real_socket_states_remain_unchanged_by_probe(self):
+        with socket.socket() as listener:
+            self.assertFalse(search.listener_is_listening(listener))
+            listener.bind(("127.0.0.1", 0))
+            self.assertFalse(search.listener_is_listening(listener))
+            listener.listen(1)
+            address = listener.getsockname()
+            self.assertTrue(search.listener_is_listening(listener))
+            with socket.create_connection(address, timeout=2) as client:
+                accepted, _ = listener.accept()
+                with accepted:
+                    self.assertFalse(search.listener_is_listening(client))
+                    self.assertFalse(search.listener_is_listening(accepted))
+                    self.assertTrue(search.listener_is_listening(listener))
+                    client.sendall(b"fixture")
+                    self.assertEqual(accepted.recv(7), b"fixture")
+            self.assertEqual(listener.getsockname(), address)
+            self.assertTrue(search.listener_is_listening(listener))
+
+    def test_rejected_nonlisteners_remain_open_and_are_not_promoted(self):
+        with socket.socket() as bound, search.owned_listener() as server:
+            bound.bind(("127.0.0.1", 0))
+            with socket.create_connection(server.getsockname(), timeout=2) as client:
+                accepted, _ = server.accept()
+                with accepted:
+                    for original in (bound, client, accepted):
+                        descriptor = os.dup(original.fileno())
+                        try:
+                            with self.assertRaisesRegex(ValueError, "invalid_listener"):
+                                search.adopt_listener(descriptor, original.getsockname()[1])
+                            os.fstat(descriptor)
+                            self.assertFalse(search.listener_is_listening(original))
+                        finally:
+                            os.close(descriptor)
+
+    def test_adoption_probe_error_preserves_callers_descriptor(self):
+        with search.owned_listener() as original:
+            descriptor = os.dup(original.fileno())
+            try:
+                os.set_inheritable(descriptor, True)
+                with mock.patch.object(search, "listener_is_listening", side_effect=OSError(42, "probe failed")):
+                    with self.assertRaises(OSError):
+                        search.adopt_listener(descriptor, original.getsockname()[1])
+                os.fstat(descriptor)
+                self.assertTrue(os.get_inheritable(descriptor))
+                self.assertTrue(search.listener_is_listening(original))
+            finally:
+                os.close(descriptor)
+
+    def test_adoption_setup_error_detaches_without_closing(self):
+        listener = mock.Mock(family=socket.AF_INET, type=socket.SOCK_STREAM)
+        listener.getsockname.return_value = ("127.0.0.1", 12345)
+        listener.set_inheritable.side_effect = OSError("descriptor setup failed")
+        with mock.patch.object(search.socket, "socket", return_value=listener), \
+                mock.patch.object(search, "listener_is_listening", return_value=True):
+            with self.assertRaises(OSError):
+                search.adopt_listener(123, 12345)
+        listener.detach.assert_called_once_with()
+        listener.close.assert_not_called()
+        listener.bind.assert_not_called()
+        listener.listen.assert_not_called()
+
+
 class BoundaryTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
@@ -242,7 +339,10 @@ class ConfigurationTests(unittest.TestCase):
                 with self.assertRaises(OSError):
                     second.bind(first.getsockname())
             duplicate = os.dup(first.fileno())
+            os.set_inheritable(duplicate, True)
             adopted = search.adopt_listener(duplicate, first.getsockname()[1])
+            self.assertEqual(adopted.fileno(), duplicate)
+            self.assertFalse(adopted.get_inheritable())
             adopted.close()
             self.assertEqual(first.getsockname()[0], "127.0.0.1")
             duplicate = os.dup(first.fileno())
@@ -415,7 +515,7 @@ class LifecycleTests(unittest.TestCase):
                 process.stdin.flush()
                 self.assertEqual(read_event(process)["event"], "stopped")
                 process.wait(timeout=5)
-                self.assertEqual(foreign.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN), 1)
+                self.assertTrue(search.listener_is_listening(foreign))
             finally:
                 foreign.close()
                 finish_fixture(process)

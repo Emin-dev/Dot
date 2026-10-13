@@ -207,4 +207,158 @@ final class ResearchHTTPTransportTests: XCTestCase {
         let empty = try await ResearchBoundedProcess.run(executable: "/usr/bin/true", arguments: [], deadline: ProcessInfo.processInfo.systemUptime + 2, stdoutLimit: 16, stderrLimit: 16)
         XCTAssertEqual(empty.status, 0); XCTAssertTrue(empty.stdout.isEmpty); XCTAssertTrue(empty.stderr.isEmpty)
     }
+
+    func testNumericConnectRejectsPrivatePinsInvalidPortsAndExpiredDeadlines() async {
+        for (address, port, deadline) in [("127.0.0.1", 80, ProcessInfo.processInfo.systemUptime + 1),
+                                         ("::1", 80, ProcessInfo.processInfo.systemUptime + 1),
+                                         ("1.1.1.1", 0, ProcessInfo.processInfo.systemUptime + 1),
+                                         ("1.1.1.1", 65_536, ProcessInfo.processInfo.systemUptime + 1),
+                                         ("1.1.1.1", 80, 0), ("1.1.1.1", 80, .infinity)] {
+            do {
+                let socket = try await ResearchPinnedSocket.connect(address: address, port: port, deadline: deadline)
+                try? socket.close(); XCTFail("Invalid endpoint/deadline accepted")
+            } catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+        }
+    }
+
+    func testConnectWaitHonorsDeadlineAndCancellationWithoutBlocking() async throws {
+        var sockets: [Int32] = [-1, -1]
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &sockets) == 0 else { XCTFail("socketpair failed"); return }
+        defer { sockets.forEach { Darwin.close($0) } }
+        let descriptor = sockets[0], flags = fcntl(sockets[0], F_GETFL)
+        XCTAssertGreaterThanOrEqual(flags, 0)
+        XCTAssertEqual(fcntl(descriptor, F_SETFL, flags | O_NONBLOCK), 0)
+        // Fill a local socket so its POLLOUT stays pending without public traffic.
+        let buffer = [UInt8](repeating: 0, count: 16_384)
+        var blocked = false
+        for _ in 0..<1_024 {
+            let count = buffer.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress!, $0.count) }
+            if count < 0 {
+                XCTAssertTrue(errno == EAGAIN || errno == EWOULDBLOCK); blocked = true; break
+            }
+        }
+        guard blocked else { XCTFail("Fixture did not fill"); return }
+        let start = ProcessInfo.processInfo.systemUptime
+        do {
+            try await ResearchPinnedSocket.waitUntilConnected(descriptor, deadline: start + 0.05)
+            XCTFail("Expected connect deadline")
+        } catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+        XCTAssertLessThan(ProcessInfo.processInfo.systemUptime - start, 1)
+        let task = Task { try await ResearchPinnedSocket.waitUntilConnected(descriptor, deadline: ProcessInfo.processInfo.systemUptime + 10) }
+        try await Task.sleep(nanoseconds: 20_000_000); task.cancel()
+        do { try await task.value; XCTFail("Expected connect cancellation") } catch { XCTAssertTrue(error is CancellationError) }
+    }
+
+#if !SWIFT_PACKAGE
+    @MainActor private func sourceRuntime(helper: URL) async throws -> ResearchFetchRuntime {
+        let python = try XCTUnwrap(ProcessInfo.processInfo.environment["DOT_TEST_PYTHON"], "Run scripts/verify_macos.sh for the explicit test runtime")
+        let result = try await ResearchBoundedProcess.run(executable: python,
+            arguments: ["-I", "-S", "-B", "-c", "import sys; print(sys.base_prefix)"],
+            deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 4_096, stderrLimit: 1_024)
+        XCTAssertEqual(result.status, 0); XCTAssertTrue(result.stderr.isEmpty)
+        let root = try XCTUnwrap(String(data: result.stdout, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines)
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        return try ResearchFetchRuntime(auditedPythonRoot: URL(fileURLWithPath: root), signedHelper: helper,
+            signedProfile: repository.appendingPathComponent("Resources/Research/source_fetch.sb"))
+    }
+
+    @MainActor private func inheritedTCPFixture() async throws -> (FileHandle, FileHandle, Int) {
+        let listener = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard listener >= 0 else { throw ResearchNotebookError.networkFailure }
+        defer { Darwin.close(listener) }
+        var endpoint = sockaddr_in()
+        endpoint.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); endpoint.sin_family = sa_family_t(AF_INET)
+        endpoint.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &endpoint) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, listen(listener, 1) == 0 else { throw ResearchNotebookError.networkFailure }
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let named = withUnsafeMutablePointer(to: &endpoint) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
+        }
+        guard named == 0 else { throw ResearchNotebookError.networkFailure }
+        let client = Darwin.socket(AF_INET, SOCK_STREAM, 0)
+        guard client >= 0 else { throw ResearchNotebookError.networkFailure }
+        let handle = FileHandle(fileDescriptor: client, closeOnDealloc: true)
+        do {
+            let flags = fcntl(client, F_GETFL)
+            guard flags >= 0, fcntl(client, F_SETFL, flags | O_NONBLOCK) == 0,
+                  fcntl(client, F_SETFD, FD_CLOEXEC) == 0 else { throw ResearchNotebookError.networkFailure }
+            let started = withUnsafePointer(to: &endpoint) { pointer in
+                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(client, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            guard started == 0 || errno == EINPROGRESS else { throw ResearchNotebookError.networkFailure }
+            try await ResearchPinnedSocket.waitUntilConnected(client, deadline: ProcessInfo.processInfo.systemUptime + 1)
+            let accepted = accept(listener, nil, nil)
+            guard accepted >= 0 else { throw ResearchNotebookError.networkFailure }
+            return (handle, FileHandle(fileDescriptor: accepted, closeOnDealloc: true), Int(UInt16(bigEndian: endpoint.sin_port)))
+        } catch { try? handle.close(); throw error }
+    }
+
+    @MainActor private func assertPeerBytes(_ peer: FileHandle, expected: Data) throws {
+        let descriptor = peer.fileDescriptor, flags = fcntl(peer.fileDescriptor, F_GETFL)
+        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { throw ResearchNotebookError.networkFailure }
+        var event = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+        XCTAssertEqual(Darwin.poll(&event, 1, 1_000), 1, "Child socket must close promptly after its owner closes")
+        var buffer = [UInt8](repeating: 0, count: 64)
+        let count = Darwin.read(descriptor, &buffer, buffer.count)
+        XCTAssertGreaterThanOrEqual(count, 0)
+        XCTAssertEqual(Data(buffer.prefix(max(0, count))), expected)
+    }
+
+    @MainActor func testAssembledRuntimePassesOnlyConnectedSocketUnderExactSandbox() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let helper = directory.appendingPathComponent("socket-canary.py")
+        try Data("""
+        import errno, socket, sys, urllib.parse
+        inherited = socket.socket(fileno=0)
+        inherited.settimeout(1)
+        port = urllib.parse.urlsplit(sys.argv[1]).port
+        assert inherited.getpeername() == ('127.0.0.1', port)
+        inherited.sendall(b'connected-only')
+        inherited.close()
+        fresh = None
+        try:
+            fresh = socket.socket()
+            fresh.settimeout(1)
+            fresh.connect(('127.0.0.1', port))
+        except OSError as error:
+            assert error.errno in (errno.EPERM, errno.EACCES), error
+        else:
+            raise AssertionError('fresh connection allowed')
+        finally:
+            if fresh is not None:
+                fresh.close()
+        print('native-socket-ok')
+        """.utf8).write(to: helper)
+        let runtime = try await sourceRuntime(helper: helper)
+        let (inherited, peer, port) = try await inheritedTCPFixture()
+        defer { try? inherited.close(); try? peer.close() }
+        let arguments = try runtime.arguments(url: URL(string: "http://fixture.invalid:\(port)/")!, address: "1.1.1.1", remaining: 2)
+        XCTAssertFalse(arguments.contains { $0.contains("DOT_SOURCE_ENDPOINT") })
+        let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec", arguments: arguments,
+            deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 128, stderrLimit: 4_096, standardInput: inherited)
+        XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
+        XCTAssertEqual(result.stdout, Data("native-socket-ok\n".utf8)); XCTAssertTrue(result.stderr.isEmpty)
+        try inherited.close()
+        try assertPeerBytes(peer, expected: Data("connected-only".utf8))
+        try assertPeerBytes(peer, expected: Data())
+    }
+
+    @MainActor func testAssembledProductionHelperRejectsInheritedPeerBeforeHTTPBytes() async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        let runtime = try await sourceRuntime(helper: repository.appendingPathComponent("Resources/Research/dot_source_fetch.py"))
+        let (inherited, peer, port) = try await inheritedTCPFixture()
+        defer { try? inherited.close(); try? peer.close() }
+        let arguments = try runtime.arguments(url: URL(string: "http://fixture.invalid:\(port)/secret")!, address: "1.1.1.1", remaining: 2)
+        let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec", arguments: arguments,
+            deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 128, stderrLimit: 4_096, standardInput: inherited)
+        XCTAssertEqual(result.status, 1); XCTAssertTrue(result.stdout.isEmpty); XCTAssertTrue(result.stderr.isEmpty)
+        try inherited.close()
+        try assertPeerBytes(peer, expected: Data())
+    }
+#endif
 }

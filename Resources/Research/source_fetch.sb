@@ -1,6 +1,8 @@
 (version 1)
 ; Separate short-lived reader. No models, launcher, application data, user files,
 ; state directories, DNS, inbound sockets, proxies or trust-daemon egress.
+; The host supplies one already-connected, vetted socket as stdin. There is no
+; network exception: the reader cannot connect, reconnect or choose another peer.
 (allow default)
 (deny file-read*)
 (deny file-map-executable)
@@ -26,4 +28,3 @@
   (subpath "/System/Library") (subpath "/Library/Apple/System") (subpath "/usr/lib")
   (subpath (param "DOT_SOURCE_PYTHON_ROOT")))
 (allow file-write-data (literal "/dev/null"))
-(allow network-outbound (remote tcp (param "DOT_SOURCE_ENDPOINT")))

@@ -1,6 +1,6 @@
 """Actual stdlib helper tests with injected loopback sockets; no public traffic.
 
-Production validates public literals before connect. Fixture-only connector/context
+Production accepts only an inherited connected public peer. Fixture-only connector/context
 injection lets tests verify HTTP/TLS mechanics without altering system trust or DNS.
 Swift and exact macOS sandbox acceptance are separate native gates.
 """
@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 HELPER = ROOT / 'Resources/Research/dot_source_fetch.py'
@@ -190,16 +191,92 @@ class ResearchTransportContractTests(unittest.TestCase):
         self.assertIn('"/usr/bin/sandbox-exec"', swift)
         self.assertIn('"-I", "-S", "-B"', swift)
         self.assertIn('kill(process.processIdentifier, SIGKILL)', swift)
+        self.assertIn('ResearchPinnedSocket.connect(address: address', swift)
+        self.assertIn('standardInput: socket', swift)
+        self.assertIn('process.standardInput = standardInput ?? FileHandle.nullDevice', swift)
+        self.assertIn('Darwin.poll(&event, 1, 0)', swift)
+        self.assertIn('FD_CLOEXEC', swift)
+        self.assertIn('defer { if !transferred { Darwin.close(descriptor) } }', swift)
+        self.assertIn('defer { try? socket.close() }', swift)
+        helper = HELPER.read_text()
+        self.assertIn('connector=inherited_connection', helper)
+        self.assertIn('socket.socket(fileno=0)', helper)
+        self.assertNotIn('.connect(', helper)
+        self.assertNotIn('getaddrinfo', helper)
+        self.assertNotIn('DOT_SOURCE_ENDPOINT', swift)
         self.assertNotIn('URLSession(', reader)
         self.assertNotIn('"/usr/bin/curl"', swift)
         profile = (ROOT / 'Resources/Research/source_fetch.sb').read_text()
-        for expected in ['(deny network*)', '(deny file-read*)', '(deny file-write*)', '(deny process-exec)', '(remote tcp (param "DOT_SOURCE_ENDPOINT"))']:
+        for expected in ['(deny network*)', '(deny file-read*)', '(deny file-write*)', '(deny process-exec)']:
             self.assertIn(expected, profile)
-        for forbidden in ['DOT_MODELS', 'DOT_RUNTIME', 'DOT_STATE', '(subpath "/Users")', '(subpath "/tmp")']:
+        for forbidden in ['(allow network', 'DOT_SOURCE_ENDPOINT', 'DOT_MODELS', 'DOT_RUNTIME', 'DOT_STATE', '(subpath "/Users")', '(subpath "/tmp")']:
             self.assertNotIn(forbidden, profile)
 
+    def test_inherited_socket_checks_peer_port_family_type_and_scope(self):
+        for address, family, peer in [('1.1.1.1', socket.AF_INET, ('1.1.1.1', 443)),
+                                      ('2606:4700:4700::1111', socket.AF_INET6, ('2606:4700:4700::1111', 443, 0, 0))]:
+            inherited = mock.Mock(family=family)
+            inherited.getpeername.return_value = peer
+            inherited.getsockopt.return_value = socket.SOCK_STREAM
+            with mock.patch.object(fetcher.socket, 'socket', return_value=inherited) as create:
+                self.assertIs(fetcher.inherited_connection(address, 443, 2), inherited)
+            create.assert_called_once_with(fileno=0)
+            inherited.settimeout.assert_called_once_with(2)
+            inherited.connect.assert_not_called()
+            inherited.close.assert_not_called()
+        failures = [
+            (socket.AF_INET, ('8.8.8.8', 443), socket.SOCK_STREAM),
+            (socket.AF_INET, ('1.1.1.1', 80), socket.SOCK_STREAM),
+            (socket.AF_INET6, ('1.1.1.1', 443), socket.SOCK_STREAM),
+            (socket.AF_INET, ('1.1.1.1', 443), socket.SOCK_DGRAM),
+            (socket.AF_INET, ('127.0.0.1', 443), socket.SOCK_STREAM),
+        ]
+        for family, peer, kind in failures:
+            inherited = mock.Mock(family=family)
+            inherited.getpeername.return_value = peer
+            inherited.getsockopt.return_value = kind
+            with mock.patch.object(fetcher.socket, 'socket', return_value=inherited):
+                with self.assertRaises(ValueError):
+                    fetcher.inherited_connection('1.1.1.1', 443, 2)
+            inherited.close.assert_called_once()
+            inherited.settimeout.assert_not_called()
+        inherited = mock.Mock(family=socket.AF_INET6)
+        inherited.getpeername.return_value = ('2606:4700:4700::1111', 443, 0, 3)
+        inherited.getsockopt.return_value = socket.SOCK_STREAM
+        with mock.patch.object(fetcher.socket, 'socket', return_value=inherited):
+            with self.assertRaises(ValueError):
+                fetcher.inherited_connection('2606:4700:4700::1111', 443, 2)
+        inherited.close.assert_called_once()
+
+    def test_inherited_unconnected_socket_is_closed_and_private_pin_never_opens_it(self):
+        inherited = mock.Mock()
+        inherited.getpeername.side_effect = OSError('not connected')
+        with mock.patch.object(fetcher.socket, 'socket', return_value=inherited) as create:
+            with self.assertRaises(OSError):
+                fetcher.inherited_connection('1.1.1.1', 443, 2)
+            with self.assertRaises(ValueError):
+                fetcher.inherited_connection('127.0.0.1', 443, 2)
+        create.assert_called_once_with(fileno=0)
+        inherited.close.assert_called_once()
+
+    def test_cli_mismatched_inherited_peer_sends_no_request_bytes(self):
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', 0)); listener.listen(1)
+            with socket.create_connection(listener.getsockname(), timeout=1) as inherited:
+                peer, _ = listener.accept()
+                with peer:
+                    result = subprocess.run([sys.executable, '-I', '-S', '-B', str(HELPER),
+                        f'http://fixture.invalid:{listener.getsockname()[1]}/private-source-query', '1.1.1.1', '1'],
+                        stdin=inherited, capture_output=True, timeout=3, close_fds=True)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr), (1, b'', b''))
+                    inherited.shutdown(socket.SHUT_WR)
+                    peer.settimeout(1)
+                    self.assertEqual(peer.recv(1), b'', 'Rejected peer must receive zero request bytes')
+                # Parent still owns its descriptor even though the child closed stdin.
+                self.assertEqual(inherited.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE), socket.SOCK_STREAM)
+
     @unittest.skipUnless(sys.platform == 'darwin', 'Exact Seatbelt profile requires macOS')
-    def test_exact_sandbox_denies_private_files_writes_and_other_endpoints(self):
+    def test_exact_sandbox_uses_only_inherited_socket_and_denies_new_connections(self):
         with tempfile.TemporaryDirectory() as directory:
             directory = pathlib.Path(directory).resolve()
             python = pathlib.Path(sys.executable).resolve()
@@ -207,12 +284,12 @@ class ResearchTransportContractTests(unittest.TestCase):
             self.assertTrue(python.is_relative_to(python_root), 'Use the official contained test Python runtime')
             canary, secret = directory / 'canary.py', directory / 'private-sentinel'
             secret.write_text('private fixture')
-            allowed = socket.socket(); denied = socket.socket()
-            allowed.bind(('127.0.0.1', 0)); allowed.listen(1)
+            listener = socket.socket(); denied = socket.socket()
+            listener.bind(('127.0.0.1', 0)); listener.listen(2)
             denied.bind(('127.0.0.1', 0)); denied.listen(1)
             try:
-                port, forbidden = allowed.getsockname()[1], denied.getsockname()[1]
-                canary.write_text("""import pathlib, socket, ssl, sys
+                port, forbidden = listener.getsockname()[1], denied.getsockname()[1]
+                canary.write_text("""import errno, pathlib, socket, ssl, sys
 assert ssl.OPENSSL_VERSION.startswith('OpenSSL ')
 ssl.create_default_context(cafile='/etc/ssl/cert.pem')
 secret = pathlib.Path(sys.argv[1])
@@ -228,39 +305,48 @@ except PermissionError:
     pass
 else:
     raise AssertionError('write allowed')
-connection = socket.socket()
+connection = socket.socket(fileno=0)
 connection.settimeout(1)
-connection.connect(('127.0.0.1', int(sys.argv[2])))
-connection.sendall(b'allowed')
+assert connection.getpeername() == ('127.0.0.1', int(sys.argv[2]))
+assert connection.recv(16) == b'host-owned'
+connection.sendall(b'inherited-only')
 connection.close()
-connection = socket.socket()
-connection.settimeout(1)
-try:
-    connection.connect(('127.0.0.1', int(sys.argv[3])))
-except OSError:
-    pass
-else:
-    raise AssertionError('other endpoint allowed')
-connection.close()
+# Even reconnecting to the same inherited peer must fail. No exception exists.
+for port in (int(sys.argv[2]), int(sys.argv[3])):
+    fresh = None
+    try:
+        fresh = socket.socket()
+        fresh.settimeout(1)
+        fresh.connect(('127.0.0.1', port))
+    except OSError as error:
+        assert error.errno in (errno.EPERM, errno.EACCES), error
+    else:
+        raise AssertionError('fresh connection allowed')
+    finally:
+        if fresh is not None:
+            fresh.close()
 print('sandbox-ok')
 """)
-                result = subprocess.run(['/usr/bin/sandbox-exec', '-f', str(ROOT / 'Resources/Research/source_fetch.sb'),
-                    '-D', 'DOT_SOURCE_PYTHON=' + str(python), '-D', 'DOT_SOURCE_PYTHON_ROOT=' + str(python_root),
-                    '-D', 'DOT_SOURCE_HELPER=' + str(canary), '-D', f'DOT_SOURCE_ENDPOINT=127.0.0.1:{port}',
-                    str(python), '-I', '-S', '-B', str(canary), str(secret), str(port), str(forbidden)],
-                    env={'PATH': '/usr/bin:/bin', 'HOME': '/var/empty', 'LC_ALL': 'C', 'PYTHONDONTWRITEBYTECODE': '1'},
-                    capture_output=True, timeout=8)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertEqual(result.stdout.strip(), b'sandbox-ok')
-                allowed.settimeout(1)
-                connection, _ = allowed.accept()
-                with connection:
-                    self.assertEqual(connection.recv(16), b'allowed')
-                denied.settimeout(0.05)
-                with self.assertRaises(socket.timeout):
-                    denied.accept()
+                with socket.create_connection(listener.getsockname(), timeout=1) as inherited:
+                    peer, _ = listener.accept()
+                    with peer:
+                        peer.sendall(b'host-owned')
+                        result = subprocess.run(['/usr/bin/sandbox-exec', '-f', str(ROOT / 'Resources/Research/source_fetch.sb'),
+                            '-D', 'DOT_SOURCE_PYTHON=' + str(python), '-D', 'DOT_SOURCE_PYTHON_ROOT=' + str(python_root),
+                            '-D', 'DOT_SOURCE_HELPER=' + str(canary),
+                            str(python), '-I', '-S', '-B', str(canary), str(secret), str(port), str(forbidden)],
+                            stdin=inherited, env={'PATH': '/usr/bin:/bin', 'HOME': '/var/empty', 'LC_ALL': 'C', 'PYTHONDONTWRITEBYTECODE': '1'},
+                            capture_output=True, timeout=8, close_fds=True)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(result.stdout.strip(), b'sandbox-ok')
+                        peer.settimeout(1)
+                        self.assertEqual(peer.recv(16), b'inherited-only')
+                for sink in (listener, denied):
+                    sink.settimeout(0.05)
+                    with self.assertRaises(socket.timeout):
+                        sink.accept()
             finally:
-                allowed.close(); denied.close()
+                listener.close(); denied.close()
 
     def test_tls_checks_original_hostname_before_http(self):
         openssl = shutil.which('openssl')
