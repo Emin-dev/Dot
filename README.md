@@ -1,6 +1,8 @@
 # dot — floating local companion
 
-**[Product roadmap and build checklist](docs/BUILD_CHECKLIST.md)** — agreed future stack, features, configurable timing/activity, design choices and the explicit permission gate before implementation. [Verified progress](docs/PROGRESS.md) keeps source, tests, installed behavior and unpublished work separate.
+**[Product roadmap and build checklist](docs/BUILD_CHECKLIST.md)** — full stack, ranked workflow recommendations, configurable timing/activity and open design choices. [Download the plain-text checklist](docs/BUILD_CHECKLIST.txt) and [ten-option interactive design preview](docs/design/dot-ui-options.html) ([download HTML](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-ui-options.html); save and open in a browser). [Verified progress](docs/PROGRESS.md) keeps source, tests, installed behavior and unpublished work separate.
+
+**Current hold: show the ten UI options before building.** The user approved the first voice batch, then requested the existing preview before work continues. App implementation and builds are paused until the owner views it and confirms continuation; documentation publication remains authorized. The bounded first batch, once resumed, covers persisted native silence/invitation options and validated final-question follow-up listening, with cancellation and focused/native verification. Speech begun during the invitation continues until the selected trailing silence, within the normal capture bounds. The wider roadmap, new designs and installation are not completed or authorized by that approval. The current design and Splash/Qwen/British Kokoro baseline stay in place.
 
 The description below is the current installed baseline. The target adds proactive screen/file context, online research, native settings/options and staged Rust services; those capabilities are not installed by this documentation update.
 

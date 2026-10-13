@@ -1,6 +1,6 @@
 # Dot: implementation and next steps
 
-Updated 2026-10-13. **[Canonical product roadmap and build checklist](BUILD_CHECKLIST.md)** records the agreed future behavior, full stack, open decisions and explicit permission gate before implementation. This page is the verified status ledger, not a release certification. The documentation update changes no app behavior. Update checkboxes only with evidence.
+Updated 2026-10-13. **[Canonical product roadmap and build checklist](BUILD_CHECKLIST.md)** records the full stack, ranked recommendations, open decisions and the latest preview-before-build hold on the previously approved first voice batch. [Download the plain-text checklist](BUILD_CHECKLIST.txt) or [interactive ten-option design preview](design/dot-ui-options.html) ([download HTML](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-ui-options.html); save and open in a browser). This page is the verified status ledger, not a release certification. This documentation publication changes no app behavior. Update checkboxes only with evidence.
 
 ## Current source and personal test app
 
@@ -33,6 +33,18 @@ Updated 2026-10-13. **[Canonical product roadmap and build checklist](BUILD_CHEC
 - [ ] Broader mixed-monitor, dynamic desktop and sustained CPU/UX acceptance. A map can validly yield no safe route; Dot then stays still. Initial launch position is not guaranteed content-safe, and this is not perfect semantic understanding of useful content.
 - [ ] Fresh owner-led smoke test of the newly installed personal build, including speech, interruption, screen context, dragging and placement during normal work.
 
+## First voice batch — paused for preview, completion pending evidence
+
+The user explicitly approved starting configurable listening and question-only follow-up, then asked to see the existing ten-option UI comparison before building. The newer request pauses implementation and builds until the owner views the preview and confirms continuation. Earlier approval remains historical context; documentation publication stays authorized. Preserve any started work, the installed app and the unpublished UI patch. Installation requires a separate clear step. Keep existing Swift coordination, the current design, Qwen/Splash and British Kokoro voice.
+
+- [ ] Persist native trailing-silence choices 2/3/5/8 seconds (default 3) and invitation choices 3/6/9/12/20 seconds (default 6), including migration/invalid-value behavior.
+- [ ] Require uninterrupted selected silence before reasoning/research; resumed speech resets a monotonic deadline and foreground interaction takes priority over background work.
+- [ ] Arm only after validated current-turn question intent, successful complete generation and final synthesis/playback completion. A reply begun in time cancels the invitation deadline and continues until selected trailing silence, subject to the existing 60-second capture/sample bounds.
+- [ ] Verify no-speech expiry, boundary races, repeated/intermediate drains, echo, permission/route loss, stale callbacks, Stop/replacement/hide/Quit/sleep/drag/menu cancellation and all settings. Record automated versus physical-device evidence separately.
+- [ ] Preserve/profile the baseline where available; distinguish selected silence from post-silence processing and first actual audible response. No latency reduction is established by approval or compilation.
+
+After preview review and confirmation to continue, coordinate non-overlapping settings/timing, playback/question-gate and tests/review work under one integration owner. No new proactive scheduler, movement, general tools/research/file autonomy, theme, speech engine, full Rust migration or public release is included. The unchanged HTML preview has illustrative silent mouth movement; its later motion-state echo fix has syntax validation but no fresh browser verification.
+
 ## Agreed future work — pending implementation
 
 The [canonical checklist](BUILD_CHECKLIST.md) is the source of truth for contracts and open choices. These summaries supersede earlier narrower roadmap wording; none is a completion claim.
@@ -47,6 +59,7 @@ The [canonical checklist](BUILD_CHECKLIST.md) is the source of truth for contrac
 - [ ] Mac/Accessibility/browser/file/coding tools with verified execution, bounded recovery, cancellation/action history and undo where possible. Maximum autonomy/no repeated app confirmations is the requested direction; actual OS/provider constraints remain. Do not present historic blanket confirmation rules as newly agreed policy.
 - [ ] Durable local text history Read/Copy/Delete, editable memory, project/task context and preference learning; current history is RAM-only. Existing plans exclude stored mic audio/screenshots; learned-fact retention and long-report presentation remain open.
 - [ ] Version-matched own-source access, Siri/App Intents and separate T3-Video-Wan2.2-5B research. Video is not a fast voice-path dependency.
+- [ ] [Ranked future workflows](BUILD_CHECKLIST.md#research-backed-improvements-and-concrete-workflows): persistent missions, verified action receipts, dated/source-linked memory and research notebooks, project resume packs, watched-folder document workers, native action recipes, event-aware help, optional calendar preparation and select-to-delegate. Begin with a proposed source-linked local project brief workflow only after the first voice slice; the recommendation is not an expansion of current implementation approval.
 
 ## Hardware and distribution targets
 
@@ -59,10 +72,10 @@ The [canonical checklist](BUILD_CHECKLIST.md) is the source of truth for contrac
 
 ## Verification and working order
 
-1. Publish and explain the roadmap, research open choices, show the existing design plus ten new options, and ask remaining questions.
-2. Present the concise stack/features checklist and ask for final permission to build. Documentation is authorized now; app implementation, builds and installation wait for that explicit go-ahead.
-3. After permission, coordinate the [future parallel lanes](BUILD_CHECKLIST.md#future-parallel-work-lanes), preserve the installed baseline and unpublished patch, and integrate measured slices with exact tests/device evidence.
-4. Record source, automated tests, native acceptance, installation and owner acceptance separately; complete hardware/distribution gates before claiming a public release.
+1. Publish the expanded canonical specification, plain-text companion and existing design-only preview separately from app implementation. Show the ten options as the user most recently requested.
+2. Keep implementation/builds paused until the owner views that comparison and confirms continuation. Then resume only the previously approved configurable-listening/question-follow-up batch with several agents, agreed interfaces and one integration owner. Existing Swift coordination is appropriate; retain the working voice/model/design baseline.
+3. Preserve the installed app and unpublished patch. Use the [parallel lanes](BUILD_CHECKLIST.md#future-parallel-work-lanes) only within the approved scope; proposed later workflows and broader lane capabilities remain future work.
+4. Record source, automated tests, native acceptance, installation and owner acceptance separately. Review the exact tested candidate before any separately authorized installation and complete hardware/distribution gates before claiming a public release.
 
 Use `python3 -B -m unittest discover -s Tests/Python -v`, `swift test`, and `bash scripts/verify_macos.sh`. Real payload assembly uses `scripts/build_complete.sh`; complete packaging requires exact-artifact native evidence via `scripts/package_complete.sh`. Never replace full payload hashes with size/mtime-only trust, weaken sandbox/TLS checks to make a test pass, or claim model-free CI proves physical microphone/speaker or screen permission behavior.
 
