@@ -21,6 +21,7 @@ final class ChatModel: ObservableObject {
     @Published private(set) var capturingScreen = false
     private var gate = TurnGate()
     private var work: Task<Void, Never>?
+    private let warmup = TurnWarmup()
     private var generating = false
     private var history: [ChatMessage] = []
     private var chunker = SentenceBuffer()
@@ -68,7 +69,23 @@ final class ChatModel: ObservableObject {
         }
         stt.onError = { [weak self] id, message in
             guard let self, self.gate.accepts(id) else { return }
-            self.phase = .blocked(message)
+            self.cancelTurn(); self.phase = .blocked(message)
+        }
+        stt.onRecording = { [weak self] id in
+            guard let self, self.gate.accepts(id) else { return }
+            self.timing("capture_started")
+            do { try self.tts.start(id: id) }
+            catch {
+                self.logFailure(error, stage: .voice)
+                self.cancelTurn(); self.phase = .blocked(error.localizedDescription); return
+            }
+            self.timing("warmup_started")
+            self.warmup.start(turn: id) { [weak self] in
+                guard let self, self.gate.accepts(id) else { throw CancellationError() }
+                _ = try await self.engine.verifyConnection()
+                guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                self.timing("warmup_ready")
+            }
         }
         tts.onError = { [weak self] id, message in
             guard let self, self.gate.accepts(id) else { return }
@@ -96,6 +113,13 @@ final class ChatModel: ObservableObject {
         phase = .listening
         work = Task { [weak self] in
             guard let self, !Task.isCancelled, self.gate.accepts(id) else { return }
+            do { try self.screen.prepare(turn: id) }
+            catch {
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.logFailure(error, stage: .capture)
+                self.phase = .blocked(error.localizedDescription); return
+            }
+            guard !Task.isCancelled, self.gate.accepts(id) else { return }
             await self.stt.start(id: id)
         }
     }
@@ -108,12 +132,12 @@ final class ChatModel: ObservableObject {
         history.append(ChatMessage(role: "user", content: text))
         if history.count > 12 { history.removeFirst(history.count - 12) }
         let snapshot = history
-        do { try tts.start(id: id) }
-        catch { logFailure(error, stage: .voice); generating = false; phase = .blocked(error.localizedDescription); return }
         work = Task { [weak self] in
             guard let self else { return }
             var stage = PipelineDiagnostic.Stage.readiness
             do {
+                try await self.warmup.wait(turn: id)
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
                 try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
                     guard let self, self.gate.accepts(id) else { return }
                     if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
@@ -160,7 +184,7 @@ final class ChatModel: ObservableObject {
     @discardableResult
     func cancelTurn() -> UUID {
         let id = gate.advance()
-        work?.cancel(); work = nil
+        work?.cancel(); work = nil; warmup.cancel()
         stt.cancel(); tts.stop(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
         chunker = SentenceBuffer(); phase = .idle
         return id

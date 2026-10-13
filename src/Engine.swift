@@ -75,6 +75,14 @@ final class EngineManager: ObservableObject {
 
     private(set) var visionAvailable = false
     func verifyConnection() async throws -> (URL, String) {
+        try Task.checkCancellation()
+        let began = ProcessInfo.processInfo.systemUptime
+        var outcome = "stopped"
+        Self.log.notice("DOT_READINESS event=started")
+        defer {
+            let milliseconds = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
+            Self.log.notice("DOT_READINESS event=ended outcome=\(outcome, privacy: .public) elapsed=\(milliseconds)ms")
+        }
         let base: URL, model: String, ownedPID: Int?, identityPort: Int
         if let configuredEndpoint {
             guard protocolClasses?.isEmpty == false, let url = LocalEndpoint.validate(configuredEndpoint), let selected = configuredModel, !selected.isEmpty else { throw EngineError.configuration }
@@ -104,10 +112,12 @@ final class EngineManager: ObservableObject {
                 visionAvailable = identity.vision == true && identity.input_modalities?.contains("image") == true
                 let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: .ready)
                 Self.log.notice("\(diagnostic.logLine, privacy: .public)")
+                outcome = "ready"
                 return (base, model)
             } catch {
                 try Task.checkCancellation()
                 if attempt == attempts - 1 || ProcessInfo.processInfo.systemUptime >= readinessDeadline {
+                    outcome = ownedPID == nil ? "failed" : "timeout"
                     let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: ownedPID == nil ? .failed : .timeout)
                     Self.log.error("\(diagnostic.logLine, privacy: .public)")
                     throw (error as? EngineError) ?? EngineError.unavailable
@@ -226,4 +236,26 @@ final class StreamDelivery {
     func cancel() {
         deadline?.cancel(); deadline = nil; closed = true; buffer = StreamUpdateBuffer()
     }
+}
+
+/// One cancellable warm attempt per explicit recording, shared with its final transcript.
+@MainActor
+final class TurnWarmup {
+    private var turn: UUID?
+    private var work: Task<Void, Error>?
+    func start(turn: UUID, operation: @escaping @MainActor () async throws -> Void) {
+        cancel(); self.turn = turn
+        work = Task {
+            try Task.checkCancellation()
+            try await operation()
+            try Task.checkCancellation()
+        }
+    }
+    func wait(turn: UUID) async throws {
+        guard self.turn == turn, let work else { throw CancellationError() }
+        try await work.value
+        try Task.checkCancellation()
+        guard self.turn == turn else { throw CancellationError() }
+    }
+    func cancel() { turn = nil; work?.cancel(); work = nil }
 }

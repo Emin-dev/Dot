@@ -569,3 +569,29 @@ final class PipelineDiagnosticTests: XCTestCase {
                        "pipeline=capture outcome=failed reason=capture_failed")
     }
 }
+
+final class ScreenPermissionTurnTests: XCTestCase {
+    func testDeniedEarlyPermissionDoesNotAuthorizeLaterCapture() {
+        var permission = ScreenPermissionTurn(); let turn = UUID(); var requests = 0
+        XCTAssertFalse(permission.prepare(turn: turn, enabled: true, preflight: { false }, request: { requests += 1; return false }))
+        XCTAssertFalse(permission.mayCapture(turn: turn, preflight: { true })); XCTAssertEqual(requests, 1)
+    }
+    func testFirstGrantIsRequestedOnceThenOnlyRechecked() {
+        var permission = ScreenPermissionTurn(); let turn = UUID(); var checks = [false, true], requests = 0
+        XCTAssertTrue(permission.prepare(turn: turn, enabled: true, preflight: { checks.removeFirst() }, request: { requests += 1; return true }))
+        XCTAssertTrue(permission.mayCapture(turn: turn, preflight: { true }))
+        XCTAssertFalse(permission.mayCapture(turn: turn, preflight: { false }))
+        XCTAssertEqual(requests, 1)
+    }
+    func testCancellationAndAnotherTurnCannotReusePermission() {
+        var permission = ScreenPermissionTurn(); let turn = UUID()
+        XCTAssertTrue(permission.prepare(turn: turn, enabled: true, preflight: { true }, request: { XCTFail("unexpected prompt"); return false }))
+        XCTAssertFalse(permission.mayCapture(turn: UUID(), preflight: { true }))
+        permission.cancel(); XCTAssertFalse(permission.mayCapture(turn: turn, preflight: { true }))
+    }
+    func testDisabledScreenNeverChecksOrRequestsPermission() {
+        var permission = ScreenPermissionTurn(); let turn = UUID()
+        XCTAssertTrue(permission.prepare(turn: turn, enabled: false, preflight: { XCTFail("unexpected check"); return false }, request: { XCTFail("unexpected prompt"); return false }))
+        XCTAssertFalse(permission.mayCapture(turn: turn, preflight: { XCTFail("unexpected check"); return true }))
+    }
+}

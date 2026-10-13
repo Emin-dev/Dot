@@ -98,7 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let panel, let view = panel.contentView, let model else { return }
         panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
         let menu = NSMenu()
-        if let message = OfflinePreparation.shared.state.detail {
+        if OfflinePreparation.shared.state == .checking {
+            let percent = Int(OfflinePreparation.shared.progress * 100)
+            let item = NSMenuItem(title: "Checking bundled files, \(percent)%", action: nil, keyEquivalent: "")
+            item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
+        } else if let message = OfflinePreparation.shared.state.detail {
             let item = NSMenuItem(title: String(message.prefix(160)), action: nil, keyEquivalent: "")
             item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
         } else if case .blocked(let message) = model.phase {

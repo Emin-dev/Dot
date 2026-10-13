@@ -8,12 +8,18 @@ import UniformTypeIdentifiers
 final class ScreenContext {
     var enabled = true
     private var gate = ScreenContextGate()
+    private var permission = ScreenPermissionTurn()
+    func prepare(turn: UUID) throws {
+        try Task.checkCancellation()
+        guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
+                                 request: CGRequestScreenCaptureAccess) else { throw ScreenFailure.permission }
+        try Task.checkCancellation()
+    }
     func capture(turn: UUID, modelHasVision: Bool) async throws -> String? {
         guard enabled else { return nil }
         guard modelHasVision else { throw ScreenFailure.unsupported }
         try Task.checkCancellation()
-        guard ScreenPermissionAccess.allowed(preflight: CGPreflightScreenCaptureAccess,
-                                             request: CGRequestScreenCaptureAccess) else {
+        guard permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess) else {
             throw ScreenFailure.permission
         }
         try Task.checkCancellation()
@@ -47,7 +53,7 @@ final class ScreenContext {
         try gate.capturedJPEG(encoded, width: image.width, height: image.height, turn: turn, now: ProcessInfo.processInfo.systemUptime)
         return try gate.consumeDataURL(turn: turn, now: ProcessInfo.processInfo.systemUptime)
     }
-    func cancel() { gate.cancel() }
+    func cancel() { gate.cancel(); permission.cancel() }
     enum ScreenFailure: LocalizedError {
         case permission, unavailable, unsupported
         var errorDescription: String? {

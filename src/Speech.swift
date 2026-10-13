@@ -42,6 +42,7 @@ final class STTManager: ObservableObject {
     @Published private(set) var transcript = ""
     @Published private(set) var level = 0.0
     var onFinal: ((UUID, String) -> Void)?
+    var onRecording: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
     private let engine = AVAudioEngine()
     private let recognizer = WhisperRecognizer()
@@ -88,6 +89,7 @@ final class STTManager: ObservableObject {
                 Task { @MainActor [weak self] in self?.tick(id) }
             }
             self.timer = timer; RunLoop.main.add(timer, forMode: .common)
+            onRecording?(id)
         } catch { fail(id, "The microphone couldn't start. Click me to try again.") }
     }
     private func tick(_ id: UUID) {

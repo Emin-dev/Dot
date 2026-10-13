@@ -354,3 +354,18 @@ struct PipelineDiagnostic: Equatable {
         "pipeline=\(stage.rawValue) outcome=\(outcome.rawValue)\(reason.map { " reason=\($0.rawValue)" } ?? "")"
     }
 }
+
+/// Permission may be requested once at the explicit click, never after expensive warmup.
+struct ScreenPermissionTurn {
+    private var authorizedTurn: UUID?
+    mutating func prepare(turn: UUID, enabled: Bool, preflight: () -> Bool, request: () -> Bool) -> Bool {
+        authorizedTurn = nil
+        guard enabled else { return true }
+        guard ScreenPermissionAccess.allowed(preflight: preflight, request: request) else { return false }
+        authorizedTurn = turn; return true
+    }
+    func mayCapture(turn: UUID, preflight: () -> Bool) -> Bool {
+        authorizedTurn == turn && preflight()
+    }
+    mutating func cancel() { authorizedTurn = nil }
+}

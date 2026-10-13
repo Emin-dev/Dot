@@ -144,7 +144,8 @@ final class CompanionInterfaceTests: XCTestCase {
         XCTAssertTrue(preparation.state.detail?.contains("speech recognizer") == true)
     }
     @MainActor func testMissingRuntimeStaysVisibleAndNeverReady() async throws {
-        let preparation = OfflinePreparation(resources: nil, runtimeCheck: { throw PreparationFailure.runtime })
+        let folder = try fixture(); defer { try? FileManager.default.removeItem(at: folder) }
+        let preparation = OfflinePreparation(resources: folder, runtimeCheck: { throw PreparationFailure.runtime })
         preparation.start(nativeRecognizerAvailable: true)
         try await waitUntil { preparation.state != .checking }
         XCTAssertEqual(preparation.state, .unavailable(PreparationFailure.runtime.localizedDescription))
@@ -216,11 +217,27 @@ final class CompanionInterfaceTests: XCTestCase {
         try await waitUntil { preparation.ready }
         XCTAssertEqual(preparation.state, .ready)
     }
+    @MainActor func testModelsVerifyWhileRuntimeWaitsButCannotPublishReadiness() async throws {
+        let folder = try fixture(); defer { try? FileManager.default.removeItem(at: folder) }
+        let runtime = VerificationBarrier()
+        let preparation = OfflinePreparation(resources: folder, runtimeCheck: { try await runtime.value() })
+        preparation.start(nativeRecognizerAvailable: true)
+        defer { preparation.shutdown() }
+        try await waitUntil { preparation.progress > 0 }
+        XCTAssertFalse(preparation.ready); XCTAssertNil(preparation.root); XCTAssertLessThan(preparation.progress, 1)
+        for _ in 0..<200 { if await runtime.started { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        let runtimeStarted = await runtime.started; XCTAssertTrue(runtimeStarted)
+        guard runtimeStarted else { throw NSError(domain: "DotTests", code: 1) }
+        await runtime.succeed(folder)
+        try await waitUntil { preparation.ready }
+        XCTAssertEqual(preparation.root?.lastPathComponent, "OfflineModels")
+    }
     @MainActor private func waitUntil(_ predicate: () -> Bool) async throws {
         for _ in 0..<200 {
             if predicate() { return }; try await Task.sleep(nanoseconds: 5_000_000)
         }
         XCTFail("readiness did not settle")
+        throw NSError(domain: "DotTests", code: 1)
     }
     private func fixture() throws -> URL {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -229,6 +246,123 @@ final class CompanionInterfaceTests: XCTestCase {
         let data = Data(#"{"schema_version":1,"total_bytes":5,"files":[{"path":"model","bytes":5,"sha256":"2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}]}"#.utf8)
         try data.write(to: folder.appendingPathComponent("bundled-models.json"))
         return folder
+    }
+}
+#endif
+
+#if !SWIFT_PACKAGE
+private actor VerificationBarrier {
+    private var continuation: CheckedContinuation<URL, Error>?
+    private(set) var started = false
+    private(set) var ended = false
+    func value() async throws -> URL {
+        started = true; defer { ended = true }
+        return try await withTaskCancellationHandler(operation: {
+            try Task.checkCancellation()
+            let result = try await withCheckedThrowingContinuation { continuation = $0 }
+            try Task.checkCancellation(); return result
+        }, onCancel: { Task { await self.fail(CancellationError()) } })
+    }
+    func succeed(_ result: URL = URL(fileURLWithPath: "/verified")) {
+        let saved = continuation; continuation = nil; saved?.resume(returning: result)
+    }
+    func fail(_ error: Error) {
+        let saved = continuation; continuation = nil; saved?.resume(throwing: error)
+    }
+}
+private actor VerificationCompletion {
+    private(set) var finished = false
+    func finish() { finished = true }
+}
+final class PayloadVerificationConcurrencyTests: XCTestCase {
+    private func waitForStart(_ barriers: [VerificationBarrier]) async throws {
+        for _ in 0..<200 {
+            var all = true
+            for barrier in barriers { if !(await barrier.started) { all = false } }
+            if all { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+        XCTFail("verification branches did not start")
+        throw NSError(domain: "DotTests", code: 1)
+    }
+    func testBothBranchesStartTogetherAndBothMustFinish() async throws {
+        let runtime = VerificationBarrier(), models = VerificationBarrier(), completion = VerificationCompletion()
+        let task = Task {
+            let root = try await PayloadVerification.run(runtime: { try await runtime.value() }, models: { try await models.value() })
+            await completion.finish(); return root
+        }
+        defer { task.cancel() }
+        try await waitForStart([runtime, models])
+        await runtime.succeed()
+        let completeBeforeModels = await completion.finished; XCTAssertFalse(completeBeforeModels)
+        await models.succeed(URL(fileURLWithPath: "/models"))
+        let result = try await task.value; XCTAssertEqual(result.path, "/models")
+    }
+    func testEitherFailureCancelsAndDrainsTheOtherBranch() async throws {
+        for runtimeFails in [true, false] {
+            let runtime = VerificationBarrier(), models = VerificationBarrier()
+            let task = Task { try await PayloadVerification.run(runtime: { try await runtime.value() }, models: { try await models.value() }) }
+            defer { task.cancel() }
+            try await waitForStart([runtime, models])
+            if runtimeFails { await runtime.fail(PreparationFailure.runtime) }
+            else { await models.fail(PreparationFailure.integrity) }
+            do { _ = try await task.value; XCTFail("verification failure was ignored") }
+            catch PreparationFailure.runtime { XCTAssertTrue(runtimeFails) }
+            catch PreparationFailure.integrity { XCTAssertFalse(runtimeFails) }
+            catch { XCTFail("original verification failure was replaced") }
+            let runtimeEnded = await runtime.ended, modelEnded = await models.ended
+            XCTAssertTrue(runtimeEnded); XCTAssertTrue(modelEnded)
+        }
+    }
+    func testOwnerCancellationDrainsBothBranches() async throws {
+        let runtime = VerificationBarrier(), models = VerificationBarrier()
+        let task = Task { try await PayloadVerification.run(runtime: { try await runtime.value() }, models: { try await models.value() }) }
+        defer { task.cancel() }
+        try await waitForStart([runtime, models]); task.cancel()
+        do { _ = try await task.value; XCTFail("cancelled verification succeeded") }
+        catch is CancellationError {} catch { XCTFail("cancellation was replaced") }
+        let runtimeEnded = await runtime.ended, modelEnded = await models.ended
+        XCTAssertTrue(runtimeEnded); XCTAssertTrue(modelEnded)
+    }
+}
+final class TurnWarmupTests: XCTestCase {
+    @MainActor func testCancelledQueuedWarmupNeverStartsOperation() async throws {
+        let warmup = TurnWarmup(), turn = UUID(); var calls = 0
+        defer { warmup.cancel() }
+        warmup.start(turn: turn) { calls += 1 }; warmup.cancel()
+        for _ in 0..<3 { await Task.yield() }
+        XCTAssertEqual(calls, 0)
+        do { try await warmup.wait(turn: turn); XCTFail("cancelled turn was adopted") } catch is CancellationError {} catch { XCTFail("unexpected error") }
+    }
+    @MainActor func testTranscriptSharesOneWarmAttempt() async throws {
+        let warmup = TurnWarmup(), turn = UUID(), barrier = VerificationBarrier(); var calls = 0
+        defer { warmup.cancel() }
+        warmup.start(turn: turn) { calls += 1; _ = try await barrier.value() }
+        for _ in 0..<200 { if await barrier.started { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        let started = await barrier.started; XCTAssertTrue(started)
+        guard started else { throw NSError(domain: "DotTests", code: 1) }
+        let waiter = Task { try await warmup.wait(turn: turn) }
+        await barrier.succeed(); try await waiter.value
+        try await warmup.wait(turn: turn)
+        XCTAssertEqual(calls, 1)
+    }
+    @MainActor func testReplacementRejectsOldCompletionAndKeepsNewWarmup() async throws {
+        let warmup = TurnWarmup(), first = UUID(), second = UUID(), barrier = VerificationBarrier()
+        defer { warmup.cancel() }
+        warmup.start(turn: first) { _ = try await barrier.value() }
+        for _ in 0..<200 { if await barrier.started { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        let started = await barrier.started; XCTAssertTrue(started)
+        guard started else { throw NSError(domain: "DotTests", code: 1) }
+        var waiterEntered = false
+        let oldWait = Task { waiterEntered = true; try await warmup.wait(turn: first) }
+        for _ in 0..<200 { if waiterEntered { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        XCTAssertTrue(waiterEntered)
+        guard waiterEntered else { throw NSError(domain: "DotTests", code: 1) }
+        warmup.start(turn: second) {}
+        do { try await oldWait.value; XCTFail("old warmup was reused") } catch is CancellationError {} catch { XCTFail("unexpected error") }
+        try await warmup.wait(turn: second)
+        for _ in 0..<200 { if await barrier.ended { break }; try await Task.sleep(nanoseconds: 5_000_000) }
+        let ended = await barrier.ended; XCTAssertTrue(ended)
     }
 }
 #endif
