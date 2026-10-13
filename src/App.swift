@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: CompanionPanel? { surface.panel }
     private var model: ChatModel?
     private let placement = PlacementCapture()
+    private let voiceEnvironment = VoiceEnvironmentMonitor()
     private var movement: Timer?
     private var statusItem: NSStatusItem?
     private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime)
@@ -27,9 +28,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let model = ChatModel(); self.model = model
+        voiceEnvironment.isActive = { [weak model] in model?.phase.isActive == true || model?.followupPending == true }
+        voiceEnvironment.onChange = { [weak model] in model?.cancelTurn() }
+        voiceEnvironment.start()
         placement.onCaptureChanged = { [weak model] active in model?.placementCapturing = active }
         model.placementInvalidated = { [weak self] in self?.cancelMovement() }
-        let panel = surface.present(content: NSHostingView(rootView: PetView(model: model, stt: model.stt)), size: PetLayout.panelSize)
+        let panel = surface.present(content: NSHostingView(rootView: PetView(model: model, stt: model.stt, tts: model.tts, skins: model.skinPreferences)), size: PetLayout.panelSize)
+        panel.visibilityChanged = { [weak model] in model?.visible = $0 }
         panel.stopAction = { [weak self] in self?.stopCurrentAction() }
         panel.optionsAction = { [weak self] in self?.showOptions() }
         panel.primaryAction = { [weak model] in model?.clicked() }
@@ -56,11 +61,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderFrontRegardless()
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Dot")
-        item.button?.action = #selector(showPet); item.button?.target = self
+        item.button?.toolTip = "Dot: Show or Quit"
+        item.menu = CompanionStatusMenu.make(target: self, show: #selector(showPet), quit: #selector(quit))
         statusItem = item
         observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }; self.menuTracking += 1; self.moveGently()
+                guard let self else { return }; self.model?.cancelForInteraction(); self.menuTracking += 1; self.moveGently()
             }
         })
         observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
@@ -80,6 +86,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor in self?.cancelMovement() }
             })
         }
+        observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak model] _ in
+            Task { @MainActor in model?.cancelTurn() }
+        })
+        observations.append(NotificationCenter.default.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { [weak model] _ in
+            Task { @MainActor in model?.visible = false }
+        })
+        observations.append(NotificationCenter.default.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { [weak model] _ in
+            Task { @MainActor in model?.visible = true }
+        })
         scheduleMovement(interval: 0.5)
     }
 
@@ -92,12 +107,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func cancelMovement() { placement.invalidate(); roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
 
-    @objc private func showPet() { cancelMovement(); surface.recall() }
+    @objc private func showPet() { model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func stopCurrentAction() {
         cancelMovement()
-        if model?.phase.isActive == true { model?.cancelTurn() }
+        model?.cancelTurn()
         OfflinePreparation.shared.pause()
     }
     @objc private func talk() { model?.clicked() }
@@ -105,45 +120,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePin() { model?.pinned.toggle() }
     @objc private func toggleScreen() { model?.screenEnabled.toggle() }
     @objc private func clearConversation() { model?.reset() }
+    @objc private func copyDetails() {
+        let summary = CompanionIssue.copiedDiagnostic(readiness: OfflinePreparation.shared.state, issue: model?.issue)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary, forType: .string)
+    }
+    @objc private func setSilence(_ sender: NSMenuItem) {
+        model?.cancelTurn(); _ = model?.voiceTiming.setSilenceSeconds(Double(sender.tag))
+    }
+    @objc private func setInvitation(_ sender: NSMenuItem) {
+        model?.cancelTurn(); _ = model?.voiceTiming.setInvitationSeconds(Double(sender.tag))
+    }
+    @objc private func selectSkin(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let skin = DotSkin(rawValue: value) else { return }
+        model?.skinPreferences.selected = skin
+    }
+    @objc private func selectMotion(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String, let detail = SkinMotionDetail(rawValue: value) else { return }
+        model?.skinPreferences.motionDetail = detail
+    }
     private func showOptions() {
         guard let panel, let view = panel.contentView, let model else { return }
-        panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
+        model.cancelForInteraction(); panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
         let menu = NSMenu()
-        if OfflinePreparation.shared.state == .checking {
-            let percent = Int(OfflinePreparation.shared.progress * 100)
-            let item = NSMenuItem(title: "Checking bundled files, \(percent)%", action: nil, keyEquivalent: "")
-            item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
-        } else if let message = OfflinePreparation.shared.state.detail {
-            let item = NSMenuItem(title: String(message.prefix(160)), action: nil, keyEquivalent: "")
-            item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
-        } else if case .blocked(let message) = model.phase {
-            let item = NSMenuItem(title: String(message.prefix(160)), action: nil, keyEquivalent: "")
+        let readiness = OfflinePreparation.shared.state
+        let hasDetails = readiness.detail != nil || model.issue != nil
+        if let header = CompanionIssue.menuHeader(readiness: readiness, issue: model.issue,
+                                                   progress: OfflinePreparation.shared.progress) {
+            let item = NSMenuItem(title: header, action: nil, keyEquivalent: "")
             item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
         }
-        for action in CompanionMenuAction.available(readiness: OfflinePreparation.shared.state, busy: model.phase.isActive) {
-            let title: String, selector: Selector
+        for action in CompanionMenuAction.available(readiness: readiness, busy: model.phase.isActive, hasDetails: hasDetails) {
+            let title = action.title(busy: model.phase.isActive, pinned: model.pinned, issue: model.issue)
+            let selector: Selector
             switch action {
-            case .talk: title = model.phase.isActive ? "Interrupt and listen" : "Talk"; selector = #selector(talk)
-            case .stop: title = "Stop"; selector = #selector(stopCurrentAction)
-            case .pause: title = "Pause file check"; selector = #selector(stopCurrentAction)
-            case .retry: title = "Retry file check"; selector = #selector(retryPreparation)
-            case .pin: title = model.pinned ? "Roam" : "Pin here"; selector = #selector(togglePin)
-            case .screen: title = "Screen context"; selector = #selector(toggleScreen)
-            case .clear: title = "Clear conversation"; selector = #selector(clearConversation)
-            case .quit: title = "Quit Dot"; selector = #selector(quit)
+            case .talk: selector = #selector(talk)
+            case .stop: selector = #selector(stopCurrentAction)
+            case .pause: selector = #selector(stopCurrentAction)
+            case .retry: selector = #selector(retryPreparation)
+            case .pin: selector = #selector(togglePin)
+            case .screen: selector = #selector(toggleScreen)
+            case .clear: selector = #selector(clearConversation)
+            case .copyDetails: selector = #selector(copyDetails)
+            case .quit: selector = #selector(quit)
             }
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: action == .quit ? "q" : "")
             item.target = self
             if action == .screen { item.state = model.screenEnabled ? .on : .off }
             menu.addItem(item)
         }
+        menu.addItem(.separator())
+        menu.addItem(VoiceOptionsMenu.make(settings: model.voiceTiming, target: self,
+            silence: #selector(setSilence(_:)), invitation: #selector(setInvitation(_:))))
+        menu.addItem(AppearanceOptionsMenu.make(settings: model.skinPreferences, target: self,
+            skin: #selector(selectSkin(_:)), motion: #selector(selectMotion(_:))))
         menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
     }
 
     private func moveGently() {
         guard let panel, let model else { return }
         let paused = !panel.isVisible || panel.isKeyWindow || model.hovered || model.interactionPaused
-            || model.pinned || model.phase.isActive || menuTracking > 0 || NSEvent.pressedMouseButtons != 0
+            || model.pinned || model.phase.isActive || model.followupPending || menuTracking > 0 || NSEvent.pressedMouseButtons != 0
             || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || NSWorkspace.shared.isVoiceOverEnabled
         guard let screen = panel.screen, let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else {
             cancelMovement(); return
@@ -161,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        movement?.invalidate(); placement.invalidate(); model?.shutdown()
+        voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
             NSWorkspace.shared.notificationCenter.removeObserver(observation)

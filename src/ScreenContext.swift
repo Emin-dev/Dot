@@ -9,10 +9,10 @@ final class ScreenContext {
     var enabled = true
     private var gate = ScreenContextGate()
     private var permission = ScreenPermissionTurn()
-    func prepare(turn: UUID) throws {
+    func prepare(turn: UUID, requestPermission: Bool = true) throws {
         try Task.checkCancellation()
         guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                 request: CGRequestScreenCaptureAccess) else { throw ScreenFailure.permission }
+                                 request: { requestPermission && CGRequestScreenCaptureAccess() }) else { throw ScreenFailure.permission }
         try Task.checkCancellation()
     }
     func capture(turn: UUID, modelHasVision: Bool) async throws -> String? {

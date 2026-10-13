@@ -47,6 +47,18 @@
         F30000000000000000000005 = {isa = PBXBuildFile; fileRef = F10000000000000000000005; };
         F20000000000000000000006 = {isa = PBXBuildFile; fileRef = F10000000000000000000006; };
         F30000000000000000000006 = {isa = PBXBuildFile; fileRef = F10000000000000000000006; };
+        A42000000000000000000001 = {isa = PBXBuildFile; fileRef = A41000000000000000000001; };
+        A43000000000000000000001 = {isa = PBXBuildFile; fileRef = A41000000000000000000001; };
+        A42000000000000000000002 = {isa = PBXBuildFile; fileRef = A41000000000000000000002; };
+        A43000000000000000000002 = {isa = PBXBuildFile; fileRef = A41000000000000000000002; };
+        A42000000000000000000003 = {isa = PBXBuildFile; fileRef = A41000000000000000000003; };
+        A42000000000000000000004 = {isa = PBXBuildFile; fileRef = A41000000000000000000004; };
+        A43000000000000000000004 = {isa = PBXBuildFile; fileRef = A41000000000000000000004; };
+        A42000000000000000000005 = {isa = PBXBuildFile; fileRef = A41000000000000000000005; };
+        A43000000000000000000005 = {isa = PBXBuildFile; fileRef = A41000000000000000000005; };
+        A43000000000000000000006 = {isa = PBXBuildFile; fileRef = A41000000000000000000006; };
+        A43000000000000000000007 = {isa = PBXBuildFile; fileRef = A41000000000000000000007; };
+        A43000000000000000000008 = {isa = PBXBuildFile; fileRef = A41000000000000000000008; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -82,6 +94,14 @@
         F10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/VoiceAudioReader.swift; sourceTree = SOURCE_ROOT; };
         F10000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoiceAudioReaderTests.swift; sourceTree = SOURCE_ROOT; };
         F10000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/PlacementCapture.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/VoiceTiming.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/VoiceFollowup.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/VoiceEnvironment.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/SkinPreferences.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/NativeCharacter.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoiceTimingTests.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000007 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoiceFollowupTests.swift; sourceTree = SOURCE_ROOT; };
+        A41000000000000000000008 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/NativeSkinTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +121,15 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000004 /* Sources */,
+                A41000000000000000000001,
+                A41000000000000000000002,
+                A41000000000000000000003,
+                A41000000000000000000004,
+                A41000000000000000000005,
+                A41000000000000000000006,
+                A41000000000000000000007,
+                A41000000000000000000008,
+
                 F10000000000000000000006,
                 F10000000000000000000005,
                 F10000000000000000000004,
@@ -251,6 +280,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000055 /* App.swift in Sources */,
+                A42000000000000000000001,
+                A42000000000000000000002,
+                A42000000000000000000003,
+                A42000000000000000000004,
+                A42000000000000000000005,
+
 				A10000000000000000000056 /* InteractionCore.swift in Sources */,
 				A10000000000000000000054 /* ChatView.swift in Sources */,
 				A10000000000000000000052 /* Engine.swift in Sources */,
@@ -271,7 +306,7 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 
-        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008, D10000000000000000000003, E30000000000000000000002,E30000000000000000000003, E30000000000000000000004, E30000000000000000000012, F30000000000000000000001, F30000000000000000000002, F30000000000000000000003, F30000000000000000000004, F30000000000000000000005, F30000000000000000000006, ); runOnlyForDeploymentPostprocessing = 0; };
+        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A43000000000000000000001, A43000000000000000000002, A43000000000000000000004, A43000000000000000000005, A43000000000000000000006, A43000000000000000000007, A43000000000000000000008, B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008, D10000000000000000000003, E30000000000000000000002,E30000000000000000000003, E30000000000000000000004, E30000000000000000000012, F30000000000000000000001, F30000000000000000000002, F30000000000000000000003, F30000000000000000000004, F30000000000000000000005, F30000000000000000000006, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */

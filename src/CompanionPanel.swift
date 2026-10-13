@@ -9,6 +9,7 @@ final class CompanionPanel: NSPanel {
     var primaryHitTest: ((NSPoint) -> Bool)?
     var pointerInteraction: ((Bool) -> Void)?
     var constrainDrag: ((NSPoint, NSPoint) -> NSPoint)?
+    var visibilityChanged: ((Bool) -> Void)?
     private var pointer = CompanionDragState()
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
@@ -19,7 +20,8 @@ final class CompanionPanel: NSPanel {
     private func openOptions() { cancelPointerGesture(); optionsAction?() }
     override func cancelOperation(_ sender: Any?) { cancelPointerGesture(); stopAction?() }
     override func resignKey() { cancelPointerGesture(); super.resignKey() }
-    override func close() { cancelPointerGesture(); super.close() }
+    override func close() { cancelPointerGesture(); visibilityChanged?(false); super.close() }
+    override func orderOut(_ sender: Any?) { visibilityChanged?(false); super.orderOut(sender) }
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 53 { cancelOperation(nil); return }
         if event.keyCode == 109, event.modifierFlags.contains(.shift) { openOptions(); return }
@@ -92,5 +94,65 @@ final class CompanionSurface {
             }
         }
         panel.makeKeyAndOrderFront(nil)
+    }
+}
+
+
+@MainActor
+enum CompanionStatusMenu {
+    static func make(target: AnyObject, show: Selector, quit: Selector) -> NSMenu {
+        let menu = NSMenu()
+        let recall = NSMenuItem(title: "Show Dot", action: show, keyEquivalent: "")
+        recall.target = target; menu.addItem(recall)
+        menu.addItem(.separator())
+        let exit = NSMenuItem(title: "Quit Dot", action: quit, keyEquivalent: "q")
+        exit.target = target; menu.addItem(exit)
+        return menu
+    }
+}
+
+/// Native menu controls keep the companion's single-surface design.
+@MainActor
+enum VoiceOptionsMenu {
+    static func make(settings: VoiceTimingSettings, target: AnyObject, silence: Selector, invitation: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: "Voice settings", action: nil, keyEquivalent: "")
+        let menu = NSMenu(); item.submenu = menu
+        for (title, choices, selected, action) in [
+            ("Silence before responding", VoiceTimingSettings.silenceChoices, settings.silenceSeconds, silence),
+            ("Time to begin a reply", VoiceTimingSettings.invitationChoices, settings.invitationSeconds, invitation)
+        ] {
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: ""), options = NSMenu()
+            parent.submenu = options
+            for seconds in choices {
+                let choice = NSMenuItem(title: "\(Int(seconds)) seconds", action: action, keyEquivalent: "")
+                choice.tag = Int(seconds); choice.target = target; choice.state = seconds == selected ? .on : .off
+                options.addItem(choice)
+            }
+            menu.addItem(parent)
+        }
+        let hint = NSMenuItem(title: "Reply time limits when speech starts, not its length", action: nil, keyEquivalent: "")
+        hint.isEnabled = false; menu.addItem(hint)
+        return item
+    }
+}
+
+
+@MainActor
+enum AppearanceOptionsMenu {
+    static func make(settings: SkinPreferences, target: AnyObject, skin: Selector, motion: Selector) -> NSMenuItem {
+        let root = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: ""), menu = NSMenu()
+        for value in DotSkin.allCases {
+            let item = NSMenuItem(title: value.displayName, action: skin, keyEquivalent: "")
+            item.target = target; item.representedObject = value.rawValue
+            item.state = settings.selected == value ? .on : .off; menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let detail = NSMenuItem(title: "Animation detail", action: nil, keyEquivalent: ""), choices = NSMenu()
+        for value in SkinMotionDetail.allCases {
+            let item = NSMenuItem(title: value.displayName, action: motion, keyEquivalent: "")
+            item.target = target; item.representedObject = value.rawValue
+            item.state = settings.motionDetail == value ? .on : .off; choices.addItem(item)
+        }
+        detail.submenu = choices; menu.addItem(detail); root.submenu = menu; return root
     }
 }
