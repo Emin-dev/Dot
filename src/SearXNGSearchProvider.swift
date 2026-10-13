@@ -308,10 +308,11 @@ private actor SearXNGSearchClient {
                   let url = URL(string: address), ResearchWebReader.allowed(url),
                   item["content"] == nil || item["content"] is NSNull || item["content"] is String,
                   item["publishedDate"] == nil || item["publishedDate"] is NSNull || item["publishedDate"] is String else { continue }
-            var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            parts?.fragment = nil; parts?.host = parts?.host?.lowercased(); parts?.scheme = parts?.scheme?.lowercased()
-            if (parts?.scheme == "https" && parts?.port == 443) || (parts?.scheme == "http" && parts?.port == 80) { parts?.port = nil }
-            guard let canonical = parts?.url else { continue }
+            guard var parts = URLComponents(url: url, resolvingAgainstBaseURL: false) else { continue }
+            let host = parts.host?.lowercased(), scheme = parts.scheme?.lowercased()
+            parts.fragment = nil; parts.host = host; parts.scheme = scheme
+            if (parts.scheme == "https" && parts.port == 443) || (parts.scheme == "http" && parts.port == 80) { parts.port = nil }
+            guard let canonical = parts.url else { continue }
             let title = prefixUTF8(titleValue.trimmingCharacters(in: .whitespacesAndNewlines), maximumBytes: 2_048)
             guard !title.isEmpty, seen.insert(canonical.absoluteString).inserted else { continue }
             results.append(WebSearchResult(url: canonical, title: title,
