@@ -55,6 +55,14 @@ The owner requested this quality review be added to GitHub before continuing imp
 
 **Current practical verification limits:** the separate `6aa5b89` candidate was launched and all 11 actual native windows captured without clipping; isolated offline-payload readiness was 18.64 seconds. No inference or speech was started in that check. It also emitted intermittent layout/shortcut-registration diagnostics, retained for investigation. Accessibility and synthetic-input access were unavailable, so actual menu and physical voice acceptance did not run. Fresh browser inventory was empty. These limits do not revoke owner design acceptance or block available source/native checks. No current-device voice-loop or latency claim follows from prior synthetic/earlier-revision results.
 
+## Active integration checkpoint — 2026-10-13 18:16 UTC
+
+Published app source is still the merged `6aa5b89` milestone; current integration is unfinished. See [CONTINUATION](CONTINUATION.md) for exact ownership, durable 65-file recovery snapshot, hashes and executable next steps. Current focused evidence includes 136 Python tests, 52 static guards, screenshot/capture/history checks and native expression renders. A native aggregate compiled; two fixture failures were fixed and passed targeted reruns, while one corrected coordinator expectation still awaits rerun. This is not an exact tested current candidate.
+
+A separate real `6aa5b89` test used actual fixed Qwen/Splash and British Kokoro playback followed by the actual authorized microphone; an unanswered invitation closed with `no_speech` after 6,124 ms. This bounded result does not cover spoken replies, echo, Bluetooth, p50/p95 or the newer helper policies. Current helper file/network fixtures passed and actual runtime acceptance under them is underway. Installed `b26a145` is unchanged.
+
+The search-provider question is pending in the coordinating conversation (Tavily free-only versus budgeted raw Perplexity Search); no provider or paid use has been selected. Provider-neutral search/read/evidence and native source UI work continue independently. Local Qwen remains the reasoning engine; actual read evidence and explicit retention rights are required.
+
 ## Short improvement checklist
 
 - [ ] **Fast voice first:** keep the chosen local model and British voice; measure the complete conversation path and let background work yield immediately to conversation.

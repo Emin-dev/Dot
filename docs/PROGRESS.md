@@ -109,3 +109,13 @@ The [canonical checklist](BUILD_CHECKLIST.md) is the source of truth for contrac
 Use `python3 -B -m unittest discover -s Tests/Python -v`, `swift test`, and `bash scripts/verify_macos.sh`. Real payload assembly uses `scripts/build_complete.sh`; complete packaging requires exact-artifact native evidence via `scripts/package_complete.sh`. Never replace full payload hashes with size/mtime-only trust, weaken sandbox/TLS checks to make a test pass, or claim model-free CI proves physical microphone/speaker or screen permission behavior.
 
 References: [startup measurements](startup-performance.md), [screen contract](screen-context-contract.md), [placement policy](roaming-policy.md), [complete assembly](self-contained-build-plan.md), [offline acceptance](offline-acceptance.md), [Splash guidance](https://github.com/incoai/splash/blob/f91c91e21dda483f8c59a248a444d0989a560d31/README.md), [M4 Pro MacBook Pro specifications](https://support.apple.com/en-us/121553).
+
+## Reliability integration checkpoint — 2026-10-13 18:16 UTC
+
+See [CONTINUATION](CONTINUATION.md) for current source ownership, exact historical candidate/installed hashes, failed/unrun checks and the verified durable 65-file recovery manifest. App integration remains uncommitted; this documentation checkpoint does not publish unfinished app code.
+
+- Current light checks: 136 Python tests and 52 static guards passed. Helper canaries cover required runtime/model/private-state access and forbidden personal/symlink/network paths; actual tightened-policy model/voice validation remains underway.
+- The current native aggregate compiled. Two fixture failures (first-mouse event setup and JSON image escaping) passed targeted reruns after correction. One coordinator expectation was corrected to expect the intended recovery state and awaits rerun; no full current aggregate pass is claimed.
+- Historical exact `6aa5b89` real runtime now has a physical microphone no-speech invitation result: actual Qwen/British Kokoro final audio, bounded microphone opening under existing permission and no-speech close after 6,124 ms. No captured content retained. Spoken timing races/acoustics/routes and the newer candidate still need acceptance.
+- All six parallel slots plus integration have distinct assignments: typed/status UI, coordinator tests, source-notebook UI, actual tightened-runtime acceptance, provider-neutral research, and native UI acceptance. Provider choice remains pending in the coordinating chat; no paid or cloud-LLM commitment.
+- The working installed app is unchanged. Durable history, richer expressions and reliability fixes have focused evidence but are not yet a merged, fully verified replacement candidate.
