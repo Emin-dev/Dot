@@ -198,29 +198,31 @@ final class NativeActionInterfaceTests: XCTestCase {
     @MainActor func testShutdownCannotReopenAndFlushWaitsForDurableLateSuccess() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let workspace = ActionPanelWorkspace(mode: .lateSuccess)
-        let model = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
-        let running = Task { await model.execute(.launchApplication(bundleID: "fixture.shutdown")) }
+        var model: NativeActionPanelModel? = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
+        let running = Task { [weak model] in await model?.execute(.launchApplication(bundleID: "fixture.shutdown")) }
         await workspace.waitForLaunch()
-        model.closeAdmissions(); model.open()
-        XCTAssertTrue(model.shuttingDown); XCTAssertTrue(model.busy); XCTAssertTrue(model.cancelling)
-        model.bundleID = "fixture.must-not-start"
-        XCTAssertFalse(model.canRun)
+        model!.closeAdmissions(); model!.open()
+        XCTAssertTrue(model!.shuttingDown); XCTAssertTrue(model!.busy); XCTAssertTrue(model!.cancelling)
+        model!.bundleID = "fixture.must-not-start"
+        XCTAssertFalse(model!.canRun)
         var flushed = false
-        let waiting = Task { await model.flush(); flushed = true }
+        let waiting = Task { await model!.flush(); flushed = true }
         await Task.yield()
         XCTAssertFalse(flushed, "Quit must not finish while the admitted action still awaits its result")
         await workspace.completeLaunch()
         let result = await running.value
         await waiting.value
-        XCTAssertTrue(flushed); XCTAssertFalse(model.busy)
+        XCTAssertTrue(flushed); XCTAssertFalse(model!.busy)
         XCTAssertEqual(result?.receipt.status, .succeeded)
         XCTAssertEqual(result?.receipt.cancellationRequested, true)
         XCTAssertEqual(result?.historySaved, true)
-        model.open()
-        let blocked = await model.execute(.openWebURL("https://example.com"))
+        model!.open()
+        let blocked = await model!.execute(.openWebURL("https://example.com"))
         XCTAssertNil(blocked, "A later panel opening must not undo application shutdown")
+        model = nil // Release the first executor's exclusive storage lock before reopening.
         let reopened = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
         await reopened.reloadReceipts()
+        XCTAssertNil(reopened.error)
         XCTAssertEqual(reopened.receipts.map(\.id), [try XCTUnwrap(result?.receipt.id)])
         let urls = await workspace.urls
         XCTAssertTrue(urls.isEmpty)
@@ -229,17 +231,19 @@ final class NativeActionInterfaceTests: XCTestCase {
     @MainActor func testShutdownCancelsWaitingHandoffAndPersistsReceiptBeforeFlushReturns() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let workspace = ActionPanelWorkspace(mode: .cancelWaiting)
-        let model = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
-        let running = Task { await model.execute(.launchApplication(bundleID: "fixture.shutdown-cancel")) }
+        var model: NativeActionPanelModel? = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
+        let running = Task { [weak model] in await model?.execute(.launchApplication(bundleID: "fixture.shutdown-cancel")) }
         await workspace.waitForLaunch()
-        model.closeAdmissions()
-        await model.flush()
+        model!.closeAdmissions()
+        await model!.flush()
         let result = await running.value
         XCTAssertEqual(result?.receipt.status, .cancelled)
         XCTAssertEqual(result?.historySaved, true)
-        XCTAssertFalse(model.busy); XCTAssertFalse(model.cancelling)
+        XCTAssertFalse(model!.busy); XCTAssertFalse(model!.cancelling)
+        model = nil // Release the first executor's exclusive storage lock before reopening.
         let reopened = NativeActionPanelModel(applicationStorage: root, workspace: workspace)
         await reopened.reloadReceipts()
+        XCTAssertNil(reopened.error)
         XCTAssertEqual(reopened.receipts.map(\.id), [try XCTUnwrap(result?.receipt.id)])
     }
 
