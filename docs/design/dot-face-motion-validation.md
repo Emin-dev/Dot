@@ -1,5 +1,7 @@
 # dot face motion study — validation
 
+**Current status:** this report describes the existing published artifact. The owner subsequently required every face to stay smiling, warm and friendly, including focus/research/thinking. The HTML now awaits a friendly-expression repair and layout pass and is **not visually final**. No repaired export or new visual acceptance is claimed by this report.
+
 Design prototype only. No app source, installed app, microphone, speech engine, model, or repository was changed by this work.
 
 ## Ten selectable identities

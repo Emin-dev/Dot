@@ -6,6 +6,8 @@
 
 **Native Settings will offer 11 skins: Original plus Pearl, Mochi, Cloudlet, Pip, Dew, Ripple, Sprout, Veil, Halo and Nova. Original stays default until changed.** Veil replaces Fold at position 8 as a nearly invisible transparent bubble/lens. The v3 board, motion study and validation report are delivered; the v2 Fold board/prompt remain historical. The prototype covers 120 composed state/expression combinations per face, not 120 reviewed production animation clips or real speech synchronization. Native rendering, at least 120 reviewed named recipes per new skin, actual audio alignment and performance still require implementation and acceptance. Record and publish new decisions as discussed.
 
+**Latest expression direction:** all faces stay smiling, warm and friendly, including focus, thinking and research; use open rounded eyes/highlights, relaxed arched brows and an upturned resting mouth, with friendly articulated speech and independent truthful task labels. The current motion preview is **not visually final** and awaits its friendly-expression repair/layout pass. No repaired export is published yet.
+
 The description below is the current installed baseline. The target adds proactive screen/file context, online research, native settings/options and staged Rust services; those capabilities are not installed by this documentation update.
 
 A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Drag to move without starting the microphone. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.

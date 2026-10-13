@@ -4,13 +4,17 @@ The owner reviewed the directions, selected all ten new skins alongside Original
 
 **Native Settings choices: Original plus ten new skins = 11 choices. Original remains default until changed.** The new lineup is Pearl, Mochi, Cloudlet, Pip, Dew, Ripple, Sprout, Veil, Halo and Nova. Veil replaces Fold at position 8: a thin, nearly invisible transparent bubble/lens like Dew but more transparent, with a sparse face, faint rim and visible backdrop. The split is **4 rounded / 3 glass / 1 Sprout / 2 AI**.
 
+**Latest facial-expression requirement:** all 11 faces must remain smiling, warm and user-friendly across every state, including focus, thinking and research. Use rounder open eyes with highlights, relaxed gently arched brows and a gentle upturned resting mouth. No angry inward V-brows, glaring slit eyes or scowls. Speaking should articulate friendly mouth shapes; keep truthful task labels independent of facial expression. Preserve each identity, Veil, Original as default and the 120+ reviewed named animation-recipe target per new skin.
+
+**Motion preview status:** the published HTML is not visually final. It awaits the owner-requested friendly-expression repair and layout pass; no repaired export is ready or claimed here. Its existing validation report remains evidence for the earlier artifact, not acceptance of this new requirement.
+
 ## Current delivered artifacts
 
 | Artifact | Status and scope |
 | --- | --- |
 | **[V3 concept board](dot-face-directions-v3.png)** | Delivered generated concept art showing the approved Veil-inclusive lineup. Not native app screenshots or implemented skins. |
 | [V3 generation prompt](dot-face-directions-v3-prompt.txt) | Preserved unchanged; records the intended local Fold-to-Veil edit. Prompt instructions are provenance, not proof that all other pixels are identical. |
-| **[Interactive motion study](dot-face-motion-directions.html)** | Delivered standalone HTML. [Download](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-face-motion-directions.html), save and open in a browser; GitHub file view shows source. Silent procedural design exploration, not native UI or real audio alignment. |
+| **[Interactive motion study](dot-face-motion-directions.html)** | **Delivered but not visually final; friendly-expression repair and layout pass pending.** Existing HTML remains unchanged; no repaired export is published. [Download](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-face-motion-directions.html), save and open in a browser; GitHub file view shows source. Silent procedural design exploration, not native UI or real audio alignment. |
 | [Motion validation report](dot-face-motion-validation.md) | Supplied handler/browser evidence and limits, with a publication clarification that optional wrapper helpers use a CDN. |
 
 The report records **1,200** actual activity/expression event-handler configurations and **120 distinct painted CSS parameter tuples per face**, excluding labels from uniqueness checks. It also records eight synthetic speaking-mouth shapes, state-echo preservation, no autoplay and deterministic Reduce Motion handling. Actual browser review covered all ten faces at 736, 390 and 320 px with interaction, pause, local selection, no navigation autoplay and no horizontal overflow. Dark appearance was reviewed; light appearance and OS-level Reduce Motion were not visually tested.
