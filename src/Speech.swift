@@ -1,299 +1,187 @@
-import Foundation
 import AppKit
 import AVFoundation
-import Speech
+import Combine
 
-// MARK: - Speech-to-text (Apple on-device)
-
-final class STTManager: NSObject, ObservableObject {
-    static let shared = STTManager()
-
-    @Published var recording = false
-    @Published var transcript = ""
-    @Published var permissionDenied = false
-    /// Human-readable voice error (shown in the UI; modal alerts are avoided —
-    /// they would hang the app/CI when no audio device or permission exists).
-    @Published var errorText: String?
-    /// Live microphone level 0..1 (drives the orb while listening).
-    @Published var level: Double = 0
-
-    /// Fires once on the main queue with the final transcript when a capture
-    /// ends (after endAudio; a short fallback covers slow/final-less recognition).
-    /// May be empty if nothing was recognized — callers must ignore "".
-    var onFinal: ((String) -> Void)?
-
-    private let audioEngine = AVAudioEngine()
-    private var recognizer: SFSpeechRecognizer?
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
-    private var finalFired = false
-    private var lastLevelPublish = Date.distantPast
-
-    func ensurePermissions(_ ok: @escaping (Bool) -> Void) {
-        AVCaptureDevice.requestAccess(for: .audio) { granted in
-            DispatchQueue.main.async {
-                guard granted else { ok(false); return }
-                SFSpeechRecognizer.requestAuthorization { status in
-                    DispatchQueue.main.async {
-                        if status == .authorized { ok(true) }
-                        else { self.permissionDenied = true; ok(false) }
-                    }
-                }
-            }
+/// Bounded PCM storage. The real-time tap only downmixes/copies a small buffer.
+private final class CapturedPCM: @unchecked Sendable {
+    private let lock = NSLock()
+    private var samples: [Float] = []
+    private var active = true
+    private let maximum: Int
+    private(set) var rate: Double
+    private var loudness = 0.0
+    private var speechAt: Double?
+    private var overflow = false
+    init(rate: Double) { self.rate = rate; maximum = Int(rate * 61); samples.reserveCapacity(maximum) }
+    func append(_ buffer: AVAudioPCMBuffer) {
+        guard let channels = buffer.floatChannelData, buffer.format.sampleRate == rate,
+              buffer.format.channelCount > 0, buffer.frameLength <= 8192 else { return }
+        lock.lock(); defer { lock.unlock() }
+        guard active else { return }
+        let count = Int(buffer.frameLength), channelCount = Int(buffer.format.channelCount)
+        guard samples.count + count <= maximum else { overflow = true; return }
+        var sum: Float = 0
+        for index in 0..<count {
+            var sample: Float = 0
+            for channel in 0..<channelCount { sample += channels[channel][index] / Float(channelCount) }
+            if !sample.isFinite { overflow = true; return }
+            samples.append(sample); sum += sample * sample
         }
+        loudness = count > 0 ? Double(sqrt(sum / Float(count))) : 0
+        if loudness > 0.015 { speechAt = ProcessInfo.processInfo.systemUptime }
     }
+    func status() -> (Double, Double?, Bool) { lock.lock(); defer { lock.unlock() }; return (loudness, speechAt, overflow) }
+    func take() -> [Float] { lock.lock(); defer { lock.unlock() }; active = false; let result = samples; samples = []; return result }
+    func cancel() { lock.lock(); active = false; samples = []; lock.unlock() }
+}
 
-    func start() {
-        guard !recording else { return }
-        ensurePermissions { [weak self] granted in
-            guard let self, granted else { return }
-            self.begin()
-        }
-    }
+@MainActor
+final class STTManager: ObservableObject {
+    @Published private(set) var recording = false
+    @Published private(set) var transcribing = false
+    @Published private(set) var transcript = ""
+    @Published private(set) var level = 0.0
+    var onFinal: ((UUID, String) -> Void)?
+    var onRecording: ((UUID) -> Void)?
+    var onError: ((UUID, String) -> Void)?
+    private let engine = AVAudioEngine()
+    private let recognizer = WhisperRecognizer()
+    private var pcm: CapturedPCM?
+    private var cancellation: RecognitionCancellation?
+    private var inference: Task<Void, Never>?
+    private var capture: UUID?
+    private var timer: Timer?
+    private var tapInstalled = false
+    private var began = 0.0
+    private var modelURL: URL?
 
-    // internal (not private) so the headless STT harness can drive it directly.
-    func begin() {
-        guard !recording else { return }
-        transcript = ""
-        finalFired = false
-        let rec = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-        guard let rec, rec.isAvailable else { return }
-        recognizer = rec
-
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        if rec.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true   // private: stays on this Mac
-        }
-        request.taskHint = .dictation
-        self.request = request
-
-        let input = audioEngine.inputNode
-        // CRASH FIX: the tap MUST use the input node's OWN output format
-        // (48 kHz on most Macs). Installing a custom 16 kHz tap format throws
-        // an unrecoverable ObjC exception → SIGABRT. The recognizer resamples
-        // internally, so no manual conversion is needed.
-        let nodeFormat = input.outputFormat(forBus: 0)
-        guard nodeFormat.sampleRate > 0 else {
-            errorText = "No microphone available"
-            return
-        }
-        var tapCount = 0
-        input.installTap(onBus: 0, bufferSize: 1024, format: nodeFormat) { [weak self] buffer, _ in
-            request.append(buffer)
-            tapCount += 1
-            guard let self, tapCount % 3 == 0,
-                  let ch = buffer.floatChannelData?.pointee else { return }
-            var sum: Float = 0
-            let n = Int(buffer.frameLength)
-            for i in 0..<n { sum += ch[i] * ch[i] }
-            let rms = sqrt(sum / Float(max(1, n)))
-            let scaled = min(1.0, Double(rms) * 7.0)
-            // Throttle publishes (≈12 Hz max) so the UI stays smooth.
-            guard scaled > self.level + 0.02,
-                  Date().timeIntervalSince(self.lastLevelPublish) > 0.08 else { return }
-            self.lastLevelPublish = Date()
-            DispatchQueue.main.async { self.level = max(0.05, scaled) }
-        }
-
-        task = rec.recognitionTask(with: request) { [weak self] result, error in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let result { self.transcript = result.bestTranscription.formattedString }
-                if error != nil || result?.isFinal == true {
-                    self.deliverFinal()
-                    self.stop(fireFinal: false)
-                }
-            }
-        }
-
+    func start(id: UUID) async {
+        guard !Task.isCancelled else { return }
+        cancel(); capture = id
         do {
-            audioEngine.prepare()
-            try audioEngine.start()
-            errorText = nil
-            recording = true
-        } catch {
-            // Mic permission denied / device busy — recover cleanly, no crash.
-            errorText = error.localizedDescription
-            cleanup()
+            let payload = try await OfflinePayload.shared.validate()
+            guard !Task.isCancelled, capture == id else { return }
+            modelURL = payload.appendingPathComponent("STT/ggml-base.en.bin")
+            guard WhisperRecognizer.available else { throw RecognitionFailure.unavailable }
+        } catch { fail(id, error.localizedDescription); return }
+        guard !Task.isCancelled, capture == id else { return }
+        let mic: Bool
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: mic = true
+        case .notDetermined:
+            mic = await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+            }
+        default: mic = false
         }
+        guard !Task.isCancelled, capture == id else { return }
+        guard mic else { fail(id, "Microphone access is off. Enable Dot in System Settings → Privacy & Security → Microphone."); return }
+        let input = engine.inputNode, format = engine.inputNode.outputFormat(forBus: 0)
+        guard (8000...96000).contains(format.sampleRate), (1...8).contains(format.channelCount),
+              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else { fail(id, RecognitionFailure.format.localizedDescription); return }
+        let pcm = CapturedPCM(rate: format.sampleRate); self.pcm = pcm
+        transcript = ""; began = ProcessInfo.processInfo.systemUptime
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in pcm.append(buffer) }
+        tapInstalled = true
+        do {
+            engine.prepare(); try engine.start(); recording = true
+            let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+                Task { @MainActor [weak self] in self?.tick(id) }
+            }
+            self.timer = timer; RunLoop.main.add(timer, forMode: .common)
+            onRecording?(id)
+        } catch { fail(id, "The microphone couldn't start. Click me to try again.") }
     }
-
-    /// Ends the capture. The final recognition result arrives asynchronously
-    /// after endAudio(); a fallback delivers the best partial transcript if it
-    /// is slow, so a voice capture is never silently lost.
-    func stop(fireFinal: Bool = true) {
-        guard recording else { return }
-        recording = false
-        cleanup()
-        if fireFinal {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-                self?.deliverFinal()
+    private func tick(_ id: UUID) {
+        guard capture == id, recording, let pcm else { return }
+        let (rms, lastSpeech, overflow) = pcm.status(), now = ProcessInfo.processInfo.systemUptime
+        level = min(1, rms * 8)
+        if overflow { fail(id, "The recording reached its safe limit. Click me to start again.") }
+        else if let lastSpeech, now - lastSpeech >= 3 { finishCapture(id) }
+        else if now - began >= 60 { fail(id, "Listening ended after one minute. Click me when you're ready.") }
+    }
+    private func finishCapture(_ id: UUID) {
+        guard capture == id, let pcm, let modelURL else { return }
+        stopAudio(); let samples = pcm.take(); self.pcm = nil
+        let token = RecognitionCancellation(); cancellation = token; transcribing = true
+        inference = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
+                guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
+                self.transcript = text; self.cancel(); self.onFinal?(id, text)
+            } catch {
+                guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
+                self.fail(id, error.localizedDescription)
             }
         }
     }
-
-    private func deliverFinal() {
-        guard !finalFired else { return }
-        finalFired = true
-        onFinal?(transcript.trimmingCharacters(in: .whitespacesAndNewlines))
-    }
-
-    private func cleanup() {
-        if audioEngine.isRunning { audioEngine.stop() }
-        audioEngine.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        request = nil
-        task?.cancel()
-        task = nil
-        recognizer = nil
+    private func fail(_ id: UUID, _ message: String) { guard capture == id else { return }; cancel(); onError?(id, message) }
+    private func stopAudio() {
+        timer?.invalidate(); timer = nil; recording = false
+        if engine.isRunning { engine.stop() }
+        if tapInstalled { engine.inputNode.removeTap(onBus: 0); tapInstalled = false }
         level = 0
     }
+    func cancel() {
+        capture = nil; cancellation?.cancel(); cancellation = nil
+        inference?.cancel(); inference = nil; stopAudio(); pcm?.cancel(); pcm = nil; transcribing = false
+    }
+    func shutdown() { cancel(); recognizer.shutdown() }
 }
 
-// MARK: - Text-to-speech (native, premium voice, sentence-streaming)
-
-final class TTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
-    static let shared = TTSManager()
-
-    @Published var speaking = false
-    /// Fires on the main queue when the whole queue has finished playing.
-    var onFinished: (() -> Void)?
-    /// While true, new segments are dropped (barge-in: the user is talking).
-    private var barred = false
-
-    private let synthesizer = AVSpeechSynthesizer()
-    private var queue: [String] = []
-    private var isBusy = false
-    /// The voice list loads lazily — cache the choice once it is non-empty so
-    /// per-sentence speak() stays cheap.
-    private var voiceChoice: AVSpeechSynthesisVoice?
-
-    private func pickVoice() -> AVSpeechSynthesisVoice? {
-        if let v = voiceChoice { return v }
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-        guard !voices.isEmpty else { return AVSpeechSynthesisVoice(language: "en-US") }
-        let en = voices.filter { $0.language.lowercased().hasPrefix("en") }
-        func score(_ v: AVSpeechSynthesisVoice) -> Int {
-            var s = 0
-            if v.quality == .premium { s += 8 }
-            if v.quality == .enhanced { s += 5 }
-            if v.quality == .default { s += 1 }
-            if v.name.lowercased().contains("samantha") { s += 4 }
-            if v.name.lowercased().contains("allison") { s += 3 }
-            return s
-        }
-        if let best = en.max(by: { score($0) < score($1) }) {
-            voiceChoice = best
-            return best
-        }
-        return AVSpeechSynthesisVoice(language: "en-US")
+/// Manual audio-device diagnostic used by tests/main.swift.
+/// The product voice coordinator neither constructs nor falls back to this voice.
+@MainActor
+final class NativeTTSManager: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+    @Published private(set) var speaking = false
+    var onDrained: ((UUID) -> Void)?
+    var onStarted: ((UUID) -> Void)?
+    private var synthesizer = AVSpeechSynthesizer()
+    private var generation: UUID?
+    private var pending: Set<ObjectIdentifier> = []
+    override init() { super.init(); synthesizer.delegate = self }
+    func start(id: UUID) { stop(); generation = id }
+    func enqueue(_ text: String, id: UUID) {
+        guard generation == id else { return }
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        let utterance = AVSpeechUtterance(string: value)
+        utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
+        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+        pending.insert(ObjectIdentifier(utterance)); speaking = true
+        synthesizer.speak(utterance)
     }
-
-    override init() {
-        super.init()
-        synthesizer.delegate = self
-    }
-
-    func bar() { barred = true }
-    func unbar() { barred = false }
-
-    /// Feed a (possibly partial) sentence; playback starts as soon as the first
-    /// sentence is complete — audio never waits for the whole reply.
-    func speakSegment(_ segment: String) {
-        guard !barred else { return }
-        let t = segment.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.count > 2 else { return }
-        queue.append(t)
-        if !speaking { speaking = true }
-        pump()
-    }
-
     func stop() {
-        queue.removeAll()
-        synthesizer.stopSpeaking(at: .word)
-        speaking = false
+        generation = nil; pending.removeAll(); speaking = false
+        synthesizer.delegate = nil
+        synthesizer.stopSpeaking(at: .immediate)
+        // A fresh synthesizer prevents old cancellation callbacks from claiming
+        // a new utterance or holding its queue hostage.
+        synthesizer = AVSpeechSynthesizer(); synthesizer.delegate = self
     }
-
-    private func pump() {
-        guard !isBusy, !queue.isEmpty else { return }
-        isBusy = true
-        let text = queue.removeFirst()
-        let u = AVSpeechUtterance(string: text)
-        u.voice = pickVoice()
-        u.rate = 0.47                     // slightly brisk, still natural
-        u.pitchMultiplier = 1.0
-        u.preUtteranceDelay = 0.02
-        synthesizer.speak(u)
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        Task { @MainActor [weak self] in
+            guard let self, self.synthesizer === synthesizer,
+                  self.pending.contains(ObjectIdentifier(utterance)), let id = self.generation else { return }
+            self.onStarted?(id)
+        }
     }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.isBusy = false
-            if !self.queue.isEmpty { self.pump() }
-            else {
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor [weak self] in
+            guard let self, self.synthesizer === synthesizer,
+                  self.pending.remove(ObjectIdentifier(utterance)) != nil else { return }
+            if self.pending.isEmpty {
                 self.speaking = false
-                self.onFinished?()
+                if let id = self.generation { self.onDrained?(id) }
             }
         }
     }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        DispatchQueue.main.async { [weak self] in
-            self?.isBusy = false
-            if self?.queue.isEmpty == true {
-                self?.speaking = false
-                self?.onFinished?()
-            }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor [weak self] in
+            guard let self, self.synthesizer === synthesizer else { return }
+            self.pending.remove(ObjectIdentifier(utterance))
+            if self.pending.isEmpty { self.speaking = false }
         }
-    }
-}
-
-/// Splits streamed tokens into speakable chunks on sentence boundaries.
-final class SentenceChunker {
-    private var pending = ""
-    func feed(_ token: String) -> [String] {
-        pending += token
-        var out: [String] = []
-        while let range = Self.sentenceEnd(in: pending) {
-            let chunk = String(pending[..<range.lowerBound])
-            pending = String(pending[range.upperBound...])
-            let t = chunk.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty { out.append(t) }
-            if pending.count > 600 {            // safety: don't buffer forever
-                if !pending.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    out.append(pending); pending = ""
-                }
-                break
-            }
-        }
-        return out
-    }
-    func flush() -> String? {
-        let t = pending.trimmingCharacters(in: .whitespacesAndNewlines)
-        pending = ""
-        return t.isEmpty ? nil : t
-    }
-    private static func sentenceEnd(in s: String) -> Range<String.Index>? {
-        var i = s.startIndex
-        var inQuote = false
-        while i < s.endIndex {
-            let c = s[i]
-            if c == "\"" { inQuote.toggle() }
-            if !inQuote, ".!?…".contains(c) {
-                // require a space or newline after, or end of string
-                let nextIdx = s.index(after: i)
-                if nextIdx == s.endIndex {
-                    return i..<nextIdx
-                }
-                let next = s[nextIdx]
-                if next == " " || next == "\n" || next == "\t" {
-                    return s.startIndex..<nextIdx
-                }
-            }
-            i = s.index(after: i)
-        }
-        return nil
     }
 }

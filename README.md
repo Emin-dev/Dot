@@ -1,91 +1,42 @@
-# Dot
+# Dot — floating local companion
 
-**Qwen3.8-27B, entirely on your Mac.** One window. Zero settings. Nothing leaves this machine.
+A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Drag to move without starting the microphone. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.
 
-Dot is a tiny native macOS app (Swift/SwiftUI, ~1 MB) that runs a frontier-class local
-AI model with voice in and voice out — no accounts, no cloud, no subscriptions, no telemetry.
+## Build status
 
-![Dot](icon.png)
+The review branch implements a single floating dot with a small right-click menu. There are no app settings, setup, folder-selection or chat windows, or persistent text label below the dot. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
 
-## Get it (one button)
+**A working complete installer is not yet available.** The voice dependency lock, licensed redistributable closure, offline import probe and end-to-end native conversation remain incomplete. The real Whisper framework branch has compiled on the supported Mac, but that is not a working speech pipeline. A development build reports missing bundled components and cannot talk.
 
-1. Download **Dot.dmg** — [direct link](dist/Dot-1.0.0.dmg) · or from the [latest release](../../releases)
-2. Drag Dot to Applications
-3. Open it *(first time only: right-click → Open, since the app is ad-hoc signed)*
+The shipped product must contain Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. There is no first-launch downloader, external folder picker, borrowed Python installation or server discovery. At launch, Dot verifies the embedded payload, with pause/retry in its context menu. Missing or damaged files remain a visible error; the app never downloads a repair. Copying the eventual complete app carries its immutable assets with it. Relocation and offline behavior still need real device proof.
 
-That's it. Dot then takes care of the rest automatically:
+## Interaction and privacy
 
-- fetches the **llama.cpp** inference engine (~30 MB, official release binary)
-- downloads **Qwen3.8-27B** (16.8 GB, Q4, Apache-2.0) with live progress — resumable if interrupted
-- loads it on your GPU (Metal) and you're chatting
+- Splash is the only LLM runtime. The exact target is `mlx-community/Qwen3.8-27B-4bit`; this is a checkpoint publisher name, not use of the MLX inference engine. No automatic model or runtime substitution.
+- Thinking remains on at low effort, with a 1,536-token budget. Reasoning is not spoken.
+- Microphone capture starts only after an explicit click and OS microphone permission. Three seconds without detected speech activity ends capture. English transcription uses the bundled Whisper C library locally, with a one-minute recording bound.
+- A new click cancels the old capture, generation and audio. Stale results cannot restart the microphone or replace the new turn.
+- Screen context is captured only for an explicit conversation, just before its reply, after macOS Screen Recording permission. Its on/off preference persists. Images are bounded, used once, excluded from conversation history, and never uploaded to a remote model. A denied/unavailable capture is reported honestly; turn off Screen context to continue voice-only.
+- The Bionic-derived Kokoro helper uses CPU inference and denies network access. No built-in voice fallback is selected silently.
+- Varied within-display roaming pauses for interaction, speech, pressed mouse buttons, pinning and Reduce Motion. Reduce Transparency provides an opaque body.
+- File, browser and autonomous computer actions are not implemented. Dot does not execute instructions from screen content.
 
-> **Requirements:** Apple Silicon Mac (M1 or newer), macOS 15+, ~48 GB RAM recommended
-> for the 27B model (24 GB works, slower). Internet needed once for the downloads.
+Conversation state stays in memory and disappears on quit. No analytics or conversation upload. The app has no model provisioning network path. Its owned Splash endpoint is loopback-only; the voice helper denies network access.
 
-## What you get
+## Development and verification
 
-| | |
-|---|---|
-| 💬 Chat | Streaming tokens, markdown, thinking shown in a dimmed collapsible block |
-| 🎤 Talk | On-device Apple speech recognition — dictation, private |
-| 🔊 Voice replies | Native Apple premium-voice TTS, speaking sentence-by-sentence as tokens arrive |
-| 🧠 Thinking control | One button: Qwen3.8 *low* effort (fast + thorough) ↔ off (fastest, chores) |
-| 🚫 Zero settings | No menus, no config files, no API keys, no accounts |
+The UI development target builds on macOS 15+. The complete Splash installer targets Apple Silicon M3 or newer and macOS 26.4+, with enough RAM for the selected model. Device performance and voice quality require measurement.
 
-## Why it's fast
+- Open `Dot.xcodeproj`, choose shared `Dot` scheme, then Product → Test.
+- `swift test` runs the portable pure-core suite. The Xcode target additionally runs mocked network and pipe tests.
+- `python3 -B -m unittest discover -s Tests/Python -v` runs model-free protocol, assembly and supervisor fixtures.
+- `bash scripts/verify_macos.sh` runs Python/sandbox tests, SwiftPM, Debug XCTest, Release and development packaging, then rejects warnings in all logs.
+- `bash build.sh` creates `build/Dot.dmg`, an ad-hoc signed, unnotarized **development build without neural runtimes**.
+- `DOT_WHISPER_FRAMEWORK=/verified/macos/whisper.framework bash scripts/verify_whisper_link.sh` compiles the real native recognizer branch without executing the app or models.
+- `DOT_RUNTIME_PAYLOAD=/audited/payload DOT_MODEL_PAYLOAD=/verified/models DOT_WHISPER_FRAMEWORK=/verified/macos/whisper.framework bash scripts/build_complete.sh` requires all three local inputs and a complete runtime manifest/import probe. It verifies model hashes before and after copying, embeds the native recognizer, signs and stages `build-complete/Dot.app` for native acceptance. It does not produce a distributable installer yet.
+- After real native relocation/offline/conversation/cancellation tests, `DOT_OFFLINE_ACCEPTANCE=/verified/evidence/acceptance.json bash scripts/package_complete.sh` binds the test evidence to the exact app fingerprint, rechecks the relocated staging copy, and creates the unnotarized test DMG. See [acceptance record contract](docs/offline-acceptance.md).
 
-Dot is tuned for Qwen3.8 on Apple silicon (see [the Qwen3.8 field guide](https://lmstudio.ai/blog/splash-engine) for background):
 
-- **`reasoning_effort: low`** — Qwen3.8's template defaults to *xhigh* thinking and burns minutes on trivial asks; Dot pins *low* by default and lets you disable thinking entirely
-- **KV prefix caching** — a short, constant system prompt plus llama.cpp's `--cache-reuse` keeps repeat prefills near-free
-- **Flash attention + q8_0 KV + 32K context**, full Metal offload
-- **True SSE streaming** — first token lands instantly
-- **Field-guide sampling** — thinking 1.0/0.95 · instruct 0.7/0.80
+Standard CI does not download models or establish real neural speech, microphone quality, screen permissions, interactive UI correctness or offline inference. Those are separate native device gates. See [self-contained build plan](docs/self-contained-build-plan.md), [voice bridge](docs/voice-bridge.md), [screen contract](docs/screen-context-contract.md), and [roaming policy](docs/roaming-policy.md).
 
-### Even faster: Splash
-
-For maximum speed, run **Splash** (Inco AI's purpose-built Metal engine, ~74 tok/s on
-M5 Pro) inside LM Studio Bionic, enable its local OpenAI server, then start Dot with:
-
-```
-DOT_LLM_URL=http://127.0.0.1:<port> open -a Dot
-```
-
-Dot detects the external endpoint on launch and uses it instead of its bundled engine.
-
-## Privacy
-
-Everything stays on your machine:
-
-- inference: local `llama-server` (Metal)
-- speech-to-text: Apple on-device recognizer
-- text-to-speech: Apple `AVSpeechSynthesizer`
-- the only network traffic is the one-time model download from Hugging Face
-
-## Build from source
-
-```
-bash build.sh        # needs Xcode command line tools; produces Dot.dmg
-```
-
-No dependencies. Five Swift files:
-
-| File | Role |
-|---|---|
-| `src/App.swift` | Window + dark mode |
-| `src/ChatView.swift` | The whole UI |
-| `src/Engine.swift` | Engine discovery/fetch, model download, tuned requests, SSE streaming |
-| `src/Speech.swift` | STT + TTS + sentence chunking |
-| `src/Models.swift` | Data types |
-| `src/Autotest.swift` | Invisible verification harness (`DOT_AUTOTEST=1` or `~/.dot/autotest` marker) |
-
-## How the model is picked
-
-The default model is `JonathanColetti/Qwen3.8-27B-Uncensored-GGUF` (Q4_K_M, ~16.8 GB)
-from Hugging Face — the Apache-2.0 Qwen3.8-27B base, uncensored finetune, imatrix quant.
-Swap `modelFileRelPath` / `modelDownloadURL` / `expectedModelBytes` in `src/Engine.swift`
-to use any other GGUF (or a smaller Q4 for 24 GB Macs).
-
-## License
-
-MIT — do whatever you want with it.
+This rebuild starts from `56041cf00d1d6b7c2f87590fdd1fbbbbb216e996`. Original Mac-only edits were not copied and their tests do not validate this branch. Removed generated binaries remain recoverable in the original history and preservation manifest. Main is unchanged.

@@ -1,0 +1,23 @@
+{
+  "id": "dot-splash-owned-listener-v1",
+  "upstream_revision": "f91c91e21dda483f8c59a248a444d0989a560d31",
+  "license": "Apache-2.0",
+  "notice": "Dot modifies listener adoption only. Preserve upstream LICENSE and THIRD_PARTY_NOTICES. Overlay must precede runtime manifest/signing.",
+  "files": [
+    {
+      "path": "Splash/install/launcher.py",
+      "upstream_sha256": "9f107bf8b80b9edae9489b4c569f167ea73a5d91daca74c0c68ab13430fce93e",
+      "sha256": "abd30361a17ef5811b509564fec123c83856f0d202b169a3678345aa064d63cd"
+    },
+    {
+      "path": "Splash/server/serve_options.py",
+      "upstream_sha256": "4777020405c895f0c17d8d27864ecc6d5124853214fa99ed7241d636b1c7bf15",
+      "sha256": "5cef666a4d459dd56a7fb661cb1c6431f919814587d1c39803133d9347a9a454"
+    },
+    {
+      "path": "Splash/server/server.py",
+      "upstream_sha256": "e8d45d7f30c13ad4e1ee049da481ad3125b33e8bf831c0ce83a4984636abbe81",
+      "sha256": "34f94116f2d1efeabd3b91fb496f3521613fb1392863cf49c414fe52647e53b2"
+    }
+  ]
+}

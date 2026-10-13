@@ -12,8 +12,39 @@
 		A10000000000000000000053 /* Speech.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000043 /* Speech.swift */; };
 		A10000000000000000000054 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000044 /* ChatView.swift */; };
 		A10000000000000000000055 /* App.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000045 /* App.swift */; };
-		A10000000000000000000056 /* Autotest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000046 /* Autotest.swift */; };
+		A10000000000000000000056 /* InteractionCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000046 /* InteractionCore.swift */; };
 		A10000000000000000000057 /* Icon.icns in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000048 /* Icon.icns */; };
+
+        B10000000000000000000001 /* Core in Tests */ = {isa = PBXBuildFile; fileRef = A10000000000000000000046; };
+        B10000000000000000000002 /* Tests in Sources */ = {isa = PBXBuildFile; fileRef = B10000000000000000000003; };
+        B10000000000000000000031 = {isa = PBXBuildFile; fileRef = A10000000000000000000042; };
+        B10000000000000000000032 = {isa = PBXBuildFile; fileRef = A10000000000000000000041; };
+        B10000000000000000000033 = {isa = PBXBuildFile; fileRef = B10000000000000000000034; };
+        C10000000000000000000001 = {isa = PBXBuildFile; fileRef = C10000000000000000000002; };
+        C10000000000000000000003 = {isa = PBXBuildFile; fileRef = C10000000000000000000004; };
+        C10000000000000000000005 = {isa = PBXBuildFile; fileRef = C10000000000000000000006; };
+        C10000000000000000000007 = {isa = PBXBuildFile; fileRef = C10000000000000000000006; };
+        C10000000000000000000008 = {isa = PBXBuildFile; fileRef = C10000000000000000000009; };
+        D10000000000000000000001 = {isa = PBXBuildFile; fileRef = D10000000000000000000002; };
+        D10000000000000000000003 = {isa = PBXBuildFile; fileRef = D10000000000000000000002; };
+        E20000000000000000000001 = {isa = PBXBuildFile; fileRef = E10000000000000000000001; };
+        E20000000000000000000002 = {isa = PBXBuildFile; fileRef = E10000000000000000000002; };
+        E30000000000000000000002 = {isa = PBXBuildFile; fileRef = E10000000000000000000002; };
+        E20000000000000000000003 = {isa = PBXBuildFile; fileRef = E10000000000000000000003; };
+        E30000000000000000000003 = {isa = PBXBuildFile; fileRef = E10000000000000000000003; };
+        E20000000000000000000004 = {isa = PBXBuildFile; fileRef = E10000000000000000000004; };
+        E30000000000000000000004 = {isa = PBXBuildFile; fileRef = E10000000000000000000004; };
+        E20000000000000000000005 = {isa = PBXBuildFile; fileRef = E10000000000000000000005; };
+        E20000000000000000000010 = {isa = PBXBuildFile; fileRef = E10000000000000000000010; };
+        E20000000000000000000011 = {isa = PBXBuildFile; fileRef = E10000000000000000000011; };
+        E30000000000000000000012 = {isa = PBXBuildFile; fileRef = E10000000000000000000012; };
+        F30000000000000000000001 = {isa = PBXBuildFile; fileRef = F10000000000000000000001; };
+        F20000000000000000000001 = {isa = PBXBuildFile; fileRef = F10000000000000000000001; };
+        F30000000000000000000002 = {isa = PBXBuildFile; fileRef = F10000000000000000000002; };
+        F30000000000000000000003 = {isa = PBXBuildFile; fileRef = F10000000000000000000003; };
+        F30000000000000000000004 = {isa = PBXBuildFile; fileRef = F10000000000000000000004; };
+        F20000000000000000000004 = {isa = PBXBuildFile; fileRef = F10000000000000000000004; };
+        F30000000000000000000005 = {isa = PBXBuildFile; fileRef = F10000000000000000000005; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,9 +54,31 @@
 		A10000000000000000000043 /* Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speech.swift; sourceTree = "<group>"; };
 		A10000000000000000000044 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		A10000000000000000000045 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
-		A10000000000000000000046 /* Autotest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Autotest.swift; sourceTree = "<group>"; };
+		A10000000000000000000046 /* InteractionCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionCore.swift; sourceTree = "<group>"; };
 		A10000000000000000000047 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A10000000000000000000048 /* Icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Icon.icns; sourceTree = "<group>"; };
+		A10000000000000000000048 /* Icon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Icon.icns; sourceTree = DERIVED_FILE_DIR; };
+
+        B10000000000000000000003 /* InteractionCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/InteractionCoreTests.swift; sourceTree = SOURCE_ROOT; };
+        B10000000000000000000004 /* DotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+        B10000000000000000000034 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/EngineIntegrationTests.swift; sourceTree = SOURCE_ROOT; };
+        C10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BionicVoice.swift; sourceTree = "<group>"; };
+        C10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = folder; path = Voice; sourceTree = "<group>"; };
+        C10000000000000000000006 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoicePipeWriter.swift; sourceTree = "<group>"; };
+        C10000000000000000000009 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoicePipeWriterTests.swift; sourceTree = SOURCE_ROOT; };
+        D10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoamingCore.swift; sourceTree = "<group>"; };
+        E10000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WhisperRecognizer.swift; sourceTree = "<group>"; };
+        E10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflinePayload.swift; sourceTree = "<group>"; };
+        E10000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflinePreparation.swift; sourceTree = "<group>"; };
+        E10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledSplash.swift; sourceTree = "<group>"; };
+        E10000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenContext.swift; sourceTree = "<group>"; };
+        E10000000000000000000010 = {isa = PBXFileReference; lastKnownFileType = folder; path = "Runtime"; sourceTree = "<group>"; };
+        E10000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = text.json; path = "bundled-models.json"; sourceTree = "<group>"; };
+        E10000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/OfflineIntegrationTests.swift; sourceTree = SOURCE_ROOT; };
+        F10000000000000000000001 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/CompanionPanel.swift; sourceTree = SOURCE_ROOT; };
+        F10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/LegacyAssetTransfer.swift; sourceTree = SOURCE_ROOT; };
+        F10000000000000000000003 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/CompanionInterfaceTests.swift; sourceTree = SOURCE_ROOT; };
+        F10000000000000000000004 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/VoiceAudioReader.swift; sourceTree = SOURCE_ROOT; };
+        F10000000000000000000005 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tests/DotCoreTests/VoiceAudioReaderTests.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -36,6 +89,8 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+
+        B10000000000000000000012 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -43,6 +98,13 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000004 /* Sources */,
+                F10000000000000000000005,
+                F10000000000000000000004,
+                F10000000000000000000003,
+                F10000000000000000000002,
+                F10000000000000000000001,
+                B10000000000000000000003 /* InteractionCoreTests.swift */,
+                E10000000000000000000012,
 				A10000000000000000000005 /* Resources */,
 				A10000000000000000000003 /* Products */,
 			);
@@ -52,6 +114,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000030 /* Dot.app */,
+                B10000000000000000000004 /* DotTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -60,11 +123,19 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000045 /* App.swift */,
-				A10000000000000000000046 /* Autotest.swift */,
+				A10000000000000000000046 /* InteractionCore.swift */,
 				A10000000000000000000044 /* ChatView.swift */,
 				A10000000000000000000042 /* Engine.swift */,
 				A10000000000000000000041 /* Models.swift */,
 				A10000000000000000000043 /* Speech.swift */,
+                C10000000000000000000002,
+                C10000000000000000000006,
+                D10000000000000000000002,
+                E10000000000000000000005,
+                E10000000000000000000004,
+                E10000000000000000000003,
+                E10000000000000000000002,
+                E10000000000000000000001,
 			);
 			path = src;
 			sourceTree = "<group>";
@@ -74,6 +145,7 @@
 			children = (
 				A10000000000000000000047 /* Info.plist */,
 				A10000000000000000000048 /* Icon.icns */,
+                C10000000000000000000004, E10000000000000000000011, E10000000000000000000010,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -99,6 +171,16 @@
 			productReference = A10000000000000000000030 /* Dot.app */;
 			productType = "com.apple.product-type.application";
 		};
+
+        B10000000000000000000010 /* DotTests */ = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = B10000000000000000000020;
+            buildPhases = (B10000000000000000000011, B10000000000000000000012,);
+            buildRules = (); dependencies = ();
+            name = DotTests; productName = DotTests;
+            productReference = B10000000000000000000004;
+            productType = "com.apple.product-type.bundle.unit-test";
+        };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -123,6 +205,7 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000010 /* Dot */,
+                B10000000000000000000010 /* DotTests */,
 			);
 		};
 /* End PBXProject section */
@@ -133,6 +216,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000057 /* Icon.icns in Resources */,
+                C10000000000000000000003, E20000000000000000000011, E20000000000000000000010,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -147,15 +231,13 @@
 			);
 			inputFileListPaths = (
 			);
-			inputPaths = (
-			);
+			inputPaths = ("$(PROJECT_DIR)/icon.png",);
 			outputFileListPaths = (
 			);
-			outputPaths = (
-			);
+			outputPaths = ("$(DERIVED_FILE_DIR)/Icon.icns", "$(DERIVED_FILE_DIR)/Icon.iconset", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_16x16.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_16x16@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_32x32.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_32x32@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_128x128.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_128x128@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_256x256.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_256x256@2x.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_512x512.png", "$(DERIVED_FILE_DIR)/Icon.iconset/icon_512x512@2x.png", );
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -e\nICONSET=\"${PROJECT_DIR}/build/Icon.iconset\"\nrm -rf \"$ICONSET\"\nmkdir -p \"$ICONSET\"\nfor s in 16 32 128 256 512; do\n  sips -z $s $s \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}.png\" > /dev/null\n  d=$((s * 2))\n  sips -z $d $d \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}@2x.png\" > /dev/null\ndone\nsips -z 1024 1024 \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_512x512@2x.png\" > /dev/null\niconutil -c icns \"$ICONSET\" -o \"${PROJECT_DIR}/Resources/Icon.icns\"\n";
+			shellScript = "set -e\nICONSET=\"${DERIVED_FILE_DIR}/Icon.iconset\"\nrm -rf \"$ICONSET\"\nmkdir -p \"$ICONSET\"\nfor s in 16 32 128 256 512; do\n  sips -z $s $s \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}.png\" > /dev/null\n  d=$((s * 2))\n  sips -z $d $d \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_${s}x${s}@2x.png\" > /dev/null\ndone\nsips -z 1024 1024 \"${PROJECT_DIR}/icon.png\" --out \"$ICONSET/icon_512x512@2x.png\" > /dev/null\niconutil -c icns \"$ICONSET\" -o \"${DERIVED_FILE_DIR}/Icon.icns\"\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -165,14 +247,26 @@
 			buildActionMask = 2147483647;
 			files = (
 				A10000000000000000000055 /* App.swift in Sources */,
-				A10000000000000000000056 /* Autotest.swift in Sources */,
+				A10000000000000000000056 /* InteractionCore.swift in Sources */,
 				A10000000000000000000054 /* ChatView.swift in Sources */,
 				A10000000000000000000052 /* Engine.swift in Sources */,
 				A10000000000000000000051 /* Models.swift in Sources */,
 				A10000000000000000000053 /* Speech.swift in Sources */,
+                C10000000000000000000001,
+                C10000000000000000000005,
+                D10000000000000000000001,
+                E20000000000000000000005,
+                E20000000000000000000004,
+                E20000000000000000000003,
+                E20000000000000000000002,
+                E20000000000000000000001,
+                F20000000000000000000001,
+                F20000000000000000000004,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+
+        B10000000000000000000011 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001, B10000000000000000000002, B10000000000000000000031, B10000000000000000000032, B10000000000000000000033, C10000000000000000000007, C10000000000000000000008, D10000000000000000000003, E30000000000000000000002,E30000000000000000000003, E30000000000000000000004, E30000000000000000000012, F30000000000000000000001, F30000000000000000000002, F30000000000000000000003, F30000000000000000000004, F30000000000000000000005, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
@@ -181,6 +275,35 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				COPY_PHASE_STRIP = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -204,6 +327,35 @@
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				DEAD_CODE_STRIPPING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
 				COPY_PHASE_STRIP = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -235,6 +387,8 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.dot.local;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
+                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;
 			};
 			name = Debug;
 		};
@@ -257,9 +411,18 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.dot.local;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
+                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;
 			};
 			name = Release;
 		};
+
+        B10000000000000000000021 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = app.dot.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0;
+                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;}; name = Debug; };
+        B10000000000000000000022 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; MACOSX_DEPLOYMENT_TARGET = 15.0; PRODUCT_BUNDLE_IDENTIFIER = app.dot.tests; PRODUCT_NAME = "$(TARGET_NAME)"; SDKROOT = macosx; SWIFT_VERSION = 5.0;
+                SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+                LM_SKIP_METADATA_EXTRACTION = YES;}; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -281,6 +444,8 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+
+        B10000000000000000000020 = {isa = XCConfigurationList; buildConfigurations = (B10000000000000000000021, B10000000000000000000022,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = A10000000000000000000001 /* Project object */;

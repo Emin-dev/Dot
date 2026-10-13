@@ -2,36 +2,36 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>
-    <string>Dot</string>
-    <key>CFBundleDisplayName</key>
-    <string>Dot</string>
-    <key>CFBundleExecutable</key>
-    <string>Dot</string>
-    <key>CFBundleIdentifier</key>
-    <string>app.dot.local</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleIconFile</key>
-    <string>Icon</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>15.0</string>
-    <key>LSApplicationCategoryType</key>
-    <string>public.app-category.productivity</string>
-    <key>NSHighResolutionCapable</key>
-    <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Dot uses the microphone so you can talk instead of type. Audio never leaves this Mac.</string>
-    <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Dot transcribes your voice on-device. Audio never leaves this Mac.</string>
-    <key>NSAppTransportSecurity</key>
-    <dict>
-        <key>NSAllowsLocalNetworking</key>
-        <true/>
-    </dict>
+	<key>CFBundleName</key>
+	<string>Dot</string>
+	<key>CFBundleDisplayName</key>
+	<string>Dot</string>
+	<key>CFBundleExecutable</key>
+	<string>Dot</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.dot.local</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>2</string>
+	<key>CFBundleIconFile</key>
+	<string>Icon</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>15.0</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Click Dot to speak. Dot records only during that capture and uses its bundled offline English recognizer.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+	<key>LSUIElement</key>
+	<true/>
 </dict>
 </plist>

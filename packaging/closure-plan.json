@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "kind": "planning_inventory_not_a_complete_bundle_manifest",
+  "download_authorized": false,
+  "minimum_macos": "26.4",
+  "architecture": "arm64",
+  "minimum_chip_family": "M3",
+  "q4_minimum_memory_bytes": 36000000000,
+  "components": [
+    {
+      "role": "splash_runtime",
+      "version": "1.3.1",
+      "source_commit": "f91c91e21dda483f8c59a248a444d0989a560d31",
+      "url": "https://github.com/incoai/splash/releases/download/1.3.1/splash-1.3.1-arm64-macos26.tar.gz",
+      "bytes": 73595465,
+      "sha256": "f98c602b16a70a7bc01e05b3a9e6034c367aedd47e11a4c63b637d1342756c92",
+      "license": "Apache-2.0 plus bundled third-party notices",
+      "status": "publisher_metadata_verified_archive_not_downloaded"
+    },
+    {
+      "role": "llm_target_and_vision",
+      "repository": "mlx-community/Qwen3.8-27B-4bit",
+      "revision": "10c35caafbb80f7dc6a7a432cdd11af10a6d4818",
+      "approximate_bytes": 16100000000,
+      "license": "Apache-2.0",
+      "status": "publisher_per_file_metadata_verified_bytes_not_downloaded",
+      "source_files_manifest": "splash-vision-source-manifest.json"
+    },
+    {
+      "role": "llm_draft",
+      "repository": "incoai/Qwen3.8-27B-DFlash2",
+      "revision": "015e795645c74b1a0eeef3b570031fb62e769bc5",
+      "approximate_bytes": 3850000000,
+      "license": "Apache-2.0",
+      "status": "publisher_per_file_metadata_verified_bytes_not_downloaded",
+      "source_files_manifest": "splash-vision-source-manifest.json"
+    },
+    {
+      "role": "speech_synthesis",
+      "engine": "Kokoro CPU",
+      "voice": "bf_isabella",
+      "status": "transitive_closure_and_licenses_pending",
+      "source_files_manifest": "voice-source-manifest.json"
+    },
+    {
+      "role": "speech_recognition",
+      "language": "English",
+      "status": "publisher_pins_verified_native_integration_pending",
+      "source_files_manifest": "voice-source-manifest.json",
+      "engine_candidate": "whisper.cpp v1.7.6, English base model"
+    }
+  ],
+  "unmet_gates": [
+    "complete_hash_locked_assets",
+    "transitive_license_closure",
+    "relocatable_model_layout",
+    "supported_mac_offline_inference",
+    "owned_process_tree_shutdown",
+    "screen_privacy_and_permission_tests",
+    "distribution_route_for_full_installer"
+  ],
+  "llm_source_payload_exact_bytes": 19930313310,
+  "staging_storage": {
+    "status": "owner_mac_reported_by_native_executor_2026_10_12",
+    "free_bytes_approximate": 684000000000,
+    "proposed_reserved_bytes": 100000000000,
+    "downloads_started": false
+  }
+}
