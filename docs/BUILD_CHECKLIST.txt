@@ -10,6 +10,8 @@ Latest planning update, 2026-10-13: the user welcomed the suggestions for persis
 
 **Planning deliverables:** [downloadable plain-text checklist](BUILD_CHECKLIST.txt) · [ten-option interactive design preview](design/dot-ui-options.html) ([download HTML](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-ui-options.html)). Save the HTML and open it in a browser; GitHub’s file view shows its source. The existing design remains available alongside the ten new proposals.
 
+**Latest design refinement; implementation remains held.** The first preview is exploratory and its design brief is superseded. The user liked option 1 **Liquid Voice**, option 4 **Plush Pebble** and option 10 **Window Bird**; these are preferences, not a final theme selection. Prepare a more realistic, polished **new ten-face comparison: exactly four rounded designs, two transparent Liquid Glass designs, two very different new designs, and two general AI-assistant/ChatGPT-voice-inspired faces**. Each future design should support **100+ expressive variations** across speaking, listening, researching and other situations. The revised preview is pending, and neither that preview nor 100+ app animations is claimed complete. Keep the existing app design and all paused work; do not resume implementation until the owner reviews the designs and confirms continuation.
+
 ## Short improvement checklist
 
 - [ ] **Fast voice first:** keep the chosen local model and British voice; measure the complete conversation path and let background work yield immediately to conversation.
@@ -226,7 +228,7 @@ See [contributor guidance](../CONTRIBUTING.md), [verified progress](PROGRESS.md)
 
 ## Design comparison prepared for discussion
 
-The existing Dot design remains available. Ten new proposed directions are Liquid Voice, Crystal Cat, Cloud Voice, Plush Pebble, Paper Friend, Pixel Pal, Aurora Voice, Glass Ribbon, Pocket Robot and Window Bird. None is selected or implemented in the app. The [standalone interactive preview](design/dot-ui-options.html) contains these ten new alternatives; the existing app remains a separate retained choice. Interactive previews use illustrative motion and silent mouth shapes, not verified speech synchronization, native UI or implemented themes. No design has been selected.
+The existing Dot design remains available. The first exploratory preview, superseded by the latest design brief above, contains these ten proposed directions: Liquid Voice, Crystal Cat, Cloud Voice, Plush Pebble, Paper Friend, Pixel Pal, Aurora Voice, Glass Ribbon, Pocket Robot and Window Bird. None is selected or implemented in the app. The [first standalone interactive preview](design/dot-ui-options.html) preserves those exploratory alternatives; the existing app remains a separate retained choice. Interactive previews use illustrative motion and silent mouth shapes, not verified speech synchronization, native UI or implemented themes. No design has been selected.
 
 All ten alternatives were previously checked at desktop and mobile widths. A later small motion-state echo fix passed JavaScript syntax checks but did not receive a fresh browser check after browser availability disappeared. Publication checks syntax and file integrity, not a new visual/device acceptance. The supplied HTML is published unchanged; its optional presentation helpers load from a CDN, so standalone delivery is not a claim that every helper is bundled for offline use.
 

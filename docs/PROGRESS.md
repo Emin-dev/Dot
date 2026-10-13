@@ -2,6 +2,8 @@
 
 Updated 2026-10-13. **[Canonical product roadmap and build checklist](BUILD_CHECKLIST.md)** records the full stack, ranked recommendations, open decisions and the latest preview-before-build hold on the previously approved first voice batch. [Download the plain-text checklist](BUILD_CHECKLIST.txt) or [interactive ten-option design preview](design/dot-ui-options.html) ([download HTML](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-ui-options.html); save and open in a browser). This page is the verified status ledger, not a release certification. This documentation publication changes no app behavior. Update checkboxes only with evidence.
 
+**Latest design refinement; implementation remains held.** The first preview is exploratory and its design brief is superseded. The user liked option 1 **Liquid Voice**, option 4 **Plush Pebble** and option 10 **Window Bird**; these are preferences, not a final theme selection. Prepare a more realistic, polished **new ten-face comparison: exactly four rounded designs, two transparent Liquid Glass designs, two very different new designs, and two general AI-assistant/ChatGPT-voice-inspired faces**. Each future design should support **100+ expressive variations** across speaking, listening, researching and other situations. The revised preview is pending, and neither that preview nor 100+ app animations is claimed complete. Keep the existing app design and all paused work; do not resume implementation until the owner reviews the designs and confirms continuation.
+
 ## Current source and personal test app
 
 - Default and only remote branch: `main`. The reviewed development history is merged and preserved. Do not recreate a parallel release branch just to update this checklist.
