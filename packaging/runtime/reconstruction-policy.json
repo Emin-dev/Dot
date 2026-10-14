@@ -198,8 +198,8 @@
     "immutable_payload_before_after"
   ],
   "native_finalizer": {
-    "supported": false,
-    "reason": "Native verifier and native approval require separately reviewed actual macOS observations. This portable implementation never writes a production final manifest or acceptance receipt."
+    "supported": true,
+    "reason": "Guarded native finalization is implemented. Actual macOS capability, independently reviewed source-owned schema-2 approval, genuine probe harnesses and owner inputs remain mandatory; empty production approvals fail closed. This flag grants no authority."
   },
   "component_roles": [
     "splash_runtime",

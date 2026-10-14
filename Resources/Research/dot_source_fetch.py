@@ -22,7 +22,6 @@ DENIED_V4 = tuple(map(ipaddress.ip_network, (
     '172.16.0.0/12', '192.0.0.0/24', '192.0.2.0/24', '192.31.196.0/24', '192.52.193.0/24',
     '192.88.99.0/24', '192.168.0.0/16', '192.175.48.0/24', '198.18.0.0/15',
     '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/3')))
-DENIED_V6 = tuple(map(ipaddress.ip_network, ('2001::/23', '2001:db8::/32', '2002::/16', '3ffe::/16', '3fff::/20', '2620:4f:8000::/48')))
 
 
 class LimitExceeded(ValueError):
@@ -38,9 +37,9 @@ def public_address(text):
         return False
     if address.version == 4:
         return not any(address in block for block in DENIED_V4)
-    return (address in ipaddress.ip_network('2000::/3')
-            and not any(address in block for block in DENIED_V6)
-            and address.packed[8:12] not in (b'\x00\x00\x5e\xfe', b'\x02\x00\x5e\xfe'))
+    # Arbitrary global NAT64 prefixes cannot be classified from address bytes.
+    # Match the host: only verified public IPv4 is an admissible connected peer.
+    return False
 
 
 def parse_url(url):

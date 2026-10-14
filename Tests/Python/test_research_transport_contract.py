@@ -143,7 +143,7 @@ class ResearchTransportContractTests(unittest.TestCase):
                   'fc00::1', 'fe80::1', 'fe80::1%en0', 'ff02::1', '2606:4700::5efe:7f00:1', '2606:4700::200:5efe:7f00:1']
         for address in denied:
             self.assertFalse(fetcher.public_address(address), address)
-        for address in ['1.1.1.1', '8.8.8.8', '93.184.216.34', '100.63.255.255', '100.128.0.1', '172.32.0.1', '2606:4700:4700::1111', '2001:4860:4860::8888']:
+        for address in ['1.1.1.1', '8.8.8.8', '93.184.216.34', '100.63.255.255', '100.128.0.1', '172.32.0.1']:
             self.assertTrue(fetcher.public_address(address), address)
 
     def test_private_pin_never_calls_connector_or_sends_request_bytes(self):
@@ -263,9 +263,41 @@ class ResearchTransportContractTests(unittest.TestCase):
         self.assertIn('"DOT_SOURCE_HELPER=" + helper', runtime)
         self.assertIn('python, "-I", "-S", "-B", helper', runtime)
 
+    def test_global_ipv6_translated_mapped_and_network_specific_nat64_never_become_pins(self):
+        addresses = ['2606:4700:4700::1111', '2001:4860:4860::8888',
+                     '::ffff:127.0.0.1', '::ffff:8.8.8.8', '::ffff:0:127.0.0.1', '64:ff9b::7f00:1', '64:ff9b:1::a00:1',
+                     '2001:4860:1234:5678::7f00:1', '2001:4860:1234:5678::a00:1',
+                     '2001:4860:1234:5678::a9fe:a9fe', '2001:4860:1234:5678::c0a8:101']
+        for address in addresses:
+            self.assertFalse(fetcher.public_address(address), address)
+            with mock.patch.object(fetcher.socket, 'socket') as create:
+                with self.assertRaises(ValueError):
+                    fetcher.inherited_connection(address, 443, 2)
+                create.assert_not_called()
+            connector, context = mock.Mock(), mock.Mock()
+            with self.assertRaisesRegex(ValueError, 'invalid_pin'):
+                fetcher.fetch('https://fixture.invalid/', address, 1, io.BytesIO(), io.BytesIO(),
+                              connector=connector, context_factory=context)
+            connector.assert_not_called(); context.assert_not_called()
+        self.assertEqual(self.server.requests, [])
+
+    def test_swift_source_admits_only_ipv4_and_counts_discarded_aaaa(self):
+        # Source guard only; parseDNS and redirect behavior require native XCTest.
+        source = (ROOT / 'src/ResearchHTTPTransport.swift').read_text()
+        policy = source.split('enum ResearchPublicAddress', 1)[1].split('enum ResearchSystemHTTP', 1)[0]
+        self.assertNotIn('inet_pton(AF_INET6', policy)
+        self.assertIn('return false // No IPv6 pins', policy)
+        dns = source.split('static func parseDNS', 1)[1].split('static func exchange', 1)[0]
+        ipv6 = dns.split('case "ipv6_address":', 1)[1].split('case "name"', 1)[0]
+        self.assertIn('inet_pton(AF_INET6', ipv6)
+        self.assertNotIn('addresses.append', ipv6)
+        self.assertIn('answerCount += 1', ipv6)
+        self.assertIn('answerCount <= 64', ipv6)
+        self.assertIn('guard !addresses.isEmpty', dns)
+        self.assertIn('let pin = addresses[0]', source)
+
     def test_inherited_socket_checks_peer_port_family_type_and_scope(self):
-        for address, family, peer in [('1.1.1.1', socket.AF_INET, ('1.1.1.1', 443)),
-                                      ('2606:4700:4700::1111', socket.AF_INET6, ('2606:4700:4700::1111', 443, 0, 0))]:
+        for address, family, peer in [('1.1.1.1', socket.AF_INET, ('1.1.1.1', 443))]:
             inherited = mock.Mock(family=family)
             inherited.getpeername.return_value = peer
             inherited.getsockopt.return_value = socket.SOCK_STREAM
@@ -297,7 +329,7 @@ class ResearchTransportContractTests(unittest.TestCase):
         with mock.patch.object(fetcher.socket, 'socket', return_value=inherited):
             with self.assertRaises(ValueError):
                 fetcher.inherited_connection('2606:4700:4700::1111', 443, 2)
-        inherited.close.assert_called_once()
+        inherited.close.assert_not_called()  # Rejected before adopting caller descriptor.
 
     def test_inherited_unconnected_socket_is_closed_and_private_pin_never_opens_it(self):
         inherited = mock.Mock()

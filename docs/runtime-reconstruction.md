@@ -1,7 +1,7 @@
-# Offline runtime reconstruction: portable implementation boundary
+# Offline runtime reconstruction and guarded native finalization
 
-This command prepares inert runtime bytes. It does not make a runnable release,
-prove native functionality, sign anything, or accept the current installed app.
+This command prepares inert runtime bytes and provides guarded owner-run native
+finalization. It does not sign, make a release or accept the current installed app.
 The source policy contains **zero accepted historical baselines**. The reported
 historical manifest digest is an unaccepted observation only.
 
@@ -15,18 +15,18 @@ historical manifest digest is an unaccepted observation only.
 - `status --stage STAGE`: read-only rehash of the complete payload and retained
   bounded input/evidence bytes against the source-owned basis and current source
   identities. A rewritten checkpoint cannot authorize different bytes.
-- `finalize --stage STAGE --evidence-dir EVIDENCE`: strict **unsupported interface**.
-  Portable hosts return `NATIVE_REQUIRED` (exit 4) without writes. On macOS it
-  checks the prepared stage and existence of the source-owned native approval,
-  then returns `NATIVE_FINALIZER_NOT_IMPLEMENTED` (exit 4). There is no pass switch.
+- `finalize --stage STAGE --evidence-dir EVIDENCE`: guarded Darwin finalization.
+  Portable hosts return `NATIVE_REQUIRED` (exit 4) without writes. Actual macOS
+  execution requires independently approved source-owned schema-2 evidence, all
+  nine gates and fresh static verification before atomic manifest/marker commit.
 - `copy --payload PAYLOAD --destination NEW_DESTINATION`: reserved admission
   interface. It refuses an existing destination or any `.app` ancestor and
   requires independent native admission; accepted copy is not implemented yet.
 
-Successful prepare is `runtime_reconstruction_prepared`, never
-`verified_runtime_payload`. No production operation here writes
-`runtime-manifest.json`, `accepted-runtime.json`, native success, or a native
-approval. Replacing `supported: false` with `true` cannot enable these interfaces.
+Successful prepare is `runtime_reconstruction_prepared`, never native acceptance.
+Only fully validated native finalization may write `runtime-manifest.json` and
+`accepted-runtime.json`; it never generates approval. No production runtime has
+been accepted. Policy support flags and self-manifests grant no authority.
 
 The archive ID `pinned-local-archives-v1` returns
 `ARCHIVE_LAYOUT_UNREVIEWED` (exit 4). The exact Splash and standalone CPython
@@ -97,8 +97,9 @@ A `native` Context adds `Resources/Runtime/{dot_runtime.py,dot_process.py,
 dot_tls.py,splash.sb}`, `Resources/Voice/{bionic_helper.py,voice.sb}`,
 `packaging/voice/{complete-voice-lock.json,complete-closure-audit.json}` and
 `packaging/voice-source-manifest.json`. `verify_native_contract` requires this
-phase. Future native probe implementation dependencies must be reviewed and added
-before any native finalizer can be enabled.
+phase for its structural-only legacy interface. Full finalization uses schema-2
+admission. Actual probe source dependencies must be reviewed and added before
+their evidence can satisfy its gates.
 
 Known builder, host Swift, Search auditor, held signing policy, model, Whisper and
 archive-planner pins are retained as context in the policy but their current files
@@ -220,7 +221,8 @@ cleanup through a pathname that another writer might have exchanged.
 
 Read-only status verifies the complete prepared boundary; arbitrary partial pip,
 signing, unknown work/evidence files, altered source, and unexplained tree deltas
-are refused. There is no native resume or in-place repair. Preparation is private
+are refused. Prepared status cannot resume arbitrary partial signing. Exact native finalization
+retry/revalidation is supported; there is no in-place repair. Preparation is private
 and single-writer; concurrent final publications have one no-replace winner.
 
 This protects against detected substitution and accidental corruption in a
@@ -239,22 +241,9 @@ missing arm64 macOS host observations, missing argv/environment identities, and
 unbound raw output bytes. This helper never returns native acceptance. A text
 report cannot itself cryptographically prove it came from a Mac.
 
-A future reviewed native implementation still needs:
-
-1. Exact actual distribution inventory/pip check and bootstrap exceptions; clean
-   offline Kokoro/Misaki import, genuine bf_isabella synthesis and PCM metadata,
-   cancellation/EOF/process cleanup, and actual Splash v2 product-profile probes.
-2. Fixed-path bounded system signature, ABI/minimum-OS and dyld/linkage verification
-   across all native objects/bundles, binding preserved versus changed signatures.
-3. Explicit exact install/relocation/signing deltas and final signed closure;
-   post-sign immutable-input probes and relocation with spaces, commas and Unicode.
-4. Actual independently reviewed receipts and tracked native approval in a coherent
-   source snapshot; source changes invalidate observations. No fake portable native
-   receipt may be promoted into production policy.
-5. Deterministic schema-1 manifest generation, atomic acceptance commit and
-   full re-audit; a fresh-build-owned directory capability for accepted runtime
-   copy; independent audit/build integration. A writable child of an installed
-   `.app` is not a valid build capability.
+The executable native path is described below. Actual owner inventory, genuine
+native harnesses/observations, independent native approval and separate accepted
+copy/build/auditor integration remain mandatory and unavailable here.
 
 The intended noncircular identity graph is basis/source/policy → signed closure
 (excluding only the future root manifest) → receipts → independent native approval
@@ -264,7 +253,7 @@ trailing newline. Directory and file modes and exact relative links are covered.
 No stage path, timestamp, random stage name, inode or local device enters prepared
 identity material. Native signatures are not claimed to be reproducible.
 
-Exit codes: 0 named portable operation completed, 2 invalid/untrusted input,
+Exit codes: 0 named operation completed, 2 invalid/untrusted input,
 3 independent accepted evidence missing, 4 unsupported/native required,
 5 resource/deadline/cancellation or observed filesystem mutation failure.
 
@@ -275,8 +264,8 @@ Synthetic tiny historical source policies exist only inside temporary test trees
 Tests cover deterministic inert prepare, exact source/cache transforms, read-only
 status, no self-manifest authority, graph/path hazards, bound failures, mutations,
 no-replace publication and fail-closed interfaces. They do not test actual native
-execution, actual archive layouts, production historical admission, accepted
-finalization/copy or whole-app behavior.
+execution, actual archive layouts, production historical admission, production native
+acceptance, accepted copy or whole-app behavior.
 
 `audit_runtime_payload.py` and `build_complete.sh` are unchanged and do not yet
 consume this independent admission interface. Existing Whisper original-ZIP,
@@ -284,3 +273,104 @@ Search, separate complete model hash/copy, outer-signature and clean-source gate
 remain. Do not restart the model hash process or copy the 19.93 GB model set here.
 Public provenance, notarization, license/source clearance, supported hardware,
 full app conversation, data-preserving install and owner acceptance remain open.
+
+
+## Guarded native finalization
+
+`finalize` is implemented for owner-run Darwin execution with exact reviewed
+schema-2 source-owned approval and genuine evidence. Portable execution fails
+before writes. The production policy still has zero accepted historical bases
+and no native approval. `supported` describes code availability, never authority.
+
+The source-owned approval is excluded from both phase source identities and policy
+source bindings. It pins basis/policy/native sources, prepared and signed physical
+closures, the complete sorted signing diff, component ownership, native inventory,
+fixed probe contract, nine receipts and every raw artifact. Canonical JSON is
+bounded to 16 MB. The existing schema-1 `verify_native_contract` remains structural
+only and cannot authorize a manifest or acceptance. Source changes invalidate
+checkpoints and observations; real evidence must never be relabelled to new hashes.
+
+Signing accepts only same-mode existing Mach-O resign, exact annotated relocation,
+exact bundle CodeResources writes and their missing signature directories.
+Independently parsed old/new facts bind hashes and signatures. Resign preserves
+all non-LC_CODE_SIGNATURE commands. Relocation requires exact per-command and
+per-edge before/after differences and reasons; architecture/platform/minimum OS/SDK
+stay unchanged. Source/data/package/link/bytecode/license/ownership changes and
+unknown signing layouts reject. Multiarch scalar-signature identity is unsupported.
+
+Nine concrete semantic gates require:
+
+1. Reviewed historical/collector/prepared identity chain.
+2. Exact current 92-distribution lock, physical dist-info/METADATA coverage,
+   contained origins/sys.path, fixed CPython 3.11.17 arm64, actual raw pip check.
+3. Strict nested signatures, ordered signer authorities, load commands, launch
+   contexts, resolved dependencies, system-target availability and empty metadata.
+4. Current product-profile offline imports, exact module/data origins, empty
+   private roots and observed EPERM/EACCES network/read/write denials.
+5. Exact helper/model/config/bf_isabella pins, actual protocol events, ordered
+   fresh-output causality and independently parsed nonempty PCM WAV.
+6. Distinct cancellation/recovery/EOF/shutdown, same-process recovery, and complete
+   process/pipe/output cleanup with source-bound subject/observer events.
+7. Owned literal IPv4 listener adoption, private one-shot secret pipe, authenticated
+   real inference SSE, native URLSession positive/reconnect/wrong-pin and teardown.
+8. Equivalent Voice/Splash cases under spaces/comma/Unicode, long eSpeak path and
+   unchanged closure. Copied model-owner receipts may have different artifact paths
+   only with identical owner/model facts and exact identical raw receipt bytes.
+9. All nine before/after closures, no-follow metadata and complete independently
+   admitted target/draft/vision model-input rechecks.
+
+Expected roots, identities, lock versions and resolved required interpreters are
+derived privately. Only fixed per-gate expectation fields enter from approval.
+Actual argv/environment/source/target/raw outputs must match exact reviewed
+invocations. Receipt headers bind a concrete validated event, macOS/arm64 host,
+wall diagnostics, integer duration, exited-zero outcome and complete cleanup.
+Arbitrary nonempty observations, echo-prefix probes or self-approved markers fail.
+
+Actual observation harnesses remain prerequisites. Distribution/import/immutable
+observers must emit their own canonical facts. Voice observers must emit ordered
+causality. Splash supervisor private stdout contains an API key: it stays only in
+memory, never an artifact/log or a redacted stream labelled raw evidence. Retain
+only the reviewed observer's own nonsecret stdout. Native URLSession needs reviewed
+Swift source and compiled binary plus build provenance. A source-pinned Python
+builder observer uses the fixed bundled interpreter and executes fixed
+`/usr/bin/swiftc`; exact compiler/SDK/source/output identities, raw outcomes and
+fresh output creation are validated. Two independent source/binary hashes are
+insufficient. These genuine harnesses, owner inventory/model admission and native
+receipts are absent; this implementation does not invent them or authorize runs.
+
+Fresh static verification uses only fixed root-owned Apple tools in deny-write,
+deny-network, deny-fork sandboxing and held descriptors. It retains exact raw
+bytes; timeout/signal/nonzero/launch error never means pass. Non-reaping child
+observation precedes bounded owned-process-group teardown. Containment depends on
+actual Darwin fork/posix_spawn denial; a tool requiring child creation fails closed.
+No-follow xattrs reject nonempty/unsupported metadata and are never cleared.
+System dependencies require fixed trusted disk-file identity or exact current
+arm64 dyld shared-cache membership/UUID, with ambiguity and missing targets rejected.
+Fresh raw events are reparsed and inventory/edges/system availability must exactly
+match the retained, already-admitted static gate before writer entry.
+
+Bounds: 30 seconds per command, 300 seconds for static inspection, 600 seconds for
+finalization, 2 MiB combined raw streams per command, 32 MB fresh raw aggregate,
+4096 native objects, 100000 dependency edges and 120 MB retained evidence/attempt
+aggregate. System checks cap unique targets at 4096 and disk hashing at 1 GB.
+Apple `/dev/fd`, no-follow xattrs, dyld APIs/cache layout, output grammars, signing
+layout and sandbox compatibility remain native-unverified; unsupported rejects.
+The dyld API signatures were checked against Apple's primary header, but that is
+not execution evidence: https://github.com/apple-oss-distributions/dyld/blob/main/include/mach-o/dyld_priv.h
+
+Finalization holds an exclusive nonblocking flock on the original owned checkpoint
+inode. Evidence goes to a unique bounded private attempt. Deterministic legacy
+schema-1 manifest publication is atomic/no-replace; source/payload are reaudited,
+then the acceptance marker is published last. The marker only binds independent
+source approval and a transcript; it never authorizes itself. Resume recognizes
+only exact manifest bytes, replays the prior committed raw transcript, performs
+fresh static checks, retains a new attempt and preserves the original marker.
+Abandoned attempts remain unaccepted; no recursive cleanup or unexpected overwrite
+occurs. Failed static captures may be retained while resource/time budget remains.
+No failure triggers repair/signing or a weaker retry. Same-UID mutation after the
+last checked edge is not claimed preventable; later use must independently recheck.
+
+Complete synthetic nine-gate admission tests exercise actual semantic validators
+and raw static parsers without mocks. Separate transaction tests explicitly mock
+native boundaries. Neither is production admission or genuine Darwin evidence.
+Accepted-copy/archive/build/auditor/whole-app integration remains separately owned.

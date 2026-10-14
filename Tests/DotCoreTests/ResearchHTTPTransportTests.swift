@@ -139,18 +139,98 @@ final class ResearchHTTPTransportTests: XCTestCase {
                       "2001:20::1", "2001:db8::1", "2002:7f00:1::1", "3ffe::1", "3fff::1", "2620:4f:8000::1", "fc00::1", "fd00::1",
                       "fe80::1", "fe80::1%en0", "ff02::1", "2606:4700::5efe:7f00:1", "2606:4700::200:5efe:7f00:1", "garbage", "127.1", "0x7f000001"]
         for address in denied { XCTAssertFalse(ResearchPublicAddress.allowed(address), address) }
-        for address in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "172.15.255.255", "172.32.0.1", "100.63.255.255", "100.128.0.1",
-                        "2606:4700:4700::1111", "2001:4860:4860::8888", "2a00:1450:4001:800::200e"] {
+        for address in ["1.1.1.1", "8.8.8.8", "93.184.216.34", "172.15.255.255", "172.32.0.1", "100.63.255.255", "100.128.0.1"] {
             XCTAssertTrue(ResearchPublicAddress.allowed(address), address)
         }
     }
-    func testDNSParsingRejectsMixedFamiliesMalformedEmptyAndOversizedAnswers() throws {
+    func testDNSParsingUsesOnlyVettedIPv4AndRejectsMalformedEmptyOversizedAnswers() throws {
         let fixture = "name: example.org\nipv6_address: 2606:4700:4700::1111\n\nname: example.org\nalias: www.example.org \nip_address: 1.1.1.1\n\n"
-        XCTAssertEqual(try ResearchSystemHTTP.parseDNS(Data(fixture.utf8)), ["2606:4700:4700::1111", "1.1.1.1"])
-        for text in [fixture + "ip_address: 127.0.0.1\n", fixture + "ipv6_address: ::ffff:10.0.0.1\n", "", "name: nothing.example\n",
-                     "address: 1.1.1.1\n", "ip_address: 1.1.1.1 injected\n", String(repeating: "ip_address: 1.1.1.1\n", count: 65), String(repeating: "a", count: 16_385)] {
+        XCTAssertEqual(try ResearchSystemHTTP.parseDNS(Data(fixture.utf8)), ["1.1.1.1"])
+        for text in [fixture + "ip_address: 127.0.0.1\n", "ipv6_address: 2001:4860:1234:5678::a00:1\n", fixture + "ipv6_address: malformed\n", "", "name: nothing.example\n",
+                     "address: 1.1.1.1\n", "ip_address: 1.1.1.1 injected\n", String(repeating: "ip_address: 1.1.1.1\n", count: 65), fixture + String(repeating: "ipv6_address: ::1\n", count: 65), String(repeating: "a", count: 16_385)] {
             XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data(text.utf8)))
         }
+    }
+    func testGlobalIPv6AndNetworkSpecificNAT64AreNeverAdmitted() throws {
+        for address in ["2606:4700:4700::1111", "2001:4860:4860::8888",
+                        "2001:4860:1234:5678::7f00:1", "2001:4860:1234:5678::a00:1",
+                        "2001:4860:1234:5678::a9fe:a9fe", "2001:4860:1234:5678::c0a8:101"] {
+            XCTAssertFalse(ResearchPublicAddress.allowed(address))
+            XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data("ipv6_address: \(address)\n".utf8)))
+            XCTAssertEqual(try ResearchSystemHTTP.parseDNS(Data("ipv6_address: \(address)\nip_address: 1.1.1.1\n".utf8)), ["1.1.1.1"])
+        }
+    }
+    func testDNSCountsDiscardedAAAAAndRejectsUnsafeARegardlessOfOrder() throws {
+        let safe = "ip_address: 1.1.1.1\n"
+        let discarded = "ipv6_address: ::ffff:10.0.0.1\n"
+        XCTAssertEqual(try ResearchSystemHTTP.parseDNS(Data((String(repeating: discarded, count: 63) + safe).utf8)), ["1.1.1.1"])
+        XCTAssertEqual(try ResearchSystemHTTP.parseDNS(Data(String(repeating: safe, count: 64).utf8)).count, 64)
+        for text in [String(repeating: discarded, count: 64) + safe,
+                     safe + "ipv6_address: fe80::1%en0\n", safe + "ipv6_address: 1.1.1.1\n",
+                     safe + "ip_address: 2606:4700:4700::1111\n"] {
+            XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data(text.utf8)))
+        }
+        for address in ["10.0.0.1", "127.0.0.1", "169.254.169.254", "192.168.1.1", "192.0.2.1", "240.0.0.1"] {
+            let unsafe = "ip_address: \(address)\n"
+            for text in [safe + discarded + unsafe, unsafe + discarded + safe] {
+                XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data(text.utf8)))
+            }
+        }
+        for address in ["::1", "::ffff:127.0.0.1", "::ffff:0:127.0.0.1", "64:ff9b::7f00:1", "fc00::1", "fe80::1"] {
+            let aaaa = "ipv6_address: \(address)\n"
+            XCTAssertEqual(try ResearchSystemHTTP.parseDNS(Data((aaaa + safe).utf8)), ["1.1.1.1"])
+            XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data(aaaa.utf8)))
+        }
+    }
+    func testDNSRejectsNULSuffixedAAAAWithPublicAInEitherOrder() throws {
+        let safe = "ip_address: 1.1.1.1\n"
+        for address in ["::1", "2606:4700:4700::1111", "2001:4860:1234:5678::a00:1"] {
+            for suffix in ["", "garbage"] {
+                let malformed = "ipv6_address: \(address)\u{0}\(suffix)\n"
+                for text in [malformed + safe, safe + malformed] {
+                    XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data(text.utf8)))
+                }
+            }
+        }
+    }
+    func testDNSRejectsNULSuffixedIPv4PinsWithPublicAInEitherOrder() throws {
+        let safe = "ip_address: 93.184.216.34\n"
+        for address in ["1.1.1.1", "8.8.8.8"] {
+            for suffix in ["", "garbage"] {
+                let malformed = "\(address)\u{0}\(suffix)"
+                XCTAssertFalse(ResearchPublicAddress.allowed(malformed))
+                let invalidA = "ip_address: \(malformed)\n"
+                for text in [invalidA, invalidA + safe, safe + invalidA] {
+                    XCTAssertThrowsError(try ResearchSystemHTTP.parseDNS(Data(text.utf8)))
+                }
+            }
+        }
+    }
+    func testCustomResolverCannotMixIPv6WithPublicIPv4() async {
+        for address in ["2606:4700:4700::1111", "::ffff:127.0.0.1", "::ffff:0:127.0.0.1",
+                        "64:ff9b::7f00:1", "2001:4860:1234:5678::a00:1", "192.0.2.1", "240.0.0.1"] {
+            for addresses in [[address], ["1.1.1.1", address], [address, "1.1.1.1"]] {
+                let trace = ResearchTransportTrace()
+                let transport = ResearchPinnedHTTPTransport(resolve: { _, _ in addresses }, exchange: { url, pin, _ in
+                    await trace.pin(pin); return Self.response(url)
+                })
+                do { _ = try await transport.fetch(URL(string: "https://example.org")!); XCTFail("Unsafe custom resolver pin") }
+                catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+                let (_, pins) = await trace.snapshot(); XCTAssertTrue(pins.isEmpty)
+            }
+        }
+    }
+    func testFirstPublicIPv4IsTheOnlyAttemptEvenWhenExchangeFails() async {
+        let trace = ResearchTransportTrace()
+        let transport = ResearchPinnedHTTPTransport(resolve: { host, _ in
+            await trace.resolve(host); return ["8.8.8.8", "1.1.1.1"]
+        }, exchange: { _, pin, _ in
+            await trace.pin(pin); throw ResearchNotebookError.networkFailure
+        })
+        do { _ = try await transport.fetch(URL(string: "https://example.org")!); XCTFail("Expected exchange failure") }
+        catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+        let (queries, pins) = await trace.snapshot()
+        XCTAssertEqual(queries, ["example.org"]); XCTAssertEqual(pins, ["8.8.8.8"])
     }
     func testMixedDNSNeverDispatchesConnection() async {
         for addresses in [["1.1.1.1", "10.0.0.1"], ["2606:4700:4700::1111", "::1"], [], ["127.0.0.1"]] {
@@ -224,6 +304,42 @@ final class ResearchHTTPTransportTests: XCTestCase {
         }, exchange: { url, pin, _ in await trace.pin(pin); return Self.response(url, code: 302, location: "/next") })
         do { _ = try await transport.fetch(URL(string: "https://example.org")!); XCTFail("Expected blocked rebind") } catch {}
         let (queries, pins) = await trace.snapshot(); XCTAssertEqual(queries.count, 2); XCTAssertEqual(pins.count, 1)
+    }
+    func testRedirectRepinsToNewPublicIPv4ForSameAndDifferentHosts() async throws {
+        for location in ["/next", "https://other.example/next"] {
+            let trace = ResearchTransportTrace()
+            let transport = ResearchPinnedHTTPTransport(resolve: { host, _ in
+                await trace.resolve(host); let (queries, _) = await trace.snapshot()
+                return queries.count == 1 ? ["1.1.1.1"] : ["8.8.8.8"]
+            }, exchange: { url, pin, _ in
+                await trace.pin(pin)
+                return Self.response(url, code: url.path == "/next" ? 200 : 302, location: url.path == "/next" ? nil : location)
+            })
+            let result = try await transport.fetch(URL(string: "https://example.org/start")!)
+            XCTAssertEqual(result.response.url?.path, "/next")
+            let (queries, pins) = await trace.snapshot()
+            XCTAssertEqual(queries, ["example.org", location.hasPrefix("/") ? "example.org" : "other.example"])
+            XCTAssertEqual(pins, ["1.1.1.1", "8.8.8.8"])
+        }
+    }
+    func testRedirectRebindingToIPv6OrMixedUnsafeAStopsBeforeSecondExchange() async {
+        for location in ["/next", "https://other.example/next"] {
+            for rebound in [["2001:4860:1234:5678::a00:1"], ["1.1.1.1", "::ffff:127.0.0.1"],
+                            ["1.1.1.1", "192.0.2.1"], ["1.1.1.1", "10.0.0.1"]] {
+                let trace = ResearchTransportTrace()
+                let transport = ResearchPinnedHTTPTransport(resolve: { host, _ in
+                    await trace.resolve(host); let (queries, _) = await trace.snapshot()
+                    return queries.count == 1 ? ["1.1.1.1"] : rebound
+                }, exchange: { url, pin, _ in
+                    await trace.pin(pin); return Self.response(url, code: 302, location: location)
+                })
+                do { _ = try await transport.fetch(URL(string: "https://example.org/start")!); XCTFail("Unsafe redirect rebind") }
+                catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+                let (queries, pins) = await trace.snapshot()
+                XCTAssertEqual(queries, ["example.org", location.hasPrefix("/") ? "example.org" : "other.example"])
+                XCTAssertEqual(pins, ["1.1.1.1"])
+            }
+        }
     }
     func testRedirectLimitAndHTTPSDowngrade() async {
         for location in ["/again", "http://example.org/unsafe", "file:///etc/passwd", "https://user:pass@example.org"] {

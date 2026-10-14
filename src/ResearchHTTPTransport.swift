@@ -45,14 +45,13 @@ struct ResearchPinnedHTTPTransport: ResearchHTTPTransport {
             guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
             let addresses = try await resolve(current.host!, deadline)
             try Task.checkCancellation()
-            // Reject the complete answer if *any* entry is unsafe, including mixed families.
+            // The resolver returns IPv4 candidates only. Reject the complete
+            // candidate set if any pin is unsafe; custom resolver IPv6 also fails.
             guard !addresses.isEmpty, addresses.count <= 64,
                   addresses.allSatisfy(ResearchPublicAddress.allowed),
                   ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
             // One address, one attempt. No DNS fallback or transparent retries.
-            // dscacheutil prints AAAA first even on IPv4-only networks. Prefer a
-            // vetted IPv4 candidate when present; this is selection, not a retry.
-            let pin = addresses.first(where: { !$0.contains(":") }) ?? addresses[0]
+            let pin = addresses[0]
             let result = try await exchange(current, pin, deadline)
             try Task.checkCancellation()
             guard result.response.url == current, result.data.count <= ResearchExtraction.maxBytes,
@@ -87,13 +86,13 @@ struct ResearchPinnedHTTPTransport: ResearchHTTPTransport {
     }
 }
 
-/// Conservative IANA special-use policy. Even globally reachable special-purpose
-/// exceptions are denied. IPv6 permits ordinary 2000::/3 global unicast only,
-/// excluding protocol assignments, documentation, 6to4, old 6bone and ISATAP.
-/// Mapped/compatible IPv4, NAT64, Teredo, ULA, scoped and multicast are never pins.
+/// Public IPv4-only pins. Global IPv6 may embed private IPv4 through a network-
+/// specific NAT64 prefix that cannot be inferred from the address alone. Until
+/// effective-route validation exists, IPv6 (including IPv6-only origins) fails closed.
 enum ResearchPublicAddress {
     static func allowed(_ text: String) -> Bool {
-        guard !text.isEmpty, text.utf8.count <= 45, !text.contains("%") else { return false }
+        guard !text.isEmpty, text.utf8.count <= 45, !text.contains("%"),
+              !text.utf8.contains(0) else { return false }
         var v4 = in_addr()
         if text.withCString({ inet_pton(AF_INET, $0, &v4) }) == 1 {
             let n = UInt32(bigEndian: v4.s_addr)
@@ -106,17 +105,7 @@ enum ResearchPublicAddress {
             ]
             return !excluded.contains { base, length in n >> (32 - length) == base >> (32 - length) }
         }
-        var v6 = in6_addr()
-        guard text.withCString({ inet_pton(AF_INET6, $0, &v6) }) == 1 else { return false }
-        let b = withUnsafeBytes(of: &v6) { Array($0) }
-        guard b[0] & 0xe0 == 0x20 else { return false }
-        if b[0] == 0x20 && b[1] == 0x01 && b[2] < 2 { return false } // 2001::/23 (including Teredo)
-        if b[0] == 0x20 && b[1] == 0x01 && b[2] == 0x0d && b[3] == 0xb8 { return false }
-        if b[0] == 0x20 && b[1] == 0x02 { return false }
-        if b[0] == 0x3f && (b[1] == 0xfe || (b[1] == 0xff && b[2] & 0xf0 == 0)) { return false }
-        if Array(b.prefix(6)) == [0x26, 0x20, 0x00, 0x4f, 0x80, 0x00] { return false }
-        if (b[8] == 0 || b[8] == 2) && b[9] == 0 && b[10] == 0x5e && b[11] == 0xfe { return false }
-        return true
+        return false // No IPv6 pins, including unknown network-specific NAT64 prefixes.
     }
 }
 
@@ -132,13 +121,25 @@ enum ResearchSystemHTTP {
     static func parseDNS(_ data: Data) throws -> [String] {
         guard data.count <= 16_384, let text = String(data: data, encoding: .utf8) else { throw ResearchNotebookError.networkFailure }
         var addresses: [String] = []
+        var answerCount = 0
         for line in text.split(separator: "\n") {
             guard let colon = line.firstIndex(of: ":") else { throw ResearchNotebookError.networkFailure }
             let key = String(line[..<colon]), value = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
             switch key {
-            case "ip_address", "ipv6_address":
-                guard ResearchPublicAddress.allowed(value), addresses.count < 64 else { throw ResearchNotebookError.networkFailure }
+            case "ip_address":
+                answerCount += 1
+                guard ResearchPublicAddress.allowed(value), answerCount <= 64 else { throw ResearchNotebookError.networkFailure }
                 addresses.append(value)
+            case "ipv6_address":
+                // Parse but never admit AAAA answers. Ordinary dual-stack origins
+                // can use their vetted A records without an IPv6 fallback.
+                answerCount += 1
+                var address = in6_addr()
+                // inet_pton reads a C string; never accept a NUL-truncated prefix.
+                guard answerCount <= 64, !value.contains("%"), !value.utf8.contains(0),
+                      value.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else {
+                    throw ResearchNotebookError.networkFailure
+                }
             case "name", "alias": break // Never use aliases as connection targets.
             default: throw ResearchNotebookError.networkFailure
             }
