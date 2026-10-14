@@ -143,17 +143,33 @@ class CandidateReceiptTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError): self.run_main(**kwargs)
             self.assertFalse((self.root / "build/Dot-candidate-receipt.json").exists())
 
-    def test_workflow_upload_is_after_gates_and_only_two_exact_files(self):
+    def test_workflow_validates_receipt_after_successful_full_native_gate(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        self.assertLess(workflow.index("bash scripts/verify_macos.sh"), workflow.index("scripts/write_candidate_receipt.py"))
-        self.assertLess(workflow.index("scripts/write_candidate_receipt.py"), workflow.index("uses: actions/upload-artifact@"))
-        upload = workflow.split("      - name: Upload model-free development candidate\n", 1)[1]
-        self.assertIn("actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", upload)
-        self.assertIn("          path: |\n            build/Dot.dmg\n            build/Dot-candidate-receipt.json\n          if-no-files-found: error", upload)
-        self.assertIn("retention-days: 7", upload)
+        self.assertIn("      - name: Test, compile and package with zero warnings\n"
+                      "        run: bash scripts/verify_macos.sh\n"
+                      "      - name: Record development packaging receipt\n"
+                      "        run: python3 -B scripts/write_candidate_receipt.py\n", workflow)
         self.assertNotIn("always()", workflow)
         self.assertNotIn("continue-on-error", workflow)
+        self.assertIn("timeout-minutes: 15", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
+        gates = (ROOT / "scripts/verify_macos.sh").read_text()
+        for required in ["set -euo pipefail", "unittest discover -s Tests/Python",
+                         "scripts/test_voice_sandbox.py", "scripts/test_splash_sandbox.py",
+                         "scripts/check_contracts.py", "swift test", "CODE_SIGNING_ALLOWED=NO test",
+                         "CODE_SIGNING_ALLOWED=NO build", "bash build.sh",
+                         "FAIL: warning detected", "codesign --verify --strict build/Dot.app"]:
+            with self.subTest(gate=required): self.assertIn(required, gates)
+
+    def test_workflow_keeps_diagnostics_without_automatic_artifact_delivery(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertNotIn("upload-artifact", workflow)
+        self.assertNotIn("build/Dot.dmg", workflow)
+        self.assertNotIn("build/Dot.app", workflow)
+        gates = (ROOT / "scripts/verify_macos.sh").read_text()
+        for log in ["python", "sandbox", "splash-sandbox", "swift", "test", "release", "package"]:
+            with self.subTest(log=log): self.assertIn(f'2>&1 | tee "$LOGS/{log}.log"', gates)
+        self.assertIn('print(text, end="")', (ROOT / "scripts/write_candidate_receipt.py").read_text())
 
     def test_complete_release_gate_remains_closed(self):
         release = (ROOT / ".github/workflows/release.yml").read_text()

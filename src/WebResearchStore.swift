@@ -66,7 +66,8 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
     private let directory: URL
     private let limits: Limits
     private let now: @Sendable () -> Date
-    /// Only revisions written by this live owner can still represent active network work.
+    /// Local write provenance only: an unowned revision may belong to another live store.
+    /// This set is not an execution lease or evidence that another process has stopped.
     private var ownedRevisions: Set<UUID> = []
 
     init(directory: URL? = nil, limits: Limits = Limits(), now: @escaping @Sendable () -> Date = { Date() }) throws {
@@ -80,7 +81,7 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
 
     func list() throws -> [WebResearchSessionSummary] {
         try transaction { folder in
-            try readAndRecover(folder).sessions.sorted {
+            try read(folder).sessions.map(recoveryProjection).sorted {
                 $0.session.updatedAt == $1.session.updatedAt ? $0.id.uuidString < $1.id.uuidString : $0.session.updatedAt > $1.session.updatedAt
             }.map { stored in
                 let session = stored.session
@@ -93,8 +94,8 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
 
     func load(id: UUID) throws -> WebResearchStoredSession {
         try transaction { folder in
-            guard let stored = try readAndRecover(folder).sessions.first(where: { $0.id == id }) else { throw WebResearchStoreError.notFound }
-            return stored
+            guard let stored = try read(folder).sessions.first(where: { $0.id == id }) else { throw WebResearchStoreError.notFound }
+            return recoveryProjection(stored)
         }
     }
 
@@ -102,7 +103,7 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
     func create(question: String, queries: [String], limits researchLimits: WebResearchLimits = WebResearchLimits(),
                 retryPolicy: WebResearchRetryPolicy = .preserveUncertain) throws -> WebResearchStoredSession {
         try transaction { folder in
-            var document = try readAndRecover(folder)
+            var document = try read(folder)
             let session: WebResearchSession
             do { session = try WebResearchSession(question: question, queries: queries, limits: researchLimits, retryPolicy: retryPolicy, now: now()) }
             catch { throw WebResearchStoreError.invalidInput }
@@ -115,17 +116,21 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
     }
 
     /// Compare-and-swap on an existing record only; never an upsert. Callers must keep the returned
-    /// revision after every serialized checkpoint. A deleted/recovered/replaced revision is rejected.
+    /// revision after every serialized checkpoint. A deleted or explicitly replaced revision is rejected.
+    /// Passive recovery projections retain their raw CAS revision until a caller commits a change.
     func save(_ session: WebResearchSession, expectedRevision: UUID) throws -> WebResearchStoredSession {
         guard session.storageMode == .permittedPersistence else { throw WebResearchStoreError.invalidInput }
         return try transaction { folder in
-            var document = try readAndRecover(folder)
+            var document = try read(folder)
             guard let index = document.sessions.firstIndex(where: { $0.id == session.id }) else { throw WebResearchStoreError.notFound }
             let previous = document.sessions[index]
             guard previous.revision == expectedRevision else { throw WebResearchStoreError.conflict }
             guard validResearchReplacement(previous: previous.session, next: session) else { throw WebResearchStoreError.invalidInput }
             try validateSession(session)
-            let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: previous.recoveredAt)
+            // Only an explicit target write records reconciliation; it cannot prove the prior
+            // process died or prevent an already-issued request from finishing elsewhere.
+            let recoveredAt = needsReconciliation(previous) ? now() : previous.recoveredAt
+            let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: recoveredAt)
             document.sessions[index] = stored
             try persist(document, folder: folder)
             rememberOwned(document, adding: stored.revision)
@@ -135,7 +140,7 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
 
     func delete(id: UUID, expectedRevision: UUID) throws {
         try transaction { folder in
-            var document = try readAndRecover(folder)
+            var document = try read(folder)
             guard let index = document.sessions.firstIndex(where: { $0.id == id }) else { throw WebResearchStoreError.notFound }
             guard document.sessions[index].revision == expectedRevision else { throw WebResearchStoreError.conflict }
             document.sessions.remove(at: index)
@@ -148,34 +153,33 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
     /// rather than being silently replaced by an ordinary delete operation.
     func deleteAll() throws {
         try transaction { folder in
-            _ = try readAndRecover(folder)
+            _ = try read(folder)
             try persist(Document(schemaVersion: 1, sessions: []), folder: folder)
             ownedRevisions.removeAll()
         }
     }
 
-    private func readAndRecover(_ folder: Int32) throws -> Document {
-        var document = try read(folder), recovered = false
-        for index in document.sessions.indices {
-            let stored = document.sessions[index]
-            guard !ownedRevisions.contains(stored.revision) else { continue }
-            var session = stored.session
-            let interrupted = session.stage == .retrieving || session.queries.contains { $0.status == .inFlight }
-                || session.reads.contains { $0.status == .inFlight }
-            guard interrupted else { continue }
-            for query in session.queries.indices where session.queries[query].status == .inFlight {
-                session.queries[query].status = .uncertain
-                session.queries[query].failure = .interruptedOutcomeUnknown
-            }
-            for source in session.reads.indices where session.reads[source].status == .inFlight {
-                session.reads[source].status = .pending
-            }
-            session.stage = .paused; session.updatedAt = now()
-            document.sessions[index] = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: session.updatedAt)
-            recovered = true
+    /// An unowned active checkpoint has an unknown outcome, not a proven dead owner.
+    /// Project a conservative paused view without changing durable bytes, timestamps or CAS.
+    /// Every mutation reloads raw records so unrelated writes cannot persist this projection.
+    private func recoveryProjection(_ stored: WebResearchStoredSession) -> WebResearchStoredSession {
+        guard needsReconciliation(stored) else { return stored }
+        var session = stored.session
+        for query in session.queries.indices where session.queries[query].status == .inFlight {
+            session.queries[query].status = .uncertain
+            session.queries[query].failure = .interruptedOutcomeUnknown
         }
-        if recovered { try persist(document, folder: folder); rememberOwned(document) }
-        return document
+        for source in session.reads.indices where session.reads[source].status == .inFlight {
+            session.reads[source].status = .pending
+        }
+        session.stage = .paused
+        return WebResearchStoredSession(revision: stored.revision, session: session, recoveredAt: stored.recoveredAt)
+    }
+
+    private func needsReconciliation(_ stored: WebResearchStoredSession) -> Bool {
+        !ownedRevisions.contains(stored.revision) && (stored.session.stage == .retrieving
+            || stored.session.queries.contains { $0.status == .inFlight }
+            || stored.session.reads.contains { $0.status == .inFlight })
     }
 
     private func rememberOwned(_ document: Document, adding: UUID? = nil) {
@@ -373,6 +377,20 @@ actor TransientWebResearchStore: WebResearchSessionAccess {
 }
 
 private func validResearchReplacement(previous: WebResearchSession, next: WebResearchSession) -> Bool {
+    // A checked receipt is meaningful only for the exact immutable completed
+    // payload read back by the controller. Follow-up work explicitly clears it.
+    if previous.stage == .completed && next.stage == .completed {
+        var payload = next
+        payload.outputVerification = previous.outputVerification
+        guard payload == previous else { return false }
+        if next.outputVerification != previous.outputVerification {
+            guard previous.outputVerification == .pending, next.outputVerification == .checked else { return false }
+        }
+    } else if next.stage == .completed {
+        guard next.outputVerification == .pending else { return false }
+    } else {
+        guard next.outputVerification == nil else { return false }
+    }
     guard previous.question == next.question, previous.createdAt == next.createdAt,
                   previous.limits == next.limits, previous.storageMode == next.storageMode,
                   previous.providerID == nil || previous.providerID == next.providerID,

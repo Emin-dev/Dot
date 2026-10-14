@@ -12,6 +12,27 @@ private struct StoredWorkflowSearch: WebSearchProvider {
     }
 }
 
+/// An explicit continuation barrier fixes the observer between the persisted in-flight
+/// checkpoint and its result. No elapsed-time ordering or real service is involved.
+private actor StoredRecoverySearch: WebSearchProvider {
+    nonisolated let providerID = "fixture"
+    nonisolated let permitsResultPersistence = true
+    private(set) var calls: [String] = []
+    private var holdFirst: Bool
+    private var request: CheckedContinuation<Void, Never>?
+    init(holdFirst: Bool = false) { self.holdFirst = holdFirst }
+    func search(query: String, limit: Int) async throws -> [WebSearchResult] {
+        calls.append(query)
+        if holdFirst {
+            await withCheckedContinuation { request = $0 }
+        }
+        return [WebSearchResult(url: URL(string: "https://example.org/\(query)")!, title: query,
+            snippet: "Fixture hint", publicationDateHint: nil)]
+    }
+    func waiting() -> Bool { request != nil }
+    func release() { holdFirst = false; request?.resume(); request = nil }
+}
+
 private actor StoredWorkflowReader: WebResearchSourceReading {
     var hold = false
     private var continuation: CheckedContinuation<Void, Never>?
@@ -29,9 +50,11 @@ private actor StoredWorkflowReader: WebResearchSourceReading {
 private actor StoredWorkflowCheckpoints {
     let store: WebResearchSessionStore
     var revision: UUID
+    private(set) var values: [WebResearchStoredSession] = []
     init(store: WebResearchSessionStore, revision: UUID) { self.store = store; self.revision = revision }
     func save(_ session: WebResearchSession) async throws {
-        revision = try await store.save(session, expectedRevision: revision).revision
+        let stored = try await store.save(session, expectedRevision: revision)
+        revision = stored.revision; values.append(stored)
     }
 }
 
@@ -43,12 +66,25 @@ final class WebResearchStoreTests: XCTestCase {
         try await body(root)
     }
     private func file(_ directory: URL) -> URL { directory.appendingPathComponent("research-sessions.json") }
+    private func raw(_ directory: URL, id: UUID) throws -> WebResearchStoredSession {
+        struct Archive: Decodable { let sessions: [WebResearchStoredSession] }
+        return try XCTUnwrap(JSONDecoder().decode(Archive.self, from: Data(contentsOf: file(directory)))
+            .sessions.first { $0.id == id })
+    }
     private func create(_ store: WebResearchSessionStore, question: String = "Public fixture question") async throws -> WebResearchStoredSession {
         try await store.create(question: question, queries: ["primary", "secondary"])
     }
     private func expect(_ expected: WebResearchStoreError, _ body: () async throws -> Void) async {
         do { try await body(); XCTFail("Expected \(expected)") }
         catch { XCTAssertEqual(error as? WebResearchStoreError, expected) }
+    }
+    private func waitForRequest(_ predicate: () async -> Bool) async throws {
+        // This timeout only bounds failure. The held request establishes ordering.
+        for _ in 0..<2_000 {
+            if await predicate() { return }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        XCTFail("Workflow did not reach its held request"); throw URLError(.timedOut)
     }
     private func inFlight(_ session: WebResearchSession) -> WebResearchSession {
         var copy = session; copy.stage = .retrieving; copy.providerID = "fixture"
@@ -101,23 +137,117 @@ final class WebResearchStoreTests: XCTestCase {
         }
     }
 
-    func testRestartPersistsUncertainOutcomeAndInvalidatesOldOwnerRevision() async throws {
+    func testForeignReadProjectsUnknownOutcomeWithoutChangingBytesOrOwnerRevision() async throws {
         try await withDirectory { directory in
             let original = try WebResearchSessionStore(directory: directory), initial = try await create(original)
             let active = try await original.save(inFlight(initial.session), expectedRevision: initial.revision)
-            let restarted = try WebResearchSessionStore(directory: directory, now: { Date(timeIntervalSince1970: 700) })
-            let recovered = try await restarted.load(id: active.id)
-            XCTAssertEqual(recovered.session.stage, .paused)
-            XCTAssertEqual(recovered.session.queries[0].status, .uncertain)
-            XCTAssertEqual(recovered.session.queries[0].failure, .interruptedOutcomeUnknown)
-            XCTAssertEqual(recovered.session.searchAttempts, 1)
-            XCTAssertEqual(recovered.session.retryPolicy, .preserveUncertain)
-            XCTAssertEqual(recovered.recoveredAt, Date(timeIntervalSince1970: 700))
-            XCTAssertNotEqual(recovered.revision, active.revision)
-            let normalized = try Data(contentsOf: file(directory))
-            let again = try await restarted.load(id: active.id)
-            XCTAssertEqual(again, recovered); XCTAssertEqual(try Data(contentsOf: file(directory)), normalized)
-            await expect(.conflict) { _ = try await original.save(active.session, expectedRevision: active.revision) }
+            let observer = try WebResearchSessionStore(directory: directory, now: { Date(timeIntervalSince1970: 700) })
+            let before = try Data(contentsOf: file(directory))
+            let inode = try FileManager.default.attributesOfItem(atPath: file(directory).path)[.systemFileNumber] as? NSNumber
+            let projected = try await observer.load(id: active.id)
+            XCTAssertEqual(projected.session.stage, .paused)
+            XCTAssertEqual(projected.session.queries[0].status, .uncertain)
+            XCTAssertEqual(projected.session.queries[0].failure, .interruptedOutcomeUnknown)
+            XCTAssertEqual(projected.session.searchAttempts, 1)
+            XCTAssertEqual(projected.session.retryPolicy, .preserveUncertain)
+            XCTAssertEqual(projected.revision, active.revision)
+            XCTAssertEqual(projected.session.updatedAt, active.session.updatedAt)
+            XCTAssertNil(projected.recoveredAt, "Observation is not a durable reconciliation or proof of process death")
+            for _ in 0..<3 {
+                let list = try await observer.list(), again = try await observer.load(id: active.id)
+                XCTAssertEqual(again, projected)
+                XCTAssertEqual(list[0].revision, active.revision); XCTAssertEqual(list[0].stage, .paused)
+                XCTAssertEqual(list[0].updatedAt, active.session.updatedAt); XCTAssertNil(list[0].recoveredAt)
+                XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            }
+            let independent = try await WebResearchSessionStore(directory: directory, now: { Date(timeIntervalSince1970: 900) }).load(id: active.id)
+            XCTAssertEqual(independent, projected, "Projection identity must not depend on observation time")
+            XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: file(directory).path)[.systemFileNumber] as? NSNumber, inode)
+            XCTAssertEqual(try raw(directory, id: active.id), active)
+            let owned = try await original.load(id: active.id); XCTAssertEqual(owned, active)
+            let saved = try await original.save(active.session, expectedRevision: active.revision)
+            XCTAssertNotEqual(saved.revision, active.revision); XCTAssertNil(saved.recoveredAt)
+        }
+    }
+
+    func testForeignMutationsPreserveRawUnrelatedActiveRecord() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+            let active = try await owner.save(inFlight(initial.session), expectedRevision: initial.revision)
+            let foreign = try WebResearchSessionStore(directory: directory)
+            _ = try await foreign.list(); _ = try await foreign.load(id: active.id)
+            let unrelated = try await create(foreign, question: "Independent work")
+            XCTAssertEqual(try raw(directory, id: active.id), active)
+            let changed = try await foreign.save(unrelated.session, expectedRevision: unrelated.revision)
+            XCTAssertEqual(try raw(directory, id: active.id), active)
+            try await foreign.delete(id: changed.id, expectedRevision: changed.revision)
+            XCTAssertEqual(try raw(directory, id: active.id), active)
+            let saved = try await owner.save(active.session, expectedRevision: active.revision)
+            XCTAssertNotEqual(saved.revision, active.revision)
+        }
+    }
+
+    func testFailedForeignMutationsDoNotCommitRecoveryAsASideEffect() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+            let active = try await owner.save(inFlight(initial.session), expectedRevision: initial.revision)
+            var limits = WebResearchSessionStore.Limits(); limits.maxSessions = 1
+            let foreign = try WebResearchSessionStore(directory: directory, limits: limits)
+            let before = try Data(contentsOf: file(directory))
+            await expect(.capacity) { _ = try await create(foreign) }
+            await expect(.conflict) { _ = try await foreign.save(active.session, expectedRevision: initial.revision) }
+            await expect(.conflict) { try await foreign.delete(id: active.id, expectedRevision: initial.revision) }
+            XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            XCTAssertEqual(try raw(directory, id: active.id), active)
+        }
+    }
+
+    func testExplicitRecoverySaveCommitsOnlyTargetAndFencesOldRevision() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory)
+            let first = try await create(owner), second = try await create(owner)
+            let active = try await owner.save(inFlight(first.session), expectedRevision: first.revision)
+            let unrelated = try await owner.save(inFlight(second.session), expectedRevision: second.revision)
+            let foreign = try WebResearchSessionStore(directory: directory, now: { Date(timeIntervalSince1970: 700) })
+            let projected = try await foreign.load(id: active.id)
+            let reconciled = try await foreign.save(projected.session, expectedRevision: projected.revision)
+            XCTAssertNotEqual(reconciled.revision, active.revision)
+            XCTAssertEqual(reconciled.session, projected.session)
+            XCTAssertEqual(reconciled.recoveredAt, Date(timeIntervalSince1970: 700))
+            XCTAssertEqual(try raw(directory, id: active.id), reconciled)
+            XCTAssertEqual(try raw(directory, id: unrelated.id), unrelated)
+            let reopened = try await WebResearchSessionStore(directory: directory).load(id: active.id)
+            XCTAssertEqual(reopened, reconciled)
+            let before = try Data(contentsOf: file(directory))
+            await expect(.conflict) { _ = try await owner.save(active.session, expectedRevision: active.revision) }
+            await expect(.conflict) { try await owner.delete(id: active.id, expectedRevision: active.revision) }
+            XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+        }
+    }
+
+    func testStaleRecoveryCannotReplaceCommitOrResurrectDeletedRecordOrDispatchSearch() async throws {
+        for mutation in ["save", "delete", "deleteAll"] {
+            try await withDirectory { directory in
+                let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+                let active = try await owner.save(inFlight(initial.session), expectedRevision: initial.revision)
+                let foreign = try WebResearchSessionStore(directory: directory)
+                let projected = try await foreign.load(id: active.id)
+                if mutation == "save" { _ = try await owner.save(active.session, expectedRevision: active.revision) }
+                else if mutation == "delete" { try await owner.delete(id: active.id, expectedRevision: active.revision) }
+                else { try await owner.deleteAll() }
+                let before = try Data(contentsOf: file(directory))
+                let expected: WebResearchStoreError = mutation == "save" ? .conflict : .notFound
+                await expect(expected) { _ = try await foreign.save(projected.session, expectedRevision: projected.revision) }
+                await expect(expected) { try await foreign.delete(id: projected.id, expectedRevision: projected.revision) }
+                let provider = StoredRecoverySearch(), sink = StoredWorkflowCheckpoints(store: foreign, revision: projected.revision)
+                do {
+                    _ = try await WebResearchWorkflow(provider: provider, reader: StoredWorkflowReader()).run(projected.session) { try await sink.save($0) }
+                    XCTFail("The first Resume checkpoint must reject a stale/deleted revision")
+                } catch { XCTAssertEqual(error as? WebResearchError, .checkpointFailed) }
+                let calls = await provider.calls, checkpoints = await sink.values
+                XCTAssertTrue(calls.isEmpty); XCTAssertTrue(checkpoints.isEmpty)
+                XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            }
         }
     }
 
@@ -127,7 +257,10 @@ final class WebResearchStoreTests: XCTestCase {
             var partial = ready(initial.session); partial.stage = .retrieving
             partial.reads[1].status = .inFlight; partial.reads[1].source = nil
             let active = try await store.save(partial, expectedRevision: initial.revision)
+            let before = try Data(contentsOf: file(directory))
             let recovered = try await WebResearchSessionStore(directory: directory).load(id: active.id)
+            XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            XCTAssertEqual(recovered.revision, active.revision)
             XCTAssertEqual(recovered.session.queries, active.session.queries)
             XCTAssertEqual(recovered.session.reads[0], active.session.reads[0])
             XCTAssertEqual(recovered.session.reads[1].status, .pending)
@@ -336,6 +469,144 @@ final class WebResearchStoreTests: XCTestCase {
         }
     }
 
+    func testForeignReadDuringSuspendedSearchCannotInvalidateLiveWorkflowCheckpoint() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+            let provider = StoredRecoverySearch(holdFirst: true)
+            let sink = StoredWorkflowCheckpoints(store: owner, revision: initial.revision)
+            let workflow = WebResearchWorkflow(provider: provider, reader: StoredWorkflowReader())
+            let task = Task { try await workflow.run(initial.session) { try await sink.save($0) } }
+            do {
+                try await waitForRequest { await provider.waiting() }
+                let active = try await owner.load(id: initial.id), before = try Data(contentsOf: file(directory))
+                XCTAssertEqual(active.session.queries[0].status, .inFlight)
+                let foreign = try WebResearchSessionStore(directory: directory)
+                _ = try await foreign.list()
+                let projected = try await foreign.load(id: initial.id)
+                XCTAssertEqual(projected.revision, active.revision)
+                XCTAssertEqual(projected.session.queries[0].status, .uncertain)
+                XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            } catch { await provider.release(); _ = try? await task.value; throw error }
+            await provider.release()
+            let result = try await task.value, saved = try await owner.load(id: initial.id)
+            XCTAssertEqual(result.stage, .awaitingLocalSynthesis); XCTAssertEqual(saved.session, result)
+            let calls = await provider.calls; XCTAssertEqual(calls, ["primary", "secondary"])
+        }
+    }
+
+    func testForeignReadDuringSuspendedSourceCannotInvalidateLiveWorkflowCheckpoint() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+            let reader = StoredWorkflowReader(); await reader.setHold()
+            let sink = StoredWorkflowCheckpoints(store: owner, revision: initial.revision)
+            let workflow = WebResearchWorkflow(provider: StoredWorkflowSearch(), reader: reader)
+            let task = Task { try await workflow.run(initial.session) { try await sink.save($0) } }
+            do {
+                try await waitForRequest { await reader.waiting() }
+                let active = try await owner.load(id: initial.id), before = try Data(contentsOf: file(directory))
+                XCTAssertEqual(active.session.reads[0].status, .inFlight)
+                let foreign = try WebResearchSessionStore(directory: directory)
+                _ = try await foreign.list()
+                let projected = try await foreign.load(id: initial.id)
+                XCTAssertEqual(projected.revision, active.revision)
+                XCTAssertEqual(projected.session.reads[0].status, .pending)
+                XCTAssertEqual(projected.session.queries, active.session.queries)
+                XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            } catch { await reader.release(); _ = try? await task.value; throw error }
+            await reader.release()
+            let result = try await task.value, saved = try await owner.load(id: initial.id)
+            XCTAssertEqual(result.stage, .awaitingLocalSynthesis); XCTAssertEqual(saved.session, result)
+            XCTAssertEqual(result.sources.count, 2)
+        }
+    }
+
+    func testExplicitResumeReconcilesBeforeRequestsAndPreservesUncertainAttemptCaps() async throws {
+        let scenarios: [(WebResearchRetryPolicy, Int, Int, Int, [String])] = [
+            (.preserveUncertain, 1, 0, 3, ["secondary"]),
+            (.retryUncertainWithinBudget, 1, 0, 3, ["primary", "secondary"]),
+            (.retryUncertainWithinBudget, 2, 0, 3, ["secondary"]),
+            (.retryUncertainWithinBudget, 1, 1, 2, [])
+        ]
+        for (policy, firstAttempts, secondAttempts, cap, expectedCalls) in scenarios {
+            try await withDirectory { directory in
+                var limits = WebResearchLimits(); limits.maxSearchAttempts = cap
+                let owner = try WebResearchSessionStore(directory: directory)
+                let initial = try await owner.create(question: "Resume fixture", queries: ["primary", "secondary"], limits: limits, retryPolicy: policy)
+                var pending = inFlight(initial.session); pending.queries[0].attempts = firstAttempts
+                if secondAttempts > 0 { pending.queries[1].status = .inFlight; pending.queries[1].attempts = secondAttempts }
+                let active = try await owner.save(pending, expectedRevision: initial.revision)
+                let foreign = try WebResearchSessionStore(directory: directory, now: { Date(timeIntervalSince1970: 700) })
+                let provider = StoredRecoverySearch(), before = try Data(contentsOf: file(directory))
+                _ = try await foreign.list()
+                let projected = try await foreign.load(id: active.id)
+                XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+                let callsBeforeResume = await provider.calls; XCTAssertTrue(callsBeforeResume.isEmpty)
+                let sink = StoredWorkflowCheckpoints(store: foreign, revision: projected.revision)
+                let result = try await WebResearchWorkflow(provider: provider, reader: StoredWorkflowReader()).run(projected.session) { try await sink.save($0) }
+                let calls = await provider.calls, checkpoints = await sink.values
+                XCTAssertEqual(calls, expectedCalls)
+                let first = try XCTUnwrap(checkpoints.first)
+                XCTAssertNotEqual(first.revision, active.revision)
+                XCTAssertEqual(first.recoveredAt, Date(timeIntervalSince1970: 700))
+                XCTAssertEqual(first.session.searchAttempts, active.session.searchAttempts, "Reconciliation does not refund or spend an attempt")
+                XCTAssertEqual(first.session.limits, limits); XCTAssertEqual(first.session.retryPolicy, policy)
+                XCTAssertEqual(result.searchAttempts, firstAttempts + secondAttempts + expectedCalls.count)
+                XCTAssertLessThanOrEqual(result.searchAttempts, cap)
+                XCTAssertTrue(result.queries.allSatisfy { $0.attempts <= 2 })
+                if !expectedCalls.contains("primary") {
+                    XCTAssertEqual(result.queries[0].status, .uncertain)
+                    XCTAssertEqual(result.queries[0].failure, .interruptedOutcomeUnknown)
+                }
+                let beforeStaleWrite = try Data(contentsOf: file(directory))
+                await expect(.conflict) { _ = try await owner.save(active.session, expectedRevision: active.revision) }
+                XCTAssertEqual(try Data(contentsOf: file(directory)), beforeStaleWrite)
+            }
+        }
+    }
+
+    func testRecoveryProjectionRetainsRetryGatesUntilExplicitAction() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+            var pending = inFlight(initial.session)
+            pending.retryNotBefore = Date(timeIntervalSince1970: 2_000)
+            pending.retryRequiresReview = true
+            pending.retryPolicy = .retryUncertainWithinBudget
+            let active = try await owner.save(pending, expectedRevision: initial.revision)
+            let foreign = try WebResearchSessionStore(directory: directory)
+            let projected = try await foreign.load(id: active.id)
+            XCTAssertEqual(projected.session.retryNotBefore, active.session.retryNotBefore)
+            XCTAssertEqual(projected.session.retryRequiresReview, true)
+            XCTAssertEqual(projected.session.retryPolicy, active.session.retryPolicy)
+            let before = try Data(contentsOf: file(directory)), provider = StoredRecoverySearch()
+            let sink = StoredWorkflowCheckpoints(store: foreign, revision: projected.revision)
+            let result = try await WebResearchWorkflow(provider: provider, reader: StoredWorkflowReader()).run(projected.session) { try await sink.save($0) }
+            XCTAssertEqual(result, projected.session)
+            let calls = await provider.calls, checkpoints = await sink.values
+            XCTAssertTrue(calls.isEmpty); XCTAssertTrue(checkpoints.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+        }
+    }
+
+    func testForeignObservationPreservesExactPendingAndCheckedOutputReceipts() async throws {
+        try await withDirectory { directory in
+            let owner = try WebResearchSessionStore(directory: directory), initial = try await create(owner)
+            let pending = try await owner.save(completed(initial.session), expectedRevision: initial.revision)
+            let foreign = try WebResearchSessionStore(directory: directory)
+            let before = try Data(contentsOf: file(directory))
+            _ = try await foreign.list()
+            let loadedPending = try await foreign.load(id: pending.id)
+            XCTAssertEqual(loadedPending, pending); XCTAssertEqual(try Data(contentsOf: file(directory)), before)
+            var session = pending.session; session.outputVerification = .checked
+            let checked = try await owner.save(session, expectedRevision: pending.revision)
+            let after = try Data(contentsOf: file(directory))
+            _ = try await foreign.list()
+            let loadedChecked = try await foreign.load(id: checked.id)
+            XCTAssertEqual(loadedChecked, checked); XCTAssertEqual(try Data(contentsOf: file(directory)), after)
+            await expect(.conflict) { _ = try await foreign.save(pending.session, expectedRevision: pending.revision) }
+            XCTAssertEqual(try Data(contentsOf: file(directory)), after)
+        }
+    }
+
     func testWorkflowCheckpointsUseOneSharedStoreThroughActualRetrievalBarrier() async throws {
         try await withDirectory { directory in
             let store = try WebResearchSessionStore(directory: directory), initial = try await create(store)
@@ -418,6 +689,92 @@ final class WebResearchStoreTests: XCTestCase {
         var changed = partial; changed.queries[0].coverage = .complete; changed.queries[0].unavailableEngineIDs = []
         await expect(.invalidInput) { _ = try await memory.save(changed, expectedRevision: saved.revision) }
         let actual = try await memory.load(id: saved.id); XCTAssertEqual(actual, saved)
+    }
+
+    private func completed(_ session: WebResearchSession) throws -> WebResearchSession {
+        let fetched = ready(session)
+        let claim = WebResearchClaim(id: UUID(), text: "Fixture conclusion", citationNumbers: [1], confidence: .tentative, dates: [])
+        return try fetched.completing(with: WebResearchSynthesis(answer: "Fixture conclusion [1].", claims: [claim],
+            citations: [WebResearchCitation(number: 1, sourceID: fetched.sources[0].id, excerpt: "Fixture evidence.")],
+            conflicts: [], followUpQueries: []))
+    }
+
+    func testPendingOutputReceiptSurvivesRestartWithoutRecoveryMutation() async throws {
+        try await withDirectory { directory in
+            let store = try WebResearchSessionStore(directory: directory), initial = try await create(store)
+            let pending = try await store.save(completed(initial.session), expectedRevision: initial.revision)
+            XCTAssertEqual(pending.session.outputVerification, .pending)
+            let data = try Data(contentsOf: file(directory))
+            let restored = try await WebResearchSessionStore(directory: directory).load(id: pending.id)
+            XCTAssertEqual(restored, pending)
+            XCTAssertEqual(try Data(contentsOf: file(directory)), data)
+        }
+    }
+
+    func testCheckedReceiptCannotBeMintedWithNewAnswerOrReboundToChangedContent() async throws {
+        let store = TransientWebResearchStore()
+        let initial = try await store.create(question: "Fixture", queries: ["first", "second"])
+        var draft = try completed(initial.session); draft.outputVerification = .checked
+        await expect(.invalidInput) { _ = try await store.save(draft, expectedRevision: initial.revision) }
+        draft.outputVerification = .pending
+        let pending = try await store.save(draft, expectedRevision: initial.revision)
+        var checked = pending.session; checked.outputVerification = .checked
+        let saved = try await store.save(checked, expectedRevision: pending.revision)
+        var changed = checked; changed.updatedAt = changed.updatedAt.addingTimeInterval(1)
+        await expect(.invalidInput) { _ = try await store.save(changed, expectedRevision: saved.revision) }
+        changed = checked
+        let old = try XCTUnwrap(changed.reads[0].source)
+        changed.reads[0].source = ResearchSource(id: old.id, originalURL: old.originalURL, finalURL: old.finalURL,
+            title: old.title, kind: old.kind, retrievedAt: old.retrievedAt, modifiedAt: old.modifiedAt,
+            bytesRead: old.bytesRead, sha256: old.sha256, pagesRead: old.pagesRead,
+            text: old.text + " Changed evidence.", truncated: old.truncated)
+        await expect(.invalidInput) { _ = try await store.save(changed, expectedRevision: saved.revision) }
+        changed = checked; changed.outputVerification = .pending
+        await expect(.invalidInput) { _ = try await store.save(changed, expectedRevision: saved.revision) }
+        let actual = try await store.load(id: saved.id); XCTAssertEqual(actual, saved)
+    }
+
+    func testFollowUpClearsCheckedReceiptAndCannotInheritIt() async throws {
+        let store = TransientWebResearchStore()
+        let initial = try await store.create(question: "Fixture", queries: ["first", "second"])
+        let pending = try await store.save(completed(initial.session), expectedRevision: initial.revision)
+        var checked = pending.session; checked.outputVerification = .checked
+        let saved = try await store.save(checked, expectedRevision: pending.revision)
+        var followUp = try saved.session.addingQueries(["third"])
+        XCTAssertNil(followUp.outputVerification)
+        followUp.outputVerification = .checked
+        XCTAssertThrowsError(try followUp.encodedCheckpoint())
+        await expect(.invalidInput) { _ = try await store.save(followUp, expectedRevision: saved.revision) }
+        followUp.outputVerification = nil
+        let next = try await store.save(followUp, expectedRevision: saved.revision)
+        XCTAssertNil(next.session.outputVerification); XCTAssertNil(next.session.synthesis)
+    }
+
+    func testLegacyOutputReceiptIsUnknownAndUnknownEnumIsRejected() throws {
+        let session = try completed(WebResearchSession(question: "Legacy", queries: ["first", "second"]))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: session.encodedCheckpoint()) as? [String: Any])
+        json.removeValue(forKey: "outputVerification")
+        let legacy = try WebResearchSession.decodeCheckpoint(JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(legacy.outputVerification); XCTAssertEqual(legacy.synthesis, session.synthesis)
+        json["outputVerification"] = "future-verification"
+        XCTAssertThrowsError(try WebResearchSession.decodeCheckpoint(JSONSerialization.data(withJSONObject: json)))
+    }
+
+    func testUnknownOutputStatePreservesDiskDocumentOnLoadAndDelete() async throws {
+        try await withDirectory { directory in
+            let store = try WebResearchSessionStore(directory: directory), initial = try await create(store)
+            _ = try await store.save(completed(initial.session), expectedRevision: initial.revision)
+            let data = try Data(contentsOf: file(directory))
+            let text = try XCTUnwrap(String(data: data, encoding: .utf8))
+            let future = Data(text.replacingOccurrences(of: "\"outputVerification\":\"pending\"",
+                with: "\"outputVerification\":\"future\"").utf8)
+            XCTAssertNotEqual(data, future)
+            try future.write(to: file(directory))
+            let reopened = try WebResearchSessionStore(directory: directory)
+            await expect(.corrupt) { _ = try await reopened.list() }
+            await expect(.corrupt) { try await reopened.deleteAll() }
+            XCTAssertEqual(try Data(contentsOf: file(directory)), future)
+        }
     }
 
 }

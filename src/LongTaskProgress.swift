@@ -187,6 +187,9 @@ struct LongTaskProgress: Sendable {
             }
         }
     }
+    /// Bounded running duration for restoring this presentation within the app.
+    /// It saturates just beyond the promotion threshold; never use it as an ETA.
+    var accumulatedRunningSeconds: Double { elapsedRunningSeconds }
     var canResume: Bool {
         switch state { case .paused, .blocked: return true; default: return false }
     }

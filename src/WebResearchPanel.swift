@@ -27,29 +27,44 @@ final class WebResearchModel: ObservableObject {
     private let copyText: (String) -> Void
     private let openURL: (URL) -> Bool
     private var operation: Task<Void, Never>?
+    // Keep admission reserved while publishing the final idle transition.
+    private var publishingIdle = false
     private var operationID = UUID()
+    private var progressSequence: UInt64 = 0
+    private var operationGeneration: UInt64 = 0
+    var onTaskProgress: ((ResearchTaskProgress.Event) -> Void)?
     private var cancellationRequested = false
     private var acceptingActions = true
     private var activeStored: WebResearchStoredSession?
+    // Keep the exact committed answer until its final read-back is verified.
+    // This in-process receipt additionally covers a pause during receipt read-back, without
+    // treating a saved .completed stage as proof that verification finished.
+    private var pendingVerification: WebResearchStoredSession?
     private var researchSessionID: UUID?
     private var pendingDeletion: (prompt: UUID, stored: WebResearchStoredSession, operation: UUID)?
 
-    var busy: Bool { activity != nil }
+    var busy: Bool { operation != nil || publishingIdle }
     var maxQueries: Int { limits.maxQueries }
     var transient: Bool { store?.retention == .transient }
     var configured: Bool { provider != nil && (transient || provider?.permitsResultPersistence == true) }
     var canCopy: Bool { !transient && !busy && selected != nil }
     var canStart: Bool { acceptingActions && !busy && store != nil && configured && !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     var canResume: Bool {
-        guard acceptingActions, !busy, let session = selected?.session, session.stage != .completed,
-              session.retryRequiresReview != true, session.retryNotBefore.map({ $0 <= Date() }) ?? true else { return false }
-        if session.stage == .awaitingLocalSynthesis { return synthesize != nil && Self.hasSynthesisEvidence(session) }
+        guard acceptingActions, !busy, let selected else { return false }
+        let session = selected.session
+        if session.stage == .completed { return session.outputVerification == .pending || pendingVerification == selected }
+        guard session.retryRequiresReview != true,
+              session.retryNotBefore.map({ $0 <= Date() }) ?? true else { return false }
+        if session.stage == .awaitingLocalSynthesis || Self.canFinishRetrievalLocally(session) {
+            return synthesize != nil && Self.hasSynthesisEvidence(session)
+        }
         guard configured, session.providerID == nil || session.providerID == providerName else { return false }
         return session.queries.contains { $0.status == .pending }
             || session.reads.contains { $0.status == .pending || $0.status == .inFlight }
             || session.queries.contains { ($0.status == .uncertain || $0.status == .inFlight)
                 && retryPolicy == .retryUncertainWithinBudget && $0.attempts < 2 && session.searchAttempts < session.limits.maxSearchAttempts }
             || session.stage == .planned || session.stage == .retrieving
+            || (session.stage == .paused && Self.hasTerminalRetrieval(session))
     }
     var canFollowUp: Bool {
         guard acceptingActions, !busy, configured, let session = selected?.session, let synthesis = session.synthesis,
@@ -109,7 +124,10 @@ final class WebResearchModel: ObservableObject {
     func open() { guard !shuttingDown else { return }; acceptingActions = true; if !busy { reload() } }
     func close() { acceptingActions = false; foregroundPause() }
     func closeAdmissions() { shuttingDown = true; close() }
-    func cancel() { foregroundPause() }
+    func cancel() {
+        foregroundPause()
+        if researchSessionID != nil { emitProgress(.cancelled, token: operationID) }
+    }
     func flush() async { while let work = operation { await work.value } }
 
     /// Keeps the operation occupied until its request/synthesis exits and a paused receipt is saved.
@@ -118,6 +136,7 @@ final class WebResearchModel: ObservableObject {
         cancelDeletion()
         guard let previous = operation, !cancellationRequested else { return }
         cancellationRequested = true; previous.cancel(); activity = .pausing
+        if researchSessionID != nil { emitProgress(.paused, token: operationID) }
         let token = operationID
         operation = Task { [weak self] in
             await previous.value
@@ -130,8 +149,10 @@ final class WebResearchModel: ObservableObject {
                             session.queries[index].status = .uncertain; session.queries[index].failure = .interruptedOutcomeUnknown
                         }
                         for index in session.reads.indices where session.reads[index].status == .inFlight { session.reads[index].status = .pending }
-                        session.stage = Self.hasSynthesisEvidence(session) && session.queries.allSatisfy({ $0.status == .completed || $0.status == .failed })
-                            && session.reads.allSatisfy({ $0.status == .completed || $0.status == .failed }) ? .awaitingLocalSynthesis : .paused
+                        // Stop must not discard retained results that still fit the source budget.
+                        // Normalize first so an already-ready local receipt remains ready too.
+                        session.stage = .paused
+                        if Self.canFinishRetrievalLocally(session) { session.stage = .awaitingLocalSynthesis }
                         session.updatedAt = Date()
                         self.activeStored = try await store.save(session, expectedRevision: active.revision)
                     }
@@ -187,10 +208,37 @@ final class WebResearchModel: ObservableObject {
     }
     func resume() {
         guard canResume, let selected else { return }
-        begin(selected.session.stage == .awaitingLocalSynthesis ? .synthesizing : .retrieving) { model, store, token in
-            let current = try await store.load(id: selected.id)
-            try model.check(token); model.activeStored = current; model.researchSessionID = current.id; model.selected = current
-            try await model.research(current, store: store, token: token)
+        if selected.session.stage == .completed {
+            // Explicit Resume alone admits local verification of a durable pending
+            // answer. Reload/open never runs searches, synthesis or actions.
+            guard selected.session.outputVerification == .pending || pendingVerification == selected else { return }
+            begin(.synthesizing) { model, store, token in
+                try model.check(token)
+                model.activeStored = selected; model.researchSessionID = selected.id
+                model.pendingVerification = selected
+                model.emitProgress(.started(selected.session, resuming: true), token: token)
+                try model.check(token)
+                model.emitProgress(.verifying(selected.session), token: token)
+                try model.check(token)
+                try await model.verifyCompleted(selected, store: store, token: token)
+            }
+            return
+        }
+        begin(selected.session.stage == .awaitingLocalSynthesis || Self.canFinishRetrievalLocally(selected.session) ? .synthesizing : .retrieving) { model, store, token in
+            var current = try await store.load(id: selected.id)
+            try model.check(token)
+            guard current.revision == selected.revision else { throw WebResearchStoreError.conflict }
+            model.activeStored = current; model.researchSessionID = current.id
+            if Self.canFinishRetrievalLocally(current.session) {
+                // Resume explicitly commits this target's retrieval barrier before local
+                // synthesis. Reading a recovery projection alone never changes authority.
+                var session = current.session; session.stage = .awaitingLocalSynthesis; session.updatedAt = Date()
+                current = try await store.save(session, expectedRevision: selected.revision)
+                model.activeStored = current // Capture an admitted write before cancellation.
+                try model.check(token)
+            }
+            model.selected = current
+            try await model.research(current, store: store, token: token, resuming: true)
         }
     }
     func retryReviewedService() {
@@ -202,7 +250,7 @@ final class WebResearchModel: ObservableObject {
             let updated = try await store.save(current.session.allowingReviewedProviderRetry(), expectedRevision: current.revision)
             model.activeStored = updated; model.researchSessionID = updated.id
             try model.check(token); model.selected = updated
-            try await model.research(updated, store: store, token: token)
+            try await model.research(updated, store: store, token: token, resuming: true)
         }
     }
     func followUp() {
@@ -232,7 +280,9 @@ final class WebResearchModel: ObservableObject {
         let target = request.stored
         begin(.deleting) { model, store, token in
             try await store.delete(id: target.id, expectedRevision: target.revision)
+            if model.pendingVerification?.id == target.id { model.pendingVerification = nil }
             try model.check(token); model.selected = nil
+            model.emitProgress(.removed(taskID: target.id), token: token)
             try await model.refresh(store: store, preferred: nil, token: token)
             model.notice = "Research deleted from this store."
         }
@@ -256,7 +306,11 @@ final class WebResearchModel: ObservableObject {
         else { error = "The original source could not be opened." }
     }
 
-    private func research(_ original: WebResearchStoredSession, store: any WebResearchSessionAccess, token: UUID) async throws {
+    private func research(_ original: WebResearchStoredSession, store: any WebResearchSessionAccess, token: UUID, resuming: Bool = false) async throws {
+        try check(token)
+        pendingVerification = nil
+        emitProgress(.started(original.session, resuming: resuming), token: token)
+        try check(token)
         var stored = original
         if stored.session.stage != .awaitingLocalSynthesis {
             guard let provider, transient || provider.permitsResultPersistence else { throw WebResearchError.resultRetentionUnavailable }
@@ -277,25 +331,74 @@ final class WebResearchModel: ObservableObject {
                 if result.retryRequiresReview == true { notice = "Research paused because its search service needs attention. No more searches were sent." }
                 else if let date = result.retryNotBefore { notice = "Research paused until " + date.formatted() + ". Resume later; remaining searches have not been sent." }
                 else { notice = "Paused with an interrupted search outcome. " + retrySummary }
+                emitProgress(.blocked(.init(reason: result.retryRequiresReview == true ? "The search service needs attention" : "Search is waiting for a safe retry",
+                    nextAction: "Open Web research and check the saved retry instructions")!), token: token)
                 try await refresh(store: store, preferred: stored.id, token: token); return
             }
             guard let latest = activeStored else { throw WebResearchStoreError.notFound }; stored = latest
         }
         try check(token)
         guard Self.hasSynthesisEvidence(stored.session) else {
+            emitProgress(.blocked(.init(reason: "There is not enough readable evidence for synthesis",
+                nextAction: "Open Web research to inspect sources and revise the search plan")!), token: token)
             notice = "The available evidence is " + (transient ? "held temporarily in memory" : "saved locally") + ". At least two completed searches and two readable sources are needed before local synthesis."
             try await refresh(store: store, preferred: stored.id, token: token); return
         }
         guard let synthesize else {
+            emitProgress(.blocked(.init(reason: "Local reasoning is unavailable",
+                nextAction: "Check local Qwen readiness, then resume from Web research")!), token: token)
             notice = "Sources are ready. Local Qwen synthesis is not configured for this panel yet."
             try await refresh(store: store, preferred: stored.id, token: token); return
         }
         activity = .synthesizing
+        emitProgress(.synthesizing(stored.session), token: token)
+        try check(token)
         let result = try await synthesize(stored.session)
+        try check(token)
+        emitProgress(.verifying(stored.session), token: token)
         try check(token)
         let completed = try stored.session.completing(with: result)
         try await checkpoint(completed, store: store, token: token)
-        try await refresh(store: store, preferred: stored.id, token: token)
+        guard let expected = activeStored else { throw WebResearchStoreError.notFound }
+        try await verifyCompleted(expected, store: store, token: token)
+    }
+
+    private func verifyCompleted(_ expected: WebResearchStoredSession,
+                                 store: any WebResearchSessionAccess, token: UUID) async throws {
+        try check(token)
+        guard expected.session.stage == .completed, expected.session.synthesis != nil,
+              pendingVerification == expected else { throw WebResearchStoreError.conflict }
+        // A successful save is insufficient for the complete halo. Revalidate the
+        // exact checkpoint, reload it, and compare the visible refresh as well.
+        // A resume after pause/Stop uses this same path without new synthesis.
+        _ = try expected.session.encodedCheckpoint()
+        let reloaded = try await store.load(id: expected.id)
+        try check(token)
+        guard reloaded == expected else { throw WebResearchStoreError.conflict }
+        try await refresh(store: store, preferred: expected.id, token: token)
+        try check(token) // Published observers may synchronously Stop or close.
+        guard selected == expected else { throw WebResearchStoreError.conflict }
+        // Persist a receipt only after the original answer passed both exact
+        // read-backs. This metadata-only CAS cannot carry a receipt to new content.
+        var verified = expected, checkedReadback = reloaded
+        if expected.session.outputVerification == .pending {
+            var checked = expected.session; checked.outputVerification = .checked
+            verified = try await store.save(checked, expectedRevision: expected.revision)
+            // Capture an admitted write before observing cancellation, so a late
+            // Stop can resume only this exact receipt without replaying synthesis.
+            activeStored = verified; pendingVerification = verified
+            try check(token)
+            let receipt = try await store.load(id: verified.id)
+            try check(token)
+            guard receipt == verified else { throw WebResearchStoreError.conflict }
+            checkedReadback = receipt
+            try await refresh(store: store, preferred: verified.id, token: token)
+            try check(token) // Recheck admission after synchronous UI observers.
+            guard selected == verified else { throw WebResearchStoreError.conflict }
+        }
+        emitProgress(.verified(expected: verified, reloaded: checkedReadback), token: token)
+        try check(token) // A completion observer may synchronously Stop or close.
+        pendingVerification = nil
         notice = (transient ? "Temporary research answer ready. It will be lost when dot quits." : "Research answer saved locally.") + " Citation excerpts match sources; conclusions still require judgment."
     }
 
@@ -304,7 +407,9 @@ final class WebResearchModel: ObservableObject {
         guard let active = activeStored, active.id == session.id else { throw WebResearchStoreError.conflict }
         let saved = try await store.save(session, expectedRevision: active.revision)
         activeStored = saved
+        if session.stage == .completed { pendingVerification = saved }
         try check(token); selected = saved
+        if session.stage != .completed { emitProgress(.checkpoint(session), token: token) }
     }
 
     private func refresh(store: any WebResearchSessionAccess, preferred: UUID?, token: UUID, duringCleanup: Bool = false) async throws {
@@ -322,16 +427,30 @@ final class WebResearchModel: ObservableObject {
                        body: @escaping @MainActor (WebResearchModel, any WebResearchSessionAccess, UUID) async throws -> Void) {
         guard acceptingActions, !busy, let store else { return }
         cancelDeletion()
-        let token = UUID(); operationID = token; cancellationRequested = false
-        self.activity = activity; error = nil; notice = nil; activeStored = nil; researchSessionID = nil
+        let token = UUID(); operationID = token; operationGeneration += 1; progressSequence = 0; cancellationRequested = false
+        activeStored = nil; researchSessionID = nil
+        // Install ownership before any synchronous Published observer can Stop,
+        // close, or attempt another operation. This task cannot run until we yield.
         operation = Task { [weak self] in
             guard let self else { return }
             do { try self.check(token); try await body(self, store, token) }
             catch {
-                if !self.cancellationRequested, self.operationID == token, !Task.isCancelled { self.error = error.localizedDescription; self.notice = nil }
+                if !self.cancellationRequested, self.operationID == token, !Task.isCancelled {
+                    self.error = error.localizedDescription; self.notice = nil
+                    if self.researchSessionID != nil { self.emitProgress(.failed, token: token) }
+                }
             }
             if !self.cancellationRequested { self.finish(token) }
         }
+        self.activity = activity; error = nil; notice = nil
+        // Published uses willSet: a nested Stop may publish pausing before the
+        // outer activity assignment finishes. Restore the admitted pause state.
+        if cancellationRequested { self.activity = .pausing }
+    }
+    private func emitProgress(_ change: ResearchTaskProgress.Change, token: UUID) {
+        guard operationID == token else { return }
+        progressSequence += 1
+        onTaskProgress?(.init(operation: token, generation: operationGeneration, sequence: progressSequence, change: change))
     }
     private func check(_ token: UUID) throws {
         try Task.checkCancellation()
@@ -339,7 +458,23 @@ final class WebResearchModel: ObservableObject {
     }
     private func finish(_ token: UUID) {
         guard operationID == token else { return }
-        activity = nil; operation = nil; cancellationRequested = false; activeStored = nil; researchSessionID = nil
+        publishingIdle = true
+        operation = nil; cancellationRequested = false; activeStored = nil; researchSessionID = nil
+        // Reject nested admission until this outer Published assignment finishes;
+        // otherwise it could overwrite a newly started operation's activity.
+        activity = nil
+        publishingIdle = false
+    }
+    private static func hasTerminalRetrieval(_ session: WebResearchSession) -> Bool {
+        session.queries.allSatisfy { $0.status == .completed || $0.status == .failed }
+            && session.reads.allSatisfy { $0.status == .completed || $0.status == .failed }
+    }
+    private static func canFinishRetrievalLocally(_ session: WebResearchSession) -> Bool {
+        (session.stage == .paused || session.stage == .retrieving) && hasTerminalRetrieval(session)
+            && hasSynthesisEvidence(session)
+            // Completed queries may still have unqueued results. Leave those to the
+            // existing bounded retrieval workflow rather than silently skipping sources.
+            && (session.unreadResultCount == 0 || session.reads.count >= session.limits.maxSources)
     }
     private static func hasSynthesisEvidence(_ session: WebResearchSession) -> Bool {
         session.sources.count >= 2 && session.queries.filter { $0.status == .completed }.count >= 2
@@ -536,6 +671,10 @@ struct WebResearchView: View {
     @ViewBuilder private func answer(_ session: WebResearchSession) -> some View {
         if let result = session.synthesis {
             Text(verbatim: result.answer).textSelection(.enabled)
+            if session.outputVerification == .pending {
+                Text("Saved answer awaits its final local check. Use Resume; this does not repeat searches or local reasoning.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Text("Citation excerpts match retrieved text. This does not independently prove the conclusions.").font(.caption).foregroundStyle(.secondary)
             ForEach(result.claims) { claim in
                 VStack(alignment: .leading, spacing: 3) {

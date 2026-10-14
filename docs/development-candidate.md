@@ -1,20 +1,34 @@
-# Model-free macOS test candidate
+# Model-free macOS packaging validation
 
-This candidate is a native UI test build, **not the complete voice/research app**.
-The normal macOS CI job uploads it only after Python/sandbox tests, SwiftPM,
-native XCTest, Release/development packaging, zero-warning checks and strict
-app-signature verification succeed. CI does not launch it or establish device
-acceptance. The complete-release workflow and native offline acceptance gate
-remain unchanged.
+The model-free build is a native UI test build, **not the complete voice/research
+app**. The normal macOS CI job still runs Python/sandbox tests, SwiftPM, native
+XCTest, Release/development packaging, zero-warning checks and strict app-signature
+verification. Only after those gates succeed does it validate and record the
+exact-source packaging receipt. Test/build diagnostics and the printed receipt
+remain available in the workflow logs.
 
-## Download and test safely
+CI no longer automatically uploads the model-free DMG, app or receipt as a
+downloadable artifact. It does not launch the app or establish device acceptance.
+The complete-release workflow and native offline acceptance gate remain closed
+until their separate requirements are met. Removing automatic delivery does not
+make the model-free build a complete app or waive any packaging test.
 
-1. Use the successful **Native companion checks** run for the exact reviewed
-   commit. Download its `Dot-development-<commit>-<architecture>-<attempt>`
-   artifact within seven days. GitHub may require sign-in. Unzip it to obtain
-   `Dot.dmg` and `Dot-candidate-receipt.json`.
-2. Compare the receipt's commit with that workflow run and its DMG size/SHA-256
-   with the downloaded file (`shasum -a 256 Dot.dmg`). Check
+## Historical candidates and separate local tests
+
+The earlier delivered `5753a4e` candidate remains historical model-free test
+evidence; this change neither deletes that artifact nor upgrades its acceptance.
+Its original artifact retention still applies. Current CI runs do not offer a
+replacement download. These precautions apply only if testing a retained candidate
+or a separately prepared local test build; a green CI run is not a request to
+replace the working app.
+
+1. Identify the candidate's exact source revision and successful native checks.
+   Keep its `Dot.dmg` and `Dot-candidate-receipt.json` together. For a historical
+   CI download, use its original workflow run and artifact rather than a newer
+   run's logs or receipt.
+2. Compare the receipt's commit with the exact source revision (and original
+   workflow run for a historical artifact), and its DMG size/SHA-256 with the
+   candidate file (`shasum -a 256 Dot.dmg`). Check
    `platform.executable_architectures` and `platform.minimum_version` against
    your Mac. This is a single-architecture build, not a universal installer;
    the receipt records the actual executable architecture and macOS build/SDK.

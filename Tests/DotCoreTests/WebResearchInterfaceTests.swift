@@ -1,5 +1,6 @@
 #if !SWIFT_PACKAGE
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 
@@ -46,11 +47,15 @@ private actor PanelSynthesisGate {
 private actor PanelStoreGate: WebResearchSessionAccess {
     let base: WebResearchSessionStore
     var holdLoad = false
+    var holdCheckedSave = false
+    var holdReconciliationSave = false
     private var continuation: CheckedContinuation<Void, Never>?
     init(_ base: WebResearchSessionStore) { self.base = base }
     func suspendLoad() { holdLoad = true }
+    func suspendCheckedSave() { holdCheckedSave = true }
+    func suspendReconciliationSave() { holdReconciliationSave = true }
     func waiting() -> Bool { continuation != nil }
-    func release() { holdLoad = false; continuation?.resume(); continuation = nil }
+    func release() { holdLoad = false; holdCheckedSave = false; holdReconciliationSave = false; continuation?.resume(); continuation = nil }
     func list() async throws -> [WebResearchSessionSummary] { try await base.list() }
     func load(id: UUID) async throws -> WebResearchStoredSession {
         if holdLoad { await withCheckedContinuation { continuation = $0 } }
@@ -59,7 +64,88 @@ private actor PanelStoreGate: WebResearchSessionAccess {
     func create(question: String, queries: [String], limits: WebResearchLimits, retryPolicy: WebResearchRetryPolicy) async throws -> WebResearchStoredSession {
         try await base.create(question: question, queries: queries, limits: limits, retryPolicy: retryPolicy)
     }
-    func save(_ session: WebResearchSession, expectedRevision: UUID) async throws -> WebResearchStoredSession { try await base.save(session, expectedRevision: expectedRevision) }
+    func save(_ session: WebResearchSession, expectedRevision: UUID) async throws -> WebResearchStoredSession {
+        let result = try await base.save(session, expectedRevision: expectedRevision)
+        if (holdCheckedSave && session.outputVerification == .checked)
+            || (holdReconciliationSave && session.stage == .awaitingLocalSynthesis) {
+            await withCheckedContinuation { continuation = $0 }
+        }
+        return result
+    }
+    func delete(id: UUID, expectedRevision: UUID) async throws { try await base.delete(id: id, expectedRevision: expectedRevision) }
+    func deleteAll() async throws { try await base.deleteAll() }
+}
+
+
+private actor PanelRecoveryReader: WebResearchSourceReading {
+    private(set) var calls: [URL] = []
+    func read(_ url: URL) async throws -> ResearchSource {
+        calls.append(url)
+        return try await PanelReaderFixture().read(url)
+    }
+}
+
+/// Another successful writer wins after Resume's load and before its reconciliation
+/// save. The losing model must never reach synthesis or send another request.
+private actor PanelReconciliationRaceStore: WebResearchSessionAccess {
+    let base: WebResearchSessionStore
+    let competitor: WebResearchSessionStore
+    let delete: Bool
+    private var fired = false
+    init(base: WebResearchSessionStore, competitor: WebResearchSessionStore, delete: Bool) {
+        self.base = base; self.competitor = competitor; self.delete = delete
+    }
+    func list() async throws -> [WebResearchSessionSummary] { try await base.list() }
+    func load(id: UUID) async throws -> WebResearchStoredSession { try await base.load(id: id) }
+    func create(question: String, queries: [String], limits: WebResearchLimits, retryPolicy: WebResearchRetryPolicy) async throws -> WebResearchStoredSession {
+        try await base.create(question: question, queries: queries, limits: limits, retryPolicy: retryPolicy)
+    }
+    func save(_ session: WebResearchSession, expectedRevision: UUID) async throws -> WebResearchStoredSession {
+        if !fired && session.stage == .awaitingLocalSynthesis {
+            fired = true
+            if delete { try await competitor.delete(id: session.id, expectedRevision: expectedRevision) }
+            else { _ = try await competitor.save(session, expectedRevision: expectedRevision) }
+        }
+        return try await base.save(session, expectedRevision: expectedRevision)
+    }
+    func delete(id: UUID, expectedRevision: UUID) async throws { try await base.delete(id: id, expectedRevision: expectedRevision) }
+    func deleteAll() async throws { try await base.deleteAll() }
+}
+
+private actor ProgressReadbackStore: WebResearchSessionAccess {
+    enum Fault { case firstReadRevision, secondReadRevision, thirdReadRevision, fourthReadRevision, checkedSaveFailure, deletionBeforeRefresh }
+    let base: WebResearchSessionStore
+    let fault: Fault
+    private var completed: WebResearchStoredSession?
+    private var completedLoads = 0
+    init(_ base: WebResearchSessionStore, fault: Fault) { self.base = base; self.fault = fault }
+    func list() async throws -> [WebResearchSessionSummary] {
+        if fault == .deletionBeforeRefresh, completedLoads > 0, let completed {
+            try await base.delete(id: completed.id, expectedRevision: completed.revision)
+            self.completed = nil
+        }
+        return try await base.list()
+    }
+    func load(id: UUID) async throws -> WebResearchStoredSession {
+        let result = try await base.load(id: id)
+        if result.session.stage == .completed {
+            completedLoads += 1
+            if (fault == .firstReadRevision && completedLoads == 1) || (fault == .secondReadRevision && completedLoads == 2)
+                || (fault == .thirdReadRevision && completedLoads == 3) || (fault == .fourthReadRevision && completedLoads == 4) {
+                return WebResearchStoredSession(revision: UUID(), session: result.session, recoveredAt: result.recoveredAt)
+            }
+        }
+        return result
+    }
+    func create(question: String, queries: [String], limits: WebResearchLimits, retryPolicy: WebResearchRetryPolicy) async throws -> WebResearchStoredSession {
+        try await base.create(question: question, queries: queries, limits: limits, retryPolicy: retryPolicy)
+    }
+    func save(_ session: WebResearchSession, expectedRevision: UUID) async throws -> WebResearchStoredSession {
+        if fault == .checkedSaveFailure && session.outputVerification == .checked { throw WebResearchStoreError.unavailable }
+        let result = try await base.save(session, expectedRevision: expectedRevision)
+        if session.stage == .completed { completed = result }
+        return result
+    }
     func delete(id: UUID, expectedRevision: UUID) async throws { try await base.delete(id: id, expectedRevision: expectedRevision) }
     func deleteAll() async throws { try await base.deleteAll() }
 }
@@ -419,6 +505,679 @@ final class WebResearchInterfaceTests: XCTestCase {
         let restarted = WebResearchModel(directory: directory, retention: .transient)
         restarted.open(); await restarted.flush(); XCTAssertTrue(restarted.summaries.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
+
+    @MainActor func testProgressFollowsProducerReceiptsThroughReadBack() async throws {
+        try await withStore { store, _ in
+            var now = 0.0
+            var progress = ResearchTaskProgress()
+            var changes: [ResearchTaskProgress.Change] = []
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(), synthesize: { session in
+                now = 121; progress.tick(now: now)
+                XCTAssertEqual(progress.progress.state, .running)
+                XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+                return Self.answer(session)
+            })
+            model.onTaskProgress = { event in changes.append(event.change); progress.receive(event, now: now) }
+            draft(model); model.start(); await model.flush()
+            XCTAssertEqual(model.selected?.session.stage, .completed)
+            XCTAssertEqual(progress.progress.halo, .verifiedComplete)
+            guard case .completed(let result) = progress.progress.state else { return XCTFail("Missing checked result") }
+            XCTAssertEqual(result.evidenceID, model.selected?.revision.uuidString)
+            XCTAssertTrue(result.summary.contains("conclusions still require judgment"))
+            XCTAssertEqual(changes.filter { if case .started = $0 { return true }; return false }.count, 1)
+            XCTAssertEqual(changes.filter { if case .verified = $0 { return true }; return false }.count, 1)
+            XCTAssertTrue(changes.contains { if case .verifying = $0 { return true }; return false })
+            confirmDelete(model); await model.flush()
+            XCTAssertEqual(progress.progress.state, .idle, "Deleting this result clears its completed status")
+        }
+    }
+    @MainActor func testProgressDoesNotCompleteBeforeStoreReadBackReturns() async throws {
+        try await withStore { store, _ in
+            let gated = PanelStoreGate(store)
+            var now = 0.0
+            var progress = ResearchTaskProgress()
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: gated, reader: PanelReaderFixture(), synthesize: { session in
+                now = 121; progress.tick(now: now); await gated.suspendLoad()
+                return Self.answer(session)
+            })
+            model.onTaskProgress = { progress.receive($0, now: now) }
+            draft(model); model.start(); try await eventually { await gated.waiting() }
+            XCTAssertEqual(progress.progress.snapshot?.phase, .finalVerification)
+            XCTAssertEqual(progress.progress.state, .running)
+            XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+            await gated.release(); await model.flush()
+            XCTAssertEqual(progress.progress.halo, .verifiedComplete)
+        }
+    }
+    @MainActor func testPauseOrStopDuringReadBackResumesOnlyExactVerification() async throws {
+        for stop in [false, true] {
+            try await withStore { store, _ in
+                let gated = PanelStoreGate(store), provider = PanelSearchFixture()
+                var now = 0.0, syntheses = 0
+                var progress = ResearchTaskProgress()
+                var starts: [ResearchTaskProgress.Event] = []
+                let model = WebResearchModel(provider: provider, store: gated, reader: PanelReaderFixture(), synthesize: { session in
+                    syntheses += 1; now = 121; progress.tick(now: now); await gated.suspendLoad()
+                    return Self.answer(session)
+                })
+                model.onTaskProgress = { event in
+                    if case .started = event.change { starts.append(event) }
+                    progress.receive(event, now: now)
+                }
+                draft(model); model.start(); try await eventually { await gated.waiting() }
+                if stop { model.cancel() } else { model.foregroundPause() }
+                await gated.release(); await model.flush()
+                XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+                if stop { XCTAssertEqual(progress.progress.state, .cancelled) }
+                else if case .paused = progress.progress.state {} else { XCTFail("Expected paused verification") }
+                XCTAssertFalse(model.busy); XCTAssertTrue(model.canResume)
+                let expected = try XCTUnwrap(model.selected)
+                XCTAssertEqual(expected.session.stage, .completed)
+                let callsBefore = await provider.calls
+
+                // An explicit resume performs only the deferred read-back. Old
+                // operation callbacks cannot replace this verification attempt.
+                await gated.suspendLoad(); model.resume()
+                try await eventually { await gated.waiting() }
+                XCTAssertEqual(syntheses, 1)
+                XCTAssertEqual(progress.progress.state, .running)
+                XCTAssertEqual(progress.progress.snapshot?.phase, .finalVerification)
+                XCTAssertEqual(starts.count, 2)
+                XCTAssertGreaterThan(starts[1].generation, starts[0].generation)
+                XCTAssertNotEqual(starts[1].operation, starts[0].operation)
+                progress.receive(.init(operation: starts[0].operation, generation: starts[0].generation,
+                    sequence: UInt64.max, change: .failed), now: now)
+                XCTAssertEqual(progress.progress.state, .running)
+                XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+                await gated.release(); await model.flush()
+                let callsAfter = await provider.calls
+                XCTAssertEqual(callsAfter, callsBefore); XCTAssertEqual(syntheses, 1)
+                XCTAssertEqual(model.selected?.session.synthesis, expected.session.synthesis, "Retry cannot replace the answer")
+                XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+                XCTAssertEqual(progress.progress.halo, .verifiedComplete)
+                XCTAssertFalse(model.canResume); XCTAssertFalse(model.busy)
+                XCTAssertNil(model.error)
+            }
+        }
+    }
+    @MainActor func testResumedVerificationRejectsAChangedSavedRevision() async throws {
+        try await withStore { store, _ in
+            let gated = PanelStoreGate(store)
+            var now = 0.0, syntheses = 0
+            var progress = ResearchTaskProgress()
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: gated, reader: PanelReaderFixture(), synthesize: { session in
+                syntheses += 1; now = 121; progress.tick(now: now); await gated.suspendLoad()
+                return Self.answer(session)
+            })
+            model.onTaskProgress = { progress.receive($0, now: now) }
+            draft(model); model.start(); try await eventually { await gated.waiting() }
+            model.foregroundPause(); await gated.release(); await model.flush()
+            let expected = try XCTUnwrap(model.selected)
+            XCTAssertTrue(model.canResume)
+            _ = try await store.save(expected.session, expectedRevision: expected.revision)
+            model.resume(); await model.flush()
+            XCTAssertEqual(syntheses, 1); XCTAssertNotNil(model.error)
+            XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+            guard case .failed = progress.progress.state else { return XCTFail("Changed result must fail closed") }
+        }
+    }
+    @MainActor func testLoadingCompletedAnswerDoesNotOfferVerificationResumeWithoutReceipt() async throws {
+        try await withStore { store, _ in
+            let writer = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(), synthesize: { Self.answer($0) })
+            draft(writer); writer.start(); await writer.flush()
+            XCTAssertEqual(writer.selected?.session.stage, .completed)
+            XCTAssertFalse(writer.canResume)
+            let browser = WebResearchModel(store: store)
+            var progressEvents = 0
+            browser.onTaskProgress = { _ in progressEvents += 1 }
+            browser.open(); await browser.flush()
+            XCTAssertEqual(browser.selected?.session.stage, .completed)
+            XCTAssertFalse(browser.canResume)
+            browser.resume(); await browser.flush()
+            XCTAssertEqual(progressEvents, 0)
+        }
+    }
+    @MainActor func testInvalidCitationFailsProgressInsteadOfShowingSuccess() async throws {
+        try await withStore { store, _ in
+            var now = 0.0
+            var progress = ResearchTaskProgress()
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(), synthesize: { session in
+                now = 121; progress.tick(now: now)
+                let answer = Self.answer(session)
+                return WebResearchSynthesis(answer: answer.answer, claims: answer.claims,
+                    citations: [.init(number: 1, sourceID: session.sources[0].id, excerpt: "Fabricated quotation")],
+                    conflicts: answer.conflicts, followUpQueries: [])
+            })
+            model.onTaskProgress = { progress.receive($0, now: now) }
+            draft(model); model.start(); await model.flush()
+            guard case .failed = progress.progress.state else { return XCTFail("Expected failed verification") }
+            XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+            XCTAssertNotNil(model.error)
+        }
+    }
+    @MainActor func testInsufficientSourcesBlockWithActionableReason() async throws {
+        try await withStore { store, _ in
+            var progress = ResearchTaskProgress()
+            let now = 0.0
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(failSecondary: true), synthesize: { Self.answer($0) })
+            model.onTaskProgress = { progress.receive($0, now: now) }
+            draft(model); model.start(); await model.flush()
+            guard case .blocked(let reason) = progress.progress.state else { return XCTFail("Expected evidence blocker") }
+            XCTAssertTrue(reason.nextAction.contains("revise the search plan"))
+            XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+        }
+    }
+
+    @MainActor func testMismatchedOrDeletedFinalReadBackNeverShowsCompleteHalo() async throws {
+        for fault in [ProgressReadbackStore.Fault.firstReadRevision, .secondReadRevision, .thirdReadRevision, .fourthReadRevision, .checkedSaveFailure, .deletionBeforeRefresh] {
+            try await withStore { base, _ in
+                let store = ProgressReadbackStore(base, fault: fault)
+                var now = 0.0
+                var progress = ResearchTaskProgress()
+                var verified = 0
+                let model = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(), synthesize: { session in
+                    now = 121; progress.tick(now: now); return Self.answer(session)
+                })
+                model.onTaskProgress = { event in
+                    if case .verified = event.change { verified += 1 }
+                    progress.receive(event, now: now)
+                }
+                draft(model); model.start(); await model.flush()
+                XCTAssertEqual(verified, 0); XCTAssertNotNil(model.error)
+                XCTAssertNotEqual(progress.progress.halo, .verifiedComplete)
+                guard case .failed = progress.progress.state else { return XCTFail("Read-back must fail closed") }
+            }
+        }
+    }
+    @MainActor private func interruptedTerminalRetrieval(_ store: WebResearchSessionStore,
+                                                        unqueued: Bool = false, atSourceCap: Bool = false) async throws -> WebResearchStoredSession {
+        var limits = WebResearchLimits()
+        if atSourceCap { limits.maxSources = 2 }
+        let initial = try await store.create(question: "Reconciliation fixture", queries: ["primary", "secondary"], limits: limits)
+        var retrieved = try await WebResearchWorkflow(provider: PanelSearchFixture(), reader: PanelReaderFixture()).run(initial.session) { _ in }
+        retrieved.stage = .retrieving
+        if unqueued { retrieved.reads = [] }
+        if atSourceCap {
+            retrieved.queries[0].results.append(WebSearchResult(url: URL(string: "https://example.org/over-cap")!,
+                title: "Over cap", snippet: "Untrusted hint", publicationDateHint: nil))
+        }
+        return try await store.save(retrieved, expectedRevision: initial.revision)
+    }
+
+    @MainActor func testExplicitResumeReconcilesTerminalRetrievalBeforeProviderFreeLocalSynthesis() async throws {
+        for atSourceCap in [false, true] {
+            try await withStore { owner, directory in
+                let active = try await interruptedTerminalRetrieval(owner, atSourceCap: atSourceCap)
+                let reader = PanelRecoveryReader(), file = directory.appendingPathComponent("research-sessions.json")
+                let before = try Data(contentsOf: file)
+                var syntheses = 0
+                let model = WebResearchModel(directory: directory, reader: reader, synthesize: { session in
+                    syntheses += 1
+                    let committed = try await owner.load(id: active.id)
+                    XCTAssertNotEqual(committed.revision, active.revision)
+                    XCTAssertEqual(committed.session, session)
+                    XCTAssertEqual(session.stage, .awaitingLocalSynthesis)
+                    XCTAssertNotNil(committed.recoveredAt)
+                    return Self.answer(session)
+                })
+                model.open(); await model.flush()
+                XCTAssertEqual(model.selected?.revision, active.revision)
+                XCTAssertEqual(model.selected?.session.stage, .paused)
+                XCTAssertEqual(try Data(contentsOf: file), before)
+                XCTAssertTrue(model.canResume); XCTAssertEqual(syntheses, 0)
+                let beforeReads = await reader.calls; XCTAssertTrue(beforeReads.isEmpty)
+                model.resume(); await model.flush()
+                XCTAssertNil(model.error); XCTAssertEqual(syntheses, 1)
+                XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+                XCTAssertEqual(model.selected?.session.searchAttempts, active.session.searchAttempts)
+                XCTAssertEqual(model.selected?.session.sources, active.session.sources)
+                let reads = await reader.calls; XCTAssertTrue(reads.isEmpty)
+            }
+        }
+    }
+
+    @MainActor func testExplicitResumeWithTerminalQueriesStillReadsUnqueuedResults() async throws {
+        try await withStore { owner, directory in
+            let active = try await interruptedTerminalRetrieval(owner, unqueued: true)
+            let provider = PanelSearchFixture(), reader = PanelRecoveryReader()
+            var syntheses = 0
+            let model = WebResearchModel(provider: provider, directory: directory, reader: reader, synthesize: { session in
+                syntheses += 1; return Self.answer(session)
+            })
+            model.open(); await model.flush()
+            XCTAssertEqual(model.selected?.revision, active.revision)
+            XCTAssertEqual(model.selected?.session.stage, .paused); XCTAssertTrue(model.canResume)
+            model.resume(); await model.flush()
+            XCTAssertNil(model.error); XCTAssertEqual(syntheses, 1)
+            XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+            let calls = await provider.calls, reads = await reader.calls
+            XCTAssertTrue(calls.isEmpty, "Completed queries must not be replayed")
+            XCTAssertEqual(reads.map(\.path), ["/primary", "/secondary"])
+        }
+    }
+
+    @MainActor func testStopRetainsEvidenceAndReadsUnqueuedResultBeforeSynthesisUnlessAtSourceCap() async throws {
+        for atSourceCap in [false, true] {
+            try await withStore { owner, directory in
+                var limits = WebResearchLimits()
+                if atSourceCap { limits.maxSources = 2 }
+                let initial = try await owner.create(question: "Retained evidence with unread result",
+                    queries: ["primary", "secondary"], limits: limits)
+                var retrieved = try await WebResearchWorkflow(provider: PanelSearchFixture(), reader: PanelReaderFixture())
+                    .run(initial.session) { _ in }
+                retrieved.stage = .retrieving
+                // Add the discovered result before the first completed-query save. Later
+                // writes must preserve the existing immutable query-result receipts.
+                retrieved.queries[0].results.append(WebSearchResult(url: URL(string: "https://example.org/third")!,
+                    title: "Third source", snippet: "Untrusted hint", publicationDateHint: nil))
+                let active = try await owner.save(retrieved, expectedRevision: initial.revision)
+                let retainedSources = active.session.sources, attempts = active.session.searchAttempts
+                XCTAssertEqual(retainedSources.count, 2); XCTAssertEqual(active.session.unreadResultCount, 1)
+                let provider = PanelSearchFixture(), reader = PanelRecoveryReader()
+                var syntheses = 0, armed = false, stopped = false
+                let model = WebResearchModel(provider: atSourceCap ? nil : provider, directory: directory,
+                    reader: reader, synthesize: { session in
+                        syntheses += 1
+                        XCTAssertEqual(Array(session.sources.prefix(2)), retainedSources)
+                        XCTAssertEqual(session.searchAttempts, attempts)
+                        return Self.answer(session)
+                    })
+                model.open(); await model.flush()
+                XCTAssertEqual(model.selected?.session.stage, .paused); XCTAssertTrue(model.canResume)
+                // The synchronous publication is an exact barrier: ownership is already
+                // bound, but research() has not admitted a source request or synthesis.
+                let observation = model.$selected.sink { selected in
+                    if armed, !stopped, selected?.id == active.id {
+                        stopped = true; model.cancel()
+                    }
+                }
+                defer { observation.cancel() }
+                armed = true
+                model.resume(); await model.flush()
+                XCTAssertTrue(stopped); XCTAssertFalse(model.busy); XCTAssertNil(model.error)
+                XCTAssertEqual(syntheses, 0)
+                XCTAssertEqual(model.selected?.session.stage, atSourceCap ? .awaitingLocalSynthesis : .paused)
+                XCTAssertEqual(model.selected?.session.sources, retainedSources)
+                XCTAssertEqual(model.selected?.session.unreadResultCount, 1)
+                XCTAssertEqual(model.selected?.session.searchAttempts, attempts)
+                XCTAssertEqual(model.selected?.session.queries, active.session.queries)
+                let callsBefore = await provider.calls, readsBefore = await reader.calls
+                XCTAssertTrue(callsBefore.isEmpty); XCTAssertTrue(readsBefore.isEmpty)
+                observation.cancel()
+                XCTAssertTrue(model.canResume)
+                model.resume(); await model.flush()
+                XCTAssertNil(model.error); XCTAssertEqual(syntheses, 1)
+                XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+                XCTAssertEqual(model.selected?.session.searchAttempts, attempts)
+                XCTAssertEqual(model.selected?.session.queries, active.session.queries)
+                XCTAssertEqual(Array(try XCTUnwrap(model.selected).session.sources.prefix(2)), retainedSources)
+                XCTAssertEqual(model.selected?.session.sources.count, atSourceCap ? 2 : 3)
+                XCTAssertEqual(model.selected?.session.unreadResultCount, atSourceCap ? 1 : 0)
+                let callsAfter = await provider.calls, readsAfter = await reader.calls
+                XCTAssertTrue(callsAfter.isEmpty, "Completed queries must never be replayed or recharge the search budget")
+                XCTAssertEqual(readsAfter.map(\.path), atSourceCap ? [] : ["/third"])
+            }
+        }
+    }
+
+    @MainActor func testExplicitResumeRejectsChangedSelectedRevisionBeforeAnyNewWork() async throws {
+        for terminal in [false, true] {
+            try await withStore { owner, directory in
+                let active: WebResearchStoredSession
+                if terminal { active = try await interruptedTerminalRetrieval(owner) }
+                else { active = try await owner.create(question: "Original plan", queries: ["primary", "secondary"]) }
+                let provider = PanelSearchFixture(), reader = PanelRecoveryReader()
+                var syntheses = 0, events = 0
+                let model = WebResearchModel(provider: provider, directory: directory, reader: reader, synthesize: { session in
+                    syntheses += 1; return Self.answer(session)
+                })
+                model.onTaskProgress = { _ in events += 1 }
+                model.open(); await model.flush(); XCTAssertTrue(model.canResume)
+                let selected = try XCTUnwrap(model.selected)
+                let winner = try await owner.save(active.session, expectedRevision: active.revision)
+                let file = directory.appendingPathComponent("research-sessions.json"), before = try Data(contentsOf: file)
+                model.resume(); await model.flush()
+                XCTAssertEqual(model.error, WebResearchStoreError.conflict.localizedDescription)
+                XCTAssertEqual(model.selected, selected)
+                XCTAssertEqual(events, 0, "A stale Resume must not bind a newer operation")
+                XCTAssertEqual(syntheses, 0)
+                let calls = await provider.calls, reads = await reader.calls
+                XCTAssertTrue(calls.isEmpty); XCTAssertTrue(reads.isEmpty)
+                XCTAssertEqual(try Data(contentsOf: file), before)
+                let latest = try await owner.load(id: winner.id); XCTAssertEqual(latest, winner)
+            }
+        }
+    }
+
+    @MainActor func testLostReconciliationCASCannotStartSynthesisOrRestoreDeletedTarget() async throws {
+        for delete in [false, true] {
+            try await withStore { owner, directory in
+                let active = try await interruptedTerminalRetrieval(owner)
+                let store = PanelReconciliationRaceStore(base: try WebResearchSessionStore(directory: directory), competitor: owner, delete: delete)
+                let reader = PanelRecoveryReader()
+                var syntheses = 0
+                let model = WebResearchModel(store: store, reader: reader, synthesize: { session in
+                    syntheses += 1; return Self.answer(session)
+                })
+                model.open(); await model.flush(); XCTAssertTrue(model.canResume)
+                model.resume(); await model.flush()
+                XCTAssertEqual(model.error, (delete ? WebResearchStoreError.notFound : .conflict).localizedDescription)
+                XCTAssertEqual(syntheses, 0)
+                let reads = await reader.calls; XCTAssertTrue(reads.isEmpty)
+                let list = try await owner.list()
+                if delete { XCTAssertTrue(list.isEmpty) }
+                else {
+                    let winner = try await owner.load(id: active.id)
+                    XCTAssertNotEqual(winner.revision, active.revision)
+                    XCTAssertEqual(winner.session.stage, .awaitingLocalSynthesis)
+                    XCTAssertNil(winner.session.synthesis)
+                }
+            }
+        }
+    }
+
+    @MainActor func testStopDrainsAdmittedReconciliationBeforeLaterLocalResume() async throws {
+        try await withStore { owner, directory in
+            let active = try await interruptedTerminalRetrieval(owner)
+            let gate = PanelStoreGate(try WebResearchSessionStore(directory: directory))
+            let reader = PanelRecoveryReader()
+            var syntheses = 0
+            let model = WebResearchModel(store: gate, reader: reader, synthesize: { session in
+                syntheses += 1; return Self.answer(session)
+            })
+            model.open(); await model.flush()
+            await gate.suspendReconciliationSave()
+            model.resume(); try await eventually { await gate.waiting() }
+            model.cancel(); await gate.release(); await model.flush()
+            XCTAssertEqual(syntheses, 0)
+            XCTAssertEqual(model.selected?.session.stage, .awaitingLocalSynthesis)
+            XCTAssertNotEqual(model.selected?.revision, active.revision)
+            XCTAssertNil(model.error)
+            model.resume(); await model.flush()
+            XCTAssertEqual(syntheses, 1); XCTAssertNil(model.error)
+            XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+            let reads = await reader.calls; XCTAssertTrue(reads.isEmpty)
+        }
+    }
+
+    @MainActor func testUncertainOnlyPreservePolicyStillNeedsNoAutomaticOrExplicitReplay() async throws {
+        try await withStore { owner, directory in
+            let initial = try await owner.create(question: "Unknown outcomes", queries: ["primary", "secondary"])
+            var interrupted = initial.session; interrupted.stage = .retrieving; interrupted.providerID = "panel-fixture"
+            for index in interrupted.queries.indices { interrupted.queries[index].status = .inFlight; interrupted.queries[index].attempts = 1 }
+            let active = try await owner.save(interrupted, expectedRevision: initial.revision)
+            let provider = PanelSearchFixture(), reader = PanelRecoveryReader()
+            let model = WebResearchModel(provider: provider, directory: directory, reader: reader)
+            let file = directory.appendingPathComponent("research-sessions.json"), before = try Data(contentsOf: file)
+            model.open(); await model.flush()
+            XCTAssertEqual(model.selected?.revision, active.revision)
+            XCTAssertFalse(model.canResume)
+            model.resume(); await model.flush()
+            let calls = await provider.calls, reads = await reader.calls
+            XCTAssertTrue(calls.isEmpty); XCTAssertTrue(reads.isEmpty)
+            XCTAssertEqual(try Data(contentsOf: file), before)
+        }
+    }
+
+    @MainActor func testRestartOffersOnlyExplicitLocalVerificationOfPendingAnswer() async throws {
+        try await withStore { store, directory in
+            let gated = PanelStoreGate(store), provider = PanelSearchFixture()
+            var syntheses = 0
+            let writer = WebResearchModel(provider: provider, store: gated, reader: PanelReaderFixture(), synthesize: { session in
+                syntheses += 1; await gated.suspendLoad(); return Self.answer(session)
+            })
+            draft(writer); writer.start(); try await eventually { await gated.waiting() }
+            writer.cancel(); await gated.release(); await writer.flush()
+            let pending = try XCTUnwrap(writer.selected)
+            XCTAssertEqual(pending.session.outputVerification, .pending)
+            let before = await provider.calls
+            let restarted = WebResearchModel(store: try WebResearchSessionStore(directory: directory))
+            var verified = 0, events = 0
+            restarted.onTaskProgress = { event in
+                events += 1
+                if case .verified = event.change { verified += 1 }
+            }
+            restarted.open(); await restarted.flush()
+            XCTAssertEqual(events, 0, "Opening cannot replay any work")
+            XCTAssertTrue(restarted.canResume, "Final local checks need neither provider nor synthesis")
+            XCTAssertEqual(restarted.selected, pending)
+            restarted.resume(); await restarted.flush()
+            XCTAssertEqual(verified, 1); XCTAssertNil(restarted.error)
+            XCTAssertEqual(restarted.selected?.session.outputVerification, .checked)
+            XCTAssertEqual(restarted.selected?.session.synthesis, pending.session.synthesis)
+            XCTAssertFalse(restarted.canResume)
+            let after = await provider.calls
+            XCTAssertEqual(before, after); XCTAssertEqual(syntheses, 1)
+            let reopened = WebResearchModel(store: try WebResearchSessionStore(directory: directory))
+            reopened.open(); await reopened.flush()
+            XCTAssertFalse(reopened.canResume)
+            XCTAssertEqual(reopened.selected?.session.outputVerification, .checked)
+        }
+    }
+
+    @MainActor func testRestoredPendingReceiptRejectsDeletedOrChangedRevision() async throws {
+        for deleted in [false, true] {
+            try await withStore { store, directory in
+                let gated = PanelStoreGate(store)
+                let writer = WebResearchModel(provider: PanelSearchFixture(), store: gated, reader: PanelReaderFixture(), synthesize: { session in
+                    await gated.suspendLoad(); return Self.answer(session)
+                })
+                draft(writer); writer.start(); try await eventually { await gated.waiting() }
+                writer.cancel(); await gated.release(); await writer.flush()
+                let restartStore = try WebResearchSessionStore(directory: directory)
+                let reader = WebResearchModel(store: restartStore)
+                reader.open(); await reader.flush()
+                let pending = try XCTUnwrap(reader.selected)
+                if deleted { try await restartStore.delete(id: pending.id, expectedRevision: pending.revision) }
+                else { _ = try await restartStore.save(pending.session, expectedRevision: pending.revision) }
+                var verified = 0
+                reader.onTaskProgress = { if case .verified = $0.change { verified += 1 } }
+                reader.resume(); await reader.flush()
+                XCTAssertEqual(verified, 0); XCTAssertNotNil(reader.error)
+            }
+        }
+    }
+
+    @MainActor func testStopDrainsAdmittedCheckedReceiptWriteWithoutReplayingAnswer() async throws {
+        try await withStore { store, _ in
+            let gate = PanelStoreGate(store)
+            await gate.suspendCheckedSave()
+            var syntheses = 0, verified = 0
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: gate, reader: PanelReaderFixture(), synthesize: { session in
+                syntheses += 1; return Self.answer(session)
+            })
+            model.onTaskProgress = { if case .verified = $0.change { verified += 1 } }
+            draft(model); model.start(); try await eventually { await gate.waiting() }
+            model.cancel()
+            XCTAssertTrue(model.busy, "Stop must drain a previously admitted metadata write")
+            await gate.release(); await model.flush()
+            XCTAssertEqual(verified, 0); XCTAssertTrue(model.canResume)
+            XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+            let committed = model.selected
+            model.resume(); await model.flush()
+            XCTAssertEqual(verified, 1); XCTAssertEqual(syntheses, 1)
+            XCTAssertEqual(model.selected, committed, "The checked receipt needs only read-back")
+            XCTAssertFalse(model.canResume)
+        }
+    }
+
+    @MainActor func testPendingAndLegacyValidAnswersCannotEmitVerifiedSuccess() async throws {
+        try await withStore { store, _ in
+            let writer = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(), synthesize: { Self.answer($0) })
+            draft(writer); writer.start(); await writer.flush()
+            let checked = try XCTUnwrap(writer.selected)
+            XCTAssertEqual(checked.session.outputVerification, .checked)
+            let states: [WebResearchOutputVerification?] = [.pending, nil, .checked]
+            for state in states {
+                var session = checked.session; session.outputVerification = state
+                XCTAssertNoThrow(try session.encodedCheckpoint(), "Use a valid answer to isolate receipt admission")
+                let stored = WebResearchStoredSession(revision: UUID(), session: session, recoveredAt: nil)
+                let operation = UUID()
+                var progress = ResearchTaskProgress()
+                XCTAssertTrue(progress.receive(.init(operation: operation, generation: 1, sequence: 1,
+                    change: .started(session, resuming: true)), now: 0))
+                XCTAssertTrue(progress.receive(.init(operation: operation, generation: 1, sequence: 2,
+                    change: .verifying(session)), now: 121))
+                let accepted = progress.receive(.init(operation: operation, generation: 1, sequence: 3,
+                    change: .verified(expected: stored, reloaded: stored)), now: 122)
+                XCTAssertEqual(accepted, state == .checked)
+                if state != .checked { XCTAssertNotEqual(progress.progress.halo, .verifiedComplete) }
+            }
+        }
+    }
+
+    @MainActor func testSynchronousCheckedSelectionObserverStopsBeforeVerifiedEvent() async throws {
+        try await withStore { store, _ in
+            var syntheses = 0, verified = 0, stopped = false
+            let model = WebResearchModel(provider: PanelSearchFixture(), store: store, reader: PanelReaderFixture(), synthesize: { session in
+                syntheses += 1; return Self.answer(session)
+            })
+            model.onTaskProgress = { if case .verified = $0.change { verified += 1 } }
+            let observation = model.$selected.sink { selected in
+                if selected?.session.outputVerification == .checked, !stopped {
+                    stopped = true; model.cancel()
+                }
+            }
+            defer { observation.cancel() }
+            draft(model); model.start(); await model.flush()
+            XCTAssertTrue(stopped); XCTAssertEqual(verified, 0)
+            XCTAssertTrue(model.canResume); XCTAssertFalse(model.busy)
+            model.resume(); await model.flush()
+            XCTAssertEqual(verified, 1); XCTAssertEqual(syntheses, 1)
+            XCTAssertFalse(model.canResume)
+        }
+    }
+
+    @MainActor func testVerifiedCallbackStopOrCloseCannotPublishLateSuccessOrLoseReadbackRetry() async throws {
+        for close in [false, true] {
+            try await withStore { store, _ in
+                let provider = PanelSearchFixture()
+                var syntheses = 0, verified = 0, interrupted = false
+                var lateSuccessNotices: [String] = []
+                let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture(), synthesize: { session in
+                    syntheses += 1; return Self.answer(session)
+                })
+                let observation = model.$notice.sink { notice in
+                    if interrupted, let notice, notice.contains("Citation excerpts match sources") {
+                        lateSuccessNotices.append(notice)
+                    }
+                }
+                defer { observation.cancel() }
+                model.onTaskProgress = { event in
+                    if case .verified = event.change {
+                        verified += 1
+                        if !interrupted {
+                            interrupted = true
+                            if close { model.close() } else { model.cancel() }
+                        }
+                    }
+                }
+                draft(model); model.start(); await model.flush()
+                XCTAssertTrue(interrupted); XCTAssertEqual(verified, 1)
+                XCTAssertTrue(lateSuccessNotices.isEmpty, "No success notice may publish after the callback interrupts admission")
+                XCTAssertFalse(model.busy)
+                let checked = try XCTUnwrap(model.selected)
+                XCTAssertEqual(checked.session.outputVerification, .checked, "Completed local checks remain durable")
+                if close {
+                    XCTAssertFalse(model.canResume)
+                    model.open(); await model.flush()
+                }
+                XCTAssertTrue(model.canResume, "Keep the exact receipt until uninterrupted completion publication")
+                let callsBefore = await provider.calls
+                observation.cancel()
+                model.resume(); await model.flush()
+                XCTAssertEqual(verified, 2); XCTAssertEqual(syntheses, 1)
+                XCTAssertEqual(model.selected, checked, "Retry only reads back the same checked receipt")
+                let callsAfter = await provider.calls
+                XCTAssertEqual(callsAfter, callsBefore)
+                XCTAssertFalse(model.canResume); XCTAssertNil(model.error)
+            }
+        }
+    }
+
+    @MainActor func testAdmissionActivityObserverStopOrCloseDrainsOwnedTaskBeforeAnyWork() async throws {
+        for close in [false, true] {
+            try await withStore { store, _ in
+                let provider = PanelSearchFixture()
+                var interrupted = false, syntheses = 0
+                let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture(), synthesize: { session in
+                    syntheses += 1; return Self.answer(session)
+                })
+                let observation = model.$activity.sink { activity in
+                    if activity == .retrieving, !interrupted {
+                        interrupted = true
+                        XCTAssertTrue(model.busy, "Ownership must precede the first published activity")
+                        if close { model.close() } else { model.cancel() }
+                    }
+                }
+                defer { observation.cancel() }
+                draft(model); model.start()
+                XCTAssertTrue(interrupted); XCTAssertTrue(model.busy)
+                XCTAssertEqual(model.activity, .pausing, "Outer willSet must not overwrite the nested pause")
+                await model.flush()
+                XCTAssertFalse(model.busy); XCTAssertNil(model.activity); XCTAssertNil(model.selected)
+                let calls = await provider.calls, saved = try await store.list()
+                XCTAssertTrue(calls.isEmpty); XCTAssertTrue(saved.isEmpty); XCTAssertEqual(syntheses, 0)
+                if close { model.open(); await model.flush() }
+                model.start(); await model.flush()
+                XCTAssertEqual(syntheses, 1, "Admission is restored only after the old task drained")
+                XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+            }
+        }
+    }
+
+    @MainActor func testAdmissionActivityObserverCannotReplaceOperationBeforeHandleInstallation() async throws {
+        try await withStore { store, _ in
+            let provider = PanelSearchFixture()
+            var attempted = false, syntheses = 0
+            let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture(), synthesize: { session in
+                syntheses += 1; return Self.answer(session)
+            })
+            let observation = model.$activity.sink { activity in
+                if activity == .retrieving, !attempted {
+                    attempted = true
+                    XCTAssertTrue(model.busy); XCTAssertFalse(model.canStart)
+                    model.start()
+                }
+            }
+            defer { observation.cancel() }
+            draft(model); model.start(); await model.flush()
+            XCTAssertTrue(attempted); XCTAssertFalse(model.busy)
+            let saved = try await store.list(), calls = await provider.calls
+            XCTAssertEqual(saved.count, 1); XCTAssertEqual(calls.count, 2); XCTAssertEqual(syntheses, 1)
+            XCTAssertEqual(model.selected?.session.outputVerification, .checked)
+        }
+    }
+
+    @MainActor func testIdleActivityObserverCannotAdmitWorkDuringOldHandleCleanup() async throws {
+        try await withStore { store, _ in
+            let provider = PanelSearchFixture()
+            var armed = false, attempted = false, syntheses = 0
+            let model = WebResearchModel(provider: provider, store: store, reader: PanelReaderFixture(), synthesize: { session in
+                syntheses += 1; return Self.answer(session)
+            })
+            let observation = model.$activity.sink { activity in
+                if activity != nil { armed = true }
+                if activity == nil, armed, !attempted {
+                    attempted = true
+                    XCTAssertTrue(model.busy, "Idle publication reserves admission until old cleanup finishes")
+                    XCTAssertFalse(model.canStart)
+                    model.start()
+                }
+            }
+            defer { observation.cancel() }
+            draft(model); model.start(); await model.flush()
+            XCTAssertTrue(attempted); XCTAssertFalse(model.busy); XCTAssertNil(model.activity)
+            let first = try await store.list()
+            XCTAssertEqual(first.count, 1); XCTAssertEqual(syntheses, 1)
+            XCTAssertTrue(model.canStart)
+            model.start(); await model.flush()
+            let second = try await store.list(), calls = await provider.calls
+            XCTAssertEqual(second.count, 2); XCTAssertEqual(calls.count, 4); XCTAssertEqual(syntheses, 2)
+            XCTAssertFalse(model.busy); XCTAssertNil(model.activity)
+        }
     }
 
 }

@@ -146,6 +146,10 @@ struct WebResearchSynthesis: Codable, Equatable, Sendable {
 
 /// A bounded, serializable receipt for the caller's local checkpoint store. This type neither
 /// selects a provider nor stores credentials. Source strings are untrusted data, never commands.
+/// Persisted output-check state, not semantic truth or authority to execute actions.
+/// Missing on legacy answers means unknown; merely opening them never starts work.
+enum WebResearchOutputVerification: String, Codable, Sendable { case pending, checked }
+
 struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
     let schemaVersion: Int
     let retention: WebResearchRetention?
@@ -163,6 +167,7 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
     var queries: [WebResearchQuery]
     var reads: [WebResearchRead]
     var synthesis: WebResearchSynthesis?
+    var outputVerification: WebResearchOutputVerification?
 
     init(question: String, queries: [String], limits: WebResearchLimits = WebResearchLimits(),
          retryPolicy: WebResearchRetryPolicy = .preserveUncertain, now: Date = Date(),
@@ -221,7 +226,7 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
             throw WebResearchError.insufficientEvidence
         }
         try validateEvidence(result)
-        var copy = self; copy.synthesis = result; copy.stage = .completed; copy.updatedAt = now
+        var copy = self; copy.synthesis = result; copy.stage = .completed; copy.updatedAt = now; copy.outputVerification = .pending
         try copy.validate(); return copy
     }
 
@@ -231,7 +236,7 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
         // Reject before clearing an existing answer or issuing searches that cannot
         // contribute any new source evidence to this session.
         guard hasAdditionalSourceCapacity else { throw WebResearchError.limitExceeded }
-        var copy = self; copy.stage = .planned; copy.synthesis = nil; copy.updatedAt = now
+        var copy = self; copy.stage = .planned; copy.synthesis = nil; copy.updatedAt = now; copy.outputVerification = nil
         copy.queries += text.map { WebResearchQuery(id: UUID(), text: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
         try copy.validate(); return copy
     }
@@ -301,7 +306,8 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
     }
 
     fileprivate func validate() throws {
-        guard schemaVersion == 1, limits.valid, !question.isEmpty, question.utf8.count <= 8_192,
+        guard (outputVerification == nil || stage == .completed),
+              schemaVersion == 1, limits.valid, !question.isEmpty, question.utf8.count <= 8_192,
               (2...limits.maxQueries).contains(queries.count), reads.count <= limits.maxSources,
               Set(queries.map(\.id)).count == queries.count,
               Set(queries.map { $0.text.lowercased() }).count == queries.count,
