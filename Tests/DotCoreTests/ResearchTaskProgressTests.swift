@@ -105,7 +105,7 @@ final class ResearchTaskProgressTests: XCTestCase {
     func testResumeOfLongTaskDoesNotReplayStartSpeech() throws {
         var model = ResearchTaskProgress(); let op = UUID(), session = try session()
         var context = LongTaskProgress.SpeechContext(); context.ready = true
-        model.setSpeechContext(context)
+        XCTAssertNil(model.setSpeechContext(context), "Initial ready context must not interrupt speech")
         model.receive(event(op, 1, .started(session, resuming: false)), now: 0)
         model.tick(now: 121)
         let initial = try XCTUnwrap(model.takeSpeech(now: 121)); model.finishSpeech(id: initial.id)
@@ -117,7 +117,7 @@ final class ResearchTaskProgressTests: XCTestCase {
     func testResumeAtLocalSynthesisKeepsKnownPlanAndDoesNotReplayRevisionSpeech() throws {
         var model = ResearchTaskProgress(); let operation = UUID(), session = try settled()
         var context = LongTaskProgress.SpeechContext(); context.ready = true
-        model.setSpeechContext(context)
+        XCTAssertNil(model.setSpeechContext(context), "Initial ready context must not interrupt speech")
         model.receive(event(operation, 1, .started(session, resuming: false)), now: 0)
         model.receive(event(operation, 2, .synthesizing(session)), now: 121)
         let initial = try XCTUnwrap(model.takeSpeech(now: 121)); model.finishSpeech(id: initial.id)
