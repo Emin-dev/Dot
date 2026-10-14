@@ -190,6 +190,28 @@ final class ResearchHTTPTransportTests: XCTestCase {
         }
         XCTAssertEqual(Set(ResearchBoundedProcess.environment.keys), ["PATH", "HOME", "LC_ALL", "PYTHONDONTWRITEBYTECODE"])
     }
+    func testRuntimeChoosesOnlyContainedFrameworkOrStandaloneInterpreter() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let standalone = root.appendingPathComponent("bin/python3")
+        let framework = root.appendingPathComponent("Resources/Python.app/Contents/MacOS/Python")
+        for file in [standalone, framework] {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("fixture executable".utf8).write(to: file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+        }
+        let helper = root.appendingPathComponent("helper.py"), profile = root.appendingPathComponent("profile.sb")
+        try Data().write(to: helper); try Data().write(to: profile)
+        let first = try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile)
+        XCTAssertEqual(first.python, framework.resolvingSymlinksInPath().path)
+        try FileManager.default.removeItem(at: framework)
+        let second = try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile)
+        XCTAssertEqual(second.python, standalone.resolvingSymlinksInPath().path)
+        try FileManager.default.createSymbolicLink(at: framework, withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
+        XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile))
+    }
+
     func testOwnedProcessDeadlineCancellationAndOutputLimit() async throws {
         let start = ProcessInfo.processInfo.systemUptime
         do {

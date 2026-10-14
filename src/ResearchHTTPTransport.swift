@@ -258,7 +258,12 @@ struct ResearchFetchRuntime: Sendable {
             return result.path
         }
         pythonRoot = try canonical(auditedPythonRoot, directory: true)
-        python = try canonical(auditedPythonRoot.appendingPathComponent("bin/python3"), directory: false)
+        // Python.org framework bin/python3 is a launcher that execs Python.app.
+        // Run the contained interpreter directly so Seatbelt permits one exact executable.
+        let frameworkInterpreter = auditedPythonRoot.appendingPathComponent("Resources/Python.app/Contents/MacOS/Python")
+        let interpreter = FileManager.default.fileExists(atPath: frameworkInterpreter.path)
+            ? frameworkInterpreter : auditedPythonRoot.appendingPathComponent("bin/python3")
+        python = try canonical(interpreter, directory: false)
         helper = try canonical(signedHelper, directory: false)
         profile = try canonical(signedProfile, directory: false)
         guard python.hasPrefix(pythonRoot + "/"), FileManager.default.isExecutableFile(atPath: python) else { throw ResearchNotebookError.networkFailure }

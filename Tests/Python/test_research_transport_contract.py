@@ -281,6 +281,10 @@ class ResearchTransportContractTests(unittest.TestCase):
             directory = pathlib.Path(directory).resolve()
             python = pathlib.Path(sys.executable).resolve()
             python_root = pathlib.Path(sys.base_prefix).resolve()
+            # Match ResearchFetchRuntime: framework bin/python is an exec trampoline.
+            framework = python_root / 'Resources/Python.app/Contents/MacOS/Python'
+            if framework.exists():
+                python = framework.resolve(strict=True)
             self.assertTrue(python.is_relative_to(python_root), 'Use the official contained test Python runtime')
             canary, secret = directory / 'canary.py', directory / 'private-sentinel'
             secret.write_text('private fixture')
