@@ -53,6 +53,46 @@ private actor ResearchTransportTrace {
     func snapshot() -> ([String], [String]) { (resolutions, pins) }
 }
 
+/// Only the delivery queue is held. Foundation launches/reaps a real child;
+/// tests never call its termination handler or synthesize a receipt.
+@MainActor private final class ResearchProcessSettlementFixture {
+    let process = Process()
+    let receiptQueue = OperationQueue()
+    let input = Pipe()
+    private(set) var returned = false
+
+    init(_ script: String) {
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", script]
+        receiptQueue.maxConcurrentOperationCount = 1
+        receiptQueue.isSuspended = true
+    }
+
+    func start(seconds: TimeInterval = 5, stdoutLimit: Int = 16, stderrLimit: Int = 16,
+               beforeLaunch: (@Sendable () -> Void)? = nil) -> Task<ResearchBoundedProcess.Output, Error> {
+        let deadline = ProcessInfo.processInfo.systemUptime + seconds
+        return Task { @MainActor in
+            defer { returned = true }
+            return try await ResearchBoundedProcess.run(testProcess: process, terminationReceiptQueue: receiptQueue,
+                deadline: deadline, stdoutLimit: stdoutLimit, stderrLimit: stderrLimit, standardInput: input.fileHandleForReading,
+                beforeLaunch: beforeLaunch)
+        }
+    }
+
+    var pipes: [Pipe] { [process.standardOutput, process.standardError].compactMap { $0 as? Pipe } }
+
+    func release() {
+        receiptQueue.isSuspended = false
+        try? input.fileHandleForWriting.close(); try? input.fileHandleForReading.close()
+    }
+}
+
+@MainActor private final class ResearchProcessLifetimeProbe {
+    weak var child: Process?
+    weak var output: Pipe?
+    weak var errors: Pipe?
+}
+
 final class ResearchHTTPTransportTests: XCTestCase {
     private static func response(_ url: URL, code: Int = 200, location: String? = nil) -> ResearchHTTPResult {
         var headers = ["Content-Type": "text/plain"]
@@ -298,6 +338,236 @@ final class ResearchHTTPTransportTests: XCTestCase {
         } catch { XCTAssertEqual(error as? ResearchNotebookError, .limitExceeded) }
         let empty = try await ResearchBoundedProcess.run(executable: "/usr/bin/true", arguments: [], deadline: ProcessInfo.processInfo.systemUptime + 2, stdoutLimit: 16, stderrLimit: 16)
         XCTAssertEqual(empty.status, 0); XCTAssertTrue(empty.stdout.isEmpty); XCTAssertTrue(empty.stderr.isEmpty)
+    }
+
+    @MainActor private func eventuallyProcess(_ condition: () -> Bool,
+                                             file: StaticString = #filePath, line: UInt = #line) async throws {
+        let deadline = ProcessInfo.processInfo.systemUptime + 3
+        while !condition() {
+            guard ProcessInfo.processInfo.systemUptime < deadline else {
+                XCTFail("Process fixture did not reach its observed state", file: file, line: line)
+                throw ResearchNotebookError.networkFailure
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
+    @MainActor private func assertProcessPipesClosed(_ fixture: ResearchProcessSettlementFixture,
+                                                     file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(fixture.pipes.count, 2, file: file, line: line)
+        for pipe in fixture.pipes {
+            XCTAssertThrowsError(try pipe.fileHandleForReading.read(upToCount: 1), file: file, line: line)
+        }
+        XCTAssertNil(fixture.process.terminationHandler, file: file, line: line)
+        // The supplied input belongs to the caller, not child cleanup.
+        XCTAssertGreaterThanOrEqual(fcntl(fixture.input.fileHandleForReading.fileDescriptor, F_GETFD), 0, file: file, line: line)
+    }
+
+    @MainActor func testOwnedProcessEOFDoesNotSubstituteForExitOrTerminationReceipt() async throws {
+        let fixture = ResearchProcessSettlementFixture("exec 1>&- 2>&-; read -r line")
+        let task = fixture.start()
+        defer { task.cancel(); fixture.release() }
+        try await eventuallyProcess { fixture.process.isRunning }
+        let descriptors = fixture.pipes.map { $0.fileHandleForReading.fileDescriptor }
+        XCTAssertEqual(descriptors.count, 2)
+        try await eventuallyProcess {
+            descriptors.allSatisfy { descriptor in
+                var byte: UInt8 = 0
+                return Darwin.read(descriptor, &byte, 1) == 0
+            }
+        }
+        // Both output streams are genuinely at EOF, but this exact child is alive.
+        XCTAssertTrue(fixture.process.isRunning); XCTAssertFalse(fixture.returned)
+        XCTAssertEqual(fixture.receiptQueue.operationCount, 0)
+        try fixture.input.fileHandleForWriting.write(contentsOf: Data("finish\n".utf8))
+        try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+        XCTAssertFalse(fixture.process.isRunning)
+        XCTAssertEqual(fixture.process.terminationReason, .exit)
+        XCTAssertEqual(fixture.process.terminationStatus, 0)
+        // Even actual exit plus EOF cannot bypass the held authentic receipt.
+        for _ in 0..<4 { await Task.yield() }
+        XCTAssertFalse(fixture.returned)
+        for descriptor in descriptors { XCTAssertGreaterThanOrEqual(fcntl(descriptor, F_GETFD), 0) }
+        fixture.receiptQueue.isSuspended = false
+        let result = try await task.value
+        XCTAssertEqual(result.status, 0); XCTAssertTrue(result.stdout.isEmpty); XCTAssertTrue(result.stderr.isEmpty)
+        XCTAssertTrue(fixture.returned); assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessRepeatedCancellationWaitsForRealTerminationAndPipeClosure() async throws {
+        let fixture = ResearchProcessSettlementFixture("trap '' TERM; read -r line")
+        let task = fixture.start()
+        defer { task.cancel(); fixture.release() }
+        try await eventuallyProcess { fixture.process.isRunning }
+        let descriptors = fixture.pipes.map { $0.fileHandleForReading.fileDescriptor }
+        task.cancel()
+        try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+        XCTAssertFalse(fixture.process.isRunning)
+        XCTAssertEqual(fixture.process.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(fixture.process.terminationStatus, SIGKILL)
+        // Cleanup already killed the held child; repeated cancellation must not
+        // cancel cleanup or turn that kill request into a settlement receipt.
+        for _ in 0..<8 {
+            task.cancel(); try await Task.sleep(nanoseconds: 5_000_000)
+            XCTAssertFalse(fixture.returned)
+        }
+        for descriptor in descriptors { XCTAssertGreaterThanOrEqual(fcntl(descriptor, F_GETFD), 0) }
+        fixture.receiptQueue.isSuspended = false
+        do { _ = try await task.value; XCTFail("Expected cancellation after settlement") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(fixture.returned); assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessDeadlineCannotReplaceTerminationReceiptDuringCancellation() async throws {
+        let fixture = ResearchProcessSettlementFixture("read -r line")
+        let task = fixture.start(seconds: 1)
+        defer { task.cancel(); fixture.release() }
+        try await eventuallyProcess { fixture.process.isRunning }
+        let descriptors = fixture.pipes.map { $0.fileHandleForReading.fileDescriptor }
+        try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+        XCTAssertFalse(fixture.process.isRunning)
+        XCTAssertEqual(fixture.process.terminationStatus, SIGKILL)
+        for _ in 0..<8 {
+            task.cancel(); try await Task.sleep(nanoseconds: 5_000_000)
+            XCTAssertFalse(fixture.returned)
+        }
+        for descriptor in descriptors { XCTAssertGreaterThanOrEqual(fcntl(descriptor, F_GETFD), 0) }
+        fixture.receiptQueue.isSuspended = false
+        do { _ = try await task.value; XCTFail("Expected original deadline failure") }
+        catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+        assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessBothOutputLimitsAwaitRealTerminationDespiteRepeatedCancellation() async throws {
+        for destination in ["", " >&2"] {
+            let fixture = ResearchProcessSettlementFixture("read -r line; while :; do printf '12345678'" + destination + "; done")
+            let task = fixture.start(stdoutLimit: 7, stderrLimit: 7)
+            defer { task.cancel(); fixture.release() }
+            try await eventuallyProcess { fixture.process.isRunning }
+            let descriptors = fixture.pipes.map { $0.fileHandleForReading.fileDescriptor }
+            try fixture.input.fileHandleForWriting.write(contentsOf: Data("start\n".utf8))
+            try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+            XCTAssertFalse(fixture.process.isRunning)
+            XCTAssertEqual(fixture.process.terminationReason, .uncaughtSignal)
+            XCTAssertEqual(fixture.process.terminationStatus, SIGKILL)
+            for _ in 0..<4 {
+                task.cancel(); try await Task.sleep(nanoseconds: 5_000_000)
+                XCTAssertFalse(fixture.returned)
+            }
+            for descriptor in descriptors { XCTAssertGreaterThanOrEqual(fcntl(descriptor, F_GETFD), 0) }
+            fixture.receiptQueue.isSuspended = false
+            do { _ = try await task.value; XCTFail("Expected streamed overflow after settlement") }
+            catch { XCTAssertEqual(error as? ResearchNotebookError, .limitExceeded) }
+            assertProcessPipesClosed(fixture)
+        }
+    }
+
+    @MainActor func testOwnedProcessExactLimitSuccessAndNonzeroStatusWaitForReceipt() async throws {
+        for status in [0, 7] {
+            let fixture = ResearchProcessSettlementFixture("printf 'source'; printf 'meta' >&2; exit \(status)")
+            let task = fixture.start(stdoutLimit: 6, stderrLimit: 4)
+            defer { task.cancel(); fixture.release() }
+            try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+            XCTAssertFalse(fixture.process.isRunning)
+            XCTAssertEqual(fixture.process.terminationStatus, Int32(status))
+            try await Task.sleep(nanoseconds: 30_000_000)
+            XCTAssertFalse(fixture.returned)
+            fixture.receiptQueue.isSuspended = false
+            let result = try await task.value
+            XCTAssertEqual(result.status, Int32(status))
+            XCTAssertEqual(result.stdout, Data("source".utf8)); XCTAssertEqual(result.stderr, Data("meta".utf8))
+            assertProcessPipesClosed(fixture)
+        }
+    }
+
+    @MainActor func testOwnedProcessSuccessfulExitPastDeadlineStillAwaitsReceiptThenFails() async throws {
+        let fixture = ResearchProcessSettlementFixture("exit 0")
+        let task = fixture.start(seconds: 0.5)
+        defer { task.cancel(); fixture.release() }
+        try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+        XCTAssertFalse(fixture.process.isRunning); XCTAssertEqual(fixture.process.terminationStatus, 0)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        XCTAssertFalse(fixture.returned, "The elapsed deadline must not release a held receipt")
+        fixture.receiptQueue.isSuspended = false
+        do { _ = try await task.value; XCTFail("Expected expired deadline after settlement") }
+        catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+        assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessCancellationWhileSuccessfulReceiptIsHeldCannotReturnSuccess() async throws {
+        let fixture = ResearchProcessSettlementFixture("exit 0")
+        let task = fixture.start()
+        defer { task.cancel(); fixture.release() }
+        try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+        XCTAssertFalse(fixture.process.isRunning); XCTAssertEqual(fixture.process.terminationStatus, 0)
+        for _ in 0..<8 {
+            task.cancel(); try await Task.sleep(nanoseconds: 5_000_000)
+            XCTAssertFalse(fixture.returned)
+        }
+        fixture.receiptQueue.isSuspended = false
+        do { _ = try await task.value; XCTFail("Cancelled caller received success") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessCancellationAfterInitialCheckStillSettlesAdmittedChild() async throws {
+        let fixture = ResearchProcessSettlementFixture("read -r line")
+        let task = fixture.start(beforeLaunch: { withUnsafeCurrentTask { $0?.cancel() } })
+        defer { task.cancel(); fixture.release() }
+        try await eventuallyProcess { fixture.receiptQueue.operationCount == 1 }
+        XCTAssertTrue(task.isCancelled)
+        XCTAssertGreaterThan(fixture.process.processIdentifier, 0)
+        XCTAssertFalse(fixture.process.isRunning)
+        XCTAssertEqual(fixture.process.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(fixture.process.terminationStatus, SIGKILL)
+        for _ in 0..<4 { task.cancel(); await Task.yield(); XCTAssertFalse(fixture.returned) }
+        fixture.receiptQueue.isSuspended = false
+        do { _ = try await task.value; XCTFail("Expected cancellation after admitted-child settlement") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessLaunchFailureClosesPipesWithoutInventingReceipt() async throws {
+        let fixture = ResearchProcessSettlementFixture("exit 0")
+        fixture.process.executableURL = URL(fileURLWithPath: "/nonexistent-dot-process-fixture/child")
+        let task = fixture.start()
+        defer { task.cancel(); fixture.release() }
+        do { _ = try await task.value; XCTFail("Expected launch failure") } catch {}
+        XCTAssertFalse(fixture.process.isRunning); XCTAssertEqual(fixture.receiptQueue.operationCount, 0)
+        XCTAssertTrue(fixture.returned); assertProcessPipesClosed(fixture)
+    }
+
+    @MainActor func testOwnedProcessSettledTasksReleaseChildAndPipesIncludingLaunchFailure() async throws {
+        for failsToLaunch in [false, true] {
+            let probe = ResearchProcessLifetimeProbe()
+            let completedTask: Task<ResearchBoundedProcess.Output, Error>
+            do {
+                let fixture = ResearchProcessSettlementFixture("printf 'ok'")
+                if failsToLaunch {
+                    fixture.process.executableURL = URL(fileURLWithPath: "/nonexistent-dot-process-fixture/child")
+                }
+                // Allow immediate callback delivery, including callback-before-
+                // waiter scheduling. The receipt stores an already-arrived status.
+                fixture.receiptQueue.isSuspended = false
+                let task = fixture.start()
+                defer { task.cancel(); fixture.release() }
+                let result = await task.result
+                if failsToLaunch {
+                    if case .success = result { XCTFail("Expected launch failure") }
+                } else {
+                    let value = try result.get()
+                    XCTAssertEqual(value.status, 0); XCTAssertEqual(value.stdout, Data("ok".utf8))
+                }
+                assertProcessPipesClosed(fixture)
+                probe.child = fixture.process; probe.output = fixture.pipes.first; probe.errors = fixture.pipes.last
+                XCTAssertNotNil(probe.child); XCTAssertNotNil(probe.output); XCTAssertNotNil(probe.errors)
+                completedTask = task
+            }
+            // Retaining the finished consumer must not retain cleanup, its child
+            // or either pipe through a callback/task ownership cycle.
+            try await eventuallyProcess { probe.child == nil && probe.output == nil && probe.errors == nil }
+            withExtendedLifetime(completedTask) {}
+        }
     }
 
     func testNumericConnectRejectsPrivatePinsInvalidPortsAndExpiredDeadlines() async {

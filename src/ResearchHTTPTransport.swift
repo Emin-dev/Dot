@@ -282,44 +282,113 @@ struct ResearchFetchRuntime: Sendable {
 }
 
 /// No shell, inherited environment, temporary response files, blocking pipe reads,
-/// unbounded DNS threads or detached retries. The caller owns the exact child PID.
-/// Cancellation/deadline/overflow kills that child and closes both bounded pipes.
+/// unbounded DNS threads or detached retries. The caller owns the exact child.
+/// Cancellation/deadline/overflow requests SIGKILL, then awaits the real termination
+/// receipt and pipe closure. A kill request, EOF or expired deadline is not settlement.
 enum ResearchBoundedProcess {
     struct Output: Sendable { let stdout: Data; let stderr: Data; let status: Int32 }
     static let environment = ["PATH": "/usr/bin:/bin", "HOME": "/var/empty", "LC_ALL": "C", "PYTHONDONTWRITEBYTECODE": "1"]
 
+    /// One actual Foundation callback and at most one cleanup waiter per child.
+    /// Continuations are deliberately unaffected by the consumer's cancellation.
+    private actor TerminationReceipt {
+        private var status: Int32?
+        private var waiter: CheckedContinuation<Int32, Never>?
+        func record(_ value: Int32) {
+            guard status == nil else { return }
+            status = value
+            let pending = waiter; waiter = nil
+            pending?.resume(returning: value)
+        }
+        func wait() async -> Int32 {
+            if let status { return status }
+            return await withCheckedContinuation { waiter = $0 }
+        }
+    }
+
     static func run(executable: String, arguments: [String], deadline: TimeInterval,
                     stdoutLimit: Int, stderrLimit: Int, standardInput: FileHandle? = nil) async throws -> Output {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
+        return try await run(process: process, deadline: deadline, stdoutLimit: stdoutLimit,
+                             stderrLimit: stderrLimit, standardInput: standardInput, receiptQueue: nil, beforeLaunch: nil)
+    }
+
+    /// Internal native-test seam: inspect the exact real child and delay delivery
+    /// of its authentic termination receipt. The pre-launch hook exercises the
+    /// cancellation/launch race; neither hook can manufacture a receipt.
+    /// Resolver/reader callers use the production overload above, without a queue.
+    static func run(testProcess: Process, terminationReceiptQueue: OperationQueue, deadline: TimeInterval,
+                    stdoutLimit: Int, stderrLimit: Int, standardInput: FileHandle? = nil,
+                    beforeLaunch: (@Sendable () -> Void)? = nil) async throws -> Output {
+        precondition(!testProcess.isRunning && testProcess.terminationHandler == nil)
+        return try await run(process: testProcess, deadline: deadline, stdoutLimit: stdoutLimit,
+                             stderrLimit: stderrLimit, standardInput: standardInput, receiptQueue: terminationReceiptQueue, beforeLaunch: beforeLaunch)
+    }
+
+    private static func run(process: Process, deadline: TimeInterval, stdoutLimit: Int, stderrLimit: Int,
+                            standardInput: FileHandle?, receiptQueue: OperationQueue?,
+                            beforeLaunch: (@Sendable () -> Void)?) async throws -> Output {
         try Task.checkCancellation()
         guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
-        let process = Process(), output = Pipe(), errors = Pipe()
-        process.executableURL = URL(fileURLWithPath: executable); process.arguments = arguments
+        let output = Pipe(), errors = Pipe(), receipt = TerminationReceipt()
         process.environment = environment; process.currentDirectoryURL = URL(fileURLWithPath: "/")
         // The caller owns this handle and closes it after the bounded child ends.
         process.standardInput = standardInput ?? FileHandle.nullDevice; process.standardOutput = output; process.standardError = errors
+        let handles = [output.fileHandleForReading, output.fileHandleForWriting,
+                       errors.fileHandleForReading, errors.fileHandleForWriting]
+        var launched = false
         defer {
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-            try? output.fileHandleForReading.close(); try? output.fileHandleForWriting.close()
-            try? errors.fileHandleForReading.close(); try? errors.fileHandleForWriting.close()
+            // A failed launch has no child and therefore no termination receipt.
+            if !launched {
+                process.terminationHandler = nil
+                handles.forEach { try? $0.close() }
+            }
+        }
+        process.terminationHandler = { finished in
+            let status = finished.terminationStatus
+            let deliver: @Sendable () -> Void = { Task { await receipt.record(status) } }
+            if let receiptQueue { receiptQueue.addOperation(deliver) }
+            else { deliver() }
         }
         for handle in [output.fileHandleForReading, errors.fileHandleForReading] {
             let flags = fcntl(handle.fileDescriptor, F_GETFL)
             guard flags >= 0, fcntl(handle.fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else { throw ResearchNotebookError.networkFailure }
         }
+        beforeLaunch?()
         try process.run()
-        try output.fileHandleForWriting.close(); try errors.fileHandleForWriting.close()
+        launched = true
         var stdout = Data(), stderr = Data(), outEOF = false, errEOF = false
-        while true {
-            try Task.checkCancellation()
-            guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
-            if !outEOF { outEOF = try drain(output.fileHandleForReading.fileDescriptor, into: &stdout, limit: stdoutLimit) }
-            if !errEOF { errEOF = try drain(errors.fileHandleForReading.fileDescriptor, into: &stderr, limit: stderrLimit) }
-            if !process.isRunning, outEOF, errEOF {
+        let failure: Error?
+        do {
+            try output.fileHandleForWriting.close(); try errors.fileHandleForWriting.close()
+            while true {
                 try Task.checkCancellation()
-                return Output(stdout: stdout, stderr: stderr, status: process.terminationStatus)
+                guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
+                if !outEOF { outEOF = try drain(output.fileHandleForReading.fileDescriptor, into: &stdout, limit: stdoutLimit) }
+                if !errEOF { errEOF = try drain(errors.fileHandleForReading.fileDescriptor, into: &stderr, limit: stderrLimit) }
+                if !process.isRunning, outEOF, errEOF { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
             }
-            try await Task.sleep(nanoseconds: 10_000_000)
+            failure = nil
+        } catch { failure = error }
+
+        // Retain this exact child and its resources in independently owned cleanup.
+        // Repeated cancellation cannot cancel the receipt wait or claim completion.
+        // No timeout is substituted for termination; no other process is discovered.
+        let mustStop = failure != nil
+        let cleanup = Task.detached { () -> Int32 in
+            if mustStop && process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            let status = await receipt.wait()
+            handles.forEach { try? $0.close() }
+            process.terminationHandler = nil
+            return status
         }
+        let status = await cleanup.value
+        if let failure { throw failure }
+        try Task.checkCancellation()
+        guard ProcessInfo.processInfo.systemUptime < deadline else { throw ResearchNotebookError.networkFailure }
+        return Output(stdout: stdout, stderr: stderr, status: status)
     }
 
     private static func drain(_ fd: Int32, into data: inout Data, limit: Int) throws -> Bool {
