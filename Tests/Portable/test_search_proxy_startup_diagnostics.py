@@ -22,6 +22,23 @@ support = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(support)
 SECRET = "synthetic-secret-not-for-diagnostics"
 
+# A diagnostic vocabulary, never an environment acceptance allowlist. All
+# differences still fail. Unknown names and every value remain undisclosed.
+FIXTURE_ENVIRONMENT_KEYS = (
+    "PATH", "HOME", "TMPDIR", "LANG", "PYTHONDONTWRITEBYTECODE", "LC_ALL", "LC_CTYPE",
+    "__PYVENV_LAUNCHER__", "PYTHONEXECUTABLE", "VERSIONER_PYTHON_VERSION",
+    "VERSIONER_PYTHON_PREFER_32_BIT", "__CF_USER_TEXT_ENCODING", "__CFBundleIdentifier",
+)
+FIXTURE_EXIT_LABELS = {71: "cwd", 72: "environment-unclassified", 73: "listener"}
+for _index, _key in enumerate(FIXTURE_ENVIRONMENT_KEYS):
+    for _operation, _label in enumerate(("added", "removed", "changed")):
+        FIXTURE_EXIT_LABELS[80 + 3 * _index + _operation] = f"environment-{_label}:{_key}"
+for _operation, _label in enumerate(("added", "removed", "changed")):
+    FIXTURE_EXIT_LABELS[140 + _operation] = f"environment-{_label}:unknown-key"
+for _mask in range(1, 8):
+    FIXTURE_EXIT_LABELS[150 + _mask] = "environment-multiple:" + "+".join(
+        label for bit, label in ((1, "added"), (2, "removed"), (4, "changed")) if _mask & bit)
+
 
 class StartupContextTests(unittest.TestCase):
     def setUp(self):
@@ -540,9 +557,25 @@ class StartupChildTests(unittest.TestCase):
         self.assertNotIn(SECRET, json.dumps(result))
 
     def inheritance_program(self):
-        lines = ['import os, socket', 'try:',
+        lines = ['import os, socket',
+            'def environment_exit_code(expected, actual):',
+            f'    known = {FIXTURE_ENVIRONMENT_KEYS!r}',
+            '    added = set(actual) - set(expected)',
+            '    removed = set(expected) - set(actual)',
+            '    changed = {key for key in set(expected) & set(actual) if expected[key] != actual[key]}',
+            '    differences = added | removed | changed',
+            '    if len(differences) == 1:',
+            '        key = next(iter(differences))',
+            '        operation = 0 if key in added else 1 if key in removed else 2',
+            '        return 80 + 3 * known.index(key) + operation if key in known else 140 + operation',
+            '    if differences:',
+            '        return 150 + bool(added) + 2 * bool(removed) + 4 * bool(changed)',
+            '    return 72',
+            'try:',
             f'    assert os.getcwd() == {str(self.state)!r}, 71',
-            f'    assert dict(os.environ) == {self.context["env"]!r}, 72',
+            f'    expected = {self.context["env"]!r}',
+            '    actual = dict(os.environ)',
+            '    assert actual == expected, environment_exit_code(expected, actual)',
             f'    s = socket.socket(fileno={self.listener.fileno()})']
         if sys.platform == "darwin":
             lines.append('    assert s.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\\x01", 73')
@@ -559,7 +592,8 @@ class StartupChildTests(unittest.TestCase):
         self.context["env"]["LC_ALL"] = "C"
         result = self.run_child(self.inheritance_program())
         self.assertEqual(result["status"], "success",
-            f'fixed fixture exit code {result["returncode"]}: 71=cwd, 72=environment, 73=listener')
+            f'fixed fixture exit code {result["returncode"]}: '
+            f'{FIXTURE_EXIT_LABELS.get(result["returncode"], "unclassified")}')
         self.assertEqual(result["returncode"], 0)
         self.assertEqual(result["cleanup"], "not-needed")
         support.assert_owned(self.listener.getsockname()[1])
@@ -569,11 +603,85 @@ class StartupChildTests(unittest.TestCase):
         self.context["env"].update(LC_ALL="C", LC_CTYPE="dot-unavailable-locale")
         result = self.run_child(self.inheritance_program())
         self.assertEqual(result["status"], "success",
-            f'fixed fixture exit code {result["returncode"]}: 71=cwd, 72=environment, 73=listener')
+            f'fixed fixture exit code {result["returncode"]}: '
+            f'{FIXTURE_EXIT_LABELS.get(result["returncode"], "unclassified")}')
         self.assertEqual(result["returncode"], 0)
         self.assertNotIn("LC_ALL", support.minimal_env(self.state))
         self.assertNotIn("LC_CTYPE", support.minimal_env(self.state))
         support.assert_owned(self.listener.getsockname()[1])
+
+    def test_environment_diagnostic_codes_are_fixed_and_complete(self):
+        # Execute the exact generated classifier, without a host interpreter's
+        # startup mutations or a second implementation of its classification.
+        tree = ast.parse(self.inheritance_program())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))
+        namespace = {}
+        exec(compile(ast.Module(body=[function], type_ignores=[]), "<fixed-env-diagnostic>", "exec"), namespace)
+        classify = namespace["environment_exit_code"]
+        observed = set()
+        for index, key in enumerate(FIXTURE_ENVIRONMENT_KEYS):
+            for operation, expected, actual in (
+                    (0, {}, {key: SECRET}),
+                    (1, {key: SECRET}, {}),
+                    (2, {key: SECRET}, {key: "malformed\n\x00value"})):
+                with self.subTest(key=key, operation=operation):
+                    code = classify(expected, actual)
+                    self.assertEqual(code, 80 + 3 * index + operation)
+                    observed.add(code)
+        for key in (SECRET, "PATH\n", "__PYVENV_LAUNCHER__\x00", "x" * 4096, 17):
+            for operation, expected, actual in (
+                    (0, {}, {key: SECRET}), (1, {key: SECRET}, {}),
+                    (2, {key: SECRET}, {key: None})):
+                with self.subTest(operation=operation):
+                    code = classify(expected, actual)
+                    self.assertEqual(code, 140 + operation)
+                    observed.add(code)
+        for mask in range(1, 8):
+            expected, actual = {}, {}
+            # Two differences per selected kind ensure every mask reaches the
+            # multiple-delta branch. Known and unknown names are mixed.
+            if mask & 1:
+                actual.update(__PYVENV_LAUNCHER__=SECRET, unknown_added=SECRET)
+            if mask & 2:
+                expected.update(PATH=SECRET, unknown_removed=SECRET)
+            if mask & 4:
+                expected.update(HOME=SECRET, unknown_changed=SECRET)
+                actual.update(HOME="changed", unknown_changed="changed")
+            self.assertEqual(classify(expected, actual), 150 + mask)
+            self.assertEqual(classify(dict(reversed(list(expected.items()))),
+                                      dict(reversed(list(actual.items())))), 150 + mask)
+            observed.add(150 + mask)
+        self.assertEqual(classify({}, {}), 72)
+        self.assertEqual(classify({"PATH": SECRET}, {"PATH": SECRET}), 72)
+        self.assertEqual(observed, set(FIXTURE_EXIT_LABELS) - {71, 72, 73})
+        self.assertTrue(all(type(code) is int and 0 < code < 256 for code in FIXTURE_EXIT_LABELS))
+        self.assertEqual(len(set(FIXTURE_EXIT_LABELS.values())), len(FIXTURE_EXIT_LABELS))
+        self.assertNotIn(SECRET, repr(FIXTURE_EXIT_LABELS))
+        self.assertNotIn(str(self.state), repr(FIXTURE_EXIT_LABELS))
+
+    def test_generated_environment_diagnostics_fail_closed_in_real_children(self):
+        self.context["env"]["LC_ALL"] = "C"
+        expected = self.context["env"].copy()
+        cases = [({**expected, "__PYVENV_LAUNCHER__": SECRET}, 101),
+                 ({**expected, "__CF_USER_TEXT_ENCODING": "malformed"}, 113),
+                 ({**expected, SECRET: SECRET}, 140),
+                 ({**expected, "HOME": "malformed\n\x00value"}, 85),
+                 ({key: value for key, value in expected.items() if key != "PATH"}, 81),
+                 ({**expected, "HOME": SECRET, SECRET: SECRET}, 155)]
+        for actual, code in cases:
+            # This regression substitutes a synthetic observed mapping after
+            # startup. The inheritance tests above never replace/normalize it.
+            program = self.inheritance_program().replace("import os, socket\n",
+                f"import os, socket\nos.environ = {actual!r}\n", 1)
+            with self.subTest(code=code):
+                result = self.run_child(program)
+                self.assertEqual(result["status"], "nonzero-exit")
+                self.assertEqual(result["returncode"], code)
+                self.assertEqual(result["cleanup"], "not-needed")
+                self.assertEqual(self.context["env"], expected)
+        self.assertEqual(support.minimal_env(self.state),
+            {"PATH": "/usr/bin:/bin", "HOME": str(self.state), "TMPDIR": str(self.state),
+             "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"})
 
     def test_generated_inheritance_checks_are_exact_on_both_platforms(self):
         self.context["env"]["LC_ALL"] = "C"
@@ -587,9 +695,9 @@ class StartupChildTests(unittest.TestCase):
             cases = [(str(self.state), self.context["env"], state, None if index == 0 else 73)
                      for index, state in enumerate(states)]
             cases.extend([(SECRET, self.context["env"], states[0], 71),
-                          (str(self.state), {**self.context["env"], "SECRET": SECRET}, states[0], 72),
-                          (str(self.state), {**self.context["env"], "LC_CTYPE": "UTF-8"}, states[0], 72),
-                          (str(self.state), {}, states[0], 72)])
+                          (str(self.state), {**self.context["env"], "SECRET": SECRET}, states[0], 140),
+                          (str(self.state), {**self.context["env"], "LC_CTYPE": "UTF-8"}, states[0], 98),
+                          (str(self.state), {}, states[0], 152)])
             for cwd, env, state, exit_code in cases:
                 with self.subTest(platform=platform, exit_code=exit_code):
                     fake_os = mock.Mock(environ=env)
@@ -602,7 +710,8 @@ class StartupChildTests(unittest.TestCase):
                     output = mock.Mock()
                     imports = {"os": fake_os, "socket": fake_socket}
                     namespace = {"__builtins__": {"__import__": lambda name, *args: imports[name],
-                        "dict": dict, "AssertionError": AssertionError, "SystemExit": SystemExit, "print": output}}
+                        "dict": dict, "set": set, "len": len, "next": next, "iter": iter, "bool": bool,
+                        "AssertionError": AssertionError, "SystemExit": SystemExit, "print": output}}
                     if exit_code is None:
                         exec(code, namespace)
                         output.assert_called_once_with("dot-search-startup-v1")
