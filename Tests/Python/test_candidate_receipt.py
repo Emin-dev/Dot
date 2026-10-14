@@ -109,7 +109,7 @@ class CandidateReceiptTests(unittest.TestCase):
                    ("git", "status", "--porcelain", "--untracked-files=all"): dirty,
                    ("uname", "-m"): "arm64", ("sw_vers", "-productVersion"): "15.7",
                    ("xcrun", "--sdk", "macosx", "--show-sdk-version"): "26.4",
-                   ("lipo", "-archs", str(self.binary)): "arm64"}
+                   ("lipo", "-archs", str(self.binary.resolve())): "arm64"}
         original_cwd = Path.cwd()
         try:
             with mock.patch.object(receipt, "__file__", str(self.root / "scripts/write_candidate_receipt.py")), \
@@ -126,6 +126,17 @@ class CandidateReceiptTests(unittest.TestCase):
         result = json.loads((self.root / "build/Dot-candidate-receipt.json").read_text())
         self.assertEqual(result, self.make())
         self.assertEqual(self.dmg.read_bytes(), before)
+
+    def test_main_resolves_symlinked_fixture_root_before_lipo(self):
+        actual_root = self.root
+        alias = actual_root / "fixture-alias"
+        alias.symlink_to(actual_root, target_is_directory=True)
+        self.root = alias
+        self.binary = alias / "build/Dot.app/Contents/MacOS/Dot"
+        self.run_main()
+        result = json.loads((actual_root / "build/Dot-candidate-receipt.json").read_text())
+        self.assertEqual(result["dmg"]["sha256"], hashlib.sha256(self.dmg.read_bytes()).hexdigest())
+        self.assertEqual(result["commit"], self.commit)
 
     def test_main_rejects_dirty_checkout_and_workflow_commit_mismatch(self):
         for kwargs in [{"dirty": " M src/App.swift"}, {"workflow_sha": "b" * 40}]:
