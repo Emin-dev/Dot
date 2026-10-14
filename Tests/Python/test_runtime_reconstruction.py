@@ -1374,12 +1374,141 @@ class BoundedProcessTests(unittest.TestCase):
             deadline = time.monotonic()+2
             while not m._native_child_exited(child) and time.monotonic()<deadline:
                 time.sleep(.005)
+            self.assertTrue(m._native_child_exited(child))
             self.assertIsNone(child.returncode)
-            m.os.killpg(child.pid,m.signal.SIGKILL)
-            self.assertEqual(child.wait(timeout=1),0)
+            # Direct waitpid proves the observer left a waitable child. Popen
+            # wait alone treats ECHILD as zero and could hide accidental reaping.
+            # This fixture cannot fork, so no group teardown is needed here.
+            reap_deadline = time.monotonic()+1
+            while True:
+                pid, status = os.waitpid(child.pid, os.WNOHANG)
+                if pid: break
+                self.assertLess(time.monotonic(), reap_deadline)
+                time.sleep(.005)
+            self.assertEqual(pid, child.pid)
+            child.returncode = os.waitstatus_to_exitcode(status)
+            self.assertEqual(child.returncode, 0)
         finally:
             if child.returncode is None:
-                m.os.killpg(child.pid,m.signal.SIGKILL); child.wait(timeout=1)
+                try: os.kill(child.pid, m.signal.SIGKILL)
+                except ProcessLookupError: pass
+                child.wait(timeout=1)
+
+    def test_darwin_eperm_requires_independent_singleton_before_reap(self):
+        original_kill = os.killpg
+        original_popen = m.subprocess.Popen
+        original_wait = m.subprocess.Popen.wait
+        for program, expected in (("import os; os.write(1,b'raw')", 0),
+                                  ('import os,signal; os.kill(os.getpid(),signal.SIGTERM)', -15)):
+            with self.subTest(expected=expected):
+                children, events = [], []
+                def popen(*args, **kwargs):
+                    child = original_popen(*args, **kwargs)
+                    children.append(child)
+                    return child
+                def kill(pid, sig):
+                    events.append(('signal', sig))
+                    if sig == m.signal.SIGKILL:
+                        self.assertIsNone(children[0].returncode)
+                        self.assertTrue(m._native_child_exited(children[0]))
+                        raise PermissionError(errno.EPERM, 'synthetic Darwin zombie group')
+                    self.assertIsNotNone(children[0].returncode)
+                    return original_kill(pid, sig)
+                def enumerate_group(kind, pgid, buffer, size):
+                    self.assertEqual(events[-1], ('signal', m.signal.SIGKILL))
+                    self.assertEqual((kind, pgid, size), (2, children[0].pid, 8))
+                    self.assertIsNone(children[0].returncode)
+                    buffer[0] = pgid
+                    events.append(('singleton', pgid))
+                    return 4
+                def wait(child, *args, **kwargs):
+                    self.assertEqual(events[-1], ('singleton', child.pid))
+                    events.append(('wait', child.pid))
+                    return original_wait(child, *args, **kwargs)
+                library = types.SimpleNamespace(proc_listpids=mock.Mock(side_effect=enumerate_group))
+                with mock.patch.object(m.sys, 'platform', 'darwin'), \
+                     mock.patch.object(m.ctypes, 'CDLL', return_value=library), \
+                     mock.patch.object(m.subprocess, 'Popen', side_effect=popen), \
+                     mock.patch.object(original_popen, 'wait', wait), \
+                     mock.patch.object(m.os, 'killpg', side_effect=kill):
+                    result = self.run_child(program)
+                self.assertEqual(result['returncode'], expected)
+                self.assertTrue(result['cleanup']['complete'])
+                self.assertEqual(result['cleanup']['open_output_pipes'], 0)
+                self.assertIsNone(result['reason'])
+                self.assertEqual(result['stdout'], b'raw' if expected == 0 else b'')
+                self.assertEqual(sum(event == ('signal', m.signal.SIGKILL) for event in events), 1)
+
+    def test_darwin_eperm_without_membership_proof_never_reaps(self):
+        original_popen = m.subprocess.Popen
+        children = []
+        def popen(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+        try:
+            with mock.patch.object(m.sys, 'platform', 'darwin'), \
+                 mock.patch.object(m.subprocess, 'Popen', side_effect=popen), \
+                 mock.patch.object(original_popen, 'wait') as wait, \
+                 mock.patch.object(m.os, 'killpg', side_effect=PermissionError(errno.EPERM, 'denied')), \
+                 mock.patch.object(m, '_native_darwin_exited_singleton', return_value=False):
+                result = self.run_child('pass')
+            wait.assert_not_called()
+            self.assertIsNone(result['returncode'])
+            self.assertEqual(result['reason'], 'incomplete_cleanup')
+            self.assertFalse(result['cleanup']['complete'])
+            self.assertEqual(result['cleanup']['remaining_owned_processes'], 1)
+            self.assertTrue(children[0].stdout.closed and children[0].stderr.closed)
+        finally:
+            # Known no-fork test child; release only after asserting no early reap.
+            for child in children:
+                child.wait(timeout=1)
+
+    def test_darwin_proof_cannot_outlive_cleanup_deadline(self):
+        original_popen = m.subprocess.Popen
+        children = []
+        def popen(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+        clock = [10.0]
+        def late_proof(child):
+            clock[0] += 3
+            return True
+        try:
+            with mock.patch.object(m.subprocess, 'Popen', side_effect=popen), \
+                 mock.patch.object(original_popen, 'wait') as wait, \
+                 mock.patch.object(m.os, 'killpg', side_effect=PermissionError(errno.EPERM, 'denied')), \
+                 mock.patch.object(m, '_native_child_exited', return_value=True), \
+                 mock.patch.object(m, '_native_darwin_exited_singleton', side_effect=late_proof), \
+                 mock.patch.object(m.time, 'monotonic', side_effect=lambda: clock[0]):
+                result = m._native_run_bounded([sys.executable, '-I', '-B', '-c', 'pass'], 11)
+            wait.assert_not_called()
+            self.assertFalse(result['cleanup']['complete'])
+            self.assertIsNone(result['returncode'])
+        finally:
+            for child in children:
+                child.wait(timeout=1)
+
+    def test_reaped_leader_is_never_signaled_again(self):
+        original_popen = m.subprocess.Popen
+        children = []
+        def popen(*args, **kwargs):
+            child = original_popen(*args, **kwargs)
+            children.append(child)
+            return child
+        def unexpectedly_reaped(child):
+            child.wait(timeout=1)
+            return True
+        with mock.patch.object(m.subprocess, 'Popen', side_effect=popen), \
+             mock.patch.object(m, '_native_child_exited', side_effect=unexpectedly_reaped), \
+             mock.patch.object(m.os, 'killpg') as kill:
+            result = self.run_child('pass')
+        kill.assert_not_called()
+        self.assertFalse(result['cleanup']['complete'])
+        self.assertIsNone(result['returncode'])
+        self.assertEqual(result['reason'], 'incomplete_cleanup')
+        self.assertTrue(children[0].stdout.closed and children[0].stderr.closed)
 
     def test_selector_failure_never_spawns(self):
         with mock.patch.object(m.selectors,'DefaultSelector',side_effect=OSError('too many files')), \
@@ -1398,6 +1527,124 @@ class BoundedProcessTests(unittest.TestCase):
         self.assertFalse(result['cleanup']['complete'])
         self.assertEqual(result['cleanup']['remaining_owned_processes'],1)
         self.assertGreaterEqual(result['cleanup']['duration_ms'],2000)
+
+
+class NativeExitObservationTests(unittest.TestCase):
+    def test_waitid_requires_exact_pid_and_terminal_code(self):
+        child = types.SimpleNamespace(pid=12345, returncode=None)
+        # Explicit constants let this contract test run even on CPython builds
+        # whose Darwin configuration omits waitid and its constants.
+        values = {'P_PID': 1, 'WEXITED': 4, 'WNOHANG': 1, 'WNOWAIT': 16,
+                  'CLD_EXITED': 1, 'CLD_KILLED': 2, 'CLD_DUMPED': 3}
+        for pid, code, expected in ((12345, 1, True), (12345, 2, True), (12345, 3, True),
+                                    (0, 0, False), (12346, 1, None),
+                                    (12345, 5, None), (12345, 6, None)):
+            with self.subTest(pid=pid, code=code), mock.patch.multiple(m.os, create=True, **values), \
+                 mock.patch.object(m.os, 'waitid', create=True,
+                                   return_value=types.SimpleNamespace(si_pid=pid, si_code=code)) as wait:
+                if expected is None:
+                    with self.assertRaises(ChildProcessError): m._native_child_exited(child)
+                else:
+                    self.assertEqual(m._native_child_exited(child), expected)
+                wait.assert_called_once_with(1, child.pid, 21)
+                self.assertIsNone(child.returncode)
+
+    def test_no_waitid_event_is_not_exit(self):
+        with mock.patch.object(m.os, 'waitid', create=True, return_value=None), \
+             mock.patch.multiple(m.os, create=True, P_PID=1, WEXITED=4, WNOHANG=1, WNOWAIT=16):
+            self.assertFalse(m._native_child_exited(types.SimpleNamespace(pid=12345, returncode=None)))
+
+    def test_reaped_child_is_rejected_before_observation(self):
+        with mock.patch.object(m.os, 'waitid', create=True) as wait:
+            with self.assertRaises(ChildProcessError):
+                m._native_child_exited(types.SimpleNamespace(pid=12345, returncode=0))
+        wait.assert_not_called()
+
+    def test_kqueue_requires_exact_owned_process_event(self):
+        child = types.SimpleNamespace(pid=12345, returncode=None)
+        values = {'KQ_FILTER_PROC': -5, 'KQ_EV_ADD': 1, 'KQ_EV_ONESHOT': 16,
+                  'KQ_NOTE_EXIT': 0x80000000, 'KQ_EV_ERROR': 0x4000}
+        for pid, event_filter in ((12345, -5), (12346, -5), (12345, -1)):
+            event = types.SimpleNamespace(ident=pid, filter=event_filter, flags=0, fflags=0x80000000)
+            queue = mock.Mock()
+            queue.control.return_value = [event]
+            with self.subTest(pid=pid, event_filter=event_filter), \
+                 mock.patch.object(m.os, 'waitid', None, create=True), \
+                 mock.patch.multiple(m.select, create=True, **values), \
+                 mock.patch.object(m.select, 'kqueue', create=True, return_value=queue), \
+                 mock.patch.object(m.select, 'kevent', create=True):
+                if (pid, event_filter) == (12345, -5):
+                    self.assertTrue(m._native_child_exited(child))
+                else:
+                    with self.assertRaises(ChildProcessError): m._native_child_exited(child)
+            queue.close.assert_called_once()
+
+
+class DarwinSingletonEvidenceTests(unittest.TestCase):
+    def child(self):
+        return types.SimpleNamespace(pid=12345, returncode=None)
+
+    def test_exact_singleton_and_all_ambiguous_counts(self):
+        for count, members, accepted in ((4, [12345], True), (8, [12345, 12346], False),
+                                         (8, [12346, 12345], False), (4, [12346], False),
+                                         (4, [12345, 12346], False), (0, [], False),
+                                         (-1, [], False), (1, [12345], False),
+                                         (3, [12345], False), (5, [12345], False),
+                                         (12, [12345, 12346], False)):
+            with self.subTest(count=count, members=members):
+                def enumerate_group(kind, pgid, buffer, size):
+                    self.assertEqual((kind, pgid, size), (2, 12345, 8))
+                    for index, member in enumerate(members): buffer[index] = member
+                    return count
+                listing = mock.Mock(side_effect=enumerate_group)
+                library = types.SimpleNamespace(proc_listpids=listing)
+                with mock.patch.object(m.sys, 'platform', 'darwin'), \
+                     mock.patch.object(m, '_native_child_exited', return_value=True), \
+                     mock.patch.object(m.ctypes, 'CDLL', return_value=library) as load:
+                    self.assertEqual(m._native_darwin_exited_singleton(self.child()), accepted)
+                load.assert_called_once_with('/usr/lib/libproc.dylib', use_errno=True)
+                self.assertEqual(listing.argtypes,
+                                 [m.ctypes.c_uint32, m.ctypes.c_uint32, m.ctypes.c_void_p, m.ctypes.c_int])
+                self.assertIs(listing.restype, m.ctypes.c_int)
+
+    def test_unsupported_reaped_live_and_invalid_children_are_not_enumerated(self):
+        for platform, code, pid, exited in (('linux', None, 12345, True),
+                                          ('darwin', 0, 12345, True),
+                                          ('darwin', None, 12345, False),
+                                          ('darwin', None, 1, True),
+                                          ('darwin', None, -1, True),
+                                          ('darwin', None, 2**31, True)):
+            with self.subTest(platform=platform, code=code, pid=pid, exited=exited), \
+                 mock.patch.object(m.sys, 'platform', platform), \
+                 mock.patch.object(m, '_native_child_exited', return_value=exited), \
+                 mock.patch.object(m.ctypes, 'CDLL') as load:
+                child = types.SimpleNamespace(pid=pid, returncode=code)
+                self.assertFalse(m._native_darwin_exited_singleton(child))
+                load.assert_not_called()
+
+    def test_api_failures_and_changed_child_state_are_inconclusive(self):
+        for failure in ('load', 'symbol', 'call', 'reaped'):
+            with self.subTest(failure=failure):
+                child = self.child()
+                def enumerate_group(*args):
+                    if failure == 'call': raise OSError(errno.EPERM, 'inspection denied')
+                    child.returncode = 0
+                    args[2][0] = child.pid
+                    return 4
+                library = (types.SimpleNamespace() if failure == 'symbol' else
+                           types.SimpleNamespace(proc_listpids=mock.Mock(side_effect=enumerate_group)))
+                with mock.patch.object(m.sys, 'platform', 'darwin'), \
+                     mock.patch.object(m, '_native_child_exited', return_value=True), \
+                     mock.patch.object(m.ctypes, 'CDLL', return_value=library,
+                                       side_effect=OSError('missing libproc') if failure == 'load' else None):
+                    self.assertFalse(m._native_darwin_exited_singleton(child))
+
+    def test_observation_failure_is_inconclusive(self):
+        with mock.patch.object(m.sys, 'platform', 'darwin'), \
+             mock.patch.object(m, '_native_child_exited', side_effect=ChildProcessError('no held child')), \
+             mock.patch.object(m.ctypes, 'CDLL') as load:
+            self.assertFalse(m._native_darwin_exited_singleton(self.child()))
+        load.assert_not_called()
 
 
 class ParserTests(unittest.TestCase):

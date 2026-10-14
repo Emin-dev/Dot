@@ -2117,7 +2117,13 @@ def _native_child_exited(child):
         raise ChildProcessError('owned child already reaped')
     waitid = getattr(os, 'waitid', None)
     if callable(waitid):
-        return waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT) is not None
+        observation = waitid(os.P_PID, child.pid, os.WEXITED | os.WNOHANG | os.WNOWAIT)
+        if observation is None or observation.si_pid == 0:
+            return False
+        if (observation.si_pid != child.pid or observation.si_code not in
+                (os.CLD_EXITED, os.CLD_KILLED, os.CLD_DUMPED)):
+            raise ChildProcessError('invalid owned-child terminal observation')
+        return True
     if not hasattr(select, 'kqueue'):
         raise RuntimeError('non-reaping child observation unavailable')
     queue = select.kqueue()
@@ -2129,6 +2135,8 @@ def _native_child_exited(child):
         except ProcessLookupError:
             return True
         for event in events:
+            if event.ident != child.pid or event.filter != select.KQ_FILTER_PROC:
+                raise ChildProcessError('invalid owned-child process event')
             if event.flags & select.KQ_EV_ERROR:
                 if event.data == errno.ESRCH:
                     return True
@@ -2140,12 +2148,45 @@ def _native_child_exited(child):
         queue.close()
 
 
+def _native_darwin_exited_singleton(child):
+    """Prove the held, exited leader is its group's sole remaining member.
+
+    XNU killpg1 excludes SZOMB members and can return EPERM for a zombie-only
+    group. EPERM is not evidence of successful signaling or absent descendants.
+    libproc's PROC_PGRP_ONLY snapshot includes both live and zombie processes.
+    Two PID slots suffice: only an exact one-PID result can establish singleton
+    membership; a full buffer, missing leader or API failure is inconclusive.
+    This proof is used only before reaping our start_new_session child, so its
+    reserved PID cannot refer to another group. It never discovers or signals
+    arbitrary processes, and does not account for escaped descendants.
+    """
+    if (sys.platform != 'darwin' or child.returncode is not None
+            or type(child.pid) is not int or not 1 < child.pid < 2**31):
+        return False
+    try:
+        if not _native_child_exited(child):
+            return False
+        libproc = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
+        listpids = libproc.proc_listpids
+        listpids.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_int]
+        listpids.restype = ctypes.c_int
+        members = (ctypes.c_int * 2)()
+        # PROC_PGRP_ONLY=2. The API returns bytes, not a count of PIDs; its
+        # wrapper returns zero on syscall failure. No sizing/retry race exists.
+        size = listpids(2, child.pid, members, ctypes.sizeof(members))
+        return (size == ctypes.sizeof(ctypes.c_int) and members[0] == child.pid
+                and members[1] == 0 and child.returncode is None)
+    except (AttributeError, OSError, RuntimeError, ValueError):
+        return False
+
+
 def _native_run_bounded(argv, deadline, pass_fds=(), env=None, cap=_NS_OUTPUT):
-    """Raw bounded capture. Never poll/wait before killing the owned group.
+    """Raw bounded capture. Never poll/wait before owned-group teardown.
 
     EOF is not exit. One absolute deadline remains active after output EOF.
-    A child remains unreaped until SIGKILL has been sent to its owned group;
-    the leader's reserved PID therefore cannot accidentally name another group.
+    A child remains unreaped until its owned group has received SIGKILL or an
+    attempted signal is followed by proof that only the exited leader remains.
+    The reserved PID therefore cannot accidentally name another group.
     Completion additionally requires group disappearance and both output EOFs.
     This private primitive accounts for its owned process group; production
     additionally uses the fixed deny-process-fork sandbox, so a target cannot
@@ -2181,23 +2222,37 @@ def _native_run_bounded(argv, deadline, pass_fds=(), env=None, cap=_NS_OUTPUT):
     cleanup_start = None
     cleanup_deadline = None
     killed = False
+    exited_singleton = False
     leader_exited = False
     pending_exception = None
 
     def teardown(reason=None):
-        nonlocal cleanup_start, cleanup_deadline, killed
+        nonlocal cleanup_start, cleanup_deadline, killed, exited_singleton
         if result['reason'] is None and reason is not None:
             result['reason'] = reason
         if cleanup_start is None:
             cleanup_start = time.monotonic()
             cleanup_deadline = cleanup_start + 2
-        if not killed:
+        if not (killed or exited_singleton):
+            if child.returncode is not None:
+                # A released PID must never be used for another group signal.
+                result['reason'] = 'group_identity_lost'
+                return
             try:
                 os.killpg(child.pid, signal.SIGKILL)
                 killed = True
             except ProcessLookupError:
                 # The unreaped child prevents PID reuse; no such group is safe.
                 killed = True
+            except PermissionError as exc:
+                # Never reinterpret EPERM as success. Independently establish
+                # exact exited singleton membership while the PID is reserved.
+                exited_singleton = (exc.errno == errno.EPERM and leader_exited
+                                    and time.monotonic() < cleanup_deadline
+                                    and _native_darwin_exited_singleton(child)
+                                    and time.monotonic() < cleanup_deadline)
+                if not exited_singleton:
+                    result['reason'] = 'group_kill_failed'
             except OSError:
                 result['reason'] = 'group_kill_failed'
 
@@ -2234,7 +2289,7 @@ def _native_run_bounded(argv, deadline, pass_fds=(), env=None, cap=_NS_OUTPUT):
             leader_exited = _native_child_exited(child)
             if leader_exited:
                 teardown()
-            if leader_exited and killed and not selector.get_map():
+            if leader_exited and (killed or exited_singleton) and not selector.get_map():
                 break
             stop = cleanup_deadline if cleanup_deadline is not None else deadline
             drain(min(0.02, max(0, stop - time.monotonic())))
@@ -2252,8 +2307,9 @@ def _native_run_bounded(argv, deadline, pass_fds=(), env=None, cap=_NS_OUTPUT):
                 break
             if not leader_exited:
                 time.sleep(min(0.01, max(0, cleanup_deadline-time.monotonic())))
-        if killed and leader_exited:
-            # First and only reaping call occurs after owned-group teardown.
+        if (killed or exited_singleton) and leader_exited:
+            # First and only reap follows the owned-group signal attempt and
+            # either signal success/absence or independent singleton proof.
             try:
                 result['returncode'] = child.wait(timeout=max(0, cleanup_deadline-time.monotonic()))
             except subprocess.TimeoutExpired:
@@ -2280,7 +2336,7 @@ def _native_run_bounded(argv, deadline, pass_fds=(), env=None, cap=_NS_OUTPUT):
         open_pipes = len(selector.get_map())
         result['cleanup'] = {'remaining_owned_processes':0 if group_gone else 1,
                              'open_output_pipes':open_pipes,
-                             'complete':bool(killed and leader_exited and group_gone and not open_pipes),
+                             'complete':bool((killed or exited_singleton) and leader_exited and group_gone and not open_pipes),
                              'duration_ms':int((time.monotonic()-cleanup_start)*1000)}
         if result['cleanup']['duration_ms'] > 2000:
             result['cleanup']['complete'] = False
