@@ -619,6 +619,12 @@ extension ResearchEngineTests {
 /// installation. These tests manually deliver receipts; production-route tests
 /// above and below still use the actual per-request session/data delegate.
 final class InferenceTransferTests: XCTestCase {
+    /// The probe is held strongly; its observed transfer remains weak so the
+    /// release assertion below tests ARC teardown, not an explicit probe reset.
+    @MainActor private final class LifetimeProbe {
+        weak var transfer: InferenceTransfer?
+        init(_ transfer: InferenceTransfer?) { self.transfer = transfer }
+    }
     @MainActor private func eventually(_ condition: @escaping @MainActor () async -> Bool) async throws {
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         while !(await condition()), ProcessInfo.processInfo.systemUptime < deadline { try await Task.sleep(nanoseconds: 1_000_000) }
@@ -749,7 +755,8 @@ final class InferenceTransferTests: XCTestCase {
     @MainActor func testCancelSuspendedProductionTaskSettlesAndReleasesDelegateCycle() async throws {
         let fixture = AdmissionTransport([.init(chunks: [Data(repeating: 120, count: InferenceTransfer.highWaterBytes)])]); defer { fixture.close() }
         var transfer: InferenceTransfer? = production(fixture)
-        weak var weakTransfer = transfer
+        let lifetime = LifetimeProbe(transfer)
+        XCTAssertNotNil(lifetime.transfer)
         // Do not retain the returned Bytes; the only lasting owner should be this
         // local variable and the session's delegate retention until invalidation.
         _ = try await transfer!.start()
@@ -759,7 +766,7 @@ final class InferenceTransferTests: XCTestCase {
         XCTAssertTrue(final.completed); XCTAssertTrue(final.invalidated); XCTAssertEqual(final.suspendCount, final.resumeCount)
         XCTAssertFalse(final.retainedTask); XCTAssertFalse(final.retainedSession)
         transfer = nil
-        try await eventually { weakTransfer == nil }
+        try await eventually { lifetime.transfer == nil }
     }
     @MainActor func testCancellationOfPendingByteConsumerWakesBeforeTransportSettles() async throws {
         let fixture = AdmissionTransport([.init()], holdStop: true); defer { fixture.close() }
