@@ -16,21 +16,31 @@ The generator explicitly requests `ec_param_enc:named_curve` for P-256. Native d
 
 The private backend still uses Splash's API-key client authentication. TLS authenticates the app-facing server; PID/model checks are additional consistency checks, not the cryptographic trust anchor. A hostile local process can deny service, but cannot obtain application bytes by presenting a different certificate. Same-user debugger/root compromise is outside this process-level boundary.
 
+## One-shot backend credential handoff
+
+The managed supervisor no longer places `SPLASH_API_KEY` or the key's bytes in a child environment or command line. It preloads its per-launch 64-character lowercase-hex key into a new anonymous pipe, closes the only writer before spawning, and passes only the read descriptor alongside the owned listener. The pipe is bounded to 64 bytes, the producer uses a nonblocking write, and all parent descriptors close after spawn or failure. No credential file is created.
+
+The pinned launcher validates the read-only pipe and immediately makes it close-on-exec while it prepares the model. Only its final server exec makes this descriptor inheritable. Every aborted preparation or failed exec closes it. Before importing Transformers or the heavy server modules, the patched server consumes exactly 64 lowercase-hex bytes followed by EOF with a two-second absolute deadline, closes the descriptor on success or failure, and injects the key into the parsed options in memory. The supported supervisor emits exactly one listener flag and one credential flag. Once the consumer adopts a validated credential descriptor, it closes that descriptor on success or failure. The server prelude rejects missing/duplicated capability flags; a malformed production server startup exits, so the OS closes any inherited capabilities not yet adopted. The launcher parser itself follows upstream last-value-wins behavior for duplicate flags, so this is not a duplicate-rejection or cleanup guarantee for arbitrary embedding callers. Mixed environment/argument keys, wrong descriptor types, truncated/oversized input and missing EOF reject managed startup. The native engine and preparation execs do not inherit the credential capability.
+
+Mutable transfer buffers are overwritten after use. This is not guaranteed erasure of Python immutable strings or process memory: the supervisor, relay and HTTP server must retain the active key in memory. The existing private supervisor-to-app pipe still carries the key and TLS certificate pin. The backend port and descriptor numbers remain non-secret process metadata; port hiding is not an authentication boundary. Root/debugger access or the ability to steal process descriptors remains outside this protection.
+
+Model-free checks exercise the real producer/supervisor, Linux process metadata, key rotation, a launcher-style exec, exact pinned overlay reproduction and malformed/timeout cases. These checks are not an assembled Splash inference run. Native macOS sibling-process metadata, real Seatbelt execution of this new handoff, exact patched external-runtime assembly and signed complete-app acceptance remain required.
+
 ## Exact upstream patch
 
 Pinned upstream: Splash 1.3.1, commit `f91c91e21dda483f8c59a248a444d0989a560d31`.
 
 `python3 -B scripts/patch_splash_listener.py --source SOURCE_DIRECTORY --output NEW_OVERLAY_DIRECTORY` creates a three-file overlay only after verifying all original SHA-256 values and unique source anchors. It does not execute upstream code. An unexpected source revision fails closed.
 
-- `install/launcher.py`: validate managed `--listen-fd` instead of probing its already-owned port; retain the descriptor across launcher exec.
-- `server/serve_options.py`: declare/forward `--listen-fd` and strictly validate family, type, literal address, port, listening state and disabled socket reuse.
-- `server/server.py`: close HTTPServer's unused placeholder socket, adopt the managed descriptor without rebinding, set HTTP server address fields, and mark the descriptor non-inheritable before launching the native engine.
+- `install/launcher.py`: validate managed `--listen-fd` instead of probing its already-owned port; retain that descriptor across launcher exec, and retain the credential pipe only for the final server exec.
+- `server/serve_options.py`: declare/forward paired `--listen-fd` and `--api-key-fd`, strictly validate listener family/type/address/port/listening state and disabled socket reuse, and implement the bounded credential consumer.
+- `server/server.py`: consume/close the credential pipe before heavy imports and supply the key in memory; close HTTPServer's unused placeholder socket, adopt the managed listener without rebinding, set HTTP server address fields, and mark it non-inheritable before launching the native engine.
 
 The plaintext Splash admission/MSG_PEEK/disconnect code remains unchanged behind the relay. Wrapping its listening socket directly in TLS would not be compatible with those paths.
 
 Darwin uses its read-only `TCP_CONNECTION_INFO` state byte for listener validation because `SO_ACCEPTCONN` returns ENOPROTOOPT there. The native diagnostic verified unbound/bound-only/listening/connected states as 0/0/1/4. Linux retains its SO_ACCEPTCONN check. Query errors fail closed. Native competition tests also verified that wildcard/dual-stack/mapped-address binds cannot divert literal loopback traffic even when the OS permits coexistence; the original parent's descriptor remains owned after a duplicate child descriptor closes.
 
-The original and resulting hashes are in `Resources/Runtime/splash-managed-listener-patch.json`. Apply the overlay during assembly before generating the runtime file manifest and signing. Preserve upstream Apache-2.0 LICENSE, THIRD_PARTY_NOTICES and the inserted modification notices. Both Swift and Python runtime audits require the exact patched hashes and `transport_patch: dot-splash-owned-listener-v1`.
+The original and resulting hashes are in `Resources/Runtime/splash-managed-listener-patch.json`. Apply the overlay during assembly before generating the runtime file manifest and signing. Preserve upstream Apache-2.0 LICENSE, THIRD_PARTY_NOTICES and the inserted modification notices. Both Swift and Python runtime audits require the exact patched hashes and `transport_patch: dot-splash-owned-listener-secret-pipe-v2`. A previous v1 payload is rejected; changing only its manifest label is also rejected. Rebuild and re-audit the external runtime against this overlay before a complete build. Source changes or a synthetic manifest do not refresh an older payload's integrity or native acceptance evidence.
 
 ## Bounds and shutdown
 

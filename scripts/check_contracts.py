@@ -1,7 +1,36 @@
 #!/usr/bin/env python3
 """Portable static guardrails. These are not Swift compilation/runtime tests."""
 from pathlib import Path
-import plistlib, re, xml.etree.ElementTree as ET
+import ast, plistlib, re, xml.etree.ElementTree as ET
+def runtime_handoff_contract(source):
+    """Static shape check; executable handoff tests establish runtime behavior."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False
+    def matches(node, expression):
+        return ast.dump(node) == ast.dump(ast.parse(expression, mode='eval').body)
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
+    spawns = [node for node in calls if matches(node.func, 'subprocess.Popen')]
+    if len(spawns) != 1 or not any(matches(node, 'relay.close()') for node in calls):
+        return False
+    spawn = spawns[0]
+    for scope in (node for node in ast.walk(tree) if isinstance(node, ast.With)):
+        for item in scope.items:
+            if (not matches(item.context_expr, '_process.api_key_pipe(api_key)')
+                or not isinstance(item.optional_vars, ast.Name)):
+                continue
+            if not any(node is spawn for statement in scope.body for node in ast.walk(statement)):
+                continue
+            inherited = next((keyword.value for keyword in spawn.keywords if keyword.arg == 'pass_fds'), None)
+            if not isinstance(inherited, ast.Tuple) or len(inherited.elts) != 2:
+                return False
+            required = {ast.dump(ast.parse('listener.fileno()', mode='eval').body),
+                        ast.dump(ast.Name(id=item.optional_vars.id, ctx=ast.Load()))}
+            return {ast.dump(node) for node in inherited.elts} == required
+    return False
+
+
 root = Path(__file__).resolve().parents[1]
 read = lambda p: (root / p).read_text()
 engine, speech, chat = map(read, ['src/Engine.swift', 'src/Speech.swift', 'src/ChatView.swift'])
@@ -35,7 +64,7 @@ checks = {
     'voice sandbox uses private writes and OpenMP environment fallback': '(deny file-write*)' in read('Resources/Voice/voice.sb') and '(subpath (param "DOT_OUTPUT"))' in read('Resources/Voice/voice.sb') and '(deny file-read-data (literal "/tmp") (literal "/private/tmp"))' in read('Resources/Voice/voice.sb') and '"DOT_OUTPUT="' in read('src/VoiceAudioReader.swift') and 'child.environment = launch.environment' in read('src/BionicVoice.swift'),
     'installer requires native offline acceptance': 'offline_acceptance.py' in read('scripts/package_complete.sh') and 'hdiutil create' not in read('scripts/build_complete.sh'),
     'owned runtime transport is TLS pinned': 'https://127.0.0.1:' in read('src/BundledSplash.swift') and 'RuntimeCertificatePin.matches' in engine,
-    'runtime listener retained across child exec': 'pass_fds=(listener.fileno(),)' in read('Resources/Runtime/dot_runtime.py') and 'relay.close()' in read('Resources/Runtime/dot_runtime.py'),
+    'runtime listener and scoped credential pipe retained across child exec': runtime_handoff_contract(read('Resources/Runtime/dot_runtime.py')),
     'status and SSE enforce client byte budgets': 'boundedStatus' in engine and 'BoundedSSELines()' in engine and 'ResponseTextBudget()' in engine,
     'screen first grant rechecks access without prompt loops': 'permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess' in read('src/ScreenContext.swift') and 'requestPermission && CGRequestScreenCaptureAccess()' in read('src/ScreenContext.swift'),
     'runtime protocol reads available pipe bytes without waiting for EOF': 'Darwin.read(descriptor' in read('src/BundledSplash.swift') and 'O_NONBLOCK' in read('src/BundledSplash.swift') and 'FD_CLOEXEC' in read('src/BundledSplash.swift') and 'read(upToCount:' not in read('src/BundledSplash.swift'),

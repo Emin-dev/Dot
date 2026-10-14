@@ -230,7 +230,7 @@ def main():
         api_key = secrets.token_hex(32)
         relay = tls.TLSRelay(listener, state, api_key=api_key, listener=endpoint)
         home = state / 'home'; home.mkdir()
-        environment = {'SPLASH_API_KEY': api_key, 'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(state),
+        environment = {'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(state),
                        'HF_HOME': str(state / 'hf'), 'HF_HUB_CACHE': str(state / 'hf/hub'),
                        'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'PYTHONNOUSERSITE': '1',
                        'HF_HUB_DISABLE_TELEMETRY': '1', 'HF_HUB_DISABLE_IMPLICIT_TOKEN': '1',
@@ -240,8 +240,11 @@ def main():
                    '--offline', '--no-webui', '--host', '127.0.0.1', '--port', str(port), '--listen-fd', str(listener.fileno()), '--max-cache-disk', '0']
         if stopped: return 0
         stage = 'launcher'
-        child = subprocess.Popen(command, cwd=runtime, env=environment, stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True, pass_fds=(listener.fileno(),))
+        with _process.api_key_pipe(api_key) as key_fd:
+            command.extend(['--api-key-fd', str(key_fd)])
+            child = subprocess.Popen(command, cwd=runtime, env=environment, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True,
+                                     pass_fds=(listener.fileno(), key_fd))
         os.set_blocking(child.stderr.fileno(), False)
         stderr_open = True
         print(json.dumps({'protocol': PROTOCOL, 'event': 'started', 'pid': child.pid, 'port': relay.port, 'backend_port': port, 'api_key': api_key, 'tls_certificate_sha256': relay.certificate_sha256}), flush=True)

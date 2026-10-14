@@ -119,11 +119,11 @@ actor OfflinePayload {
         guard manifest.components.count == 3, roles == Set(["splash_runtime", "speech_recognition", "speech_synthesis"]) else { throw OfflineFailure.incomplete }
         let names = manifest.files.map(\.path)
         guard Set(names.map { $0.precomposedStringWithCanonicalMapping.lowercased() }).count == names.count else { throw OfflineFailure.corrupt }
-        guard manifest.transport_patch == "dot-splash-owned-listener-v1" else { throw OfflineFailure.incomplete }
+        guard manifest.transport_patch == "dot-splash-owned-listener-secret-pipe-v2" else { throw OfflineFailure.incomplete }
         let managedSources = [
-            "Splash/install/launcher.py": "abd30361a17ef5811b509564fec123c83856f0d202b169a3678345aa064d63cd",
-            "Splash/server/serve_options.py": "5cef666a4d459dd56a7fb661cb1c6431f919814587d1c39803133d9347a9a454",
-            "Splash/server/server.py": "34f94116f2d1efeabd3b91fb496f3521613fb1392863cf49c414fe52647e53b2"
+            "Splash/install/launcher.py": "bc04fa504e8fd6df2aa2b8ff0d00f2580add0d771d50ddd5120a5937bbf23493",
+            "Splash/server/serve_options.py": "d254b93bad8e84e8ac30add4e6d2cca1ad85dda423151081982be4d8a36ad9e7",
+            "Splash/server/server.py": "32de35c53d12d9a6596cb1c4cc630fdaa9a69104176c1c61e0c55453324140e7"
         ]
         guard managedSources.allSatisfy({ name, expected in manifest.files.contains { $0.path == name && $0.kind == "file" && $0.sha256 == expected } }) else { throw OfflineFailure.incomplete }
         let nameSet = Set(names)

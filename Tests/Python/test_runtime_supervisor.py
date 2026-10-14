@@ -100,7 +100,7 @@ class RuntimeOwnershipTests(unittest.TestCase):
         import select
         secret = 'FIXTURE_PRIVATE_CONTENT'
         (self.payload / 'Splash/install/launcher.py').write_text(
-            "import os,sys\nsys.stderr.write(os.environ['SPLASH_API_KEY'] + ' " + secret + " ModuleNotFoundError: local_fixture\\n')\nsys.exit(7)\n")
+            "import os,sys\nfd=int(sys.argv[sys.argv.index('--api-key-fd')+1]); key=os.read(fd,65).decode(); os.close(fd)\nsys.stderr.write(key + ' " + secret + " ModuleNotFoundError: local_fixture\\n')\nsys.exit(7)\n")
         process = self.launch()
         try:
             started = json.loads(process.stdout.readline()); self.assertEqual(started['event'], 'started')
@@ -276,11 +276,14 @@ with runtime.tls.owned_listener() as backend, runtime.tls.owned_listener() as en
         launcher.write_text("""import os,socket,sys
 fd = int(sys.argv[sys.argv.index('--listen-fd') + 1])
 listener = socket.socket(fileno=fd)
+key_fd = int(sys.argv[sys.argv.index('--api-key-fd') + 1])
+key = os.read(key_fd, 65).decode()
+os.close(key_fd)
 while True:
     connection, _ = listener.accept()
     with connection:
         data = connection.recv(8192)
-        expected = ('Bearer ' + os.environ['SPLASH_API_KEY']).encode()
+        expected = ('Bearer ' + key).encode()
         connection.sendall(b'fixture authenticated' if expected in data else b'unauthorized')
 """)
         command = [sys.executable, '-I', '-S', '-B', str(path), '--sandbox-profile', str(path.with_name('splash.sb')),

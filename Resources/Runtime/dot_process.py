@@ -2,8 +2,37 @@
 macOS uses kqueue NOTE_EXIT; waitid is not exposed by every CPython/macOS build.
 """
 import errno
+from contextlib import contextmanager
 import os
 import select
+
+
+@contextmanager
+def api_key_pipe(api_key):
+    """One inherited read capability; no secret in environment/argv/files.
+
+    Preload the bounded anonymous pipe and close its only writer before spawn.
+    The caller must pass only the read descriptor to its owned child. Both ends
+    start CLOEXEC, and the parent's read end closes on success or spawn failure.
+    """
+    if (type(api_key) is not str or len(api_key) != 64
+        or any(character not in '0123456789abcdef' for character in api_key)):
+        raise ValueError('invalid runtime credential')
+    reader = writer = None
+    transfer = bytearray(api_key, 'ascii')
+    try:
+        reader, writer = os.pipe()
+        os.set_blocking(writer, False)
+        # 64 bytes is below POSIX PIPE_BUF. A short write is a hard failure.
+        if os.write(writer, transfer) != len(transfer):
+            raise OSError('runtime credential transfer failed')
+        os.close(writer); writer = None
+        transfer[:] = b'\x00' * len(transfer)
+        yield reader
+    finally:
+        transfer[:] = b'\x00' * len(transfer)
+        if writer is not None: os.close(writer)
+        if reader is not None: os.close(reader)
 
 
 def child_exited(child):

@@ -36,6 +36,16 @@ class RuntimeAuditTests(unittest.TestCase):
     def test_model_pin_gate_rejects_fake_fixture(self):
         self.audit()
         with self.assertRaises(ValueError): audit_runtime(self.root)
+    def test_v1_transport_manifest_is_rejected_before_asset_pins(self):
+        self.manifest['transport_patch'] = 'dot-splash-owned-listener-v1'
+        self.audit()
+        with self.assertRaisesRegex(ValueError, 'authenticated listener patch missing'):
+            audit_runtime(self.root)
+    def test_v2_label_cannot_admit_old_or_unrecognized_sources(self):
+        self.manifest['transport_patch'] = 'dot-splash-owned-listener-secret-pipe-v2'
+        self.audit()
+        with self.assertRaisesRegex(ValueError, 'wrong managed listener source'):
+            audit_runtime(self.root)
     def test_tampering_rejected(self):
         (self.root / 'Voice/python/bin/python3').write_bytes(b'changed')
         with self.assertRaises(ValueError): self.audit()

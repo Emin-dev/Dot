@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "kind": "source_owned_runtime_reconstruction_policy",
+  "bounds": {
+    "json_bytes": 16000000,
+    "json_nesting": 32,
+    "regular_and_link_entries": 100000,
+    "all_nodes": 200000,
+    "runtime_bytes": 5000000000,
+    "regular_file_bytes": 1000000000,
+    "path_utf8_bytes": 4096,
+    "component_utf8_bytes": 255,
+    "path_depth": 64,
+    "symlink_hops": 64,
+    "wheel_count": 150,
+    "wheel_bytes_each": 512000000,
+    "wheel_bytes_total": 3000000000,
+    "native_objects": 4096,
+    "native_command_seconds": 30,
+    "native_command_output_bytes": 2097152,
+    "native_static_total_seconds": 300,
+    "portable_operation_seconds": 600,
+    "scratch_reserve_bytes": 1000000000,
+    "callers_may_raise": false
+  },
+  "source_bindings": {
+    "scripts/audit_runtime_payload.py": {
+      "bytes": 5241,
+      "sha256": "bdec554df069295ad904ecaec01ba4deba31f62a2c71f9ad99fe234b7a03db1b"
+    },
+    "scripts/prepare_voice_install.py": {
+      "bytes": 15142,
+      "sha256": "c970cab026b85e7c730be863450ce1ef755ed176c46384bf8f17813b22ad6ae9"
+    },
+    "scripts/build_complete.sh": {
+      "bytes": 8240,
+      "sha256": "3d480e05b11c3bc02bd311f55cacdd3e56e32f4d2581fa25860bdcc8dd13879d"
+    },
+    "scripts/patch_splash_listener.py": {
+      "bytes": 10418,
+      "sha256": "743f747cf3470ca4005531926fb8c11d5dc32e0bdec3e737f132160aaa96d161"
+    },
+    "scripts/verify_whisper_input.py": {
+      "bytes": 15649,
+      "sha256": "be845f438a7a5c65c672477b0a1e88e2155bc2b72d446ea3ce4ccfed96202ff1"
+    },
+    "scripts/audit_complete_search.py": {
+      "bytes": 20514,
+      "sha256": "36e4ea31b003ca6338ff8edfbe8d27e0309d896f91dbbcba334befcc1688f576"
+    },
+    "Resources/Runtime/splash-managed-listener-patch.json": {
+      "bytes": 1043,
+      "sha256": "b5d37af78618067d8bab9d94de1c22828f08c913c79f2e66e8637b9eab37d04b"
+    },
+    "Resources/Runtime/dot_runtime.py": {
+      "bytes": 15654,
+      "sha256": "81236c937e5cbb8ae6d617f1a390aeb98f1865015f5f9489f81b9bfc3eac8c8f"
+    },
+    "Resources/Runtime/dot_process.py": {
+      "bytes": 2571,
+      "sha256": "78475b502b417093f78d608245f4f024ebaa2a811ee28d606310a3531cfe303c"
+    },
+    "Resources/Runtime/dot_tls.py": {
+      "bytes": 11356,
+      "sha256": "c1297cb6f3800a90f3fe0eb9ce96c23b8487dc4fb16f7623500168e13793176a"
+    },
+    "Resources/Runtime/splash.sb": {
+      "bytes": 1978,
+      "sha256": "b4f9fd3cd943f5a43a09de1525e21b1788991be35eb6fa75cf6c5ce89b55d5e3"
+    },
+    "Resources/Voice/bionic_helper.py": {
+      "bytes": 10256,
+      "sha256": "cf0a81bd6a1774096060830ffc1dff4ae700b01d8604c6860e0ac5b80b48da92"
+    },
+    "Resources/Voice/voice.sb": {
+      "bytes": 1827,
+      "sha256": "0d64eeeb3fec6ee111987a1ac2cb46962ab0886147363fd5fe0de1cefe261d26"
+    },
+    "Resources/bundled-models.json": {
+      "bytes": 2580,
+      "sha256": "4250f1e6882e7c4037bfec20616ed23fbad01f2316cb4dd84fe30f63b17397fe"
+    },
+    "packaging/voice/complete-voice-lock.json": {
+      "bytes": 168139,
+      "sha256": "6e8f8aa951fdafe30f575537e2ef4a17fe918758685d0766a89bf5fe452c02a5"
+    },
+    "packaging/voice/complete-closure-audit.json": {
+      "bytes": 162317,
+      "sha256": "de5f5649fd90e088b2c536152855e93a0829521c5dc474ea2e508172a68572c7"
+    },
+    "packaging/voice-source-manifest.json": {
+      "bytes": 32975,
+      "sha256": "880482e58543352416cef232da3946381e2e99349d955ed7fb0d3cefd6c05a4e"
+    },
+    "packaging/closure-plan.json": {
+      "bytes": 2559,
+      "sha256": "a257129a6e3cb87d806520e11b58da79ae547526203bf99becd79d405fee6f2d"
+    },
+    "packaging/signing/signing-policy.json": {
+      "bytes": 722,
+      "sha256": "4aa7a69372b7aa83d58390763a50ee46b450355fa489795c6d0bc7f90d82f83f"
+    },
+    "docs/offline-voice-assembly.md": {
+      "bytes": 9625,
+      "sha256": "1b9f67d13e0ff4ba31e9ea72176a9b61e783b1d0a9cbe63b6823678df589046f"
+    },
+    "docs/self-contained-build-plan.md": {
+      "bytes": 12528,
+      "sha256": "04706fac42a1b13333d9941945531db0adb69486d11a91e9549c9bfbd8068af0"
+    },
+    "src/OfflinePayload.swift": {
+      "bytes": 15545,
+      "sha256": "ae5af69a363b4b7d50dcde6f77d9a91b33a53c48510d71ef9f20154fe0f39e6f"
+    }
+  },
+  "archive_basis": {
+    "id": "pinned-local-archives-v1",
+    "mode": "pinned_local_archives",
+    "supported": false,
+    "reason": "Real archive root layouts, component/license mappings and native install/signing transformations have not been independently inspected.",
+    "archive_pins": [
+      {
+        "role": "splash_runtime",
+        "bytes": 73595465,
+        "sha256": "f98c602b16a70a7bc01e05b3a9e6034c367aedd47e11a4c63b637d1342756c92"
+      },
+      {
+        "role": "voice_python",
+        "bytes": 27105320,
+        "sha256": "7b6068989d9b6a0e2a883352b7d0d141ce8670a61360bf4ddabac0e046a08e10"
+      }
+    ],
+    "voice_wheels": {
+      "count": 92,
+      "bytes": 220445695,
+      "lock_sha256": "6e8f8aa951fdafe30f575537e2ef4a17fe918758685d0766a89bf5fe452c02a5",
+      "audit_sha256": "de5f5649fd90e088b2c536152855e93a0829521c5dc474ea2e508172a68572c7"
+    }
+  },
+  "accepted_historical_baselines": [],
+  "overlay": {
+    "from_id": "dot-splash-owned-listener-v1",
+    "to_id": "dot-splash-owned-listener-secret-pipe-v2",
+    "upstream_revision": "f91c91e21dda483f8c59a248a444d0989a560d31",
+    "files": [
+      {
+        "path": "Splash/install/launcher.py",
+        "upstream_sha256": "9f107bf8b80b9edae9489b4c569f167ea73a5d91daca74c0c68ab13430fce93e",
+        "old_v1_sha256": "abd30361a17ef5811b509564fec123c83856f0d202b169a3678345aa064d63cd",
+        "new_v2_sha256": "bc04fa504e8fd6df2aa2b8ff0d00f2580add0d771d50ddd5120a5937bbf23493"
+      },
+      {
+        "path": "Splash/server/serve_options.py",
+        "upstream_sha256": "4777020405c895f0c17d8d27864ecc6d5124853214fa99ed7241d636b1c7bf15",
+        "old_v1_sha256": "5cef666a4d459dd56a7fb661cb1c6431f919814587d1c39803133d9347a9a454",
+        "new_v2_sha256": "d254b93bad8e84e8ac30add4e6d2cca1ad85dda423151081982be4d8a36ad9e7"
+      },
+      {
+        "path": "Splash/server/server.py",
+        "upstream_sha256": "e8d45d7f30c13ad4e1ee049da481ad3125b33e8bf831c0ce83a4984636abbe81",
+        "old_v1_sha256": "34f94116f2d1efeabd3b91fb496f3521613fb1392863cf49c414fe52647e53b2",
+        "new_v2_sha256": "32de35c53d12d9a6596cb1c4cc630fdaa9a69104176c1c61e0c55453324140e7"
+      }
+    ],
+    "bytecode_removals": "exact baseline paths and hashes required; unknown until historical manifest is supplied"
+  },
+  "speech_asset_pins": [
+    {
+      "path": "Voice/model/config.json",
+      "bytes": 2351,
+      "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"
+    },
+    {
+      "path": "Voice/model/kokoro-v1_0.pth",
+      "bytes": 327212226,
+      "sha256": "496dba118d1a58f5f3db2efc88dbdc216e0483fc89fe6e47ee1f2c53f18ad1e4"
+    },
+    {
+      "path": "Voice/model/voices/bf_isabella.pt",
+      "bytes": 523440,
+      "sha256": "cdd4c37003805104d1d08fb1e05855c8fb2c68de24ca6e71f264a30aaa59eefd"
+    },
+    {
+      "path": "STT/ggml-base.en.bin",
+      "bytes": 147964211,
+      "sha256": "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002"
+    }
+  ],
+  "required_native_evidence": [
+    "actual_install_or_accepted_historical_basis",
+    "installed_voice_distributions_and_pip_check",
+    "final_nested_signatures_and_linkage",
+    "product_profile_offline_import",
+    "product_profile_real_voice_synthesis",
+    "voice_cancellation_eof_cleanup",
+    "splash_v2_listener_secret_pipe_tls_cleanup",
+    "relocation_with_spaces_commas_unicode",
+    "immutable_payload_before_after"
+  ],
+  "native_finalizer": {
+    "supported": false,
+    "reason": "Native verifier and native approval require separately reviewed actual macOS observations. This portable implementation never writes a production final manifest or acceptance receipt."
+  },
+  "component_roles": [
+    "splash_runtime",
+    "speech_synthesis",
+    "speech_recognition"
+  ],
+  "unaccepted_historical_manifest_observation": "49ff97d86339ce77c5bb15dcb6234a4b4afac2d525f703ef854002ed37255429",
+  "phase_source_paths": {
+    "prepare": [
+      "Resources/Runtime/splash-managed-listener-patch.json",
+      "packaging/runtime/reconstruction-policy.json",
+      "scripts/patch_splash_listener.py",
+      "scripts/reconstruct_runtime_payload.py"
+    ],
+    "native": [
+      "Resources/Runtime/dot_process.py",
+      "Resources/Runtime/dot_runtime.py",
+      "Resources/Runtime/dot_tls.py",
+      "Resources/Runtime/splash-managed-listener-patch.json",
+      "Resources/Runtime/splash.sb",
+      "Resources/Voice/bionic_helper.py",
+      "Resources/Voice/voice.sb",
+      "packaging/runtime/reconstruction-policy.json",
+      "packaging/voice-source-manifest.json",
+      "packaging/voice/complete-closure-audit.json",
+      "packaging/voice/complete-voice-lock.json",
+      "scripts/patch_splash_listener.py",
+      "scripts/reconstruct_runtime_payload.py"
+    ]
+  },
+  "collector_v2": {
+    "schema_version": 2,
+    "collector_source_sha256": "c9af9c56a4a89707110e53bce1007d0cc8bef301a024eafd020140eda37a7f9a",
+    "aggregate_bytes": 120000000,
+    "artifact_bytes": {
+      "collection-start.json": 65536,
+      "runtime-manifest.original.json": 16000000,
+      "runtime-inventory.json": 120000000,
+      "support-inventory.json": 120000000,
+      "apple-tools.json": 120000000,
+      "report.json": 120000000,
+      "COMPLETE.txt": 4096
+    },
+    "nodes": 100000,
+    "path_bytes": 16000000,
+    "native_files": 2048,
+    "tool_output_bytes": 262144,
+    "tool_output_total_bytes": 32000000,
+    "elapsed_seconds_max": 1802,
+    "json_nesting": 32,
+    "seal_weight_max": 1000000000
+  }
+}
