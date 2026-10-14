@@ -248,13 +248,21 @@ class Fixture(unittest.TestCase):
 
     def test_reserved_manifest_case_alias_rejected_in_tree_and_rows(self):
         alias='RUNTIME-MANIFEST.JSON'
-        data=file(self.runtime/alias,b'not the reserved manifest')
+        # Rename through a distinct entry so case-insensitive filesystems retain
+        # the alias spelling instead of overwriting the canonical manifest.
+        (self.runtime/m.MANIFEST).rename(self.runtime/'manifest-case-rename').rename(self.runtime/alias)
+        self.assertIn(alias,{path.name for path in self.runtime.iterdir()})
+        self.assertEqual((self.runtime/alias).read_bytes(),(self.collector/'runtime-manifest.original.json').read_bytes())
         self.assertIn('manifest case alias',self.rejects(lambda:m.tree(
             self.runtime,self.context().budget,self.historical)))
         rows=copy.deepcopy(self.basis['closure'])
-        rows.append({'path':alias,'kind':'file','mode':0o644,**data})
+        rows.append({'path':alias,'kind':'file','mode':0o644,**self.historical})
         self.assertIn('manifest',self.rejects(lambda:m.validate_rows(rows,self.policy['bounds'])))
-        self.rejects(self.prepare)
+        # Preparation opens the canonical manifest before walking the tree.
+        # Supply it separately only where both spellings can physically coexist.
+        if not (self.runtime/m.MANIFEST).exists():
+            file(self.runtime/m.MANIFEST,(self.runtime/alias).read_bytes())
+        self.assertIn('manifest case alias',self.rejects(self.prepare))
         self.assertFalse(self.stage.exists())
 
     def test_readonly_overlay_parents_and_sources_preserve_exact_modes(self):
@@ -434,9 +442,30 @@ class Fixture(unittest.TestCase):
         self.rejects(self.prepare);fifo.unlink()
 
     def test_casefold_and_unicode_aliases_rejected(self):
-        for name in ('voice','Voice/Cafe\u0301'):
-            p=self.runtime/name;file(p)
-            self.rejects(self.prepare);p.unlink()
+        rows=copy.deepcopy(self.basis['closure'])
+        voice=next(row for row in rows if row['path']=='Voice')
+        rows.append({**voice,'path':'voice'})
+        self.assertIn('duplicate/aliased node',self.rejects(lambda:m.validate_rows(rows,self.policy['bounds'])))
+        alias=self.runtime/'voice'
+        if alias.exists():
+            # A case-insensitive volume cannot contain both distinct entries.
+            self.assertTrue(alias.samefile(self.runtime/'Voice'))
+        else:
+            file(alias)
+            self.assertIn('duplicate/aliased node',self.rejects(lambda:m.tree(
+                self.runtime,self.context().budget,self.historical)))
+            self.assertIn('duplicate/aliased node',self.rejects(self.prepare))
+            alias.unlink()
+        path=self.runtime/'Voice/Cafe\u0301';file(path)
+        self.assertIn('non-NFC path',self.rejects(self.prepare))
+
+    def test_case_only_directory_rename_rejected(self):
+        # Also exercise a real alternate-case entry on case-insensitive volumes.
+        (self.runtime/'Voice').rename(self.runtime/'voice-case-rename').rename(self.runtime/'voice')
+        names={path.name for path in self.runtime.iterdir()}
+        self.assertIn('voice',names);self.assertNotIn('Voice',names)
+        self.assertIn('historical full closure mismatch',self.rejects(self.prepare))
+        self.assertFalse(self.stage.exists())
 
     def test_unsafe_mode_rejected(self):
         (self.runtime/'Voice/LICENSE').chmod(0o666);self.rejects(self.prepare)
@@ -660,8 +689,12 @@ class Fixture(unittest.TestCase):
     def test_partial_extra_case_alias_and_single_file_reports_reject(self):
         path=self.collector/'apple-tools.json';raw=path.read_bytes();path.unlink()
         self.assertIn('seven-artifact',self.rejects(self.observe));file(path,raw)
-        for name in ('extra.json','REPORT.JSON'):
-            file(self.collector/name,b'{}');self.rejects(self.observe);(self.collector/name).unlink()
+        extra=self.collector/'extra.json';file(extra,b'{}');self.rejects(self.observe);extra.unlink()
+        report=self.collector/'report.json';raw=report.read_bytes()
+        report.rename(self.collector/'report-case-rename').rename(self.collector/'REPORT.JSON')
+        self.assertIn('REPORT.JSON',{path.name for path in self.collector.iterdir()})
+        self.assertEqual((self.collector/'REPORT.JSON').read_bytes(),raw)
+        self.assertIn('seven-artifact',self.rejects(self.observe))
         single=self.root/'old-collector.json';file(single,b'{}')
         self.rejects(lambda:m.read_collector_v2(single,self.context()))
 
