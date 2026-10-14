@@ -533,7 +533,7 @@ struct QuestionReplyGate {
 /// Strict parser for the pinned Splash streamed tool-call contract. It grants no microphone authority.
 /// The controller still needs same-turn success plus the final question's actual playback completion.
 struct QuestionIntentStream {
-    struct Question: Equatable { let text: String }
+    struct Question: Equatable, Sendable { let text: String }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.

@@ -36,10 +36,336 @@ final class NoRedirects: NSObject, URLSessionTaskDelegate {
     }
 }
 
+/// One explicitly owned client transfer, not another inference admission owner.
+/// The exact suspended task is retained before resume. Consumer cancellation and
+/// actual transport/session settlement are deliberately different events.
+final class InferenceTransfer: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    static let maximumBufferedBytes = BoundedSSELines.maximumStreamBytes
+    static let highWaterBytes = 262_144
+    static let lowWaterBytes = 131_072
+    static let chunkBytes = 16_384
+    private let policy: NoRedirects
+    private let lifecycle = DispatchQueue(label: "app.dot.inference-transfer")
+    private let queueKey = DispatchSpecificKey<UInt8>()
+    private var session: URLSession?
+    private var task: URLSessionDataTask?
+    private var sessionIdentity: ObjectIdentifier?
+    private var started = false
+    private var cancelled = false
+    private var completed = false
+    private var invalidationRequested = false
+    private var invalidated = false
+    private var paused = false
+    private var response: URLResponse?
+    private var consumerError: Error?
+    // Unlike consumerError, intentional cleanup cancellation never creates this
+    // sticky failure. Detached parser chunks must not hide a prior receive error.
+    private var terminalFailure: Error?
+    private var buffer = Data()
+    private var receivedBytes = 0
+    private var consumerID: UUID?
+    private var responseWaiter: CheckedContinuation<(Bytes, URLResponse), Error>?
+    private var chunkWaiter: CheckedContinuation<Data?, Error>?
+    private var settlementWaiter: CheckedContinuation<Void, Never>?
+    private var suspendCount = 0
+    private var resumeCount = 0
+    private var pinChallenges = 0
+    private var acceptedPins = 0
+
+    private init(certificateSHA256: String?) {
+        policy = NoRedirects(certificateSHA256: certificateSHA256)
+        super.init()
+        lifecycle.setSpecific(key: queueKey, value: 1)
+    }
+
+    convenience init(request: URLRequest, configuration: URLSessionConfiguration, certificateSHA256: String?) {
+        self.init(certificateSHA256: certificateSHA256)
+        let delegates = OperationQueue()
+        delegates.maxConcurrentOperationCount = 1
+        delegates.underlyingQueue = lifecycle
+        let ownedSession = URLSession(configuration: configuration, delegate: self, delegateQueue: delegates)
+        // dataTask(with:) returns a suspended task. Retain its exact handle before
+        // resume; no async-wrapper creation callback establishes ownership.
+        install(session: ownedSession, suspendedTask: ownedSession.dataTask(with: request))
+    }
+
+    /// Internal receipt-test seam only. The test must create this task from this
+    /// session and must never resume it before installation; zero byte counts and
+    /// suspension are checked, but cannot prove that caller-supplied provenance.
+    /// EngineManager has no path to select this initializer or inject a transport.
+    convenience init(testSession: URLSession, neverResumedTask: URLSessionDataTask, certificateSHA256: String? = nil) {
+        self.init(certificateSHA256: certificateSHA256)
+        install(session: testSession, suspendedTask: neverResumedTask)
+    }
+
+    private func install(session: URLSession, suspendedTask: URLSessionDataTask) {
+        precondition(self.session == nil && task == nil && !started && !cancelled)
+        precondition(suspendedTask.state == .suspended && suspendedTask.countOfBytesSent == 0
+                     && suspendedTask.countOfBytesReceived == 0)
+        self.session = session
+        sessionIdentity = ObjectIdentifier(session)
+        task = suspendedTask
+    }
+
+    /// Callbacks use the same serial queue as all control operations. Executing
+    /// nested callbacks inline avoids dispatch-sync deadlocks and preserves their
+    /// order. No data callback is forwarded to a second, unbounded chunk queue.
+    private func onLifecycle(_ operation: @escaping @Sendable () -> Void) {
+        if DispatchQueue.getSpecific(key: queueKey) != nil { operation() }
+        else { lifecycle.async(execute: operation) }
+    }
+
+    func start() async throws -> (Bytes, URLResponse) {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                onLifecycle { [self] in
+                    guard !started, responseWaiter == nil else {
+                        continuation.resume(throwing: EngineError.response); return
+                    }
+                    if let consumerError { continuation.resume(throwing: consumerError); return }
+                    guard !cancelled, !invalidated, let task else {
+                        continuation.resume(throwing: CancellationError()); return
+                    }
+                    responseWaiter = continuation
+                    started = true // Commit the lifecycle before an external/reentrant call.
+                    task.resume()
+                }
+            }
+        } onCancel: { self.cancel() }
+    }
+
+    struct Bytes: AsyncSequence, Sendable {
+        typealias Element = UInt8
+        fileprivate let transfer: InferenceTransfer
+        func makeAsyncIterator() -> Iterator { Iterator(transfer: transfer) }
+        struct Iterator: AsyncIteratorProtocol {
+            fileprivate let transfer: InferenceTransfer
+            private let id = UUID()
+            private var chunk = Data()
+            private var offset = 0
+            fileprivate init(transfer: InferenceTransfer) { self.transfer = transfer }
+            mutating func next() async throws -> UInt8? {
+                if Task.isCancelled { transfer.cancel(); throw CancellationError() }
+                if offset == chunk.count {
+                    guard let next = try await transfer.nextChunk(consumer: id) else { return nil }
+                    chunk = next; offset = 0
+                }
+                let value = chunk[chunk.startIndex + offset]; offset += 1
+                return value
+            }
+        }
+    }
+
+    private func nextChunk(consumer: UUID) async throws -> Data? {
+        try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                onLifecycle { [self] in
+                    guard consumerID == nil || consumerID == consumer, chunkWaiter == nil else {
+                        continuation.resume(throwing: EngineError.response); return
+                    }
+                    consumerID = consumer; chunkWaiter = continuation
+                    deliverChunkIfPossible()
+                }
+            }
+        } onCancel: { self.cancel() }
+    }
+    private func deliverChunkIfPossible() {
+        guard let waiter = chunkWaiter else { return }
+        if let consumerError {
+            chunkWaiter = nil; waiter.resume(throwing: consumerError); return
+        }
+        if !buffer.isEmpty {
+            let count = min(Self.chunkBytes, buffer.count)
+            let chunk = Data(buffer.prefix(count))
+            buffer.removeFirst(count)
+            if buffer.isEmpty { buffer = Data() }
+            chunkWaiter = nil; waiter.resume(returning: chunk)
+            if paused && buffer.count <= Self.lowWaterBytes && !completed && !cancelled {
+                paused = false; resumeCount += 1
+                task?.resume() // No state is changed after the external call.
+            }
+        } else if completed {
+            chunkWaiter = nil; waiter.resume(returning: nil)
+        }
+    }
+    private func failConsumers(_ error: Error, recordFailure: Bool = true) {
+        if recordFailure && terminalFailure == nil { terminalFailure = error }
+        if consumerError == nil { consumerError = error }
+        buffer = Data()
+        let header = responseWaiter; responseWaiter = nil
+        let body = chunkWaiter; chunkWaiter = nil
+        header?.resume(throwing: consumerError!)
+        body?.resume(throwing: consumerError!)
+    }
+    func cancel() { onLifecycle { [self] in cancelOnLifecycle(error: CancellationError()) } }
+    private func cancelOnLifecycle(error: Error) {
+        guard !cancelled else { return }
+        cancelled = true
+        failConsumers(error, recordFailure: !(error is CancellationError))
+        // Wake consumers without satisfying the settlement fence.
+        let ownedTask = task, wasPaused = paused
+        paused = false
+        if wasPaused { resumeCount += 1 }
+        ownedTask?.cancel()
+        // Balance only a suspend issued by this transfer, after cancellation.
+        // A task that was never started is NEVER resumed, even for teardown.
+        if wasPaused { ownedTask?.resume() }
+        invalidateSession(cancel: true)
+    }
+    private func invalidateSession(cancel: Bool) {
+        guard !invalidationRequested, let session else { return }
+        invalidationRequested = true
+        if cancel { session.invalidateAndCancel() }
+        else { session.finishTasksAndInvalidate() }
+    }
+    private var settled: Bool { invalidated && (!started || completed) }
+    private func finishSettlementIfPossible() {
+        guard settled else { return }
+        let waiter = settlementWaiter; settlementWaiter = nil
+        waiter?.resume()
+    }
+    /// Cancellation of this Swift waiter never substitutes for a receipt. A
+    /// never-resumed task has no network work; session invalidation still must
+    /// acknowledge teardown. Every resumed task also needs its exact completion.
+    func waitForCompletion() async {
+        await withCheckedContinuation { continuation in
+            onLifecycle { [self] in
+                if settled { continuation.resume() }
+                else { precondition(settlementWaiter == nil); settlementWaiter = continuation }
+            }
+        }
+    }
+
+    /// The shared publication fence keeps an existing parser failure, while a
+    /// successful parser must also survive every accepted transport callback.
+    func resultAfterSettlement<Value: Sendable>(_ result: Result<Value, Error>) async throws -> Value {
+        cancel()
+        await waitForCompletion()
+        try Task.checkCancellation()
+        if case .success = result { try await checkForFailure() }
+        return try result.get()
+    }
+
+    /// A parser may still hold a detached chunk after a later callback failed.
+    /// Validate only after both receipts, before publishing a successful result.
+    private func checkForFailure() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            onLifecycle { [self] in
+                guard settled else { continuation.resume(throwing: EngineError.response); return }
+                if let terminalFailure { continuation.resume(throwing: terminalFailure) }
+                else { continuation.resume() }
+            }
+        }
+    }
+    private static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
+    }
+
+    struct Snapshot: Sendable {
+        let started: Bool, completed: Bool, invalidated: Bool, paused: Bool, settled: Bool
+        let retainedTask: Bool, retainedSession: Bool, waitingForCompletion: Bool, waitingForChunk: Bool
+        let bufferedBytes: Int, receivedBytes: Int, suspendCount: Int, resumeCount: Int
+        let pinChallenges: Int, acceptedPins: Int
+    }
+    /// Bounded, read-only diagnostics; no request content or control handles.
+    func snapshot() async -> Snapshot {
+        await withCheckedContinuation { continuation in
+            onLifecycle { [self] in
+                continuation.resume(returning: Snapshot(started: started, completed: completed,
+                    invalidated: invalidated, paused: paused, settled: settled,
+                    retainedTask: task != nil, retainedSession: session != nil,
+                    waitingForCompletion: settlementWaiter != nil, waitingForChunk: chunkWaiter != nil, bufferedBytes: buffer.count,
+                    receivedBytes: receivedBytes, suspendCount: suspendCount, resumeCount: resumeCount,
+                    pinChallenges: pinChallenges, acceptedPins: acceptedPins))
+            }
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        onLifecycle { [self] in
+            guard sessionIdentity == ObjectIdentifier(session), task === dataTask, !completed, !cancelled, !invalidated else {
+                completionHandler(.cancel); return
+            }
+            guard self.response == nil, response.expectedContentLength <= BoundedSSELines.maximumStreamBytes else {
+                cancelOnLifecycle(error: ResponseLimit.exceeded); completionHandler(.cancel); return
+            }
+            self.response = response
+            let waiter = responseWaiter; responseWaiter = nil
+            waiter?.resume(returning: (Bytes(transfer: self), response))
+            completionHandler(.allow)
+        }
+    }
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        onLifecycle { [self] in
+            guard sessionIdentity == ObjectIdentifier(session), task === dataTask, !completed, !cancelled, !invalidated else { return }
+            // Check before retaining/copying any bytes, including callbacks that
+            // were already in flight when suspend() requested backpressure.
+            guard response != nil,
+                  data.count <= BoundedSSELines.maximumStreamBytes - receivedBytes,
+                  data.count <= Self.maximumBufferedBytes - buffer.count else {
+                cancelOnLifecycle(error: ResponseLimit.exceeded); return
+            }
+            receivedBytes += data.count; buffer.append(data)
+            deliverChunkIfPossible()
+            if !paused && !completed && !cancelled && buffer.count >= Self.highWaterBytes {
+                paused = true; suspendCount += 1
+                task?.suspend()
+            }
+        }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        onLifecycle { [self] in
+            guard sessionIdentity == ObjectIdentifier(session), self.task === task, !completed else { return }
+            completed = true; self.task = nil; paused = false
+            if let error { failConsumers(error, recordFailure: !cancelled || !Self.isCancellation(error)) }
+            else if response == nil { failConsumers(EngineError.response) }
+            else { deliverChunkIfPossible() }
+            invalidateSession(cancel: false)
+            finishSettlementIfPossible()
+        }
+    }
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        onLifecycle { [self] in
+            guard sessionIdentity == ObjectIdentifier(session), !invalidated else { return }
+            invalidated = true; self.session = nil
+            if !started { task = nil }
+            if let error { failConsumers(error, recordFailure: !cancelled || !Self.isCancellation(error)) }
+            // Preserve the immutable identity after releasing the session so
+            // an exact late completion can still settle, without retaining a cycle.
+            // A missing resumed-task completion fails closed; invalidation alone
+            // must not be relabelled as that task's receipt.
+            finishSettlementIfPossible()
+        }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        onLifecycle { [self] in
+            guard sessionIdentity == ObjectIdentifier(session), self.task === task, !cancelled, !completed, !invalidated else {
+                completionHandler(.cancelAuthenticationChallenge, nil); return
+            }
+            policy.urlSession(session, task: task, didReceive: challenge) { [self] disposition, credential in
+                pinChallenges += 1
+                if disposition == .useCredential { acceptedPins += 1 }
+                completionHandler(disposition, credential)
+            }
+        }
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        policy.urlSession(session, task: task, willPerformHTTPRedirection: response,
+                          newRequest: request, completionHandler: completionHandler)
+    }
+}
+
 enum EngineError: LocalizedError, Equatable {
-    case configuration, unavailable, identity, response, empty
+    case configuration, unavailable, identity, response, empty, busy
     var errorDescription: String? {
         switch self {
+        case .busy: return "My local engine is finishing another request. Please try again."
         case .configuration: return "My bundled model configuration is incomplete. Please install the complete Dot build."
         case .unavailable: return "My local Splash engine isn't ready yet. Click me to try again."
         case .identity: return "My local engine couldn't verify its bundled Splash model."
@@ -51,6 +377,89 @@ enum EngineError: LocalizedError, Equatable {
 
 @MainActor
 final class EngineManager: ObservableObject {
+    /// Semantic admission purpose, independent of scheduler priority or prompts.
+    enum InferencePurpose: Equatable { case foreground, background }
+    private struct ActiveInference {
+        let id: UUID
+        let purpose: InferencePurpose
+        var cancellationRequested = false
+        var cancel: (() -> Void)?
+    }
+    private struct PendingInference {
+        let id: UUID
+        let continuation: CheckedContinuation<Void, Error>
+    }
+    private var inferenceClosed = false
+    private var activeInference: ActiveInference?
+    private var pendingForeground: PendingInference?
+    /// Read-only diagnostics; exposes no request content or admission mutation.
+    var inferenceAdmission: (active: InferencePurpose?, pendingForeground: Bool) {
+        (activeInference?.purpose, pendingForeground != nil)
+    }
+
+    /// One active request, at most one waiting foreground request, no background
+    /// queue. A foreground reservation is installed before preempting background
+    /// work. Another foreground may wait for foreground work but never evicts it.
+    private func admitInference(id: UUID, purpose: InferencePurpose) async throws {
+        try Task.checkCancellation()
+        guard !inferenceClosed else { throw CancellationError() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled || inferenceClosed { continuation.resume(throwing: CancellationError()); return }
+                guard activeInference != nil else {
+                    activeInference = ActiveInference(id: id, purpose: purpose)
+                    continuation.resume(); return
+                }
+                guard purpose == .foreground, pendingForeground == nil else {
+                    continuation.resume(throwing: EngineError.busy); return
+                }
+                pendingForeground = PendingInference(id: id, continuation: continuation)
+                if activeInference?.purpose == .background { cancelActiveInference() }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.cancelPendingInference(id: id) }
+        }
+    }
+    private func cancelActiveInference() {
+        activeInference?.cancellationRequested = true
+        activeInference?.cancel?()
+    }
+    private func cancelPendingInference(id: UUID) {
+        guard let pending = pendingForeground, pending.id == id else { return }
+        pendingForeground = nil
+        pending.continuation.resume(throwing: CancellationError())
+    }
+    private func releaseInference(id: UUID) {
+        guard activeInference?.id == id else { return }
+        activeInference = nil
+        if let pending = pendingForeground {
+            pendingForeground = nil
+            activeInference = ActiveInference(id: pending.id, purpose: .foreground)
+            pending.continuation.resume()
+        }
+    }
+    private func withInference<Value: Sendable>(purpose: InferencePurpose,
+                                      operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        let id = UUID()
+        try await admitInference(id: id, purpose: purpose)
+        defer { releaseInference(id: id) }
+        try Task.checkCancellation()
+        guard activeInference?.id == id, activeInference?.cancellationRequested == false else { throw CancellationError() }
+        // Own the request even when the UI drops its Task handle. The unstructured
+        // child is explicitly cancelled and joined; cancellation never releases it.
+        let request = Task { @MainActor in
+            try Task.checkCancellation()
+            return try await operation()
+        }
+        activeInference?.cancel = { request.cancel() }
+        let result = await withTaskCancellationHandler {
+            await request.result
+        } onCancel: { request.cancel() }
+        try Task.checkCancellation()
+        guard activeInference?.id == id, activeInference?.cancellationRequested == false else { throw CancellationError() }
+        return try result.get()
+    }
+
     private static let log = Logger(subsystem: "app.dot", category: "runtime")
     private var certificateSHA256: String?
     private var currentSession: URLSession?
@@ -65,20 +474,33 @@ final class EngineManager: ObservableObject {
     }
     private var session: URLSession {
         if let currentSession { return currentSession }
-        let configuration = URLSessionConfiguration.ephemeral
+        let value = URLSession(configuration: inferenceConfiguration(), delegate: NoRedirects(certificateSHA256: certificateSHA256), delegateQueue: nil)
+        currentSession = value; return value
+    }
+
+    private func inferenceConfiguration() -> URLSessionConfiguration {
+        let configuration = Self.directConfiguration()
         configuration.timeoutIntervalForRequest = 60
         configuration.timeoutIntervalForResource = 180
-        configuration.connectionProxyDictionary = [:]
         configuration.protocolClasses = protocolClasses
         configuration.httpCookieStorage = nil; configuration.urlCache = nil; configuration.urlCredentialStorage = nil
-        let value = URLSession(configuration: configuration, delegate: NoRedirects(certificateSHA256: certificateSHA256), delegateQueue: nil)
-        currentSession = value; return value
+        return configuration
+    }
+
+    /// A nil/empty proxy dictionary inherits ambient system proxy/PAC settings.
+    /// Both readiness and chat use this one explicit direct-loopback policy.
+    static func directConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.connectionProxyDictionary = ["HTTPEnable": 0, "HTTPSEnable": 0, "SOCKSEnable": 0,
+            "ProxyAutoConfigEnable": 0, "ProxyAutoDiscoveryEnable": 0, "ExceptionsList": ["127.0.0.1"]]
+        return configuration
     }
 
 
     private(set) var visionAvailable = false
     func verifyConnection() async throws -> (URL, String) {
         try Task.checkCancellation()
+        guard !inferenceClosed else { throw CancellationError() }
         let began = ProcessInfo.processInfo.systemUptime
         var outcome = "stopped"
         Self.log.notice("DOT_READINESS event=started")
@@ -92,6 +514,8 @@ final class EngineManager: ObservableObject {
             base = url; model = selected; ownedPID = nil; identityPort = url.port ?? 0
         } else {
             let connection = try await BundledSplash.shared.connection()
+            try Task.checkCancellation()
+            guard !inferenceClosed else { throw CancellationError() }
             base = connection.url; ownedPID = connection.pid; identityPort = connection.backendPort; model = BundledSplash.model
             if certificateSHA256 != connection.certificateSHA256 {
                 currentSession?.invalidateAndCancel(); currentSession = nil
@@ -102,12 +526,14 @@ final class EngineManager: ObservableObject {
         let readinessDeadline = ProcessInfo.processInfo.systemUptime + 180
         for attempt in 0..<attempts {
             try Task.checkCancellation()
+            guard !inferenceClosed else { throw CancellationError() }
             if let ownedPID, !BundledSplash.shared.owns(pid: ownedPID) { throw await BundledSplash.shared.failure() }
             var request = URLRequest(url: base.appendingPathComponent("status")); request.timeoutInterval = 2
             if ownedPID != nil, let key = BundledSplash.shared.apiKey { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
             do {
                 let (data, response) = try await Self.boundedStatus(session: session, request: request)
                 try Task.checkCancellation()
+                guard !inferenceClosed else { throw CancellationError() }
                 guard data.count <= 1_000_000, let http = response as? HTTPURLResponse, http.statusCode == 200,
                       let identity = try? JSONDecoder().decode(SplashIdentity.self, from: data),
                       identity.matches(model: model, port: identityPort, server: http.value(forHTTPHeaderField: "Server")),
@@ -119,6 +545,7 @@ final class EngineManager: ObservableObject {
                 return (base, model)
             } catch {
                 try Task.checkCancellation()
+                guard !inferenceClosed else { throw CancellationError() }
                 if attempt == attempts - 1 || ProcessInfo.processInfo.systemUptime >= readinessDeadline {
                     outcome = ownedPID == nil ? "failed" : "timeout"
                     let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: ownedPID == nil ? .failed : .timeout)
@@ -132,9 +559,17 @@ final class EngineManager: ObservableObject {
     }
 
     @discardableResult
-    func chat(history: [ChatMessage], onDelta: @escaping @MainActor (String) -> Void,
+    func chat(history: [ChatMessage], purpose: InferencePurpose = .foreground, onDelta: @escaping @MainActor (String) -> Void,
               onReasoning: @escaping @MainActor () -> Void = {},
               screenImage: (@MainActor (Bool) async throws -> CapturedScreenImage?)? = nil) async throws -> QuestionIntentStream.Question? {
+        try await withInference(purpose: purpose) { [self] in
+            try await performChat(history: history, onDelta: onDelta, onReasoning: onReasoning, screenImage: screenImage)
+        }
+    }
+
+    private func performChat(history: [ChatMessage], onDelta: @escaping @MainActor (String) -> Void,
+                             onReasoning: @escaping @MainActor () -> Void,
+                             screenImage: (@MainActor (Bool) async throws -> CapturedScreenImage?)?) async throws -> QuestionIntentStream.Question? {
         let (base, model) = try await verifyConnection()
         try Task.checkCancellation()
         var request = URLRequest(url: base.appendingPathComponent("v1/chat/completions"))
@@ -169,51 +604,56 @@ final class EngineManager: ObservableObject {
         // closed if the screen has aged out before the transport is submitted.
         try Task.checkCancellation()
         try capturedImage?.validateFreshness(now: clock())
-        let (bytes, response) = try await session.bytes(for: request)
-        defer { bytes.task.cancel() }
-        try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              http.value(forHTTPHeaderField: "Server") == "Splash" else {
-            let diagnostic = PipelineDiagnostic(stage: .response, outcome: .failed, reason: .httpRejected)
-            Self.log.error("\(diagnostic.logLine, privacy: .public)")
-            throw EngineError.response
-        }
-        var hasContent = false
-        var sawDone = false
-        var sawReasoning = false
-        var lines = BoundedSSELines(), textBudget = ResponseTextBudget()
-        var questionIntent = QuestionIntentStream()
-        let updates = StreamDelivery(onDelta: onDelta)
-        defer { updates.cancel() }
-        for try await byte in bytes {
+        return try await withInferenceBytes(request: request) { bytes, response in
             try Task.checkCancellation()
-            guard let line = try lines.feed(byte) else { continue }
-            do { try questionIntent.feed(line) } catch { throw EngineError.response }
-            guard let delta = StreamDelta.parse(line) else { continue }
-            try textBudget.accept(delta.content)
-            try textBudget.accept(delta.reasoning)
-            if delta.done {
-                sawDone = true; break
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  http.value(forHTTPHeaderField: "Server") == "Splash" else {
+                let diagnostic = PipelineDiagnostic(stage: .response, outcome: .failed, reason: .httpRejected)
+                Self.log.error("\(diagnostic.logLine, privacy: .public)")
+                throw EngineError.response
             }
-            if !delta.reasoning.isEmpty && !sawReasoning { sawReasoning = true; onReasoning() }
-            if !delta.content.isEmpty {
-                hasContent = true
-                updates.feed(delta.content)
+            var hasContent = false
+            var sawDone = false
+            var sawReasoning = false
+            var lines = BoundedSSELines(), textBudget = ResponseTextBudget()
+            var questionIntent = QuestionIntentStream()
+            let updates = StreamDelivery(onDelta: onDelta)
+            defer { updates.cancel() }
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard let line = try lines.feed(byte) else { continue }
+                do { try questionIntent.feed(line) } catch { throw EngineError.response }
+                guard let delta = StreamDelta.parse(line) else { continue }
+                try textBudget.accept(delta.content)
+                try textBudget.accept(delta.reasoning)
+                if delta.done {
+                    sawDone = true; break
+                }
+                if !delta.reasoning.isEmpty && !sawReasoning { sawReasoning = true; onReasoning() }
+                if !delta.content.isEmpty {
+                    hasContent = true
+                    updates.feed(delta.content)
+                }
             }
+            try Task.checkCancellation()
+            guard sawDone else { throw EngineError.response }
+            let question: QuestionIntentStream.Question?
+            do { question = try questionIntent.completed() } catch { throw EngineError.response }
+            guard hasContent || question != nil else { throw EngineError.empty }
+            updates.finish()
+            return question
         }
-        try Task.checkCancellation()
-        guard sawDone else { throw EngineError.response }
-        let question: QuestionIntentStream.Question?
-        do { question = try questionIntent.completed() } catch { throw EngineError.response }
-        guard hasContent || question != nil else { throw EngineError.empty }
-        updates.finish()
-        return question
     }
 
-    /// One bounded synthesis on the same verified local runtime. The caller owns
-    /// the task and cancels it when foreground work takes priority; no intermediate
-    /// JSON, reasoning, tool calls or speech leave this operation.
+    /// One bounded background synthesis on the verified local runtime. Foreground
+    /// admission cancels and joins it; no partial synthesis or reasoning is exposed.
     func researchSynthesis(session research: WebResearchSession) async throws -> WebResearchSynthesis {
+        try await withInference(purpose: .background) { [self] in
+            try await performResearchSynthesis(session: research)
+        }
+    }
+
+    private func performResearchSynthesis(session research: WebResearchSession) async throws -> WebResearchSynthesis {
         try Task.checkCancellation()
         let evidence = try research.evidenceJSON()
         guard research.queries.filter({ $0.status == .completed }).count >= 2, research.sources.count >= 2 else {
@@ -243,29 +683,47 @@ final class EngineManager: ObservableObject {
             ]], "chat_template_kwargs": ["enable_thinking": true, "reasoning_effort": "low"]
         ])
         try Task.checkCancellation()
-        let (bytes, response) = try await session.bytes(for: request)
-        defer { bytes.task.cancel() }
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
-              http.value(forHTTPHeaderField: "Server") == "Splash" else { throw EngineError.response }
-        var lines = BoundedSSELines(), budget = ResponseTextBudget(), terminal = QuestionIntentStream()
-        var text = "", done = false
-        for try await byte in bytes {
+        return try await withInferenceBytes(request: request) { bytes, response in
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                  http.value(forHTTPHeaderField: "Server") == "Splash" else { throw EngineError.response }
+            var lines = BoundedSSELines(), budget = ResponseTextBudget(), terminal = QuestionIntentStream()
+            var text = "", done = false
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard let line = try lines.feed(byte) else { continue }
+                do { try terminal.feed(line) } catch { throw EngineError.response }
+                guard let delta = StreamDelta.parse(line) else { continue }
+                try budget.accept(delta.content); try budget.accept(delta.reasoning)
+                if delta.done { done = true; break }
+                text += delta.content
+            }
             try Task.checkCancellation()
-            guard let line = try lines.feed(byte) else { continue }
-            do { try terminal.feed(line) } catch { throw EngineError.response }
-            guard let delta = StreamDelta.parse(line) else { continue }
-            try budget.accept(delta.content); try budget.accept(delta.reasoning)
-            if delta.done { done = true; break }
-            text += delta.content
+            guard done else { throw EngineError.response }
+            do { guard try terminal.completed() == nil else { throw EngineError.response } }
+            catch { throw EngineError.response }
+            let result = try ResearchSynthesisContract.decode(text, research: research)
+            try Task.checkCancellation()
+            _ = try research.completing(with: result)
+            return result
         }
+    }
+
+    private func withInferenceBytes<Value: Sendable>(request: URLRequest,
+        process: @MainActor (InferenceTransfer.Bytes, URLResponse) async throws -> Value) async throws -> Value {
         try Task.checkCancellation()
-        guard done else { throw EngineError.response }
-        do { guard try terminal.completed() == nil else { throw EngineError.response } }
-        catch { throw EngineError.response }
-        let result = try ResearchSynthesisContract.decode(text, research: research)
-        try Task.checkCancellation()
-        _ = try research.completing(with: result)
-        return result
+        let transfer = InferenceTransfer(request: request, configuration: inferenceConfiguration(),
+                                         certificateSHA256: certificateSHA256)
+        return try await withTaskCancellationHandler {
+            let result: Result<Value, Error>
+            do {
+                let (bytes, response) = try await transfer.start()
+                try Task.checkCancellation()
+                result = .success(try await process(bytes, response))
+            } catch { result = .failure(error) }
+            // [DONE], parser failure and cancelled iteration can all precede the
+            // URLSession task's terminal callback. Do not free admission early.
+            return try await transfer.resultAfterSettlement(result)
+        } onCancel: { transfer.cancel() }
     }
 
     nonisolated private static func boundedStatus(session: URLSession, request: URLRequest) async throws -> (Data, URLResponse) {
@@ -282,6 +740,9 @@ final class EngineManager: ObservableObject {
     }
 
     func shutdown() {
+        inferenceClosed = true
+        if let pending = pendingForeground { cancelPendingInference(id: pending.id) }
+        cancelActiveInference() // Keep ownership until the child and transfer settle.
         currentSession?.invalidateAndCancel(); currentSession = nil
         BundledSplash.shared.shutdown()
     }

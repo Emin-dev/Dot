@@ -133,7 +133,7 @@ final class ChatModel: ObservableObject {
             }
         } else if let value = error as? EngineError {
             switch value {
-            case .configuration, .unavailable: reason = .unavailable
+            case .configuration, .unavailable, .busy: reason = .unavailable
             case .identity: reason = .identity
             case .response: reason = .invalidResponse
             case .empty: reason = .emptyResponse
@@ -350,7 +350,7 @@ final class ChatModel: ObservableObject {
             var failureStage = ConversationHistoryFailureStage.generation
             do {
                 try self.screen.prepare(turn: id, requestPermission: false)
-                let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] delta in
+                let question = try await self.engine.chat(history: snapshot, purpose: .background, onDelta: { [weak self] delta in
                     guard let self, self.gate.accepts(id), self.proactiveTurn?.turn == id else { return }
                     buffer.append(delta)
                 }, screenImage: { [weak self] hasVision in

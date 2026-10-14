@@ -279,7 +279,7 @@ private final class ObservedPinDelegate: NSObject, URLSessionTaskDelegate {
 /// The fixture is model-free and cannot read user prompts, screenshots or credentials.
 final class NativeTLSIntegrationTests: XCTestCase {
     private struct Ready: Decodable { let port: Int; let pin: String }
-    @MainActor private func runFixture(correctPin: Bool) async throws {
+    @MainActor private func runFixture(correctPin: Bool, inference: Bool = false) async throws {
         let python = try XCTUnwrap(ProcessInfo.processInfo.environment["DOT_TEST_PYTHON"], "Run scripts/verify_macos.sh to select the supported test interpreter")
         guard python.hasPrefix("/"), !python.contains("$(") else { throw CocoaError(.executableNotLoadable) }
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
@@ -301,20 +301,57 @@ final class NativeTLSIntegrationTests: XCTestCase {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
         let ready = try JSONDecoder().decode(Ready.self, from: Data(contentsOf: readyPath))
-        let config = URLSessionConfiguration.ephemeral
-        config.connectionProxyDictionary = [:]; config.urlCredentialStorage = nil
+        let config = inference ? EngineManager.directConfiguration() : URLSessionConfiguration.ephemeral
+        if !inference { config.connectionProxyDictionary = [:] }
+        config.urlCredentialStorage = nil
         config.timeoutIntervalForRequest = 3; config.timeoutIntervalForResource = 5
         let observations = ObservedChallenges()
-        let delegate = ObservedPinDelegate(pin: correctPin ? ready.pin : String(repeating: "0", count: 64), observations: observations)
-        let session = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
+        let pin = correctPin ? ready.pin : String(repeating: "0", count: 64)
+        let delegate = ObservedPinDelegate(pin: pin, observations: observations)
+        // Inference owns its real session, data task and session/data delegate.
+        // No wrapper or fallback session can supply the pin on its behalf.
+        let session = inference ? nil : URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+        defer { session?.invalidateAndCancel() }
         var request = URLRequest(url: URL(string: "https://127.0.0.1:\(ready.port)/fixture")!)
         request.setValue("Bearer model-free-test", forHTTPHeaderField: "Authorization")
+        var inferenceSnapshots: [InferenceTransfer.Snapshot] = []
+        func settle(_ transfer: InferenceTransfer) async {
+            transfer.cancel()
+            await transfer.waitForCompletion()
+            let state = await transfer.snapshot()
+            inferenceSnapshots.append(state)
+            XCTAssertTrue(state.started)
+            XCTAssertTrue(state.completed, "The exact resumed data task must acknowledge completion")
+            XCTAssertTrue(state.invalidated, "The owned session must acknowledge invalidation")
+            XCTAssertTrue(state.settled)
+            XCTAssertFalse(state.retainedTask)
+            XCTAssertFalse(state.retainedSession)
+            XCTAssertGreaterThan(state.pinChallenges, 0, "TLS failed before the production pinning delegate ran")
+            XCTAssertEqual(state.acceptedPins, correctPin ? state.pinChallenges : 0)
+        }
+        func fetch() async throws -> (Data, URLResponse) {
+            if let session { return try await session.data(for: request) }
+            let transfer = InferenceTransfer(request: request, configuration: config, certificateSHA256: pin)
+            let initial = await transfer.snapshot()
+            XCTAssertFalse(initial.started)
+            XCTAssertTrue(initial.retainedTask, "The suspended task must be retained before start")
+            XCTAssertTrue(initial.retainedSession)
+            do {
+                let (bytes, response) = try await transfer.start()
+                var body = Data()
+                for try await byte in bytes { body.append(byte) }
+                await settle(transfer)
+                return (body, response)
+            } catch {
+                await settle(transfer)
+                throw error
+            }
+        }
         if correctPin {
             // Connection: close requires a fresh pinned TLS connection for each request.
             for _ in 0..<2 {
                 do {
-                    let (body, response) = try await session.data(for: request)
+                    let (body, response) = try await fetch()
                     XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
                     XCTAssertEqual(body, Data("OK".utf8))
                 } catch {
@@ -325,18 +362,22 @@ final class NativeTLSIntegrationTests: XCTestCase {
                 }
             }
         } else {
-            do { _ = try await session.data(for: request); XCTFail("wrong certificate accepted") }
+            do { _ = try await fetch(); XCTFail("wrong certificate accepted") }
             catch { XCTAssertTrue(error is URLError) }
             try await Task.sleep(nanoseconds: 100_000_000)
             XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("received"), encoding: .utf8), "0")
         }
-        for _ in 0..<100 {
-            if !(await observations.values).isEmpty { break }
-            try await Task.sleep(nanoseconds: 10_000_000)
+        if inference {
+            XCTAssertEqual(inferenceSnapshots.count, correctPin ? 2 : 1)
+        } else {
+            for _ in 0..<100 {
+                if !(await observations.values).isEmpty { break }
+                try await Task.sleep(nanoseconds: 10_000_000)
+            }
+            let checks = await observations.values
+            XCTAssertFalse(checks.isEmpty, "TLS failed before the production certificate-pinning delegate ran")
+            XCTAssertTrue(checks.allSatisfy { $0.serverTrust && $0.accepted == correctPin })
         }
-        let checks = await observations.values
-        XCTAssertFalse(checks.isEmpty, "TLS failed before the production certificate-pinning delegate ran")
-        XCTAssertTrue(checks.allSatisfy { $0.serverTrust && $0.accepted == correctPin })
         try control.fileHandleForWriting.close()
         for _ in 0..<500 where process.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertFalse(process.isRunning, "TLS fixture did not stop after parent EOF")
@@ -344,6 +385,105 @@ final class NativeTLSIntegrationTests: XCTestCase {
     }
     @MainActor func testActualDelegatePinsEveryReconnect() async throws { try await runFixture(correctPin: true) }
     @MainActor func testWrongCertificateReceivesNoAuthorizationBytes() async throws { try await runFixture(correctPin: false) }
+    @MainActor func testExplicitInferenceTransferPinsEveryReconnectAndSettles() async throws { try await runFixture(correctPin: true, inference: true) }
+    @MainActor func testExplicitInferenceWrongPinReceivesNoAuthorizationBytesAndSettles() async throws { try await runFixture(correctPin: false, inference: true) }
 }
 
+/// Intercepts every request, including a wrongly followed destination, so this
+/// redirect test cannot contact either a local listener or an external host.
+private final class InferenceRedirectFixtureProtocol: URLProtocol {
+    private static let lock = NSLock()
+    private static var destination = URL(string: "http://127.0.0.1:8000/redirect-target")!
+    private static var recorded: [URLRequest] = []
+    private static var redirects = 0
+
+    static func reset(destination: URL) {
+        lock.lock(); defer { lock.unlock() }
+        self.destination = destination; recorded = []; redirects = 0
+    }
+    static func snapshot() -> (requests: [URLRequest], redirects: Int) {
+        lock.lock(); defer { lock.unlock() }
+        return (recorded, redirects)
+    }
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lock.lock()
+        Self.recorded.append(request)
+        let destination = Self.destination
+        let redirect = request.url?.path == "/redirect-source"
+        if redirect { Self.redirects += 1 }
+        Self.lock.unlock()
+        if redirect {
+            let response = HTTPURLResponse(url: request.url!, statusCode: 302, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Location": destination.absoluteString])!
+            // Preserve the synthetic bearer in the proposed request. Denial must
+            // prevent even this deliberately credential-bearing redirect.
+            var proposed = request; proposed.url = destination
+            client?.urlProtocol(self, wasRedirectedTo: proposed, redirectResponse: response)
+        } else {
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Length": "2"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data("OK".utf8))
+        }
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+@MainActor
+final class EngineProxyPolicyTests: XCTestCase {
+    func testExplicitInferenceTransferDeniesRedirectsWithoutForwardingAuthorizationAndSettles() async throws {
+        let source = URL(string: "http://127.0.0.1:8000/redirect-source")!
+        let destinations = [URL(string: "http://127.0.0.1:8000/redirect-target")!,
+                            URL(string: "http://redirect-target.invalid/redirect-target")!]
+        for destination in destinations {
+            InferenceRedirectFixtureProtocol.reset(destination: destination)
+            let configuration = EngineManager.directConfiguration()
+            configuration.protocolClasses = [InferenceRedirectFixtureProtocol.self]
+            configuration.timeoutIntervalForRequest = 3; configuration.timeoutIntervalForResource = 5
+            var request = URLRequest(url: source)
+            request.setValue("Bearer model-free-redirect-test", forHTTPHeaderField: "Authorization")
+            let transfer = InferenceTransfer(request: request, configuration: configuration, certificateSHA256: nil)
+            do {
+                let (bytes, response) = try await transfer.start()
+                var body = Data()
+                for try await byte in bytes { body.append(byte) }
+                XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 302)
+                XCTAssertEqual(response.url, source)
+                XCTAssertTrue(body.isEmpty)
+            } catch {
+                // As in SourceReferenceTests, Foundation may report .unknown
+                // after a synthetic URLProtocol redirect is declined.
+                XCTAssertEqual((error as? URLError)?.code, .unknown, "Unexpected redirect error: \(error)")
+            }
+            transfer.cancel()
+            await transfer.waitForCompletion()
+            let state = await transfer.snapshot()
+            XCTAssertTrue(state.started)
+            XCTAssertTrue(state.completed)
+            XCTAssertTrue(state.invalidated)
+            XCTAssertTrue(state.settled)
+            XCTAssertFalse(state.retainedTask)
+            XCTAssertFalse(state.retainedSession)
+            let observed = InferenceRedirectFixtureProtocol.snapshot()
+            XCTAssertEqual(observed.redirects, 1, "The fixture must actually propose a redirect")
+            XCTAssertEqual(observed.requests.map(\.url), [source])
+            XCTAssertEqual(observed.requests.first?.value(forHTTPHeaderField: "Authorization"),
+                           "Bearer model-free-redirect-test")
+            XCTAssertFalse(observed.requests.contains { $0.url == destination },
+                           "No redirected request or Authorization bytes may reach the destination")
+        }
+    }
+
+    func testReadinessAndChatConfigurationExplicitlyDisablesEveryProxyMechanism() throws {
+        let configuration = EngineManager.directConfiguration()
+        let policy = try XCTUnwrap(configuration.connectionProxyDictionary)
+        for key in ["HTTPEnable", "HTTPSEnable", "SOCKSEnable", "ProxyAutoConfigEnable", "ProxyAutoDiscoveryEnable"] {
+            XCTAssertEqual((policy[key] as? NSNumber)?.intValue, 0, key)
+        }
+        XCTAssertEqual(policy["ExceptionsList"] as? [String], ["127.0.0.1"])
+    }
+}
 #endif
