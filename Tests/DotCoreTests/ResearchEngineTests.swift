@@ -243,6 +243,7 @@ private final class AdmissionTransport: @unchecked Sendable {
         var holdHeaders = false
         var chunks: [Data]? = nil
         var status = 200
+        var contentType: String? = "text/event-stream"
     }
     private static let registryLock = NSLock()
     private static var registry: [Int: AdmissionTransport] = [:]
@@ -292,6 +293,10 @@ private final class AdmissionTransport: @unchecked Sendable {
         condition.lock(); let handler = handlers.indices.contains(index) ? handlers[index] : nil; condition.unlock()
         handler?.send(body, finish: finish)
     }
+    func releaseHeaders(index: Int = 0) {
+        condition.lock(); let handler = handlers.indices.contains(index) ? handlers[index] : nil; condition.unlock()
+        handler?.releaseHeaders()
+    }
     func close() {
         allowStop()
         condition.lock(); let values = handlers; condition.unlock()
@@ -302,6 +307,7 @@ private final class AdmissionTransport: @unchecked Sendable {
 private final class AdmissionProtocol: URLProtocol {
     private let callbacks = NSRecursiveLock()
     private var ended = false
+    private var heldReply: AdmissionTransport.Reply?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
@@ -321,8 +327,19 @@ private final class AdmissionProtocol: URLProtocol {
             ended = true; fixture.finish(self)
             client?.urlProtocol(self, didFailWithError: URLError(.cannotConnectToHost)); return
         }
-        if reply.holdHeaders { return }
-        let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: ["Server": "Splash"])!
+        if reply.holdHeaders { heldReply = reply; return }
+        deliver(reply)
+    }
+    func releaseHeaders() {
+        callbacks.lock(); defer { callbacks.unlock() }
+        guard !ended, let reply = heldReply else { return }
+        heldReply = nil; deliver(reply)
+    }
+    private func deliver(_ reply: AdmissionTransport.Reply) {
+        guard let url = request.url else { return }
+        var headers = ["Server": "Splash"]
+        if let contentType = reply.contentType { headers["Content-Type"] = contentType }
+        let response = HTTPURLResponse(url: url, statusCode: reply.status, httpVersion: "HTTP/1.1", headerFields: headers)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         if let chunks = reply.chunks {
             for data in chunks { client?.urlProtocol(self, didLoad: data) }
@@ -334,12 +351,12 @@ private final class AdmissionProtocol: URLProtocol {
         guard !ended else { return }
         if !body.isEmpty { client?.urlProtocol(self, didLoad: Data(body.utf8)) }
         if finish {
-            ended = true; AdmissionTransport.fixture(request.url?.port ?? 0)?.finish(self)
+            ended = true; heldReply = nil; AdmissionTransport.fixture(request.url?.port ?? 0)?.finish(self)
             client?.urlProtocolDidFinishLoading(self)
         }
     }
     override func stopLoading() {
-        callbacks.lock(); ended = true; callbacks.unlock()
+        callbacks.lock(); ended = true; heldReply = nil; callbacks.unlock()
         AdmissionTransport.fixture(request.url?.port ?? 0)?.stop(self)
     }
 }
@@ -519,17 +536,40 @@ extension ResearchEngineTests {
     }
     @MainActor func testDoneBeforeHTTPCompletionAndInvalidResponseStillSettleTransport() async throws {
         for reply in [AdmissionTransport.Reply(body: try ordinaryAnswer()), .init(body: "", status: 503)] {
-            let fixture = AdmissionTransport([reply, .init(body: try ordinaryAnswer(), hold: false)], holdStop: true)
+            var heldReply = reply; heldReply.holdHeaders = true
+            let completed = AdmissionTransport.Reply(body: try ordinaryAnswer(), hold: false)
+            let fixture = AdmissionTransport([heldReply, completed, completed], holdStop: true)
             let manager = admissionEngine(fixture)
-            var returned = false
-            let first = Task { defer { returned = true }; return try await manager.chat(history: [], onDelta: { _ in }) }
+            XCTAssertTrue(manager.inferenceTransportSettlements.isEmpty)
+            let first = Task { try await manager.chat(history: [], onDelta: { _ in }) }
             defer { fixture.close(); first.cancel(); manager.shutdown() }
-            try await eventually { fixture.snapshot.events.contains("stop-entered") }
-            XCTAssertFalse(returned, "Parsed terminal/error is not a URLSession settlement receipt")
-            let next = Task { try await manager.chat(history: [], onDelta: { _ in }) }
+            try await eventually { fixture.snapshot.events.contains("start1") }
+            var firstAdmissionID: UUID?
+            let next = Task {
+                try await manager.chat(history: [], onDelta: { _ in }, screenImage: { _ in
+                    // This real setup starts only after the queued caller owns
+                    // admission, before its POST. Bind the sole predecessor's
+                    // exact token and inspect its authentic settled snapshot.
+                    XCTAssertEqual(manager.inferenceTransportSettlements.count, 1)
+                    let receipt = try XCTUnwrap(manager.inferenceTransportSettlements.first)
+                    firstAdmissionID = receipt.admissionID
+                    self.assertRealSettlementSnapshot(receipt.snapshot)
+                    XCTAssertNil(manager.lastInferenceTransportSettlement)
+                    XCTAssertFalse(fixture.snapshot.events.contains("start2"))
+                    return nil
+                })
+            }
             defer { next.cancel() }
+            addTeardownBlock {
+                fixture.close(); first.cancel(); next.cancel()
+                _ = await first.result; _ = await next.result
+            }
             try await eventually { manager.inferenceAdmission.pendingForeground }
-            XCTAssertFalse(fixture.snapshot.events.contains("start2"))
+            XCTAssertFalse(fixture.snapshot.events.contains("start2"), "A real queued caller cannot start before the held response")
+            fixture.releaseHeaders()
+            try await eventually { fixture.snapshot.events.contains("stop-entered") }
+            // Protocol cleanup may overlap authentic Foundation receipts. Its
+            // object activity count cannot stand in for the snapshot above.
             fixture.allowStop()
             let result = await first.result
             if reply.status == 503 {
@@ -537,7 +577,19 @@ extension ResearchEngineTests {
                 catch { XCTAssertEqual(error as? EngineError, .response) }
             } else { _ = try result.get() }
             _ = try await next.value
-            XCTAssertEqual(fixture.snapshot.maximum, 1)
+            let firstID = try XCTUnwrap(firstAdmissionID)
+            let second = try XCTUnwrap(manager.lastInferenceTransportSettlement)
+            try assertRealSettlement(manager)
+            XCTAssertNotEqual(firstID, second.admissionID)
+            XCTAssertEqual(manager.inferenceTransportSettlements.map(\.admissionID), [firstID, second.admissionID])
+            // A third sequential request proves the diagnostic stays capped at
+            // two and evicts the oldest token, without becoming a task owner.
+            _ = try await manager.chat(history: [], onDelta: { _ in })
+            let third = try XCTUnwrap(manager.lastInferenceTransportSettlement)
+            try assertRealSettlement(manager)
+            XCTAssertNotEqual(second.admissionID, third.admissionID)
+            XCTAssertEqual(manager.inferenceTransportSettlements.map(\.admissionID), [second.admissionID, third.admissionID])
+            XCTAssertEqual(fixture.snapshot.events.filter { $0.hasPrefix("start") }, ["start1", "start2", "start3"])
             XCTAssertFalse(fixture.snapshot.barrierTimedOut)
         }
     }
@@ -581,6 +633,20 @@ extension ResearchEngineTests {
         model.open(); await model.flush(); XCTAssertTrue(model.canResume)
         return model
     }
+    @MainActor private func assertRealSettlement(_ manager: EngineManager,
+                                                file: StaticString = #filePath, line: UInt = #line) throws {
+        let receipt = try XCTUnwrap(manager.lastInferenceTransportSettlement, file: file, line: line)
+        assertRealSettlementSnapshot(receipt.snapshot, file: file, line: line)
+    }
+    @MainActor private func assertRealSettlementSnapshot(_ snapshot: InferenceTransfer.Snapshot,
+                                                        file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertTrue(snapshot.started, file: file, line: line)
+        XCTAssertTrue(snapshot.completed, file: file, line: line)
+        XCTAssertTrue(snapshot.invalidated, file: file, line: line)
+        XCTAssertTrue(snapshot.settled, file: file, line: line)
+        XCTAssertFalse(snapshot.retainedTask, file: file, line: line)
+        XCTAssertFalse(snapshot.retainedSession, file: file, line: line)
+    }
     @MainActor func testResearchModelFlushReturnsAfterPreheaderFailure() async throws {
         let fixture = AdmissionTransport([.init(failBeforeHeaders: true)])
         let manager = admissionEngine(fixture); defer { fixture.close(); manager.shutdown() }
@@ -602,15 +668,52 @@ extension ResearchEngineTests {
             var drained = false
             let flush = Task { await model.flush(); drained = true }
             try await eventually { fixture.snapshot.events.contains("stop-entered") }
-            XCTAssertFalse(drained); XCTAssertTrue(model.busy)
-            XCTAssertEqual(manager.inferenceAdmission.active, .background)
+            // stopLoading is protocol cleanup, not a barrier to Foundation's
+            // task completion or session invalidation callbacks on every SDK.
+            // If the real flush already returned, require both exact receipts.
+            if drained { try assertRealSettlement(manager) }
             fixture.allowStop(); await flush.value
+            XCTAssertTrue(drained); try assertRealSettlement(manager)
             XCTAssertFalse(model.busy); XCTAssertNil(manager.inferenceAdmission.active)
             XCTAssertNil(model.selected?.session.synthesis); XCTAssertFalse(fixture.snapshot.barrierTimedOut)
             if quitting {
                 XCTAssertTrue(model.shuttingDown); model.open(); model.resume()
                 XCTAssertFalse(model.canResume); XCTAssertFalse(model.busy)
             }
+        }
+    }
+}
+
+/// Manual adapter callbacks do not settle the separate, real fixture task.
+/// Its authentic delegate receipts are joined by async XCTest teardown as well.
+private final class ControlledSessionReceipts: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var sessionID: ObjectIdentifier?, taskID: ObjectIdentifier?
+    private var completed = false, invalidated = false, requiresCompletion = true
+    private var waiter: CheckedContinuation<Void, Never>?
+    func bind(session: URLSession, task: URLSessionTask) {
+        lock.lock(); sessionID = ObjectIdentifier(session); taskID = ObjectIdentifier(task); lock.unlock()
+    }
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        guard sessionID == ObjectIdentifier(session), taskID == ObjectIdentifier(task) else { lock.unlock(); return }
+        completed = true; finishLocked()
+    }
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        lock.lock()
+        guard sessionID == ObjectIdentifier(session) else { lock.unlock(); return }
+        invalidated = true; finishLocked()
+    }
+    private func finishLocked() {
+        let continuation = invalidated && (!requiresCompletion || completed) ? waiter : nil
+        if continuation != nil { waiter = nil }
+        lock.unlock(); continuation?.resume()
+    }
+    func wait(requiresCompletion: Bool) async {
+        await withCheckedContinuation { continuation in
+            lock.lock(); self.requiresCompletion = requiresCompletion
+            if invalidated && (!requiresCompletion || completed) { lock.unlock(); continuation.resume() }
+            else { precondition(waiter == nil); waiter = continuation; lock.unlock() }
         }
     }
 }
@@ -638,9 +741,19 @@ final class InferenceTransferTests: XCTestCase {
     }
     @MainActor private func controlled(_ fixture: AdmissionTransport) -> (InferenceTransfer, URLSession, URLSessionDataTask) {
         let configuration = EngineManager.directConfiguration(); configuration.protocolClasses = [AdmissionProtocol.self]
-        let session = URLSession(configuration: configuration)
+        let receipts = ControlledSessionReceipts()
+        let session = URLSession(configuration: configuration, delegate: receipts, delegateQueue: nil)
         let task = session.dataTask(with: URL(string: "http://127.0.0.1:\(fixture.port)/v1/chat/completions")!)
-        return (InferenceTransfer(testSession: session, neverResumedTask: task), session, task)
+        receipts.bind(session: session, task: task)
+        let transfer = InferenceTransfer(testSession: session, neverResumedTask: task)
+        addTeardownBlock {
+            let state = await transfer.snapshot()
+            task.cancel()
+            if state.paused { task.resume() }
+            session.invalidateAndCancel()
+            await receipts.wait(requiresCompletion: state.started)
+        }
+        return (transfer, session, task)
     }
     @MainActor private func response(_ fixture: AdmissionTransport) -> HTTPURLResponse {
         HTTPURLResponse(url: URL(string: "http://127.0.0.1:\(fixture.port)/v1/chat/completions")!,
@@ -769,19 +882,78 @@ final class InferenceTransferTests: XCTestCase {
         try await eventually { lifetime.transfer == nil }
     }
     @MainActor func testCancellationOfPendingByteConsumerWakesBeforeTransportSettles() async throws {
-        let fixture = AdmissionTransport([.init()], holdStop: true); defer { fixture.close() }
-        let transfer = production(fixture); defer { transfer.cancel() }
+        let fixture = AdmissionTransport([.init(body: " ")]); defer { fixture.close() }
+        let configuration = EngineManager.directConfiguration(); configuration.protocolClasses = [AdmissionProtocol.self]
+        let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/v1/chat/completions")!)
+        let callbacks = OperationQueue()
+        let transfer = InferenceTransfer(testRequest: request, configuration: configuration,
+                                         certificateSHA256: nil, callbackQueue: callbacks)
+        // Resume before cancellation/join on every success or failure path.
+        defer { callbacks.isSuspended = false; transfer.cancel() }
+        addTeardownBlock { callbacks.isSuspended = false; transfer.cancel(); await transfer.waitForCompletion() }
         let (bytes, _) = try await transfer.start()
+        var priming: UInt8?
+        let consumer = Task {
+            var iterator = bytes.makeAsyncIterator()
+            priming = try await iterator.next()
+            return try await iterator.next()
+        }
+        try await eventually {
+            let state = await transfer.snapshot()
+            return priming == 32 && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0
+        }
+        XCTAssertEqual(priming, 32)
+        let ready = await transfer.snapshot()
+        XCTAssertFalse(ready.completed); XCTAssertFalse(ready.invalidated); XCTAssertEqual(ready.bufferedBytes, 0)
+        callbacks.isSuspended = true // Held empty body is quiescent before the gate.
         var settled = false
         let waiter = Task { await transfer.waitForCompletion(); settled = true }
         try await eventually { (await transfer.snapshot()).waitingForCompletion }
-        let consumer = Task { var iterator = bytes.makeAsyncIterator(); return try await iterator.next() }
-        try await eventually { (await transfer.snapshot()).waitingForChunk }
         consumer.cancel()
         do { _ = try await consumer.value; XCTFail("Cancelled body returned") } catch { XCTAssertTrue(error is CancellationError) }
-        try await eventually { fixture.snapshot.events.contains("stop-entered") }
-        XCTAssertFalse(settled, "Consumer cancellation must not settle the transport")
-        fixture.allowStop(); await waiter.value
+        let held = await transfer.snapshot()
+        XCTAssertFalse(held.completed); XCTAssertFalse(held.invalidated); XCTAssertFalse(held.settled)
+        XCTAssertFalse(settled, "Cancellation cannot replace actual queued delegate receipts")
+        callbacks.isSuspended = false
+        await waiter.value
+        let final = await transfer.snapshot()
+        XCTAssertTrue(final.completed); XCTAssertTrue(final.invalidated); XCTAssertTrue(final.settled)
+        XCTAssertFalse(final.retainedTask); XCTAssertFalse(final.retainedSession)
+    }
+    @MainActor func testHeldHeaderDeliveryWithAndWithoutContentTypeHasAuthenticSettlement() async throws {
+        // Same adapter and held response, changing only Content-Type. An unknown
+        // MIME type may cause Darwin to wait for sniffing bytes or EOF; record
+        // the observed branch rather than treating a timeout as a receipt.
+        for body in ["", "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Answer\"}}]}\n\n"] {
+            for contentType in [nil, "text/event-stream"] as [String?] {
+                let fixture = AdmissionTransport([.init(body: body, contentType: contentType)])
+                defer { fixture.close() }
+                let configuration = EngineManager.directConfiguration()
+                configuration.protocolClasses = [AdmissionProtocol.self]
+                configuration.timeoutIntervalForRequest = 0.5; configuration.timeoutIntervalForResource = 2
+                let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/v1/chat/completions")!)
+                let transfer = InferenceTransfer(request: request, configuration: configuration, certificateSHA256: nil)
+                defer { transfer.cancel() }
+                addTeardownBlock { transfer.cancel(); await transfer.waitForCompletion() }
+                let began = ProcessInfo.processInfo.systemUptime
+                var outcome = "headers"
+                do {
+                    let (_, response) = try await transfer.start()
+                    XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+                    XCTAssertEqual((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type"), contentType)
+                } catch {
+                    outcome = (error as? URLError)?.code == .timedOut ? "timeout" : "error"
+                    XCTAssertEqual((error as? URLError)?.code, .timedOut)
+                    XCTAssertNil(contentType, "Typed SSE headers must be delivered before the bounded network timeout")
+                }
+                transfer.cancel(); await transfer.waitForCompletion()
+                let state = await transfer.snapshot()
+                XCTAssertTrue(state.started); XCTAssertTrue(state.completed); XCTAssertTrue(state.invalidated); XCTAssertTrue(state.settled)
+                XCTAssertFalse(state.retainedTask); XCTAssertFalse(state.retainedSession)
+                let milliseconds = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
+                print("DOT_TEST_HEADER_DELIVERY typed=\(contentType != nil) empty=\(body.isEmpty) outcome=\(outcome) elapsed_ms=\(milliseconds) completed=\(state.completed) invalidated=\(state.invalidated)")
+            }
+        }
     }
     @MainActor func testExactLimitLargeCallbackAndPostSuspendOverflowAreBounded() async throws {
         for overflow in [false, true] {
@@ -801,6 +973,9 @@ final class InferenceTransferTests: XCTestCase {
                 var iterator = bytes.makeAsyncIterator()
                 do { _ = try await iterator.next(); XCTFail("Overflow accepted") } catch { XCTAssertTrue(error is ResponseLimit) }
             } else {
+                // This manual receipt must not orphan the underlying suspended
+                // fixture task while the full bounded buffer is consumed.
+                task.cancel(); task.resume()
                 transfer.urlSession(session, task: task, didCompleteWithError: nil)
                 var count = 0
                 for try await byte in bytes { if byte != 120 { XCTFail("Byte order/content changed"); break }; count += 1 }

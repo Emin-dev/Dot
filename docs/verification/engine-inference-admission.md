@@ -2,21 +2,24 @@
 
 ## Scope and publication gate
 
-This seven-file candidate is staged against published
-`1fbd42f4855fafdc0a204215c0e61fc948794397`. It retains the reviewed manager
-admission policy and replaces the inference async-bytes transport with an
-explicitly owned suspended data task. It has not been compiled or run on macOS.
-Independent concurrency/security review and exact-source native acceptance are
-required before integration/publication. Existing native CI results for other
-revisions do not validate these bytes.
+The original seven-file implementation was prepared against published
+`1fbd42f4855fafdc0a204215c0e61fc948794397`. The current five-file repair is staged
+against `f0a07513c3dde21b3638207c2b63343035366185` (the explicit transport plus
+its isolated weak-reference-test compile repair). Independent source review and
+exact-source native acceptance remain required; this repair has not run natively.
 
-The changed files are Engine.swift, ChatView.swift, InteractionCore.swift,
-ResearchEngineTests.swift, EngineIntegrationTests.swift,
-test_engine_admission_contract.py and this document. No project membership,
-workflow, package, runtime helper, alternate engine, download or installed app
-changes are included. Published `research.sources` evidence semantics remain.
-ChatView changes are limited to explicit passive-background purpose and the
-exhaustive busy diagnostic; the question result gains Sendable conformance.
+Native CI 38589346500/job 115939731527 compiled the production application and
+test target and executed 788 XCTest cases on f0a0751. Four new test cases produced
+11 failures, including two unexpected errors. The failures exposed assumptions
+in the custom URLProtocol fixtures and receipt assertions; they do not justify
+weakening the actual task-completion/session-invalidation fence. The prior run's
+portable checks and 486 SwiftPM tests passed, but its full native suite failed.
+
+This repair changes Engine.swift, both existing engine native-test files,
+test_engine_admission_contract.py and this document. It retains all 29 added
+native tests and adds a MIME/header-delivery counterfactual. No project membership,
+workflow, package, runtime helper, alternate engine, download or installed-app
+changes are included. Published research evidence semantics remain unchanged.
 
 ## Admission and the three lifetimes
 
@@ -73,9 +76,27 @@ A narrowly internal receipt-test initializer installs a test-supplied session
 and never-resumed task through the same state initialization/installation path.
 It checks suspended state and zero sent/received byte counts. Those observations
 cannot prove the pair's provenance or that it was never resumed previously;
-manual-receipt tests supply that authenticity themselves. EngineManager and
-request input cannot select this seam. It is not evidence of Foundation receipt
+manual-receipt tests supply that authenticity themselves. Their separate real
+fixture session/task also have an authentic receipt recorder, joined by async
+teardown; an injected completion must not orphan its still-running OS task.
+EngineManager and request input cannot select this seam. It is not evidence of Foundation receipt
 ordering and does not replace production-route URLProtocol or TLS tests.
+
+A second internal test initializer supplies only the callback OperationQueue to
+the same real session/data-delegate creation path. It forces that queue to be
+serial and use the lifecycle queue. EngineManager uses the unchanged default.
+A native test consumes a finite priming byte, observes the next registered body
+waiter with no completion/invalidation, then suspends callback delivery. Client
+cancellation wakes that consumer while settlement stays held. Resuming delivery
+must produce both authentic receipts. Cleanup always resumes before cancel/join,
+including failure paths; no callback or wait is performed under a held lock.
+
+EngineManager records a bounded final transfer snapshot after the result fence
+and before its owned child returns. The record is tagged and guarded by the
+existing admission token and cleared for each admitted request; it provides no
+request content or control handle. Real DONE/error/model-flush tests inspect the
+actual completion and invalidation flags instead of inferring them from protocol
+object cleanup.
 
 ## Streaming bounds and backpressure
 
@@ -146,17 +167,65 @@ failure, pre-header failure and follow-on admission. Added transport tests cover
 - Actual WebResearchModel pre-header-failure flush; cancellation and the same
   panel-close-admissions/model-flush sequence used by applicationShouldTerminate
 
+### Native fixture findings and counterfactual
+
+The held AdmissionProtocol responses previously omitted Content-Type. The
+pending-byte test waited 60 seconds inside start(), before any byte consumer
+existed; the short-DONE test also failed before observing cancellation. Existing
+streaming fixtures already identify text/event-stream. The repair makes this
+fixture equally explicit and adds paired empty/small held responses with and
+without Content-Type through the actual adapter. Fixed-size diagnostic output
+records whether each delivered headers or reached a bounded request timeout,
+then requires actual task completion and session invalidation in either case.
+The missing-MIME/sniffing explanation remains a hypothesis until that exact
+counterfactual runs on macOS. An absent MIME type is legal HTTP; if Foundation
+buffers such a held response until timeout, this is a production transport
+limitation for that input, not evidence of a settled or nonexistent task. The
+normal local streaming endpoint is expected to send its event-stream MIME type.
+The existing production network timeouts are unchanged. Counterfactual test
+network timeouts do not substitute for any settlement callback.
+
+The current receipt is cleared immediately after each successful admission,
+before cancellation checks. A capped two-entry history contains only immutable
+value snapshots and admission UUIDs, appended after the authentic settlement
+fence and before admission release. Oldest entries are explicitly evicted; two
+entries are sufficient to inspect the predecessor during the next request's
+setup despite the current-receipt reset. No content, handles, scheduling control
+or second lifecycle owner is retained. The DONE/503 test holds the first actual
+POST before headers, observes a genuinely queued second foreground caller, then
+releases the response exactly once. The second caller's real setup binds the
+sole predecessor's UUID and checks both authentic receipts before its own POST.
+A third sequential request verifies cap-two eviction. This test does not infer
+transport lifetime from the number of URLProtocol fixture objects.
+
+A custom URLProtocol's blocked stopLoading method is not a contractual barrier
+to task completion or session invalidation. The f0a0751 model-flush assertions
+failed because they inferred outstanding receipts solely from that blocked
+cleanup. Real-route tests now check authenticated adapter receipt snapshots; the
+separate real callback-queue gate exercises the pending-receipt interval.
+Redirect refusal can finish the synthetic protocol without delivering a response,
+which the adapter correctly rejects as EngineError.response; the test retains
+its original-request-only, no-redirected-Authorization and both-receipt checks.
+
+The exact-limit manual-callback test also kept its underlying OS task alive
+while emulating completion. It now cancels/balances that actual task before
+injecting the manual terminal receipt, and asynchronous teardown joins the real
+session/task recorder. This does not change production lifetime semantics or
+raise a timeout. Its former 67-second duration is not a measured production
+performance result; exact native cleanup/timing must be rerun.
+
 The quit test exercises the real panel/model/engine drain boundary. A source
 contract connects that sequence to the application's termination callback. It
 does not terminate a running installed application or prove full OS quit/device
 behavior. Suspended transfer cancellation is tested separately through the
-production transport. URLProtocol stop barriers are supporting integration
-evidence, not a standalone proof of manager serialization: separate continuation
-barriers test manager ownership and manual receipts test the transport state.
+production transport. URLProtocol activity counts describe fixture objects, not
+live transport tasks: separate continuation barriers test manager ownership,
+authentic callback gating tests the transport fence, and manual receipts test
+foreign/duplicate/reordered state transitions.
 
-Portable validation on the staged source: 336 Python tests discovered, four
+Portable validation on the staged source: 337 Python tests discovered, four
 skips (two macOS-only and two optional pinned inputs absent), no failures;
-16 focused admission source contracts and 52 aggregate static guardrails passed.
+17 focused admission source contracts and 52 aggregate static guardrails passed.
 A Swift tree-sitter grammar scan of the three changed engine/test files found no
 parse errors. None of these compiles Swift, runs XCTest or proves Foundation
 behavior. Native Debug/Release warning-as-error compilation, all native tests,

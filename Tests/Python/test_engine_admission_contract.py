@@ -91,7 +91,7 @@ class EngineAdmissionContractTests(unittest.TestCase):
 
     def test_explicit_suspended_handle_is_installed_before_resume(self):
         creation = section(self.transfer, 'convenience init(request:', '/// Internal receipt-test seam')
-        self.assertIn('delegate: self, delegateQueue: delegates', creation)
+        self.assertIn('delegate: self, delegateQueue: callbackQueue', creation)
         self.assertIn('install(session: ownedSession, suspendedTask: ownedSession.dataTask(with: request))', creation)
         self.assertNotIn('.resume()', creation)
         installation = section(self.transfer, 'private func install(', '/// Callbacks use')
@@ -102,10 +102,11 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertIn('guard !cancelled, !invalidated, let task', start)
         self.assertNotIn('didCreateTask', self.transfer)
         self.assertNotIn('testSession:', self.bytes)
+        self.assertNotIn('testRequest:', self.bytes)
 
     def test_serialized_lifecycle_preserves_identity_after_session_release(self):
-        self.assertIn('delegates.maxConcurrentOperationCount = 1', self.transfer)
-        self.assertIn('delegates.underlyingQueue = lifecycle', self.transfer)
+        self.assertIn('callbackQueue.maxConcurrentOperationCount = 1', self.transfer)
+        self.assertIn('callbackQueue.underlyingQueue = lifecycle', self.transfer)
         self.assertIn('DispatchQueue.getSpecific(key: queueKey)', self.transfer)
         self.assertNotIn('lifecycle.sync', self.transfer)
         self.assertNotIn('DispatchSemaphore', self.transfer)
@@ -206,13 +207,14 @@ class EngineAdmissionContractTests(unittest.TestCase):
             'testOversizedSingleCallbackIsRejectedBeforeRetention',
             'testDetachedDoneChunkCannotHideStickyReceiveOrTransportFailure',
             'testEarlyDoneIntentionalCleanupDoesNotBecomeTransportFailure',
+            'testHeldHeaderDeliveryWithAndWithoutContentTypeHasAuthenticSettlement',
             'testResearchModelFlushReturnsAfterPreheaderFailure',
             'testResearchCancellationAndQuitDrainJoinActualTransport',
         ]
         for name in names:
             self.assertIn('func ' + name, self.native)
         self.assertIn('waitingForCompletion', self.native)
-        self.assertIn('try await eventually { (await transfer.snapshot()).waitingForChunk }', self.native)
+        self.assertIn('return priming == 32 && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0', self.native)
         self.assertIn('XCTAssertNil(try questionIntent.completed()', self.native)
         self.assertIn('await barrier.wait()', self.native)
         for name in ['testExplicitInferenceTransferPinsEveryReconnectAndSettles',
@@ -222,6 +224,30 @@ class EngineAdmissionContractTests(unittest.TestCase):
         project = (ROOT / 'Dot.xcodeproj/project.pbxproj').read_text()
         self.assertIn('Tests/DotCoreTests/ResearchEngineTests.swift', project)
         self.assertIn('Tests/DotCoreTests/EngineIntegrationTests.swift', project)
+
+    def test_real_receipt_gate_and_token_checked_final_diagnostic(self):
+        self.assertIn('callbackQueue.operationCount == 0', self.transfer)
+        self.assertIn('callbacks.isSuspended = true', self.native)
+        self.assertIn('defer { callbacks.isSuspended = false; transfer.cancel() }', self.native)
+        self.assertIn('addTeardownBlock { callbacks.isSuspended = false; transfer.cancel(); await transfer.waitForCompletion() }', self.native)
+        self.assertIn('XCTAssertFalse(held.completed); XCTAssertFalse(held.invalidated); XCTAssertFalse(held.settled)', self.native)
+        self.assertLess(self.bytes.index('transfer.resultAfterSettlement(result)'), self.bytes.index('let snapshot = await transfer.snapshot()'))
+        self.assertLess(self.bytes.index('if activeInference?.id == admissionID'), self.bytes.index('lastInferenceTransportSettlement = (admissionID, snapshot)'))
+        self.assertLess(self.bytes.index('lastInferenceTransportSettlement = (admissionID, snapshot)'), self.bytes.index('return try settledResult.get()'))
+        self.assertLess(self.owned.index('lastInferenceTransportSettlement = nil'), self.owned.index('try Task.checkCancellation()'))
+        self.assertIn('await receipts.wait(requiresCompletion: state.started)', self.native)
+        self.assertIn('task.cancel(); task.resume()', self.native)
+        self.assertIn('DOT_TEST_HEADER_DELIVERY typed=', self.native)
+        self.assertIn('return priming == 32 && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0', self.native)
+        self.assertLess(self.bytes.index('transfer.resultAfterSettlement(result)'), self.bytes.index('inferenceTransportSettlements.append((admissionID, snapshot))'))
+        self.assertIn('inferenceTransportSettlements.removeFirst(inferenceTransportSettlements.count - 2)', self.bytes)
+        self.assertIn('if inferenceTransportSettlements.count > 2', self.bytes)
+        overlap = section(self.native, 'func testDoneBeforeHTTPCompletionAndInvalidResponseStillSettleTransport()', 'func testShutdownCancelsQueuedRequestAndRetainsActiveUntilSetupSettles()')
+        self.assertLess(overlap.index('let next = Task'), overlap.index('manager.inferenceAdmission.pendingForeground'))
+        self.assertLess(overlap.index('manager.inferenceAdmission.pendingForeground'), overlap.index('fixture.releaseHeaders()'))
+        self.assertIn('firstAdmissionID = receipt.admissionID', overlap)
+        self.assertIn('assertRealSettlementSnapshot(receipt.snapshot)', overlap)
+        self.assertIn('[second.admissionID, third.admissionID]', overlap)
 
     def test_quit_closes_admission_and_joins_real_research_model_before_reply(self):
         app = (ROOT / 'src/App.swift').read_text()

@@ -80,10 +80,23 @@ final class InferenceTransfer: NSObject, URLSessionDataDelegate, @unchecked Send
 
     convenience init(request: URLRequest, configuration: URLSessionConfiguration, certificateSHA256: String?) {
         self.init(certificateSHA256: certificateSHA256)
-        let delegates = OperationQueue()
-        delegates.maxConcurrentOperationCount = 1
-        delegates.underlyingQueue = lifecycle
-        let ownedSession = URLSession(configuration: configuration, delegate: self, delegateQueue: delegates)
+        createSession(request: request, configuration: configuration, callbackQueue: OperationQueue())
+    }
+
+    /// Test-only control of actual callback delivery; EngineManager cannot select
+    /// this path. The same session/data delegate and installation path are used.
+    convenience init(testRequest: URLRequest, configuration: URLSessionConfiguration,
+                     certificateSHA256: String?, callbackQueue: OperationQueue) {
+        self.init(certificateSHA256: certificateSHA256)
+        createSession(request: testRequest, configuration: configuration, callbackQueue: callbackQueue)
+    }
+
+    private func createSession(request: URLRequest, configuration: URLSessionConfiguration,
+                               callbackQueue: OperationQueue) {
+        precondition(callbackQueue.operationCount == 0)
+        callbackQueue.maxConcurrentOperationCount = 1
+        callbackQueue.underlyingQueue = lifecycle
+        let ownedSession = URLSession(configuration: configuration, delegate: self, delegateQueue: callbackQueue)
         // dataTask(with:) returns a suspended task. Retain its exact handle before
         // resume; no async-wrapper creation callback establishes ownership.
         install(session: ownedSession, suspendedTask: ownedSession.dataTask(with: request))
@@ -392,6 +405,12 @@ final class EngineManager: ObservableObject {
     private var inferenceClosed = false
     private var activeInference: ActiveInference?
     private var pendingForeground: PendingInference?
+    /// Last real transfer's bounded receipt diagnostics, captured before the
+    /// owned child returns and releases admission. Contains no control handles.
+    private(set) var lastInferenceTransportSettlement: (admissionID: UUID, snapshot: InferenceTransfer.Snapshot)?
+    /// Two settled receipts retain the predecessor across the next admission's
+    /// current-diagnostic reset. Value snapshots and tokens only; evict oldest.
+    private(set) var inferenceTransportSettlements: [(admissionID: UUID, snapshot: InferenceTransfer.Snapshot)] = []
     /// Read-only diagnostics; exposes no request content or admission mutation.
     var inferenceAdmission: (active: InferencePurpose?, pendingForeground: Bool) {
         (activeInference?.purpose, pendingForeground != nil)
@@ -442,6 +461,7 @@ final class EngineManager: ObservableObject {
                                       operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
         let id = UUID()
         try await admitInference(id: id, purpose: purpose)
+        lastInferenceTransportSettlement = nil
         defer { releaseInference(id: id) }
         try Task.checkCancellation()
         guard activeInference?.id == id, activeInference?.cancellationRequested == false else { throw CancellationError() }
@@ -711,6 +731,7 @@ final class EngineManager: ObservableObject {
     private func withInferenceBytes<Value: Sendable>(request: URLRequest,
         process: @MainActor (InferenceTransfer.Bytes, URLResponse) async throws -> Value) async throws -> Value {
         try Task.checkCancellation()
+        guard let admissionID = activeInference?.id else { throw EngineError.response }
         let transfer = InferenceTransfer(request: request, configuration: inferenceConfiguration(),
                                          certificateSHA256: certificateSHA256)
         return try await withTaskCancellationHandler {
@@ -722,7 +743,18 @@ final class EngineManager: ObservableObject {
             } catch { result = .failure(error) }
             // [DONE], parser failure and cancelled iteration can all precede the
             // URLSession task's terminal callback. Do not free admission early.
-            return try await transfer.resultAfterSettlement(result)
+            let settledResult: Result<Value, Error>
+            do { settledResult = .success(try await transfer.resultAfterSettlement(result)) }
+            catch { settledResult = .failure(error) }
+            let snapshot = await transfer.snapshot()
+            if activeInference?.id == admissionID {
+                lastInferenceTransportSettlement = (admissionID, snapshot)
+                inferenceTransportSettlements.append((admissionID, snapshot))
+                if inferenceTransportSettlements.count > 2 {
+                    inferenceTransportSettlements.removeFirst(inferenceTransportSettlements.count - 2)
+                }
+            }
+            return try settledResult.get()
         } onCancel: { transfer.cancel() }
     }
 

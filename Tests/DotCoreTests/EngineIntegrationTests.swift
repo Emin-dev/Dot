@@ -454,9 +454,11 @@ final class EngineProxyPolicyTests: XCTestCase {
                 XCTAssertEqual(response.url, source)
                 XCTAssertTrue(body.isEmpty)
             } catch {
-                // As in SourceReferenceTests, Foundation may report .unknown
-                // after a synthetic URLProtocol redirect is declined.
-                XCTAssertEqual((error as? URLError)?.code, .unknown, "Unexpected redirect error: \(error)")
+                // The synthetic protocol finishes without delivering didReceive
+                // when its redirect is denied. The adapter rejects that absent
+                // response; Foundation may alternatively report .unknown.
+                XCTAssertTrue((error as? EngineError) == .response || (error as? URLError)?.code == .unknown,
+                              "Unexpected redirect error: \(error)")
             }
             transfer.cancel()
             await transfer.waitForCompletion()
