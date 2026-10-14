@@ -40,6 +40,10 @@ SOURCE_FIXED = (
     'Tests/Fixtures/search_real_vertical_entry.py', 'Tests/Fixtures/search_real_vertical_fixture.py',
     'Tests/Fixtures/search_proxy_fixture_support.py', 'Tests/Fixtures/search_proxy_pinned_hashes.json',
 )
+BUILD_PHASES = frozenset({
+    'swift-build-tests', 'find-clang', 'find-swift', 'sdk-path',
+    'clang-version', 'swift-version', 'sdk-version',
+})
 BOOTSTRAP_SOURCE_SHA256 = '637c9778cfdf0a7e790f3a4fc43069da05cfd5eb299273a5aab01491fa77f55d'
 HELPER_SHA256 = 'c97c37e08301d0c081120fb2390d6ae67d994953c141bbba3be0dde7cc0b622a'
 OWNER_SHA256 = 'af26f193829f7680d7d56b0c4c68141630538282c67842cd4d7d5a0e030ffa4f'
@@ -52,6 +56,8 @@ RESPONSE = (b'HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConte
 
 class CanaryFailure(Exception):
     """Fixed category only. Never wrap native stdout/stderr or arbitrary values."""
+
+    build_failure = None
 
 
 def canonical(value):
@@ -174,69 +180,105 @@ def clean_environment(home, temporary, config=None, digest=None):
     return env
 
 
-def run_owned(command, *, cwd, env, seconds):
+def build_failure_receipt(phase, observed_exit, returncode):
+    """Fixed pre-capability metadata; never inspect or retain process output."""
+    if type(phase) is not str or phase not in BUILD_PHASES:
+        raise CanaryFailure('unknown-build-phase')
+    code = returncode if type(returncode) is int and -127 <= returncode <= 255 else None
+    natural = observed_exit is True
+    return {'phase': phase, 'leader_exit_observed_before_cleanup': natural,
+            'exit_status': code if natural and code is not None and code >= 0 else None,
+            'signal': -code if natural and code is not None and code < 0 else None,
+            # A leader may race with cleanup. This value is deliberately not
+            # attributed to natural termination or to a particular group signal.
+            'returncode_observed_only_after_cleanup': code if not natural else None}
+
+
+def run_owned(command, *, cwd, env, seconds, phase=None):
     """Bound drains; reuse the reviewed non-reaping process-group owner."""
-    helper_path = ROOT / 'Resources/Search/dot_search.py'
-    if read_regular(helper_path)[1]['sha256'] != HELPER_SHA256:
-        raise CanaryFailure('reviewed-process-owner-mismatch')
-    owner = load_module('real_search_reviewed_process_owner', helper_path)
-    child = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
-    streams = [bytearray(), bytearray()]
-    selector = None
+    if phase is not None and (type(phase) is not str or phase not in BUILD_PHASES):
+        raise CanaryFailure('unknown-build-phase')
+    child = None
+    observed_exit = False
     try:
-        selector = selectors.DefaultSelector()
-        for index, pipe in enumerate((child.stdout, child.stderr)):
-            os.set_blocking(pipe.fileno(), False)
-            selector.register(pipe, selectors.EVENT_READ, index)
-        deadline = time.monotonic() + seconds
-        while selector.get_map():
-            if time.monotonic() >= deadline:
-                raise CanaryFailure('owned-process-deadline')
-            for key, _ in selector.select(min(0.1, max(0, deadline - time.monotonic()))):
-                chunk = os.read(key.fileobj.fileno(), 65536)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    key.fileobj.close()
-                    continue
-                streams[key.data].extend(chunk)
-                if sum(map(len, streams)) > 8 * 1024 * 1024:
-                    raise CanaryFailure('owned-output-cap')
-        # Preserve the unreaped leader even after its own exit. An inherited
-        # pipe may still belong to an owned descendant; closing it is no receipt.
-        while not owner.child_exited(child):
-            if time.monotonic() >= deadline:
-                raise CanaryFailure('owned-process-deadline')
-            time.sleep(0.01)
-    finally:
+        helper_path = ROOT / 'Resources/Search/dot_search.py'
+        if read_regular(helper_path)[1]['sha256'] != HELPER_SHA256:
+            raise CanaryFailure('reviewed-process-owner-mismatch')
+        owner = load_module('real_search_reviewed_process_owner', helper_path)
+        child = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+        streams = [bytearray(), bytearray()]
+        selector = None
         try:
-            # This exact reviewed implementation sends its final group signal
-            # before reaping. It also runs after any selector/read exception.
-            owner.stop_group(child)
+            selector = selectors.DefaultSelector()
+            for index, pipe in enumerate((child.stdout, child.stderr)):
+                os.set_blocking(pipe.fileno(), False)
+                selector.register(pipe, selectors.EVENT_READ, index)
+            deadline = time.monotonic() + seconds
+            while selector.get_map():
+                if time.monotonic() >= deadline:
+                    raise CanaryFailure('owned-process-deadline')
+                for key, _ in selector.select(min(0.1, max(0, deadline - time.monotonic()))):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        selector.unregister(key.fileobj)
+                        key.fileobj.close()
+                        continue
+                    streams[key.data].extend(chunk)
+                    if sum(map(len, streams)) > 8 * 1024 * 1024:
+                        raise CanaryFailure('owned-output-cap')
+            # Preserve the unreaped leader even after its own exit. An inherited
+            # pipe may still belong to an owned descendant; closing it is no receipt.
+            while not owner.child_exited(child):
+                if time.monotonic() >= deadline:
+                    raise CanaryFailure('owned-process-deadline')
+                time.sleep(0.01)
+            observed_exit = True
         finally:
-            if selector is not None:
-                selector.close()
-            for pipe in (child.stdout, child.stderr):
-                pipe.close()
-    if child.returncode != 0:
-        raise CanaryFailure('owned-process-failed')
-    return bytes(streams[0]), bytes(streams[1])
+            try:
+                try:
+                    # Observe, never reap, before cleanup can change a live leader's
+                    # status. Observation failure cannot bypass the reviewed cleanup.
+                    if phase is not None and not observed_exit:
+                        try:
+                            observed_exit = owner.child_exited(child)
+                        except Exception:
+                            pass
+                finally:
+                    # This exact reviewed implementation sends its final group signal
+                    # before reaping. It also runs after any selector/read exception.
+                    owner.stop_group(child)
+            finally:
+                if selector is not None:
+                    selector.close()
+                for pipe in (child.stdout, child.stderr):
+                    pipe.close()
+        if child.returncode != 0:
+            raise CanaryFailure('owned-process-failed')
+        return bytes(streams[0]), bytes(streams[1])
+    except BaseException as caught:
+        if phase is None:
+            raise
+        failure = caught if type(caught) is CanaryFailure else CanaryFailure('controller-failed')
+        failure.build_failure = build_failure_receipt(phase, observed_exit,
+                                                      child.returncode if child is not None else None)
+        raise failure from None
 
 
 def build_artifacts(work, env):
     _, _ = run_owned(['/usr/bin/xcrun', 'swift', 'build', '--build-tests', '--configuration', 'debug',
-                      '--scratch-path', str(work / 'build')], cwd=ROOT, env=env, seconds=600)
+                      '--scratch-path', str(work / 'build')], cwd=ROOT, env=env, seconds=600, phase='swift-build-tests')
     candidates = list((work / 'build').glob('**/DotCorePackageTests.xctest/Contents/MacOS/DotCorePackageTests'))
     if len(candidates) != 1:
         raise CanaryFailure('exact-test-executable-not-found')
     executable = canonical_path(candidates[0])
     binary = read_regular(executable)[1]
-    clang, _ = run_owned(['/usr/bin/xcrun', '--find', 'clang'], cwd=ROOT, env=env, seconds=10)
-    swift, _ = run_owned(['/usr/bin/xcrun', '--find', 'swift'], cwd=ROOT, env=env, seconds=10)
-    sdk, _ = run_owned(['/usr/bin/xcrun', '--show-sdk-path'], cwd=ROOT, env=env, seconds=10)
-    clang_version, _ = run_owned(['/usr/bin/xcrun', 'clang', '--version'], cwd=ROOT, env=env, seconds=10)
-    swift_version, _ = run_owned(['/usr/bin/xcrun', 'swift', '--version'], cwd=ROOT, env=env, seconds=10)
-    sdk_version, _ = run_owned(['/usr/bin/xcrun', '--show-sdk-version'], cwd=ROOT, env=env, seconds=10)
+    clang, _ = run_owned(['/usr/bin/xcrun', '--find', 'clang'], cwd=ROOT, env=env, seconds=10, phase='find-clang')
+    swift, _ = run_owned(['/usr/bin/xcrun', '--find', 'swift'], cwd=ROOT, env=env, seconds=10, phase='find-swift')
+    sdk, _ = run_owned(['/usr/bin/xcrun', '--show-sdk-path'], cwd=ROOT, env=env, seconds=10, phase='sdk-path')
+    clang_version, _ = run_owned(['/usr/bin/xcrun', 'clang', '--version'], cwd=ROOT, env=env, seconds=10, phase='clang-version')
+    swift_version, _ = run_owned(['/usr/bin/xcrun', 'swift', '--version'], cwd=ROOT, env=env, seconds=10, phase='swift-version')
+    sdk_version, _ = run_owned(['/usr/bin/xcrun', '--show-sdk-version'], cwd=ROOT, env=env, seconds=10, phase='sdk-version')
     clang_path = Path(clang.decode().strip()).resolve(strict=True)
     swift_path = Path(swift.decode().strip()).resolve(strict=True)
     sdk_path = Path(sdk.decode().strip()).resolve(strict=True)
@@ -660,6 +702,8 @@ def run(args):
         error = caught
         report['status'] = 'failed'
         report['failure_category'] = str(caught) if type(caught) is CanaryFailure else 'controller-failed'
+        if type(caught) is CanaryFailure and caught.build_failure is not None and 'build' not in report:
+            report['build_failure'] = caught.build_failure
     finally:
         write_new(report_path, canonical(report))
     if error is not None:
