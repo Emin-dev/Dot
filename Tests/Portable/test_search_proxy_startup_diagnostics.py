@@ -585,11 +585,39 @@ class StartupChildTests(unittest.TestCase):
                       'print("dot-search-startup-v1")'])
         return "\n".join(lines)
 
-    def test_exact_environment_cwd_and_listener_are_inherited(self):
+    def configure_inheritance_environment(self):
         # A nonempty LC_ALL prevents CPython's startup locale coercion from
         # rewriting LC_CTYPE. The portable C locale also works on Darwin,
         # where C.UTF-8 is not guaranteed to exist. Production env is unchanged.
         self.context["env"]["LC_ALL"] = "C"
+        if sys.platform == "darwin":
+            # CoreFoundation initializes this variable before Python code runs.
+            # Select its documented UID:Roman:US input explicitly, rather than
+            # assuming the runner's default or ignoring an observed addition.
+            # CFStringEncodings.c accepts the value when its UID matches getuid():
+            # https://github.com/apple-oss-distributions/CF/blob/main/CFStringEncodings.c
+            self.context["env"]["__CF_USER_TEXT_ENCODING"] = f"0x{os.getuid():X}:0:0"
+
+    def test_inheritance_environment_is_explicit_and_darwin_only(self):
+        minimal = support.minimal_env(self.state)
+        for platform in ("darwin", "linux"):
+            self.context["env"] = minimal.copy()
+            with mock.patch.object(sys, "platform", platform), \
+                 mock.patch.object(os, "getuid", return_value=501) as getuid:
+                self.configure_inheritance_environment()
+            expected = {**minimal, "LC_ALL": "C"}
+            if platform == "darwin":
+                expected["__CF_USER_TEXT_ENCODING"] = "0x1F5:0:0"
+                getuid.assert_called_once_with()
+            else:
+                getuid.assert_not_called()
+            self.assertEqual(self.context["env"], expected)
+            self.assertEqual(support.minimal_env(self.state), minimal)
+        self.assertNotIn("LC_ALL", minimal)
+        self.assertNotIn("__CF_USER_TEXT_ENCODING", minimal)
+
+    def test_exact_environment_cwd_and_listener_are_inherited(self):
+        self.configure_inheritance_environment()
         result = self.run_child(self.inheritance_program())
         self.assertEqual(result["status"], "success",
             f'fixed fixture exit code {result["returncode"]}: '
@@ -600,7 +628,8 @@ class StartupChildTests(unittest.TestCase):
 
     def test_explicit_c_locale_preserves_environment_with_unavailable_locale(self):
         # Exercise real isolated startup without depending on installed locales.
-        self.context["env"].update(LC_ALL="C", LC_CTYPE="dot-unavailable-locale")
+        self.configure_inheritance_environment()
+        self.context["env"]["LC_CTYPE"] = "dot-unavailable-locale"
         result = self.run_child(self.inheritance_program())
         self.assertEqual(result["status"], "success",
             f'fixed fixture exit code {result["returncode"]}: '
@@ -684,12 +713,14 @@ class StartupChildTests(unittest.TestCase):
              "LANG": "en_US.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"})
 
     def test_generated_inheritance_checks_are_exact_on_both_platforms(self):
-        self.context["env"]["LC_ALL"] = "C"
         for platform, query, states in (
                 ("darwin", (socket.IPPROTO_TCP, 0x106, 1),
                  (b"\x01", b"\x00", b"\x04", b"", b"\x01\x00", b"\\x01")),
                 ("linux", (socket.SOL_SOCKET, socket.SO_ACCEPTCONN), (1, 0, 2))):
-            with mock.patch.object(sys, "platform", platform):
+            self.context["env"] = support.minimal_env(self.state)
+            with mock.patch.object(sys, "platform", platform), \
+                 mock.patch.object(os, "getuid", return_value=501):
+                self.configure_inheritance_environment()
                 program = self.inheritance_program()
             code = compile(program, "<fixed-inheritance-fixture>", "exec")
             cases = [(str(self.state), self.context["env"], state, None if index == 0 else 73)
@@ -698,6 +729,20 @@ class StartupChildTests(unittest.TestCase):
                           (str(self.state), {**self.context["env"], "SECRET": SECRET}, states[0], 140),
                           (str(self.state), {**self.context["env"], "LC_CTYPE": "UTF-8"}, states[0], 98),
                           (str(self.state), {}, states[0], 152)])
+            encoding_key = "__CF_USER_TEXT_ENCODING"
+            for value in ("malformed", "0x1F6:0:0", "0x1F5:0:1", "0x1F5:0:0\n", "", SECRET):
+                cases.append((str(self.state), {**self.context["env"], encoding_key: value}, states[0],
+                              115 if platform == "darwin" else 113))
+            if platform == "darwin":
+                cases.append((str(self.state),
+                    {key: value for key, value in self.context["env"].items() if key != encoding_key},
+                    states[0], 114))
+            else:
+                # Even the explicit Darwin input is an unexpected Linux addition.
+                cases.append((str(self.state), {**self.context["env"], encoding_key: "0x1F5:0:0"},
+                              states[0], 113))
+            cases.append((str(self.state), {**self.context["env"], encoding_key + "_TYPO": "0x1F5:0:0"},
+                          states[0], 140))
             for cwd, env, state, exit_code in cases:
                 with self.subTest(platform=platform, exit_code=exit_code):
                     fake_os = mock.Mock(environ=env)

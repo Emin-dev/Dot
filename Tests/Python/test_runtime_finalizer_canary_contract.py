@@ -1402,5 +1402,241 @@ class FixedToolIdentityDiagnosticContractTests(unittest.TestCase):
                 self.test_diagnostic_does_not_override_original_toolset_rejection()
 
 
+class FixedCodesignSelfObservationContractTests(unittest.TestCase):
+    """Portable fault injection only; no native signature/containment acceptance."""
+
+    fixture = FixedToolIdentityDiagnosticContractTests.fixture
+    observe = FixedToolIdentityDiagnosticContractTests.observe
+    result = FixedToolIdentityDiagnosticContractTests.result
+
+    def self_result(self, argv):
+        target = argv[0]
+        if argv[1] == '-d':
+            return {**successful(b'designated => identifier "portable.mock.only" and anchor apple\n'),
+                    'stderr': ('Executable=' + target + '\nIdentifier=portable.mock.only\n'
+                               'Authority=portable mock, never native evidence\n').encode(), 'argv': argv}
+        return {**successful(), 'argv': argv, 'stderr': ''.join(target + ': ' + line + '\n' for line in (
+            'valid on disk', 'satisfies its Designated Requirement', 'explicit requirement satisfied')).encode()}
+
+    def observe_self(self, fixture, effect=None):
+        target = fixture[1]['codesign']
+        def command(argv, deadline, kwargs):
+            if argv[0] != target:
+                return {**successful(), 'argv': argv, 'returncode': -6}
+            if effect is not None:
+                value = effect(argv, deadline, kwargs)
+                if value is not None: return value
+            return self.self_result(argv)
+        # Source owns the actual OS target. Only this portable fixture patches
+        # it to a disposable file, while every execution result is synthetic.
+        with patch.object(h, 'FIXED_CODESIGN_SELF_PATH', target):
+            return self.observe(fixture, command)
+
+    def observation(self, records):
+        return next(r for r in records if r['event'] == 'fixed_codesign_self_identity_observation')
+
+    def test_independent_success_keeps_all_seven_sandbox_failures_unchanged(self):
+        with self.fixture() as fixture:
+            records, runner = self.observe_self(fixture)
+            target = fixture[1]['codesign']
+            self.assertEqual(runner.call_count, 9)
+            commands = [r for r in records if r['event'] == 'command']
+            original, direct = commands[:7], commands[7:]
+            self.assertEqual([r['label'] for r in original],
+                             ['fixed_tool_' + role + '_display' for role in h.FIXED_TOOL_DIAGNOSTIC_PATHS])
+            for row in original:
+                self.assertEqual(row['result']['returncode'], -6)
+                self.assertEqual(row['result']['stdout']['bytes'], 0)
+                self.assertEqual(row['result']['stderr']['bytes'], 0)
+                self.assertIsNone(row['result']['reason'])
+            self.assertEqual([r['result']['argv'] for r in direct], [
+                [target, '-d', '--verbose=4', '--requirements', '-', target],
+                [target, '--verify', '--strict', '--verbose=4', '--test-requirement', '=anchor apple', target]])
+            for call in runner.call_args_list[7:]:
+                self.assertLessEqual(call.args[1], fixture[-1].budget.deadline - 83)
+                self.assertEqual(call.kwargs, {'pass_fds': (), 'env': h.m._NS_ENV, 'cap': h.OUTPUT_BYTES})
+            original_results = [r for r in records if r['event'] == 'fixed_tool_identity_diagnostic']
+            failures = [r for r in original_results if r['status'] == 'fail']
+            self.assertEqual([r['role'] for r in failures], [*h.FIXED_TOOL_DIAGNOSTIC_PATHS, 'dispatch'])
+            self.assertEqual(failures[-1]['error'], 'discovery system signature not verified')
+            observations = [r for r in original_results if r['status'] == 'observed']
+            self.assertEqual(len(observations), 7)
+            self.assertTrue(all(r['apple_anchor_verified'] is False for r in observations))
+            self.assertLess(max(records.index(r) for r in original_results), records.index(direct[0]))
+            pair = [r for r in records if r['event'] == 'fixed_codesign_self_identity_snapshot']
+            self.assertEqual([r['phase'] for r in pair], ['before', 'after'])
+            self.assertEqual(pair[0]['snapshot'], pair[1]['snapshot'])
+            observation = self.observation(records)
+            self.assertEqual(observation['status'], 'observed')
+            self.assertEqual(observation['displayed_identifier'], 'portable.mock.only')
+            self.assertTrue(observation['sandbox_probe_result_unchanged'])
+            for field in ('production_acceptance', 'owner_runtime_acceptance', 'authorizes_inspection',
+                          'authorizes_delegated_execution', 'fixed_tool_policy_applied',
+                          'codesign_identity_policy_applied'):
+                self.assertIs(observation[field], False)
+
+    def test_nonzero_deadline_output_and_cleanup_failures_remain_failures(self):
+        mutations = [('returncode', -6), ('returncode', 1), ('returncode', False), ('returncode', None),
+                     ('reason', 'deadline'), ('reason', 'output_limit'), ('reason', 'incomplete_cleanup'),
+                     ('cleanup', {'complete': False, 'remaining_owned_processes': 1, 'open_output_pipes': 1})]
+        for suffix in ('-d', '--verify'):
+            for field, value in mutations:
+                with self.subTest(suffix=suffix, field=field, value=value), self.fixture() as fixture:
+                    def effect(argv, deadline, kwargs):
+                        result = self.self_result(argv)
+                        if argv[1] == suffix: result[field] = value
+                        return result
+                    records, runner = self.observe_self(fixture, effect)
+                    self.assertEqual(runner.call_count, 8 if suffix == '-d' else 9)
+                    self.assertEqual(self.observation(records)['status'], 'fail')
+                    raw = [r for r in records if r['event'] == 'command'][-1]['result']
+                    self.assertEqual(raw[field], value)
+                    self.assertFalse(any(r.get('apple_anchor_verified') is True for r in records))
+
+    def test_malformed_display_never_runs_anchor(self):
+        for field, value in (
+            ('stdout', b''), ('stdout', b'designated => x\nextra\n'),
+            ('stdout', b'designated => \x00\n'), ('stdout', b'designated => ' + b'x' * 4097 + b'\n'),
+            ('stderr', b''), ('stderr', b'Executable=/arbitrary/payload\nIdentifier=x\n'),
+            ('stderr', b'Executable=TARGET\nIdentifier=x\nIdentifier=y\n'),
+            ('stderr', b'Executable=TARGET\nIdentifier=bad identifier\n'),
+            ('stderr', b'Executable=TARGET\nIdentifier=x'),
+            ('stderr', b'Executable=TARGET\nIdentifier=x\n\x00\n'),
+            ('stderr', b'Executable=TARGET\nIdentifier=x\n\xff\n'),
+            ('stderr', b'Executable=TARGET\nIdentifier=x\nExecutable=TARGET\n')):
+            with self.subTest(field=field, value=value[:100]), self.fixture() as fixture:
+                def effect(argv, deadline, kwargs):
+                    result = self.self_result(argv)
+                    result[field] = value.replace(b'TARGET', argv[0].encode())
+                    return result
+                records, runner = self.observe_self(fixture, effect)
+                self.assertEqual(runner.call_count, 8)
+                self.assertEqual(self.observation(records)['status'], 'fail')
+
+    def test_malformed_anchor_output_never_becomes_observed(self):
+        for kind in ('empty', 'extra', 'wrong_target', 'stdout', 'missing_explicit', 'no_newline'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                def effect(argv, deadline, kwargs):
+                    result = self.self_result(argv)
+                    if argv[1] == '--verify':
+                        if kind == 'empty': result['stderr'] = b''
+                        elif kind == 'extra': result['stderr'] += b'extra\n'
+                        elif kind == 'wrong_target': result['stderr'] = result['stderr'].replace(argv[0].encode(), b'/payload')
+                        elif kind == 'stdout': result['stdout'] = b'extra\n'
+                        elif kind == 'missing_explicit': result['stderr'] = b'\n'.join(result['stderr'].split(b'\n')[:2]) + b'\n'
+                        else: result['stderr'] = result['stderr'][:-1]
+                    return result
+                records, runner = self.observe_self(fixture, effect)
+                self.assertEqual(runner.call_count, 9)
+                self.assertEqual(self.observation(records)['status'], 'fail')
+
+    def test_self_path_must_match_held_source_fixed_target(self):
+        with self.fixture() as fixture:
+            def sandbox_failure(argv, deadline, kwargs):
+                return {**successful(), 'argv': argv, 'returncode': -6}
+            records, runner = self.observe(fixture, sandbox_failure)
+            self.assertEqual(runner.call_count, 7)
+            self.assertEqual(self.observation(records)['error'], 'fixed codesign self target unavailable')
+
+    def test_self_identity_and_mount_drift_stop_before_anchor(self):
+        for kind in ('bytes', 'replace', 'ancestor', 'mount'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                def effect(argv, deadline, kwargs):
+                    path = Path(argv[0])
+                    if kind == 'bytes': path.write_bytes(b'mutated')
+                    elif kind == 'replace':
+                        replacement = path.with_name('replacement'); replacement.write_bytes(path.read_bytes())
+                        replacement.chmod(0o755); replacement.replace(path)
+                    elif kind == 'ancestor':
+                        path.parent.rename(fixture[0] / 'old-system'); path.parent.mkdir()
+                    else: h.os.fstatvfs.return_value = SimpleNamespace(f_flag=0)
+                records, runner = self.observe_self(fixture, effect)
+                self.assertEqual(runner.call_count, 8)
+                self.assertEqual(self.observation(records)['status'], 'fail')
+
+    def test_self_full_digest_catches_hidden_metadata_change(self):
+        with self.fixture() as fixture:
+            def effect(argv, deadline, kwargs):
+                if argv[1] == '-d':
+                    path = Path(argv[0]); path.write_bytes(b'x' * path.stat().st_size)
+            with patch.object(h.m, 'same_node'):
+                records, runner = self.observe_self(fixture, effect)
+            self.assertEqual(runner.call_count, 9)
+            self.assertEqual(self.observation(records)['error'], 'codesign self bytes/metadata/mounts changed')
+            pair = [r for r in records if r['event'] == 'fixed_codesign_self_identity_snapshot']
+            self.assertNotEqual(pair[0]['snapshot']['sha256'], pair[1]['snapshot']['sha256'])
+
+    def test_self_shares_aggregate_budget_without_any_extra_read(self):
+        with self.fixture() as fixture:
+            original_bytes = sum(Path(p).stat().st_size for p in fixture[1].values()) * 2
+            with patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES', original_bytes):
+                records, runner = self.observe_self(fixture)
+            self.assertEqual(runner.call_count, 7)
+            self.assertEqual(self.observation(records)['error'], 'fixed tool diagnostic aggregate byte bound before read')
+
+    def test_full_original_command_budget_skips_independent_observation(self):
+        with self.fixture() as fixture:
+            with patch.object(h, 'FIXED_CODESIGN_SELF_PATH', fixture[1]['codesign']):
+                records, runner = self.observe(fixture)
+            self.assertEqual(runner.call_count, 22)
+            self.assertEqual(self.observation(records)['status'], 'skipped_for_budget')
+
+    def test_self_timeout_preserves_absolute_gate_cleanup_and_return_reserves(self):
+        with self.fixture() as fixture:
+            context = fixture[-1]; now = [100.0]; context.budget.deadline = 195
+            def effect(argv, deadline, kwargs):
+                self.assertLessEqual(deadline, context.budget.deadline - 83)
+                now[0] = 114.0  # The shared absolute deadline (112) plus owned cleanup.
+                return {**self.self_result(argv), 'reason': 'deadline'}
+            with patch.object(h.time, 'monotonic', side_effect=lambda: now[0]):
+                records, runner = self.observe_self(fixture, effect)
+                context.budget.check()
+            self.assertEqual(runner.call_count, 8)
+            self.assertEqual(self.observation(records)['status'], 'fail')
+            self.assertLessEqual(now[0], context.budget.deadline - 81)
+
+    def test_global_deadline_propagates_from_independent_observation(self):
+        with self.fixture() as fixture:
+            def effect(argv, deadline, kwargs):
+                raise h.CanaryDeadline('whole deadline')
+            with self.assertRaises(h.CanaryDeadline): self.observe_self(fixture, effect)
+
+    def test_success_does_not_override_original_descriptor_gate_rejection(self):
+        with self.fixture() as fixture:
+            base, paths, _, _, context = fixture
+            (base / 'payload').mkdir(); (base / 'payload/canary').write_bytes(b'portable payload')
+            def command(argv, deadline, **kwargs):
+                if argv[0] == paths['codesign']: return self.self_result(argv)
+                return {**successful(), 'argv': argv, 'returncode': -6}
+            with patch.object(h, 'FIXED_CODESIGN_SELF_PATH', paths['codesign']), \
+                    patch.object(h, 'descriptor_identity_diagnostic'), \
+                    patch.object(h.m, '_native_run_bounded', side_effect=command), \
+                    patch.object(h.m, '_NativeToolset', side_effect=h.m.Rejected('single-link regular file required')) as tools, \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                receipt = h.Receipt()
+                self.assertFalse(receipt.gate('descriptor_inspection', lambda: h.static_inspection(context, receipt, base)))
+            tools.assert_called_once()
+            records = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(self.observation(records)['status'], 'observed')
+            self.assertEqual(records[-1]['error'], 'single-link regular file required')
+            self.assertEqual(receipt.gates, {'descriptor_inspection': 'fail'})
+
+    def test_source_has_no_caller_target_or_verified_set_write(self):
+        self.assertEqual(h.FIXED_CODESIGN_SELF_PATH, '/usr/bin/codesign')
+        source = PATH.read_text()
+        function = next(n for n in ast.walk(ast.parse(source)) if isinstance(n, ast.FunctionDef)
+                        and n.name == 'codesign_self_observation')
+        self.assertEqual(function.args.args, [])
+        body = ast.get_source_segment(source, function)
+        for forbidden in ('verified.add', 'verified.update', 'receipt.gates', 'm._ns_profile',
+                          'developer', '--sign', '--force', 'lifecycle-', 'os.environ', 'return True'):
+            # The docstring explains the excluded developer scope.
+            executable_body = body[body.index('nonlocal command_count'):]
+            self.assertNotIn(forbidden, executable_body)
+        self.assertIn('[FIXED_CODESIGN_SELF_PATH, *args, FIXED_CODESIGN_SELF_PATH]', body)
+        self.assertIn('command_count + 2 > 22', body)
+        self.assertIn('deadline=deadline', body)
+
+
 if __name__ == '__main__':
     unittest.main()

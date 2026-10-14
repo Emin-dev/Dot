@@ -76,6 +76,7 @@ FIXED_TOOL_DIAGNOSTIC_FILE_BYTES = 64 * 1024 * 1024
 FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES = 256 * 1024 * 1024
 FIXED_TOOL_DIAGNOSTIC_APPLICATIONS = '/Applications'
 FIXED_TOOL_DIAGNOSTIC_CLT = '/Library/Developer/CommandLineTools'
+FIXED_CODESIGN_SELF_PATH = '/usr/bin/codesign'
 FIXED_TOOL_DIAGNOSTIC_PATHS = {
     'codesign': '/usr/bin/codesign', 'sandbox': '/usr/bin/sandbox-exec',
     'xcrun': '/usr/bin/xcrun', 'xcode_select': '/usr/bin/xcode-select',
@@ -711,7 +712,7 @@ def fixed_tool_identity_diagnostic(context, receipt):
             return 'usr/bin'
         return None
 
-    def snapshot(item, phase):
+    def snapshot(item, phase, event='fixed_tool_identity_snapshot'):
         nonlocal read_bytes
         bounded()
         root, fd, path = item['root'], item['fd'], item['path']
@@ -760,7 +761,7 @@ def fixed_tool_identity_diagnostic(context, receipt):
                   'nlink': current.st_nlink, 'bytes': size, 'sha256': hasher.hexdigest(),
                   'ancestors': ancestors, 'mounts': mounts,
                   'mount_readonly_bit': os.ST_RDONLY}
-        receipt.emit('fixed_tool_identity_snapshot', role=item['role'], phase=phase,
+        receipt.emit(event, role=item['role'], phase=phase,
                      configured=item['configured'], resolved=str(path), snapshot=result,
                      descriptor_path=toolchain_fd_path(fd), **flags)
         return result
@@ -850,6 +851,83 @@ def fixed_tool_identity_diagnostic(context, receipt):
             command('fixed_tool_' + item['role'] + '_' + suffix, 'codesign', args)
         verified.add(item['role'])
 
+    def codesign_self_observation():
+        """Separate fixed OS metadata observation, never a sandbox retry.
+
+        Reuse only the already-used direct compiler-signature route and the
+        held system-file snapshot primitive. Nothing here enters verified or
+        selects a developer/payload target. The original sandbox receipts are
+        already final. No result repairs them or changes production admission.
+        """
+        nonlocal command_count
+        event = 'fixed_codesign_self_identity_observation'
+        fields = {**flags, 'configured': FIXED_CODESIGN_SELF_PATH,
+                  'execution_context': 'direct_fixed_system_metadata_only',
+                  'sandbox_probe_result_unchanged': True,
+                  'codesign_identity_policy_applied': False}
+        try:
+            bounded()
+            # Share all original diagnostic bounds; never reserve extra time,
+            # commands, bytes or output at the expense of the original gates.
+            if command_count + 2 > 22 or deadline - time.monotonic() < FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS:
+                receipt.emit(event, status='skipped_for_budget', **fields)
+                return
+            item = retained.get('codesign')
+            check(item is not None and item['system'] is True
+                  and str(item['path']) == item['configured'] == FIXED_CODESIGN_SELF_PATH
+                  and FIXED_TOOL_DIAGNOSTIC_PATHS['codesign'] == FIXED_CODESIGN_SELF_PATH,
+                  'fixed codesign self target unavailable')
+            before = snapshot(item, 'before', event='fixed_codesign_self_identity_snapshot')
+            check(before == item['before'], 'codesign self identity changed before observation')
+            command_context = SimpleNamespace(budget=SimpleNamespace(check=bounded, deadline=deadline))
+            try:
+                for suffix, args in (
+                    ('display', ['-d', '--verbose=4', '--requirements', '-']),
+                    ('apple_anchor', ['--verify', '--strict', '--verbose=4',
+                                      '--test-requirement', '=anchor apple'])):
+                    bounded(); recheck(item)
+                    command_count += 1
+                    check(command_count <= 22, 'fixed tool diagnostic command count bound')
+                    try:
+                        result = run(command_context, receipt, 'fixed_codesign_self_' + suffix,
+                                     [FIXED_CODESIGN_SELF_PATH, *args, FIXED_CODESIGN_SELF_PATH],
+                                     seconds=min(FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS,
+                                                 deadline - time.monotonic()))
+                    finally:
+                        if not isinstance(sys.exception(), CanaryDeadline): recheck(item)
+                    if suffix == 'display':
+                        # Parse only the displayed identity, not an identity
+                        # policy. Retain full bounded raw output in the command.
+                        check(re.fullmatch(rb'designated => [ -~]{1,4096}\n', result['stdout']) is not None,
+                              'invalid codesign self designated requirement output')
+                        text = result['stderr'].decode('utf-8', 'strict')
+                        check(text.endswith('\n') and all(c == '\n' or 32 <= ord(c) < 127 for c in text),
+                              'invalid codesign self display text')
+                        lines = text.splitlines()
+                        check(lines and lines[0] == 'Executable=' + FIXED_CODESIGN_SELF_PATH
+                              and sum(line.startswith('Executable=') for line in lines) == 1,
+                              'invalid codesign self display target')
+                        identifiers = [line[len('Identifier='):] for line in lines if line.startswith('Identifier=')]
+                        check(len(identifiers) == 1
+                              and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._-]{0,254}', identifiers[0]) is not None,
+                              'invalid codesign self displayed identifier')
+                    else:
+                        expected = ''.join(FIXED_CODESIGN_SELF_PATH + ': ' + line + '\n' for line in (
+                            'valid on disk', 'satisfies its Designated Requirement', 'explicit requirement satisfied'))
+                        check(result['stdout'] == b'' and result['stderr'] == expected.encode('utf-8'),
+                              'invalid codesign self Apple anchor output')
+            finally:
+                if not isinstance(sys.exception(), CanaryDeadline):
+                    after = snapshot(item, 'after', event='fixed_codesign_self_identity_snapshot')
+                    check(after == before, 'codesign self bytes/metadata/mounts changed')
+            receipt.emit(event, status='observed', displayed_identifier=identifiers[0],
+                         apple_anchor_verified=True, **fields)
+        except Exception as error:
+            receipt.emit(event, status='fail', **fields,
+                         error_type=type(error).__name__, errno=getattr(error, 'errno', None),
+                         code=getattr(error, 'code', None), error=str(error)[:512])
+        # Deliberately no capability return, verified-set write, or gate update.
+
     try:
         context.budget.check()
         if deadline - started < FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS:
@@ -931,6 +1009,7 @@ def fixed_tool_identity_diagnostic(context, receipt):
                                  apple_anchor_verified=role in verified, **flags)
                 except Exception as error:
                     failed(role, error)
+            codesign_self_observation()
     except Exception as error:
         failed('diagnostic', error)
     # No capability return and no production gate mutation, even on success.
