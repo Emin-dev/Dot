@@ -380,3 +380,88 @@ final class SearXNGSearchProviderTests: XCTestCase {
         }
     }
 }
+
+private actor SearXNGAdmissionFixture {
+    private(set) var calls = 0
+    private var released = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func enter() async {
+        calls += 1
+        if released { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func release() {
+        released = true
+        let pending = waiters; waiters.removeAll(); pending.forEach { $0.resume() }
+    }
+}
+
+extension SearXNGSearchProviderTests {
+    func testAdmissionHookHoldsExistingGateBeforeAnyHTTPDispatch() async throws {
+        let hook = SearXNGAdmissionFixture()
+        let lease = SearchGenerationLease()
+        let provider = try SearXNGSearchProvider(endpoint: endpoint(), gate: SearXNGRequestGate(minimumInterval: .zero),
+            isCurrentGeneration: { _ in true }, onCancellation: { _ in }, cancellationLease: lease,
+            beforeDispatch: { await hook.enter() }, configuration: configuration())
+        let query = "admission-before-dispatch", before = SearXNGFixture.requests("admission-before-dispatch").count
+        let first = Task { try await provider.searchResponse(query: query, limit: 1) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while await hook.calls == 0, ContinuousClock.now < deadline { await Task.yield() }
+        let calls = await hook.calls; XCTAssertEqual(calls, 1)
+        XCTAssertEqual(SearXNGFixture.requests(query).count, before)
+        do { _ = try await provider.searchResponse(query: "admission-concurrent", limit: 1); XCTFail("Hook lost gate reservation") }
+        catch { XCTAssertEqual(error as? SearXNGSearchError, .busy) }
+        await hook.release()
+        _ = try await first.value
+        XCTAssertEqual(SearXNGFixture.requests(query).count, before + 1)
+        let finalCalls = await hook.calls; XCTAssertEqual(finalCalls, 1)
+    }
+
+    func testLeaseRevocationDuringAdmissionHookDispatchesNothing() async throws {
+        let hook = SearXNGAdmissionFixture(), lease = SearchGenerationLease()
+        let provider = try SearXNGSearchProvider(endpoint: endpoint(), gate: SearXNGRequestGate(minimumInterval: .zero),
+            isCurrentGeneration: { _ in true }, onCancellation: { _ in }, cancellationLease: lease,
+            beforeDispatch: { await hook.enter() }, configuration: configuration())
+        let query = "admission-revoked", before = SearXNGFixture.requests("admission-revoked").count
+        let search = Task { try await provider.searchResponse(query: query, limit: 1) }
+        let deadline = ContinuousClock.now.advanced(by: .seconds(2))
+        while await hook.calls == 0, ContinuousClock.now < deadline { await Task.yield() }
+        lease.invalidate()
+        await hook.release()
+        do { _ = try await search.value; XCTFail("Revoked admission dispatched") }
+        catch { XCTAssertEqual(error as? SearXNGSearchError, .unavailable) }
+        XCTAssertEqual(SearXNGFixture.requests(query).count, before)
+    }
+
+    func testFailedAdmissionHookAndCooldownDoNotDispatchOrRearm() async throws {
+        let hook = SearXNGAdmissionFixture()
+        await hook.release()
+        let gate = SearXNGRequestGate(minimumInterval: .zero, maximumWait: .zero)
+        let provider = try SearXNGSearchProvider(endpoint: endpoint(), gate: gate,
+            isCurrentGeneration: { _ in true }, onCancellation: { _ in },
+            beforeDispatch: { await hook.enter(); throw SearXNGSearchError.unavailable }, configuration: configuration())
+        let query = "admission-failed", before = SearXNGFixture.requests("admission-failed").count
+        do { _ = try await provider.search(query: query, limit: 1); XCTFail("Failed admission dispatched") }
+        catch { XCTAssertEqual(error as? SearXNGSearchError, .unavailable) }
+        let calls = await hook.calls; XCTAssertEqual(calls, 1)
+        _ = await gate.imposeCooldown(retryAfter: "9999999999999999999999999999")
+        do { _ = try await provider.search(query: query, limit: 1); XCTFail("Cooldown invoked hook") }
+        catch { XCTAssertEqual(error as? SearXNGSearchError, .cooldown(until: nil)) }
+        let finalCalls = await hook.calls; XCTAssertEqual(finalCalls, 1)
+        XCTAssertEqual(SearXNGFixture.requests(query).count, before)
+    }
+
+    func testGenerationLeaseCancelsInFlightSessionWithoutCallerCancellation() async throws {
+        let lease = SearchGenerationLease()
+        let provider = try SearXNGSearchProvider(endpoint: endpoint(), gate: SearXNGRequestGate(minimumInterval: .zero),
+            isCurrentGeneration: { _ in lease.isValid }, onCancellation: { _ in }, cancellationLease: lease,
+            configuration: configuration())
+        let query = "delay-lease-revocation", before = SearXNGFixture.requests("delay-lease-revocation").count
+        let search = Task { try await provider.search(query: query, limit: 1) }
+        await waitForRequest(query, after: before)
+        lease.invalidate()
+        do { _ = try await search.value; XCTFail("Revoked lease returned a response") }
+        catch { XCTAssertTrue(error is CancellationError || error as? SearXNGSearchError == .unavailable) }
+        XCTAssertFalse(search.isCancelled)
+    }
+}

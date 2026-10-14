@@ -16,6 +16,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "Tests/Fixtures"))
 import search_proxy_fixture_support as fixture
+import search_proxy_transport_fixture as transport
 
 CREDENTIAL = b"1" * 64
 
@@ -255,11 +256,40 @@ class SourceContractTests(unittest.TestCase):
         self.assertEqual(result.returncode, 77)
         self.assertIn(b"no native execution performed", result.stderr)
 
+    def test_native_helper_identity_and_proof_levels_stay_separate(self):
+        source = (ROOT / "Tests/Fixtures/search_proxy_transport_fixture.py").read_text()
+        self.assertNotIn('"http://dot:"', source)
+        self.assertIn('proxy_auth=("dot", capability)', source)
+        self.assertIn('curl_options={CurlOpt.PROXYAUTH: 1}', source)
+        self.assertIn('digest(helper_path) != args.helper_sha256', source)
+        self.assertIn('"Resources/Search/dot_search.py"', source)
+        self.assertIn('processor._search_basic(query.query, params)', source)
+        self.assertIn('error.__cause__ is not None or error.__context__ is not None', source)
+        self.assertIn('"independent_broker_revocation_proven": False', source)
+        self.assertIn('"helper-origin-auth-challenge"', source)
+        self.assertIn('"helper-timeout"', source)
+
+    def test_origin_inspector_rejects_both_auth_headers_and_capability_encodings(self):
+        clean = b"POST /html/ HTTP/1.1\r\nHost: html.duckduckgo.com\r\nContent-Length: 3\r\n\r\nq=x"
+        transport.assert_origin_request(clean, CREDENTIAL)
+        for field in (b"Authorization: Basic harmless", b"aUtHoRiZaTiOn: anything",
+                b"Proxy-Authorization: Basic harmless", b"X-Credential: " + CREDENTIAL,
+                b"X-Credential: " + base64.b64encode(b"dot:" + CREDENTIAL)):
+            with self.subTest(field=field.split(b":")[0]), self.assertRaises(transport.CanaryFailure):
+                transport.assert_origin_request(clean.replace(b"Content-Length: 3", field), CREDENTIAL)
+        for change in (clean.replace(b"POST", b"GET"), clean.replace(b"/html/", b"/other/"),
+                       clean.replace(b"html.duckduckgo.com", b"other.invalid"), clean + CREDENTIAL):
+            with self.assertRaises(transport.CanaryFailure):
+                transport.assert_origin_request(change, CREDENTIAL)
+
     def test_transport_pins_are_exact_and_complete(self):
         pins = json.loads((ROOT / "Tests/Fixtures/search_proxy_pinned_hashes.json").read_text())
         self.assertEqual(pins["searxng_revision"], "22c64b8d394b680c7ea96be25f36dad14126420a")
         self.assertEqual(pins["curl_cffi_version"], "0.16.3")
-        self.assertEqual(len(pins["files"]), 8)
+        self.assertEqual(len(pins["files"]), 17)
+        self.assertTrue({"searx/search/processors/online.py", "searx/search/processors/abstract.py",
+            "searx/search/processors/__init__.py", "curl_cffi/const.py", "curl_cffi/requests/models.py",
+            "curl_cffi/requests/exceptions.py", "searx/engines/duckduckgo.py"}.issubset(pins["files"]))
         for name, value in pins["files"].items():
             self.assertTrue(name.startswith(("searx/", "curl_cffi/")))
             self.assertEqual(len(value), 64)

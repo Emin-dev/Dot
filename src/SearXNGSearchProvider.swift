@@ -141,10 +141,13 @@ final class SearXNGSearchProvider: WebSearchProvider, Sendable {
     init(endpoint: SearXNGOwnedEndpoint, gate: SearXNGRequestGate,
          isCurrentGeneration: @escaping @Sendable (UUID) async -> Bool,
          onCancellation: @escaping @Sendable (UUID) async -> Void,
+         cancellationLease: SearchGenerationLease? = nil,
+         beforeDispatch: @escaping @Sendable () async throws -> Void = {},
          engineIDs: [String] = ["duckduckgo"], language: String = "auto", safeSearch: Int = 1,
          configuration: URLSessionConfiguration = .ephemeral) throws {
         client = try SearXNGSearchClient(endpoint: endpoint, gate: gate,
             isCurrentGeneration: isCurrentGeneration, onCancellation: onCancellation,
+            cancellationLease: cancellationLease, beforeDispatch: beforeDispatch,
             engineIDs: engineIDs, language: language, safeSearch: safeSearch, configuration: configuration)
     }
 
@@ -166,10 +169,14 @@ private actor SearXNGSearchClient {
     private let language: String
     private let safeSearch: Int
     private let configuration: URLSessionConfiguration
+    private let cancellationLease: SearchGenerationLease?
+    private let beforeDispatch: @Sendable () async throws -> Void
 
     init(endpoint: SearXNGOwnedEndpoint, gate: SearXNGRequestGate,
          isCurrentGeneration: @escaping @Sendable (UUID) async -> Bool,
          onCancellation: @escaping @Sendable (UUID) async -> Void,
+         cancellationLease: SearchGenerationLease?,
+         beforeDispatch: @escaping @Sendable () async throws -> Void,
          engineIDs: [String], language: String, safeSearch: Int,
          configuration: URLSessionConfiguration) throws {
         // The helper must independently keep_only this exact reviewed selection.
@@ -180,6 +187,7 @@ private actor SearXNGSearchClient {
               language.utf8.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || $0 == 45 }) else {
             throw SearXNGSearchError.invalidConfiguration
         }
+        self.cancellationLease = cancellationLease; self.beforeDispatch = beforeDispatch
         self.endpoint = endpoint; self.gate = gate
         self.isCurrentGeneration = isCurrentGeneration; self.onCancellation = onCancellation
         self.engineIDs = engineIDs; self.language = language; self.safeSearch = safeSearch
@@ -219,8 +227,17 @@ private actor SearXNGSearchClient {
         ])
         let policy = SearXNGSearchNetworkPolicy()
         let session = URLSession(configuration: configuration, delegate: policy, delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
+        let cancellationID = cancellationLease?.register { session.invalidateAndCancel() }
+        defer {
+            if let cancellationID { cancellationLease?.unregister(cancellationID) }
+            session.invalidateAndCancel()
+        }
         do {
+            // Inside the one existing gate, after pacing and immediately before
+            // dispatch. Owned generations arm their immutable broker budget here.
+            try await beforeDispatch()
+            try Task.checkCancellation()
+            guard cancellationLease?.isValid != false else { throw SearXNGSearchError.unavailable }
             let (bytes, rawResponse) = try await session.bytes(for: request)
             try Task.checkCancellation()
             guard let response = rawResponse as? HTTPURLResponse, response.url == endpoint.url else {
@@ -245,6 +262,10 @@ private actor SearXNGSearchClient {
             try Task.checkCancellation()
             guard await isCurrentGeneration(endpoint.generation) else { throw SearXNGSearchError.unavailable }
             let result = try Self.normalize(data, limit: limit, selectedEngines: engineIDs)
+            try Task.checkCancellation()
+            guard cancellationLease?.isValid != false, await isCurrentGeneration(endpoint.generation) else {
+                throw SearXNGSearchError.unavailable
+            }
             try Task.checkCancellation()
             return result
         } catch {

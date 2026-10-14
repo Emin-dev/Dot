@@ -7,7 +7,8 @@ payload. It never downloads packages, discovers a daemon, or changes Splash.
 """
 from __future__ import annotations
 
-import argparse
+import base64
+from contextlib import contextmanager
 import email.utils
 import errno
 import hashlib
@@ -30,6 +31,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from urllib.parse import parse_qsl, urlencode
 
 PROTOCOL = 1
@@ -42,6 +44,7 @@ MAX_BODY = 16384
 MAX_RESPONSE = 1048576
 MAX_CONTROL = 2048
 STARTUP_SECONDS = 30
+PAYLOAD_VERIFY_SECONDS = 10
 
 
 class SearchFailure(Exception):
@@ -59,7 +62,77 @@ class NullWriter:
 def strict_json(data):
     def reject_constant(_):
         raise ValueError("invalid_json")
-    return json.loads(data, parse_constant=reject_constant)
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("invalid_json")
+            result[key] = value
+        return result
+    return json.loads(data, parse_constant=reject_constant, object_pairs_hook=unique_object)
+
+
+
+def parse_egress_port(value):
+    """Match the native launcher's sole nonsecret canonical decimal scalar."""
+    if type(value) is not str or not re.fullmatch(r"[1-9][0-9]{0,4}", value) or int(value) > 65535:
+        raise SearchFailure("invalid_control")
+    return int(value)
+
+
+def decode_proxy_authorization(value):
+    """Decode only the broker's exact Basic representation; never echo input."""
+    if type(value) is not str or len(value) != 98 or not value.startswith("Basic ") or not value.isascii():
+        raise SearchFailure("invalid_control")
+    decoded = None
+    try:
+        decoded = base64.b64decode(value[6:], validate=True)
+    except ValueError:
+        pass
+    # Outside the decoder's handler: malformed credentials cannot survive in a
+    # chained exception. Canonical re-encoding rejects alternate padding bits.
+    if (decoded is None or not re.fullmatch(rb"dot:[0-9a-f]{64}", decoded)
+            or "Basic " + base64.b64encode(decoded).decode("ascii") != value):
+        raise SearchFailure("invalid_control")
+    return decoded[4:].decode("ascii")
+
+
+def validate_private_egress(frame):
+    if (type(frame["generation"]) is not str
+            or not re.fullmatch(r"[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}", frame["generation"])
+            or type(frame["egress_port"]) is not int or not 1 <= frame["egress_port"] <= 65535):
+        raise SearchFailure("invalid_control")
+    return decode_proxy_authorization(frame["proxy_authorization"])
+
+
+def validate_start_frame(frame, egress_port):
+    if (type(frame) is not dict
+            or set(frame) != {"protocol", "command", "generation", "egress_port", "proxy_authorization"}
+            or type(frame["protocol"]) is not int or frame["protocol"] != PROTOCOL
+            or frame["command"] != "start" or type(egress_port) is not int
+            or not 1 <= egress_port <= 65535 or frame["egress_port"] != egress_port):
+        raise SearchFailure("invalid_control")
+    validate_private_egress(frame)
+
+
+def validate_worker_bootstrap(frame):
+    if (type(frame) is not dict
+            or set(frame) != {"protocol", "port", "capability", "generation", "egress_port", "proxy_authorization"}
+            or type(frame["protocol"]) is not int or frame["protocol"] != PROTOCOL
+            or type(frame["port"]) is not int or not 1 <= frame["port"] <= 65535
+            or type(frame["capability"]) is not str or not re.fullmatch(r"[0-9a-f]{64}", frame["capability"])
+            or frame["port"] == frame["egress_port"]):
+        raise SearchFailure("invalid_control")
+    capability = validate_private_egress(frame)
+    if hmac.compare_digest(frame["capability"], capability):
+        raise SearchFailure("invalid_control")
+    return capability
+
+
+def valid_worker_ready(frame, generation):
+    return (type(frame) is dict and set(frame) == {"protocol", "event", "generation"}
+            and type(frame["protocol"]) is int and frame["protocol"] == PROTOCOL
+            and frame["event"] == "serving" and frame["generation"] == generation)
 
 
 def response(start_response, status, code, extra_headers=()):
@@ -338,9 +411,11 @@ def remove_owned_state(state, identity):
         pass
 
 
-def settings_text(port, secret):
+def settings_text(port, secret, egress_port):
     # Values interpolated here are helper-generated only. Query input never enters YAML.
-    if not 1 <= port <= 65535 or not re.fullmatch(r"[0-9a-f]{64}", secret):
+    if (type(port) is not int or not 1 <= port <= 65535
+            or type(secret) is not str or not re.fullmatch(r"[0-9a-f]{64}", secret)
+            or type(egress_port) is not int or not 1 <= egress_port <= 65535):
         raise ValueError("invalid_settings")
     return f'''use_default_settings:
   engines:
@@ -368,6 +443,13 @@ valkey:
 outgoing:
   request_timeout: 8.0
   max_request_timeout: 12.0
+  extra_proxy_timeout: 0
+  pool_connections: 1
+  verify: true
+  max_redirects: 0
+  retries: 0
+  proxies:
+    all://: "http://127.0.0.1:{egress_port}"
 engines:
   - name: duckduckgo
     disabled: false
@@ -411,7 +493,7 @@ def read_control_line(descriptor, timeout, stop_requested=lambda: False):
     raise SearchFailure("startup_timeout")
 
 
-def supervise(state_root, worker_command, control_in=None, events_out=None):
+def supervise(state_root, worker_command, control_in=None, events_out=None, listener_fd=None, *, egress_port):
     """worker_command(listener_fd, bootstrap_fd, lifeline_fd) supports local fixtures."""
     control_in = sys.stdin.buffer if control_in is None else control_in
     events_out = sys.stdout.buffer if events_out is None else events_out
@@ -428,20 +510,30 @@ def supervise(state_root, worker_command, control_in=None, events_out=None):
     reason = "startup_failed"
     try:
         start = read_control_line(control_in.fileno(), STARTUP_SECONDS, lambda: stopped)
-        if (not isinstance(start, dict) or set(start) != {"protocol", "command", "generation"}
-                or type(start["protocol"]) is not int or start["protocol"] != PROTOCOL
-                or start["command"] != "start" or not isinstance(start["generation"], str)
-                or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", start["generation"])):
-            raise SearchFailure("invalid_control")
+        validate_start_frame(start, egress_port)
         generation = start["generation"]
         state, identity = private_state(state_root)
-        listener = owned_listener()
+        if listener_fd is None:
+            # Internal portable fixtures only. The production CLI requires the
+            # native bootstrap's continuously owned descriptor.
+            listener = owned_listener()
+        else:
+            listener = socket.socket(fileno=listener_fd)
+            address = listener.getsockname()
+            if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
+                    or len(address) != 2 or address[0] != "127.0.0.1"
+                    or not 1 <= address[1] <= 65535
+                    or not listener_is_listening(listener)
+                    or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+                    or listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT)):
+                raise SearchFailure("invalid_worker")
+            listener.set_inheritable(False)
         port = listener.getsockname()[1]
         capability = secrets.token_hex(32)
         settings = state / "config/settings.yml"
         descriptor = os.open(settings, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w") as output:
-            output.write(settings_text(port, secrets.token_hex(32)))
+            output.write(settings_text(port, secrets.token_hex(32), egress_port))
         bootstrap_r, bootstrap_w = os.pipe()
         lifeline_r, lifeline_w = os.pipe()
         child = subprocess.Popen(worker_command(listener.fileno(), bootstrap_r, lifeline_r),
@@ -455,11 +547,13 @@ def supervise(state_root, worker_command, control_in=None, events_out=None):
         lifeline_r = None
         with os.fdopen(bootstrap_w, "wb") as output:
             bootstrap_w = None
-            send_event(output, {"port": port, "capability": capability})
+            send_event(output, {"port": port, "capability": capability, "generation": generation,
+                                "egress_port": egress_port, "proxy_authorization": start["proxy_authorization"]})
+        del start
         def startup_cancelled():
             return stopped or bool(select.select([control_in.fileno()], [], [], 0)[0])
         worker_ready = read_control_line(child.stdout.fileno(), STARTUP_SECONDS, startup_cancelled)
-        if worker_ready != {"protocol": PROTOCOL, "event": "serving"}:
+        if not valid_worker_ready(worker_ready, generation):
             raise SearchFailure("invalid_worker")
         if child_exited(child):
             raise SearchFailure("server_exited")
@@ -531,14 +625,142 @@ def waitress_options(listener):
             "expose_tracebacks": False, "ident": "dot-search"}
 
 
+DDG_REQUEST_URL = "https://html.duckduckgo.com/html/"
+CURLAUTH_BASIC = 1  # pinned libcurl constant; never a caller-selectable auth mode
+
+
+def validate_private_ddg_request(params, engine):
+    """Accept only this pin's completed page-one DDG form, never transport options."""
+    expected_keys = {
+        "method", "headers", "data", "json", "content", "url", "cookies",
+        "allow_redirects", "max_redirects", "soft_max_redirects", "auth", "verify",
+        "raise_for_httperror", "query", "category", "pageno", "safesearch",
+        "time_range", "engine_data", "searxng_locale", "language",
+    }
+    if type(params) is not dict or set(params) != expected_keys:
+        raise SearchFailure("invalid_ddg_request")
+    if (params["method"] != "POST" or params["url"] != DDG_REQUEST_URL
+            or type(params["pageno"]) is not int or params["pageno"] != 1
+            or type(params["safesearch"]) is not int or params["safesearch"] != 1
+            or params["category"] != "general" or params["time_range"] is not None
+            or params["engine_data"] != {} or params["auth"] is not None
+            or params["verify"] is not None or params["json"] != {} or params["content"] != b""
+            or params["allow_redirects"] is not False or params["raise_for_httperror"] is not True
+            or type(params["max_redirects"]) is not int or params["max_redirects"] != 0
+            or type(params["soft_max_redirects"]) is not int or params["soft_max_redirects"] != 0):
+        raise SearchFailure("invalid_ddg_request")
+    query, locale = params["query"], params["searxng_locale"]
+    if (type(query) is not str or not query.strip() or len(query) >= 500
+            or len(query.encode("utf-8")) > 2048 or "\x00" in query
+            or re.search(r"(?:^|\s)!", query)
+            or type(locale) is not str or not re.fullmatch(r"[A-Za-z]{2,4}(?:[-_][A-Za-z0-9]{2,8})?", locale)
+            or params["language"] != locale):
+        raise SearchFailure("invalid_ddg_request")
+    region = engine.traits.get_region(locale, engine.traits.all_locale)
+    if (type(region) is not str or not re.fullmatch(r"[a-z]{2}-[a-z]{2,3}", region)
+            or type(params["data"]) is not dict
+            or params["data"] != {"q": engine.quote_ddg_bangs(query), "b": "", "kl": region}
+            or type(params["cookies"]) is not dict
+            or params["cookies"] != ({} if region == "wt-wt" else {"kl": region})):
+        raise SearchFailure("invalid_ddg_request")
+    headers = params["headers"]
+    fixed_headers = {
+        "User-Agent": engine._HTTP_User_Agent,
+        "Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin", "Sec-Fetch-User": "?1",
+        "Referer": DDG_REQUEST_URL, "Content-Type": "application/x-www-form-urlencoded",
+    }
+    if (type(headers) is not dict or set(headers) != {*fixed_headers, "Accept-Language"}
+            or any(headers[name] != value for name, value in fixed_headers.items())
+            or any(type(value) is not str or not 1 <= len(value) <= 512
+                   or any(ord(char) < 32 or ord(char) > 126 for char in value)
+                   for value in headers.values())
+            or not re.fullmatch(r"[A-Za-z0-9*_,.;= -]{1,256}", headers["Accept-Language"])):
+        raise SearchFailure("invalid_ddg_request")
+
+
+def install_private_ddg_processor(capability, proxy_port):
+    """Install once after strict private bootstrap and pinned initialization.
+
+    The caller owns the generation and its broker invalidation/drain. There is
+    no source selector, transport injection, TLS override or production fallback.
+    """
+    if (type(capability) is not str or not re.fullmatch(r"[0-9a-f]{64}", capability)
+            or type(proxy_port) is not int or not 1 <= proxy_port <= 65535):
+        raise SearchFailure("invalid_proxy_bootstrap")
+    import asyncio
+    import searx.network
+    from curl_cffi import CurlOpt
+    from curl_cffi.requests.exceptions import RequestException, Timeout
+    from searx.engines import engines
+    from searx.search.processors import PROCESSORS
+    from searx.search.processors.online import OnlineProcessor
+
+    if set(engines) != {"duckduckgo"} or set(PROCESSORS) != {"duckduckgo"}:
+        raise SearchFailure("engine_boundary_failed")
+    engine = engines["duckduckgo"]
+    existing = PROCESSORS["duckduckgo"]
+    if (type(existing) is not OnlineProcessor or existing.engine is not engine
+            or engine.name != "duckduckgo" or hasattr(engine, "init")
+            or hashlib.sha256(Path(engine.__file__).read_bytes()).hexdigest() != DDG_TRANSIENT_SHA256):
+        raise SearchFailure("engine_boundary_failed")
+    network = searx.network.get_network("duckduckgo")
+    if (network is None or network.verify is not True or network.enable_http is not False
+            or network.enable_http3 is not False or network.retries != 0
+            or network.max_redirects != 0 or network.max_connections != 1
+            or network.using_tor_proxy or network.retry_on_http_error or network.local_addresses
+            or network.proxies != {"all://": f"http://127.0.0.1:{proxy_port}"}
+            or network._clients):
+        # Registration is pre-readiness only. Existing clients cannot be repaired
+        # here because their defaults, keys or outstanding handles may be unsafe.
+        raise SearchFailure("proxy_policy_failed")
+
+    class PrivateDDGProcessor(OnlineProcessor):
+        def __init__(self):
+            super().__init__(engine)
+            self._dot_capability = capability
+            self._dot_admission = threading.Lock()
+            self._dot_consumed = False
+
+        def _send_http_request(self, params):
+            with self._dot_admission:
+                if self._dot_consumed:
+                    raise RequestException("dot_proxy_generation_consumed", code=0)
+                self._dot_consumed = True
+            if self.engine is not engine:
+                raise SearchFailure("engine_boundary_failed")
+            validate_private_ddg_request(params, engine)
+            timed_out = False
+            try:
+                return searx.network.post(
+                    DDG_REQUEST_URL, data=params["data"], headers=params["headers"],
+                    cookies=params["cookies"], auth=None,
+                    proxy_auth=("dot", self._dot_capability),
+                    curl_options={CurlOpt.PROXYAUTH: CURLAUTH_BASIC},
+                    allow_redirects=False, max_redirects=0, raise_for_httperror=True,
+                )
+            except (Timeout, asyncio.TimeoutError):
+                timed_out = True
+            except Exception:
+                pass
+            # Outside both handlers: no original exception/cause/context survives
+            # into the generic processor's logger, metrics or result container.
+            if timed_out:
+                raise Timeout("dot_proxy_timeout", code=28)
+            raise RequestException("dot_proxy_transport_failed", code=0)
+
+    replacement = PrivateDDGProcessor()
+    PROCESSORS["duckduckgo"] = replacement
+    return replacement
+
+
 def serve_production(listener_fd, bootstrap_fd, lifeline_fd):
     if len({listener_fd, bootstrap_fd, lifeline_fd}) != 3 or min(listener_fd, bootstrap_fd, lifeline_fd) < 3:
         raise SearchFailure("invalid_worker")
     watch_supervisor(lifeline_fd)
     bootstrap = read_control_line(bootstrap_fd, STARTUP_SECONDS)
     os.close(bootstrap_fd)
-    if not isinstance(bootstrap, dict) or set(bootstrap) != {"protocol", "port", "capability"} or bootstrap["protocol"] != PROTOCOL:
-        raise SearchFailure("invalid_control")
+    broker_capability = validate_worker_bootstrap(bootstrap)
     listener = adopt_listener(listener_fd, bootstrap["port"])
     # Library output cannot contaminate private readiness or disclose query diagnostics.
     events = os.fdopen(os.dup(sys.stdout.fileno()), "wb")
@@ -555,89 +777,274 @@ def serve_production(listener_fd, bootstrap_fd, lifeline_fd):
     engine_source = Path(engines["duckduckgo"].__file__)
     if hashlib.sha256(engine_source.read_bytes()).hexdigest() != DDG_TRANSIENT_SHA256:
         raise SearchFailure("transient_cache_patch_missing")
+    install_private_ddg_processor(broker_capability, bootstrap["egress_port"])
     from waitress import create_server
     server = create_server(SearchBoundary(app, bootstrap["port"], bootstrap["capability"]),
                            **waitress_options(listener))
-    send_event(events, {"event": "serving"})
+    send_event(events, {"event": "serving", "generation": bootstrap["generation"]})
     try:
         server.run()
     finally:
         events.close()
 
 
-def verify_payload(payload):
-    """Reject missing/unreviewed payloads, alternate interpreters and incomplete hashes.
+def payload_identity(info):
+    # Include change times and permissions: restoring the original bytes or path
+    # does not make a concurrently modified inode an immutable input again.
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_nlink, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
 
-    Native isolation and source/license acceptance are assembly gates, not facts
-    created by this code. No completed manifest is shipped by this source slice.
+
+class PayloadReader:
+    """Descriptor-relative, non-following reads of a fixed private payload tree."""
+
+    def __init__(self, root):
+        self.root = root
+        self.identities = {}
+        self.descriptor = None
+
+    def __enter__(self):
+        before = self.root.lstat()
+        self.check_type(before, directory=True)
+        self.descriptor = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY |
+                                  os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            self.remember("", before)
+            self.remember("", os.fstat(self.descriptor))
+        except BaseException:
+            os.close(self.descriptor)
+            self.descriptor = None
+            raise
+        return self
+
+    def __exit__(self, *_):
+        os.close(self.descriptor)
+        self.descriptor = None
+
+    @staticmethod
+    def check_type(info, *, directory=False):
+        valid_type = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode)
+        if (not valid_type or info.st_uid not in (0, os.getuid()) or info.st_mode & 0o022
+                or (not directory and info.st_nlink != 1)):
+            raise SearchFailure("payload_unverified")
+
+    def remember(self, name, info):
+        identity = payload_identity(info)
+        if self.identities.setdefault(name, identity) != identity:
+            raise SearchFailure("payload_unverified")
+
+    def open_directory(self, parts):
+        descriptor = os.dup(self.descriptor)
+        try:
+            self.remember("", os.fstat(descriptor))
+            for index, part in enumerate(parts):
+                name = "/".join(parts[:index + 1])
+                before = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+                self.check_type(before, directory=True)
+                self.remember(name, before)
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NONBLOCK |
+                                os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+                self.remember(name, os.fstat(descriptor))
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def read(self, name, limit, *, size=None, sha256=None, retain=True):
+        parts = name.split("/")
+        parent = self.open_directory(parts[:-1])
+        descriptor = None
+        try:
+            before = os.stat(parts[-1], dir_fd=parent, follow_symlinks=False)
+            self.check_type(before)
+            if before.st_size > limit or (size is not None and before.st_size != size):
+                raise SearchFailure("payload_unverified")
+            self.remember(name, before)
+            descriptor = os.open(parts[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW |
+                                 os.O_CLOEXEC, dir_fd=parent)
+            opened = os.fstat(descriptor)
+            self.check_type(opened)
+            self.remember(name, opened)
+            digest, total, data = hashlib.sha256(), 0, bytearray()
+            while True:
+                chunk = os.read(descriptor, min(1024 * 1024, before.st_size - total + 1))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > before.st_size:
+                    raise SearchFailure("payload_unverified")
+                digest.update(chunk)
+                if retain:
+                    data.extend(chunk)
+            self.remember(name, os.fstat(descriptor))
+            self.remember(name, os.stat(parts[-1], dir_fd=parent, follow_symlinks=False))
+            if total != before.st_size or (sha256 is not None and digest.hexdigest() != sha256):
+                raise SearchFailure("payload_unverified")
+            return bytes(data) if retain else None
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            os.close(parent)
+
+    def check_tree(self):
+        actual, pending, count = set(), [()], 0
+        while pending:
+            parts = pending.pop()
+            descriptor = self.open_directory(parts)
+            try:
+                with os.scandir(descriptor) as entries:
+                    for entry in entries:
+                        count += 1
+                        if count > 100000:
+                            raise SearchFailure("payload_unverified")
+                        name = "/".join((*parts, entry.name))
+                        info = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
+                        directory = stat.S_ISDIR(info.st_mode)
+                        self.check_type(info, directory=directory)
+                        # Every regular file must already have been read from the
+                        # exact inode inspected here, including the manifest.
+                        if not directory and name not in self.identities:
+                            raise SearchFailure("payload_unverified")
+                        self.remember(name, info)
+                        if directory:
+                            pending.append((*parts, entry.name))
+                        else:
+                            actual.add(name)
+                self.remember("/".join(parts), os.fstat(descriptor))
+            finally:
+                os.close(descriptor)
+        self.remember("", self.root.lstat())
+        return actual
+
+
+@contextmanager
+def payload_verification_deadline():
+    """Bound pre-supervisor verification, even with parent EOF/full output.
+
+    This process has not created any workers or state yet. Expiry exits only
+    itself without a potentially blocking control-pipe write; no PID/group kill,
+    additional sandbox permission, or runtime/environment override is involved.
+    """
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+    old_handler = signal.getsignal(signal.SIGALRM)
+    old_timer = signal.setitimer(signal.ITIMER_REAL, 0)
+    try:
+        signal.signal(signal.SIGALRM, lambda *_: os._exit(2))
+        signal.setitimer(signal.ITIMER_REAL, PAYLOAD_VERIFY_SECONDS)
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGALRM})
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGALRM})
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        if signal.SIGALRM in signal.sigpending():
+            signal.sigwait({signal.SIGALRM})
+        signal.signal(signal.SIGALRM, old_handler)
+        signal.setitimer(signal.ITIMER_REAL, *old_timer)
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+
+def verify_payload(payload):
+    """Validate exact payload files and artifact-bound technical acceptance.
+
+    App/native code-signature validation belongs to the Swift factory. This
+    independent verifier consumes the same technical receipt, never Boolean
+    approval flags. Source-license/distribution acceptance remains a release gate.
     """
     payload = Path(payload).resolve(strict=True)
-    manifest_path = payload / "search-runtime-manifest.json"
-    if not manifest_path.is_file() or manifest_path.is_symlink() or manifest_path.stat().st_size > 4 * 1024 * 1024:
-        raise SearchFailure("payload_unverified")
-    manifest = strict_json(manifest_path.read_bytes())
+    with PayloadReader(payload) as reader:
+        return verify_payload_contents(payload, reader)
+
+
+def verify_payload_contents(payload, reader):
+    manifest = strict_json(reader.read("search-runtime-manifest.json", 4 * 1024 * 1024))
     if (not isinstance(manifest, dict) or type(manifest.get("protocol")) is not int or manifest.get("protocol") != PROTOCOL
             or manifest.get("searxng_revision") != SEARXNG_REVISION
             or manifest.get("waitress_version") != WAITRESS_VERSION
             or manifest.get("ddg_transient_patch_sha256") != DDG_TRANSIENT_SHA256
-            or manifest.get("native_boundary_verified") is not True
-            or manifest.get("source_license_verified") is not True
-            or manifest.get("transient_cache_verified") is not True
-            or manifest.get("searxng_waitress_compatibility_verified") is not True
+            or manifest.get("native_bootstrap") != "bin/dot-search-bootstrap"
+            or manifest.get("acceptance_receipt") != "evidence/search-acceptance.json"
             or not Path(sys.executable).resolve().is_relative_to(payload)):
         raise SearchFailure("payload_unverified")
     files = manifest.get("files")
     if not isinstance(files, list) or not files or len(files) > 50000:
         raise SearchFailure("payload_unverified")
-    covered = set()
+    covered, normalized, total = set(), set(), 0
+    receipt_data = None
     for item in files:
         if not isinstance(item, dict) or set(item) != {"path", "sha256", "size"}:
             raise SearchFailure("payload_unverified")
         name = item["path"]
-        if (type(item["size"]) is not int or not 0 <= item["size"] <= 5_000_000_000
+        if (type(item["size"]) is not int or not 0 <= item["size"] <= 2_000_000_000
                 or not isinstance(item["sha256"], str)
                 or not isinstance(name, str) or not name or name in covered or Path(name).is_absolute()
-                or any(part in (".", "..") for part in name.split("/"))
+                or "\\" in name or any(ord(character) < 32 or ord(character) == 127 for character in name)
+                or any(part in ("", ".", "..") for part in name.split("/"))
                 or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"])):
             raise SearchFailure("payload_unverified")
-        path = payload / name
-        if path.is_symlink() or not path.resolve().is_relative_to(payload) or not path.is_file():
+        total += item["size"]
+        canonical_name = unicodedata.normalize("NFC", name).lower()
+        if total > 5_000_000_000 or canonical_name in normalized or name == "search-runtime-manifest.json":
             raise SearchFailure("payload_unverified")
-        digest = hashlib.sha256()
-        with path.open("rb") as source:
-            for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                digest.update(chunk)
-        if path.stat().st_size != item["size"] or digest.hexdigest() != item["sha256"]:
-            raise SearchFailure("payload_unverified")
+        normalized.add(canonical_name)
+        is_receipt = name == "evidence/search-acceptance.json"
+        data = reader.read(name, 1048576 if is_receipt else item["size"],
+                           size=item["size"], sha256=item["sha256"], retain=is_receipt)
+        if is_receipt:
+            receipt_data = data
         covered.add(name)
-    actual = set()
-    for path in payload.rglob("*"):
-        if path.is_symlink():
-            raise SearchFailure("payload_unverified")
-        if path.is_file() and path != manifest_path:
-            actual.add(path.relative_to(payload).as_posix())
-    if covered != actual or not Path(sys.executable).resolve().relative_to(payload).as_posix() in covered:
+    actual = reader.check_tree() - {"search-runtime-manifest.json"}
+    required = {"python/bin/python3", "dot_search.py", "bin/dot-search-bootstrap", "search.sb", "evidence/search-acceptance.json"}
+    if (covered != actual or not required <= covered
+            or Path(sys.executable).resolve().relative_to(payload).as_posix() not in covered):
         raise SearchFailure("payload_unverified")
+    # Parse the very bytes hashed above; never reopen acceptance after hashing.
+    receipt = strict_json(receipt_data)
+    records = "".join(f"{item['path']}\t{item['size']}\t{item['sha256']}\n" for item in sorted(files, key=lambda item: item["path"])
+                      if not item["path"].startswith("evidence/"))
+    gates = {"native_boundary", "transient_cache", "searxng_waitress_compatibility"}
+    if (not isinstance(receipt, dict) or type(receipt.get("schema")) is not int or receipt.get("schema") != 1
+            or receipt.get("platform") != "macOS-arm64"
+            or receipt.get("payload_digest") != hashlib.sha256(records.encode("utf-8")).hexdigest()
+            or not isinstance(receipt.get("gates"), dict) or set(receipt["gates"]) != gates):
+        raise SearchFailure("payload_unverified")
+    entries = {item["path"]: item for item in files}
+    for gate in receipt["gates"].values():
+        if (not isinstance(gate, dict) or set(gate) != {"result", "report", "sha256"} or gate["result"] != "passed"
+                or not isinstance(gate["report"], str) or not gate["report"].startswith("evidence/")
+                or gate["report"] == "evidence/search-acceptance.json" or gate["report"] not in entries
+                or entries[gate["report"]]["size"] <= 0 or entries[gate["report"]]["sha256"] != gate["sha256"]):
+            raise SearchFailure("payload_unverified")
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--payload")
-    parser.add_argument("--state-root")
-    parser.add_argument("--serve", nargs=3, type=int, metavar=("LISTENER", "BOOTSTRAP", "LIFELINE"))
-    args = parser.parse_args()
-    if args.serve is not None:
-        if args.payload or args.state_root:
+    # Only the native launcher's fixed argv or its private worker invocation is
+    # supported. Reject duplicate/abbreviated/extra flags without argparse echo.
+    arguments = sys.argv[1:]
+    if len(arguments) == 4 and arguments[0] == "--serve":
+        if any(not re.fullmatch(r"[1-9][0-9]{0,9}", value) or int(value) > 2147483647
+               for value in arguments[1:]):
             raise SearchFailure("invalid_control")
-        return serve_production(*args.serve)
-    if not args.payload or not args.state_root:
-        raise SearchFailure("payload_unverified")
-    verify_payload(args.payload)
+        return serve_production(*(int(value) for value in arguments[1:]))
+    if (len(arguments) != 8 or arguments[::2] != ["--payload", "--state-root", "--owned-listener", "--egress-port"]
+            or not arguments[1] or not arguments[3] or arguments[5] != "3"):
+        raise SearchFailure("invalid_control")
+    payload, state_root = arguments[1], arguments[3]
+    egress_port = parse_egress_port(arguments[7])
+    with payload_verification_deadline():
+        try:
+            verify_payload(payload)
+        except Exception:
+            # Keep a failure write inside the same deadline. A parent that stops
+            # draining stdout must not strand pre-supervisor verification either.
+            send_event(sys.stdout.buffer, {"event": "failed", "reason": "payload_unavailable"})
+            return 2
     def command(listener, bootstrap, lifeline):
         return [sys.executable, "-I", "-B", "-X", "pycache_prefix=.python-cache",
                 str(Path(__file__).resolve()), "--serve",
                 str(listener), str(bootstrap), str(lifeline)]
-    return supervise(args.state_root, command)
+    return supervise(state_root, command, listener_fd=3, egress_port=egress_port)
 
 
 if __name__ == "__main__":

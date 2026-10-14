@@ -1,4 +1,5 @@
 """Portable owned-search boundary/lifecycle fixtures. No external query is sent."""
+import base64
 import contextlib
 import importlib.util
 import io
@@ -23,6 +24,15 @@ spec = importlib.util.spec_from_file_location("dot_search", HELPER)
 search = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(search)
 TOKEN = "a" * 64
+GENERATION = "12345678-1234-4ABC-8DEF-123456789ABC"
+EGRESS_PORT = 54321
+BROKER_TOKEN = "d" * 64
+PROXY_AUTHORIZATION = "Basic " + base64.b64encode(("dot:" + BROKER_TOKEN).encode()).decode()
+
+
+def start_control():
+    return {"protocol": 1, "command": "start", "generation": GENERATION,
+            "egress_port": EGRESS_PORT, "proxy_authorization": PROXY_AUTHORIZATION}
 
 
 def form(query="synthetic fixture"):
@@ -293,7 +303,7 @@ class BoundaryTests(unittest.TestCase):
 
 class ConfigurationTests(unittest.TestCase):
     def test_configuration_removes_other_engines_and_uses_separate_secret(self):
-        text = search.settings_text(12345, "b" * 64)
+        text = search.settings_text(12345, "b" * 64, EGRESS_PORT)
         self.assertIn("keep_only: [duckduckgo]", text)
         self.assertIn("formats: [json]", text)
         self.assertNotIn("braveapi", text)
@@ -357,50 +367,62 @@ class ConfigurationTests(unittest.TestCase):
     def test_verified_manifest_rejects_tampering_extra_files_and_missing_acceptance(self):
         with tempfile.TemporaryDirectory() as root:
             payload = Path(root)
-            executable = payload / "python/bin/python3"
-            executable.parent.mkdir(parents=True)
-            executable.write_bytes(b"fixture interpreter bytes")
+            contents = {"python/bin/python3": b"fixture interpreter bytes", "dot_search.py": b"fixture helper",
+                        "bin/dot-search-bootstrap": b"fixture native", "search.sb": b"fixture profile",
+                        "evidence/technical.json": b"synthetic fixture report, not production acceptance"}
+            for name, data in contents.items():
+                target = payload / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            entries = [{"path": name, "size": len(data), "sha256": search.hashlib.sha256(data).hexdigest()}
+                       for name, data in contents.items()]
+            records = "".join(f"{entry['path']}\t{entry['size']}\t{entry['sha256']}\n" for entry in sorted(entries, key=lambda entry: entry["path"])
+                              if not entry["path"].startswith("evidence/"))
+            receipt = {"schema": 1, "platform": "macOS-arm64", "payload_digest": search.hashlib.sha256(records.encode()).hexdigest(),
+                       "gates": {name: {"result": "passed", "report": "evidence/technical.json", "sha256": entries[-1]["sha256"]}
+                                 for name in ("native_boundary", "transient_cache", "searxng_waitress_compatibility")}}
+            receipt_path = payload / "evidence/search-acceptance.json"
+            def receipt_entry():
+                data = json.dumps(receipt).encode()
+                receipt_path.write_bytes(data)
+                return {"path": "evidence/search-acceptance.json", "size": len(data), "sha256": search.hashlib.sha256(data).hexdigest()}
+            entries.append(receipt_entry())
             manifest = {"protocol": 1, "searxng_revision": search.SEARXNG_REVISION,
                         "waitress_version": search.WAITRESS_VERSION, "ddg_transient_patch_sha256": search.DDG_TRANSIENT_SHA256,
-                        "native_boundary_verified": True,
-                        "source_license_verified": True, "transient_cache_verified": True,
-                        "searxng_waitress_compatibility_verified": True,
-                        "files": [{"path": "python/bin/python3", "size": executable.stat().st_size,
-                                   "sha256": search.hashlib.sha256(executable.read_bytes()).hexdigest()}]}
+                        "native_bootstrap": "bin/dot-search-bootstrap", "acceptance_receipt": "evidence/search-acceptance.json",
+                        "source_license_verified": False, "files": entries}
             path = payload / "search-runtime-manifest.json"
-            def write():
-                path.write_text(json.dumps(manifest))
+            def write(): path.write_text(json.dumps(manifest))
             write()
+            executable = payload / "python/bin/python3"
             with mock.patch.object(search.sys, "executable", str(executable)):
+                # Pure fixture audit is not the signed Swift factory and grants no launch.
                 search.verify_payload(payload)
-                manifest["protocol"] = True
-                write()
-                with self.assertRaises(search.SearchFailure):
-                    search.verify_payload(payload)
+                manifest["protocol"] = True; write()
+                with self.assertRaises(search.SearchFailure): search.verify_payload(payload)
                 manifest["protocol"] = 1
-                size = manifest["files"][0]["size"]
+                size = entries[0]["size"]
                 for invalid in (True, -1, "24", 5_000_000_001):
-                    manifest["files"][0]["size"] = invalid
-                    write()
-                    with self.assertRaises(search.SearchFailure):
-                        search.verify_payload(payload)
-                manifest["files"][0]["size"] = size
-                for flag in ("native_boundary_verified", "source_license_verified", "transient_cache_verified",
-                             "searxng_waitress_compatibility_verified"):
-                    manifest[flag] = False
-                    write()
-                    with self.assertRaises(search.SearchFailure):
-                        search.verify_payload(payload)
-                    manifest[flag] = True
-                write()
-                unexpected = payload / "unexpected.py"
-                unexpected.write_text("fixture")
-                with self.assertRaises(search.SearchFailure):
-                    search.verify_payload(payload)
+                    entries[0]["size"] = invalid; write()
+                    with self.assertRaises(search.SearchFailure): search.verify_payload(payload)
+                entries[0]["size"] = size
+                for name in receipt["gates"]:
+                    receipt["gates"][name]["result"] = "pending"
+                    entries[-1] = receipt_entry(); write()
+                    with self.assertRaises(search.SearchFailure): search.verify_payload(payload)
+                    receipt["gates"][name]["result"] = "passed"
+                original_digest = receipt["payload_digest"]
+                receipt["payload_digest"] = "f" * 64
+                entries[-1] = receipt_entry(); write()
+                with self.assertRaises(search.SearchFailure): search.verify_payload(payload)
+                receipt["payload_digest"] = original_digest
+                entries[-1] = receipt_entry(); write()
+                search.verify_payload(payload)
+                unexpected = payload / "unexpected.py"; unexpected.write_text("fixture")
+                with self.assertRaises(search.SearchFailure): search.verify_payload(payload)
                 unexpected.unlink()
                 executable.write_bytes(b"tampered interpreter bytes")
-                with self.assertRaises(search.SearchFailure):
-                    search.verify_payload(payload)
+                with self.assertRaises(search.SearchFailure): search.verify_payload(payload)
 
     def test_worker_lifeline_rejects_nonowned_process_group(self):
         read, write = os.pipe()
@@ -438,7 +460,7 @@ def start_fixture(root, mode="normal", waitress=""):
     process = subprocess.Popen([sys.executable, "-I", "-B", str(Path(__file__).resolve()),
                                 "supervisor", str(root), mode, waitress], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    process.stdin.write(b'{"protocol":1,"command":"start","generation":"fixture-generation"}\n')
+    process.stdin.write(json.dumps(start_control()).encode() + b"\n")
     process.stdin.flush()
     return process
 
@@ -489,7 +511,7 @@ class LifecycleTests(unittest.TestCase):
                 ready = read_event(process)
                 self.assertEqual(ready["event"], "ready")
                 self.assertEqual(ready["helper_pid"], process.pid)
-                self.assertEqual(ready["generation"], "fixture-generation")
+                self.assertEqual(ready["generation"], GENERATION)
                 self.assertIn(b"200 OK", request(ready))
                 self.assertIn(b"403 Forbidden", request(ready, token="b" * 64))
                 process.stdin.close()
@@ -658,13 +680,25 @@ def fixture_main():
         def worker(listener, bootstrap, lifeline):
             return [sys.executable, "-I", "-B", str(Path(__file__).resolve()), "worker", str(listener),
                     str(bootstrap), str(lifeline), mode, waitress]
-        return search.supervise(root_or_listener, worker)
+        return search.supervise(root_or_listener, worker, egress_port=EGRESS_PORT)
     listener_fd = int(root_or_listener)
     bootstrap_fd, lifeline_fd = int(args[0]), int(args[1])
     mode, waitress = args[2:]
     search.watch_supervisor(lifeline_fd)
     info = search.read_control_line(bootstrap_fd, 5)
     os.close(bootstrap_fd)
+    broker = search.validate_worker_bootstrap(info)
+    if broker != BROKER_TOKEN or info["egress_port"] != EGRESS_PORT or info["generation"] != GENERATION:
+        raise AssertionError("private fixture handoff changed")
+    # Test-only observations stay booleans. No credential is emitted or saved.
+    for value in (*sys.argv, *os.environ.values(), Path("config/settings.yml").read_text()):
+        if BROKER_TOKEN in value or PROXY_AUTHORIZATION in value:
+            raise AssertionError("private fixture credential escaped pipe")
+    serving = {"event": "serving", "generation": info["generation"]}
+    if mode == "stale_generation": serving["generation"] = "EEEEEEEE-EEEE-4EEE-8EEE-EEEEEEEEEEEE"
+    if mode == "extra_serving": serving["extra"] = "forbidden"
+    if mode == "boolean_protocol": serving["protocol"] = True
+    if mode == "missing_generation": del serving["generation"]
     listener = search.adopt_listener(listener_fd, info["port"])
     if mode == "descendant":
         code = ("import json,os,signal,socket,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
@@ -687,7 +721,7 @@ def fixture_main():
             raise AssertionError("search response spilled to disk")
         TempfileBasedBuffer.newfile = forbidden_disk_buffer
         server = create_server(boundary, **search.waitress_options(listener))
-        search.send_event(sys.stdout.buffer, {"event": "serving"})
+        search.send_event(sys.stdout.buffer, serving)
         server.run()
     else:
         from wsgiref.simple_server import WSGIServer, WSGIRequestHandler
@@ -701,7 +735,7 @@ def fixture_main():
         server.server_port = info["port"]
         server.setup_environ()
         server.set_app(boundary)
-        search.send_event(sys.stdout.buffer, {"event": "serving"})
+        search.send_event(sys.stdout.buffer, serving)
         server.serve_forever(poll_interval=0.1)
     return 0
 
