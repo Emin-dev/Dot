@@ -808,14 +808,20 @@ private final class RuntimeLifecycleFixture: @unchecked Sendable {
                     if let resolverReceipt { await resolverReceipt.wait() }
                     return ["93.184.216.34"]
                 }, loopbackPort: 1, holdCloseReceipts: holdCloseReceipts && records.isEmpty))
-            let owner = SearchOwnedProcess(testingBootstrap: root.appendingPathComponent(missingExecutable ? "missing" : "helper"),
-                fixtureRoot: root, lease: lease, broker: broker,
-                preparationDeadline: expiredPreparation ? ContinuousClock.now : nil,
-                beforeControlWrite: closeStdinBeforeStart ? { [self] in
+            let beforeControlWrite: (@Sendable () throws -> Void)?
+            if closeStdinBeforeStart {
+                beforeControlWrite = { [self] in
                     let deadline = ProcessInfo.processInfo.systemUptime + 5
                     while !exists("closed-before-start"), ProcessInfo.processInfo.systemUptime < deadline { usleep(1_000) }
                     guard exists("closed-before-start") else { throw SearchRuntimeFailure.startupFailed }
-                } : nil, onFailure: onFailure)
+                }
+            } else {
+                beforeControlWrite = nil
+            }
+            let owner = SearchOwnedProcess(testingBootstrap: root.appendingPathComponent(missingExecutable ? "missing" : "helper"),
+                fixtureRoot: root, lease: lease, broker: broker,
+                preparationDeadline: expiredPreparation ? ContinuousClock.now : nil,
+                beforeControlWrite: beforeControlWrite, onFailure: onFailure)
             note(.init(lease: lease, broker: broker, owner: owner, onFailure: onFailure))
             if let factoryReceipt { await factoryReceipt.wait() }
             return owner
