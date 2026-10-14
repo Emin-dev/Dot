@@ -48,8 +48,8 @@ def parse_url(url):
         raise ValueError('invalid_url')
     parsed = urllib.parse.urlsplit(url)
     host = parsed.hostname
-    if (parsed.scheme not in ('http', 'https') or not host or parsed.username is not None or parsed.password is not None
-            or parsed.fragment or not 1 <= (parsed.port if parsed.port is not None else (443 if parsed.scheme == 'https' else 80)) <= 65535):
+    if (parsed.scheme != 'https' or not host or parsed.username is not None or parsed.password is not None
+            or parsed.fragment or not 1 <= (parsed.port if parsed.port is not None else 443) <= 65535):
         raise ValueError('invalid_url')
     labels = host.split('.')
     if (len(labels) < 2 or len(host) > 253 or any(not label or len(label) > 63 or label[0] == '-' or label[-1] == '-'
@@ -144,19 +144,18 @@ def fetch(url, address, timeout, body, metadata, *, connector=inherited_connecti
     if not public_address(address) or not 0 < timeout <= 30:
         raise ValueError('invalid_pin')
     deadline = time.monotonic() + timeout
-    port = parsed.port if parsed.port is not None else (443 if parsed.scheme == 'https' else 80)
+    port = parsed.port if parsed.port is not None else 443
     raw = secure = connection = None
     try:
         raw = connector(address, port, min(10, timeout))
-        if parsed.scheme == 'https':
-            context = context_factory()
-            if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
-                raise ValueError('invalid_tls_policy')
-            secure = context.wrap_socket(raw, server_hostname=parsed.hostname)
+        context = context_factory()
+        if not context.check_hostname or context.verify_mode != ssl.CERT_REQUIRED:
+            raise ValueError('invalid_tls_policy')
+        secure = context.wrap_socket(raw, server_hostname=parsed.hostname)
         connection = http.client.HTTPConnection(parsed.hostname, port, timeout=min(10, timeout))
         connection.auto_open = False
         connection.response_class = BoundedResponse
-        connection.sock = secure if secure is not None else raw
+        connection.sock = secure
         target = urllib.parse.urlunsplit(('', '', parsed.path or '/', parsed.query, ''))
         connection.request('GET', target, headers={'Accept': 'text/html, text/plain, application/pdf', 'Accept-Encoding': 'gzip, deflate', 'Connection': 'close'})
         response = connection.getresponse()

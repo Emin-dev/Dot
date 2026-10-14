@@ -80,7 +80,7 @@ struct ResearchPinnedHTTPTransport: ResearchHTTPTransport {
     }
 
     static func redirect(from: URL, to: URL, count: Int) throws -> URL {
-        guard (1...3).contains(count), !(from.scheme?.lowercased() == "https" && to.scheme?.lowercased() != "https") else {
+        guard (1...3).contains(count), ResearchWebReader.allowed(from), ResearchWebReader.allowed(to) else {
             throw ResearchNotebookError.networkFailure
         }
         return try canonicalURL(to)
@@ -150,7 +150,7 @@ enum ResearchSystemHTTP {
     static func exchange(_ url: URL, _ address: String, _ deadline: TimeInterval, runtime: ResearchFetchRuntime) async throws -> ResearchHTTPResult {
         guard ResearchWebReader.allowed(url), ResearchPublicAddress.allowed(address) else { throw ResearchNotebookError.networkFailure }
         let socket = try await ResearchPinnedSocket.connect(address: address,
-            port: url.port ?? (url.scheme == "https" ? 443 : 80), deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 10))
+            port: url.port ?? 443, deadline: min(deadline, ProcessInfo.processInfo.systemUptime + 10))
         defer { try? socket.close() }
         let remaining = deadline - ProcessInfo.processInfo.systemUptime
         guard remaining > 0 else { throw ResearchNotebookError.networkFailure }

@@ -43,7 +43,7 @@ private actor StoredWorkflowReader: WebResearchSourceReading {
         if hold { await withCheckedContinuation { continuation = $0 } }
         return ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Fixture", kind: .webPage,
             retrievedAt: Date(), modifiedAt: nil, bytesRead: 50, sha256: String(repeating: "a", count: 64),
-            pagesRead: nil, text: "Actual fixture evidence", truncated: false)
+            pagesRead: nil, text: "Actual fixture evidence", truncated: false, transportReceipt: .httpsOnlyV1)
     }
 }
 
@@ -100,7 +100,7 @@ final class WebResearchStoreTests: XCTestCase {
             copy.queries[index].results = [WebSearchResult(url: url, title: "Source", snippet: "Untrusted search hint", publicationDateHint: nil)]
             let source = ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Source", kind: .webPage,
                 retrievedAt: Date(timeIntervalSince1970: 200), modifiedAt: nil, bytesRead: 100,
-                sha256: String(repeating: "a", count: 64), pagesRead: nil, text: "Fixture evidence.", truncated: false)
+                sha256: String(repeating: "a", count: 64), pagesRead: nil, text: "Fixture evidence.", truncated: false, transportReceipt: .httpsOnlyV1)
             copy.reads.append(WebResearchRead(id: UUID(), url: url, status: .completed, source: source, failure: nil))
         }
         return copy
@@ -727,7 +727,7 @@ final class WebResearchStoreTests: XCTestCase {
         changed.reads[0].source = ResearchSource(id: old.id, originalURL: old.originalURL, finalURL: old.finalURL,
             title: old.title, kind: old.kind, retrievedAt: old.retrievedAt, modifiedAt: old.modifiedAt,
             bytesRead: old.bytesRead, sha256: old.sha256, pagesRead: old.pagesRead,
-            text: old.text + " Changed evidence.", truncated: old.truncated)
+            text: old.text + " Changed evidence.", truncated: old.truncated, transportReceipt: .httpsOnlyV1)
         await expect(.invalidInput) { _ = try await store.save(changed, expectedRevision: saved.revision) }
         changed = checked; changed.outputVerification = .pending
         await expect(.invalidInput) { _ = try await store.save(changed, expectedRevision: saved.revision) }

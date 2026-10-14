@@ -46,7 +46,7 @@ protocol WebResearchSourceReading: Sendable {
 extension ResearchWebReader: WebResearchSourceReading {}
 
 enum WebResearchError: Error, Equatable, LocalizedError {
-    case invalidSession, invalidEvidence, limitExceeded, busy, checkpointFailed, insufficientEvidence, resultRetentionUnavailable
+    case invalidSession, invalidEvidence, limitExceeded, busy, checkpointFailed, insufficientEvidence, unverifiedTransport, resultRetentionUnavailable
     var errorDescription: String? {
         switch self {
         case .invalidSession: return "The research checkpoint is invalid. Its existing contents were not changed."
@@ -54,6 +54,7 @@ enum WebResearchError: Error, Equatable, LocalizedError {
         case .limitExceeded: return "This research pass has reached its configured limits."
         case .busy: return "A research pass is already active."
         case .checkpointFailed: return "Research could not save its progress, so no further requests were started."
+        case .unverifiedTransport: return "Saved web evidence has unverified transport and cannot support new synthesis. Reread the sources over HTTPS in a new research pass."
         case .insufficientEvidence: return "More searches or readable sources are needed for this researched answer."
         case .resultRetentionUnavailable: return "The selected search plan does not have confirmed result-retention rights for saved research."
         }
@@ -181,6 +182,13 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
     }
 
     var sources: [ResearchSource] { reads.compactMap(\.source) }
+    var synthesisSources: [ResearchSource] { sources.filter(\.eligibleForSynthesis) }
+    var hasUnverifiedWebEvidence: Bool { synthesisSources.count != sources.count }
+    var transportWarning: String? {
+        hasUnverifiedWebEvidence
+            ? "Unverified web transport: some historical sources have no HTTPS-only retrieval receipt. Their saved text and any previous answer are retained for reference, but those sources are excluded from new synthesis. Reread them over HTTPS in a new research pass."
+            : nil
+    }
     var searchAttempts: Int { queries.reduce(0) { $0 + $1.attempts } }
     var unreadResultCount: Int {
         Set(queries.flatMap(\.results).map { Self.key($0.url) }).subtracting(Set(reads.map { Self.key($0.url) })).count
@@ -221,8 +229,9 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
     /// The caller supplies actual local-Qwen output after the retrieval barrier. No model is run here.
     func completing(with result: WebResearchSynthesis, now: Date = Date()) throws -> Self {
         try validate()
+        guard !hasUnverifiedWebEvidence || synthesisSources.count >= 2 else { throw WebResearchError.unverifiedTransport }
         guard stage == .awaitingLocalSynthesis,
-              queries.filter({ $0.status == .completed }).count >= 2, sources.count >= 2 else {
+              queries.filter({ $0.status == .completed }).count >= 2, synthesisSources.count >= 2 else {
             throw WebResearchError.insufficientEvidence
         }
         try validateEvidence(result)
@@ -246,6 +255,8 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
     func evidenceJSON(maxBytes: Int = 65_536) throws -> String {
         try validate()
         guard stage == .awaitingLocalSynthesis, (4_096...262_144).contains(maxBytes) else { throw WebResearchError.invalidSession }
+        guard !hasUnverifiedWebEvidence || synthesisSources.count >= 2 else { throw WebResearchError.unverifiedTransport }
+        let sources = synthesisSources
         struct SourceExtract: Encodable {
             let id: UUID
             let url: URL
@@ -325,14 +336,14 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
                   && ($0.status == .completed || $0.results.isEmpty)
                   && ($0.status != .completed || ($0.attempts > 0 && $0.completedAt != nil))
                   && ($0.status != .inFlight && $0.status != .uncertain || $0.attempts > 0)
-                  && $0.results.allSatisfy({ Self.validResult($0) }) }),
+                  && $0.results.allSatisfy({ Self.validResult($0, archived: true) }) }),
               searchAttempts <= limits.maxSearchAttempts,
               reads.allSatisfy({ read in
-                  ResearchWebReader.allowed(read.url)
+                  ResearchWebReader.validArchivedURL(read.url)
                       && queries.flatMap(\.results).contains { Self.key($0.url) == Self.key(read.url) }
                       && ((read.status == .completed) == (read.source != nil))
                       && (read.source.map { source in
-                          Self.key(source.originalURL) == Self.key(read.url) && ResearchWebReader.allowed(source.finalURL)
+                          Self.key(source.originalURL) == Self.key(read.url) && ResearchWebReader.validArchivedURL(source.finalURL)
                               && (source.kind == .webPage || source.kind == .webPDF)
                               && source.bytesRead > 0 && source.bytesRead <= ResearchExtraction.maxBytes
                               && !source.text.isEmpty && source.text.count <= ResearchExtraction.maxCharacters
@@ -348,16 +359,16 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
         }
         if let synthesis {
             guard queries.filter({ $0.status == .completed }).count >= 2, sources.count >= 2 else { throw WebResearchError.invalidSession }
-            try validateEvidence(synthesis)
+            try validateEvidence(synthesis, requireAuthenticatedTransport: false)
         }
     }
 
-    fileprivate static func validResult(_ result: WebSearchResult) -> Bool {
-        ResearchWebReader.allowed(result.url) && result.url.absoluteString.utf8.count <= 8_192
+    fileprivate static func validResult(_ result: WebSearchResult, archived: Bool = false) -> Bool {
+        (archived ? ResearchWebReader.validArchivedURL(result.url) : ResearchWebReader.allowed(result.url)) && result.url.absoluteString.utf8.count <= 8_192
             && !result.title.isEmpty && result.title.utf8.count <= 2_048 && result.snippet.utf8.count <= 8_192
     }
 
-    private func validateEvidence(_ result: WebResearchSynthesis) throws {
+    private func validateEvidence(_ result: WebResearchSynthesis, requireAuthenticatedTransport: Bool = true) throws {
         guard !result.answer.isEmpty, result.answer.utf8.count <= 64_000,
               (1...32).contains(result.claims.count), (1...64).contains(result.citations.count),
               result.conflicts.count <= 16, result.followUpQueries.count <= 4,
@@ -370,6 +381,7 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
             guard (1...64).contains(citation.number), !citation.excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   citation.excerpt.utf8.count <= 4_096,
                   let source = sources.first(where: { $0.id == citation.sourceID }),
+                  (!requireAuthenticatedTransport || source.eligibleForSynthesis),
                   source.text.contains(citation.excerpt) else { throw WebResearchError.invalidEvidence }
         }
         for claim in result.claims {
@@ -459,7 +471,7 @@ actor WebResearchWorkflow {
                     let response = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
                     cancelOperation = nil; try checkActive()
                     let results = response.results
-                    guard results.count <= limit, results.allSatisfy(WebResearchSession.validResult) else { throw WebResearchError.limitExceeded }
+                    guard results.count <= limit, results.allSatisfy({ WebResearchSession.validResult($0) }) else { throw WebResearchError.limitExceeded }
                     var seen: Set<String> = []
                     session.queries[index].results = results.filter { seen.insert(WebResearchSession.key($0.url)).inserted }
                     session.queries[index].coverage = response.coverage
@@ -488,19 +500,24 @@ actor WebResearchWorkflow {
             for rank in 0..<session.limits.resultsPerQuery {
                 for query in session.queries where rank < query.results.count && session.reads.count < session.limits.maxSources {
                     let url = query.results[rank].url
-                    if seen.insert(WebResearchSession.key(url)).inserted { session.reads.append(WebResearchRead(id: UUID(), url: url)) }
+                    if ResearchWebReader.allowed(url), seen.insert(WebResearchSession.key(url)).inserted { session.reads.append(WebResearchRead(id: UUID(), url: url)) }
                 }
             }
             try await checkpoint(&session, onCheckpoint)
             for index in session.reads.indices where session.reads[index].status == .pending {
-                try checkActive(); session.reads[index].status = .inFlight
+                try checkActive()
+                guard ResearchWebReader.allowed(session.reads[index].url) else {
+                    session.reads[index].status = .failed; session.reads[index].failure = .source
+                    try await checkpoint(&session, onCheckpoint); continue
+                }
+                session.reads[index].status = .inFlight
                 try await checkpoint(&session, onCheckpoint)
                 do {
                     let url = session.reads[index].url, reader = self.reader
                     let task = Task { try await reader.read(url) }; cancelOperation = { task.cancel() }
                     let source = try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
                     cancelOperation = nil; try checkActive()
-                    guard (1...ResearchExtraction.maxBytes).contains(source.bytesRead),
+                    guard source.eligibleForSynthesis, (1...ResearchExtraction.maxBytes).contains(source.bytesRead),
                           source.text.count <= ResearchExtraction.maxCharacters else { throw WebResearchError.invalidEvidence }
                     guard session.sources.reduce(source.text.utf8.count, { $0 + $1.text.utf8.count }) <= session.limits.maxSourceTextBytes,
                           session.sources.reduce(source.bytesRead, { $0 + $1.bytesRead }) <= 16_777_216 else { throw WebResearchError.limitExceeded }

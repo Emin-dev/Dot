@@ -1,5 +1,27 @@
 # dot: current continuation handoff
 
+## Scoped progress checkpoint — 2026-10-14 16:16 UTC
+
+This documentation tranche records **4 of 97 current requirements complete, 93 open**, plus **five separate historical milestones**. The completed scopes are R04 **dated reconciliation**, R17 service-boundary **design**, R50 video **feasibility research**, and R66 **shared-native-rig architecture**. These counts are not a feature-completion percentage or release certification. R04 closes only the fresh dated reconciliation; it must continue to be maintained as commits, tests and prerequisites change. All 102 requirement texts and their order are preserved.
+
+- Published parent for this combined candidate is [`21fb1c2`](https://github.com/Emin-dev/Dot/commit/21fb1c24d2d061bd46995d7cfcd7e6a4c8c40432), tree `dc737d2237170e50675a6b0187f3feb0c1c92065`, 238 files. Its canonical ledger still has **0 of 97 current rows checked**; the expanded local ledger has **4 of 97** after the approved dated R04 reconciliation. This tranche adds the four approved scoped closures and their reports without copying the expanded implementation.
+- Latest exact green hosted-native evidence is [`21fb1c2`](https://github.com/Emin-dev/Dot/commit/21fb1c24d2d061bd46995d7cfcd7e6a4c8c40432): **334 Python passes / 3 skips, 486 SwiftPM and 789 XCTest passes**, plus Debug/Release/development-package/signature and the zero compiler-warning gate. [Run 38594414249](https://github.com/Emin-dev/Dot/actions/runs/38594414249), [job 115957311020](https://github.com/Emin-dev/Dot/actions/runs/38594414249/job/115957311020), completed successfully at 16:11 UTC. This is model-free evidence for that exact parent; runtime diagnostics remain distinct from compiler warnings.
+- Earlier failed attempts: [`2d28437`](https://github.com/Emin-dev/Dot/commit/2d28437a560638074eb9c835349990dcaea3cba2) passed **333 Python / 3 skips and 486 SwiftPM**, then failed native compilation on the unused mutable weak binding in `ResearchEngineTests.swift`; XCTest and packaging were not reached. The minimal `f0a0751` repair cleared that compiler warning, but [run 38589346500](https://github.com/Emin-dev/Dot/actions/runs/38589346500) **failed at 15:32 UTC**: **333 Python passes / 3 skips and 486 SwiftPM passes**, followed by **788 XCTest cases with 11 failures (2 unexpected) across four new transport cases**. Release/package/signature gates were not reached. These historical failures are superseded by the exact green `21fb1c2` parent; they remain recorded rather than being relabelled as passing.
+- [Scoped evidence and reconciliation](verification/scoped-progress.md) links the exact [service-boundary design](architecture/staged-services.md), [video feasibility research](verification/video-feasibility.md), and R66 native evidence. The broader Rust migration, video implementation/Mac acceptance, production expression recipes, native integration, full runtime/device checks and distribution gates remain open.
+- The expanded local source and its `scripts/current_product_acceptance.py` validator are absent from this published base and are not added by this documentation delta. This documentation delta includes no release infrastructure, app/test code, payload, signing, installed-app or binary-delivery changes. Historical native passes do not validate that expanded source.
+- The combined candidate separately contains **19 reviewed HTTPS-evidence paths plus these seven documentation paths**. Its **343 portable cases / 339 passes / 4 skips and 52 static guards** passed; all 59 prior Engine native test names and assertions are preserved; one existing exact-limit test and its helper add phase timing. The parent's green native result does not certify the combined HTTPS delta; its exact hosted-native run remains the next verification step. No binary delivery is included.
+
+## Next executable steps
+
+1. Complete the status-only review of the combined 26-path candidate on exact green parent `21fb1c2`. After reviewed publication, check its own hosted-native run; the parent result does not validate the added HTTPS behavior. Preserve the historical failures and keep the 77.104-second exact-limit test duration as an unresolved performance observation.
+2. Continue selective review and exact-source native verification of unpublished activity Options, explicit delegation and visible progress integrations. R31, R58, LP04 and LP06 remain open; existing core tests do not validate absent UI/producer wiring.
+3. Preserve the expanded local source and verified recovery copies. Reconcile their actual current bytes separately before any integration; do not restore a snapshot over newer edits or copy the expanded App/ChatView and release tooling wholesale.
+4. Continue requirement-by-requirement reconciliation when facts change. R04 closes the dated reviewed checkpoint only; it does not end this maintenance obligation. Preserve exact runtime, owner-device, source/license, signing/notarization and final-delivery gates; no model-free development DMG is a complete owner bundle.
+
+## Historical continuation records
+
+Everything below preserves the October 13 handoff. Its lane assignments, local paths, source revisions, provider questions and pending checks are historical context, not current ownership or current main. Use the scoped checkpoint above for current published/local distinctions; the installed and candidate identities are preservation records, not a fresh device inspection.
+
 ## Cloud continuation checkpoint — 2026-10-13 20:50 UTC
 
 Development continues independently on Linux and hosted macOS CI. The owner's disconnected Mac is reserved for the final explicitly pending device checks. Main is the verified default and only remote branch; historical Mac records below remain preservation evidence.
@@ -15,9 +37,9 @@ Development continues independently on Linux and hosted macOS CI. The owner's di
 
 Checkpoint: **2026-10-13 19:08 UTC**. Read the [canonical checklist](BUILD_CHECKLIST.md), [progress](PROGRESS.md) and [helper verification](verification/helper-boundaries.md). This is an active implementation handoff, not whole-product completion or installation approval.
 
-## Revisions and recovery
+## Historical revisions and recovery
 
-- Latest verified reliability source on main: `125e0e9c9a4fa37a1f5977c235cfe98a6d596c42`; exact clean checks **158 Python/346 SwiftPM/577 native/52 guards**, sandboxes, Debug/Release/development/signature all passed with zero warnings. [Receipt](verification/reliability-history-research.md). The enclosing documentation commit publishes this checkpoint; complete offline assembly is underway.
+- Historical verified reliability source: `125e0e9c9a4fa37a1f5977c235cfe98a6d596c42`; exact clean checks **158 Python/346 SwiftPM/577 native/52 guards**, sandboxes, Debug/Release/development/signature all passed with zero warnings. [Receipt](verification/reliability-history-research.md). The enclosing documentation commit publishes this checkpoint; complete offline assembly is underway.
 - Earlier exact helper increment: `2db5aa9a1ecc744d57ef6c7478e5eab901d155de`; clean detached required checks passed before publication. Its enclosing documentation commit publishes this checkpoint. Prior public checkpoint was `92fa215da1228eb9c1f2a949fb3f1da7b5f8fa1b`; earlier voice/skin candidate remains `6aa5b89a8fa6ede0dca2c65a03a80221b566b0bc`, merged by PR #2 at `f718e870cd14148c1b20c03c7adc822f9981bf31`.
 - Main is the sole local/remote ongoing/default branch. One integration owner stages/commits/pushes; no force-push, extra feature branches, dirty reset or overwriting another writer.
 - Active checkout: `/private/tmp/dot-next-stage-20261013`. Helper verification checkout `/private/tmp/dot-helper-verified-20261013` is detached. Other source remains unfinished in the active checkout.
@@ -30,7 +52,7 @@ Checkpoint: **2026-10-13 19:08 UTC**. Read the [canonical checklist](BUILD_CHECK
 
 Installed working source remains `b26a14505bd2bc8e57264f1dfc934f778a8bd781`, executable SHA-256 `28a5bc43233266be7ecb488b58c438823ee371c9f4ed6f490ca30d5463fa1ac5`. Complete separate old candidate remains `/private/tmp/dot-voice-batch-20261013/build-complete/Dot.app`, source `6aa5b89`, executable SHA-256 `537b472c4c3487f2b00cddc15a1a502875eb45c4ee40038078660ea375f366f3`. It is ad-hoc/not notarized/not installed. The new helper-only development package is incomplete and is not an owner bundle. Do not replace either preserved app during development.
 
-## Current lane ownership
+## Historical lane ownership
 
 | Owner | Current assignment |
 | --- | --- |
@@ -57,7 +79,7 @@ Root controls integration manifests; agents must not edit them or each other's f
 - History/expressions and typed/actions/source utilities are now source-published in `125e0e9`, with exact automated evidence; physical/device/full-capability acceptance remains separate. 120 shared authored expression trajectories/render receipts do not establish full character-specific perceptual/phoneme/device acceptance. LocalMemory/PersistentTasks drafts are preserved and actively developed outside the tested source.
 - **Provider question pending once in coordinating chat:** Tavily free-only first versus raw Perplexity Search with explicit spending limit. No answer/default/time passage authorizes selection or paid calls. Keys belong locally in Dot, never chat. Qwen reasoning stays local; actual page/PDF evidence and explicit result-retention rights remain required.
 
-## Next executable steps
+## Historical next steps — 2026-10-13
 
 1. Complete the separate exact `125e0e9` offline assembly and verify payloads, native Whisper link, metadata, signature and exact provenance. Preserve installed/older complete candidate. Required model-free gates already passed; real assembled acceptance is next.
 2. After assembly/asset checks, reserve one model window for the controlled narrow read-only ANE cache comparison. No broad cache grants, engine changes or signing/security bypass; retain negative fixtures and distinguish causal measurements from prior hypotheses.

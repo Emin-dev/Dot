@@ -59,6 +59,37 @@ final class ResearchHTTPTransportTests: XCTestCase {
         if let location { headers["Location"] = location }
         return ResearchHTTPResult(data: Data("original evidence".utf8), response: HTTPURLResponse(url: url, statusCode: code, httpVersion: "HTTP/1.1", headerFields: headers)!)
     }
+    func testInitialHTTPNeverResolvesOrConnectsAndCustomHTTPSPortsRemainAllowed() async throws {
+        let trace = ResearchTransportTrace()
+        let transport = ResearchPinnedHTTPTransport(resolve: { host, _ in
+            await trace.resolve(host); return ["1.1.1.1"]
+        }, exchange: { url, pin, _ in
+            await trace.pin(pin); XCTAssertEqual(url.port, 8443); return Self.response(url)
+        })
+        for address in ["http://example.org/source", "HTTP://example.org/source", "http://example.org:8443/source"] {
+            do { _ = try await transport.fetch(URL(string: address)!); XCTFail("HTTP must fail before DNS") }
+            catch { XCTAssertEqual(error as? ResearchNotebookError, .invalidInput) }
+        }
+        let (queries, pins) = await trace.snapshot()
+        XCTAssertTrue(queries.isEmpty); XCTAssertTrue(pins.isEmpty)
+        _ = try await transport.fetch(URL(string: "https://example.org:8443/source")!)
+        let (secureQueries, securePins) = await trace.snapshot()
+        XCTAssertEqual(secureQueries, ["example.org"]); XCTAssertEqual(securePins, ["1.1.1.1"])
+    }
+
+    func testDowngradeRedirectStopsBeforeSecondDNSOrConnection() async {
+        let trace = ResearchTransportTrace()
+        let transport = ResearchPinnedHTTPTransport(resolve: { host, _ in
+            await trace.resolve(host); return ["1.1.1.1"]
+        }, exchange: { url, pin, _ in
+            await trace.pin(pin); return Self.response(url, code: 302, location: "http://other.example/replaced")
+        })
+        do { _ = try await transport.fetch(URL(string: "https://example.org/source")!); XCTFail("HTTP redirect accepted") }
+        catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+        let (queries, pins) = await trace.snapshot()
+        XCTAssertEqual(queries, ["example.org"]); XCTAssertEqual(pins, ["1.1.1.1"])
+    }
+
     func testAllSpecialIPv4AndTransitionIPv6AreRejected() {
         let denied = ["0.0.0.0", "0.1.2.3", "10.0.0.1", "100.64.0.1", "100.127.255.255", "127.0.0.1", "127.255.255.255",
                       "169.254.1.1", "172.16.0.1", "172.31.255.255", "192.0.0.9", "192.0.2.1", "192.31.196.1", "192.52.193.1",
@@ -111,7 +142,7 @@ final class ResearchHTTPTransportTests: XCTestCase {
         XCTAssertEqual(named, 0)
         let flags = fcntl(listener, F_GETFL)
         XCTAssertEqual(fcntl(listener, F_SETFL, flags | O_NONBLOCK), 0)
-        let url = URL(string: "http://private.example:\(UInt16(bigEndian: address.sin_port))/secret")!
+        let url = URL(string: "https://private.example:\(UInt16(bigEndian: address.sin_port))/secret")!
         for answer in [["127.0.0.1"], ["1.1.1.1", "127.0.0.1"], ["2606:4700:4700::1111", "::ffff:127.0.0.1"]] {
             let transport = ResearchPinnedHTTPTransport(resolve: { _, _ in answer }, exchange: { _, _, _ in
                 XCTFail("Unsafe DNS reached exchange"); throw ResearchNotebookError.networkFailure
@@ -399,7 +430,7 @@ final class ResearchHTTPTransportTests: XCTestCase {
         XCTAssertEqual(runtime.helper, try Self.kernelPath(helper), "The exact sandbox literal must retain /private when required")
         let (inherited, peer, port) = try await inheritedTCPFixture()
         defer { try? inherited.close(); try? peer.close() }
-        let arguments = try runtime.arguments(url: URL(string: "http://fixture.invalid:\(port)/")!, address: "1.1.1.1", remaining: 2)
+        let arguments = try runtime.arguments(url: URL(string: "https://fixture.invalid:\(port)/")!, address: "1.1.1.1", remaining: 2)
         XCTAssertFalse(arguments.contains { $0.contains("DOT_SOURCE_ENDPOINT") })
         let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec", arguments: arguments,
             deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 128, stderrLimit: 4_096, standardInput: inherited)
@@ -415,7 +446,7 @@ final class ResearchHTTPTransportTests: XCTestCase {
         let runtime = try await sourceRuntime(helper: repository.appendingPathComponent("Resources/Research/dot_source_fetch.py"))
         let (inherited, peer, port) = try await inheritedTCPFixture()
         defer { try? inherited.close(); try? peer.close() }
-        let arguments = try runtime.arguments(url: URL(string: "http://fixture.invalid:\(port)/secret")!, address: "1.1.1.1", remaining: 2)
+        let arguments = try runtime.arguments(url: URL(string: "https://fixture.invalid:\(port)/secret")!, address: "1.1.1.1", remaining: 2)
         let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec", arguments: arguments,
             deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 128, stderrLimit: 4_096, standardInput: inherited)
         XCTAssertEqual(result.status, 1); XCTAssertTrue(result.stdout.isEmpty); XCTAssertTrue(result.stderr.isEmpty)

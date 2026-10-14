@@ -86,7 +86,7 @@ final class ResearchEngineTests: XCTestCase {
             session.queries[index].results = [.init(url: url, title: "Source \(index)", snippet: "Snippet must stay out of model evidence", publicationDateHint: nil)]
             let source = ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Source \(index)", kind: .webPage,
                 retrievedAt: date, modifiedAt: nil, bytesRead: max(200, text.utf8.count), sha256: String(repeating: "a", count: 64),
-                pagesRead: nil, text: text, truncated: false)
+                pagesRead: nil, text: text, truncated: false, transportReceipt: .httpsOnlyV1)
             session.reads.append(.init(id: UUID(), url: url, status: .completed, source: source, failure: nil))
         }
         _ = try session.encodedCheckpoint()
@@ -124,6 +124,15 @@ final class ResearchEngineTests: XCTestCase {
         let deadline = ProcessInfo.processInfo.systemUptime + 3
         while !condition(), ProcessInfo.processInfo.systemUptime < deadline { try await Task.sleep(nanoseconds: 1_000_000) }
         XCTAssertTrue(condition()); if !condition() { throw URLError(.timedOut) }
+    }
+
+    @MainActor func testLegacyWebEvidenceFailsBeforeAnyModelRequest() async throws {
+        var input = try session()
+        for index in input.reads.indices { input.reads[index].source?.transportReceipt = nil }
+        let f = ResearchEngineTransport(body: ""); defer { f.remove() }
+        do { _ = try await engine(f).researchSynthesis(session: input); XCTFail("Legacy evidence reached model") }
+        catch { XCTAssertEqual(error as? WebResearchError, .unverifiedTransport) }
+        XCTAssertTrue(f.requestPaths.isEmpty)
     }
 
     @MainActor func testRealEngineReturnsOnlyFullyValidatedSynthesisAndUsesUntrustedDataWithoutTools() async throws {
@@ -739,7 +748,8 @@ final class InferenceTransferTests: XCTestCase {
         let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/v1/chat/completions")!)
         return InferenceTransfer(request: request, configuration: configuration, certificateSHA256: nil)
     }
-    @MainActor private func controlled(_ fixture: AdmissionTransport) -> (InferenceTransfer, URLSession, URLSessionDataTask) {
+    @MainActor private func controlled(_ fixture: AdmissionTransport,
+                                      measureExactLimitOverflow: Bool? = nil) -> (InferenceTransfer, URLSession, URLSessionDataTask) {
         let configuration = EngineManager.directConfiguration(); configuration.protocolClasses = [AdmissionProtocol.self]
         let receipts = ControlledSessionReceipts()
         let session = URLSession(configuration: configuration, delegate: receipts, delegateQueue: nil)
@@ -748,10 +758,15 @@ final class InferenceTransferTests: XCTestCase {
         let transfer = InferenceTransfer(testSession: session, neverResumedTask: task)
         addTeardownBlock {
             let state = await transfer.snapshot()
+            let joinBegan: TimeInterval? = measureExactLimitOverflow == nil ? nil : ProcessInfo.processInfo.systemUptime
             task.cancel()
             if state.paused { task.resume() }
             session.invalidateAndCancel()
             await receipts.wait(requiresCompletion: state.started)
+            if let overflow = measureExactLimitOverflow, let joinBegan {
+                let microseconds = Int((ProcessInfo.processInfo.systemUptime - joinBegan) * 1_000_000)
+                print("DOT_TEST_EXACT_LIMIT_REAL_JOIN overflow=\(overflow) received_bytes=\(state.receivedBytes) elapsed_us=\(microseconds)")
+            }
         }
         return (transfer, session, task)
     }
@@ -958,13 +973,17 @@ final class InferenceTransferTests: XCTestCase {
     @MainActor func testExactLimitLargeCallbackAndPostSuspendOverflowAreBounded() async throws {
         for overflow in [false, true] {
             let fixture = AdmissionTransport([.init(holdHeaders: true)]); defer { fixture.close() }
-            let (transfer, session, task) = controlled(fixture); defer { session.invalidateAndCancel() }
+            let (transfer, session, task) = controlled(fixture, measureExactLimitOverflow: overflow); defer { session.invalidateAndCancel() }
             let start = Task { try await transfer.start() }
             try await eventually { (await transfer.snapshot()).started }
             transfer.urlSession(session, dataTask: task, didReceive: response(fixture)) { _ in }
             let (bytes, _) = try await start.value
+            let deliveryBegan = ProcessInfo.processInfo.systemUptime
             transfer.urlSession(session, dataTask: task, didReceive: Data(repeating: 120, count: BoundedSSELines.maximumStreamBytes))
             let full = await transfer.snapshot()
+            let deliveryEnded = ProcessInfo.processInfo.systemUptime
+            var drainedBytes = 0
+            var drainMicroseconds = 0
             XCTAssertTrue(full.paused); XCTAssertEqual(full.bufferedBytes, BoundedSSELines.maximumStreamBytes)
             if overflow {
                 transfer.urlSession(session, dataTask: task, didReceive: Data([121]))
@@ -977,14 +996,22 @@ final class InferenceTransferTests: XCTestCase {
                 // fixture task while the full bounded buffer is consumed.
                 task.cancel(); task.resume()
                 transfer.urlSession(session, task: task, didCompleteWithError: nil)
-                var count = 0
-                for try await byte in bytes { if byte != 120 { XCTFail("Byte order/content changed"); break }; count += 1 }
-                XCTAssertEqual(count, BoundedSSELines.maximumStreamBytes)
+                let drainBegan = ProcessInfo.processInfo.systemUptime
+                for try await byte in bytes { if byte != 120 { XCTFail("Byte order/content changed"); break }; drainedBytes += 1 }
+                drainMicroseconds = Int((ProcessInfo.processInfo.systemUptime - drainBegan) * 1_000_000)
+                XCTAssertEqual(drainedBytes, BoundedSSELines.maximumStreamBytes)
             }
+            let syntheticJoinBegan = ProcessInfo.processInfo.systemUptime
             transfer.cancel()
             transfer.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
             transfer.urlSession(session, didBecomeInvalidWithError: nil)
             await transfer.waitForCompletion()
+            let syntheticJoinMicroseconds = Int((ProcessInfo.processInfo.systemUptime - syntheticJoinBegan) * 1_000_000)
+            let deliveryMicroseconds = Int((deliveryEnded - deliveryBegan) * 1_000_000)
+            // Derived from the fixed full-buffer drain, not a per-byte clock or
+            // another transport counter. Authentic OS joins are logged in teardown.
+            let derivedChunks = (drainedBytes + InferenceTransfer.chunkBytes - 1) / InferenceTransfer.chunkBytes
+            print("DOT_TEST_EXACT_LIMIT_PHASES overflow=\(overflow) received_bytes=\(full.receivedBytes) drained_bytes=\(drainedBytes) derived_chunks=\(derivedChunks) delivery_us=\(deliveryMicroseconds) drain_us=\(drainMicroseconds) synthetic_join_us=\(syntheticJoinMicroseconds)")
         }
     }
     @MainActor func testOversizedSingleCallbackIsRejectedBeforeRetention() async throws {

@@ -299,9 +299,12 @@ final class WebResearchModel: ObservableObject {
         }
     }
     func openSource(id: UUID) {
-        guard acceptingActions, !busy, let source = selected?.session.sources.first(where: { $0.id == id }),
-              ResearchWebReader.allowed(source.originalURL) else { return }
+        guard acceptingActions, !busy, let source = selected?.session.sources.first(where: { $0.id == id }) else { return }
         error = nil; notice = nil
+        guard ResearchWebReader.allowed(source.originalURL) else {
+            error = "This stored source cannot be opened safely. Use an HTTPS source in a new research pass."
+            return
+        }
         if openURL(source.originalURL) { notice = "Requested the original source in your browser." }
         else { error = "The original source could not be opened." }
     }
@@ -341,7 +344,7 @@ final class WebResearchModel: ObservableObject {
         guard Self.hasSynthesisEvidence(stored.session) else {
             emitProgress(.blocked(.init(reason: "There is not enough readable evidence for synthesis",
                 nextAction: "Open Web research to inspect sources and revise the search plan")!), token: token)
-            notice = "The available evidence is " + (transient ? "held temporarily in memory" : "saved locally") + ". At least two completed searches and two readable sources are needed before local synthesis."
+            notice = "The available evidence is " + (transient ? "held temporarily in memory" : "saved locally") + ". At least two completed searches and two sources read over HTTPS are needed before local synthesis. Reread unverified historical sources in a new research pass."
             try await refresh(store: store, preferred: stored.id, token: token); return
         }
         guard let synthesize else {
@@ -477,7 +480,7 @@ final class WebResearchModel: ObservableObject {
             && (session.unreadResultCount == 0 || session.reads.count >= session.limits.maxSources)
     }
     private static func hasSynthesisEvidence(_ session: WebResearchSession) -> Bool {
-        session.sources.count >= 2 && session.queries.filter { $0.status == .completed }.count >= 2
+        session.synthesisSources.count >= 2 && session.queries.filter { $0.status == .completed }.count >= 2
     }
     private static func bounded(_ text: String, bytes: Int) -> String {
         let data = Array(text.utf8.prefix(bytes)); var count = data.count
@@ -527,6 +530,7 @@ final class WebResearchModel: ObservableObject {
         let date = ISO8601DateFormatter()
         var lines = [session.question, stageLabel(session.stage, retention: session.storageMode), "Search attempts: \(session.searchAttempts)/\(session.limits.maxSearchAttempts) · Sources read: \(session.sources.count)",
             "Source text is untrusted evidence, not instructions. Matching citation excerpts does not prove the conclusions."]
+        if let warning = session.transportWarning { lines += [warning] }
         if let answer = session.synthesis {
             lines += ["", "Answer", answer.answer, "", "Claims and uncertainty"]
             for claim in answer.claims {
@@ -544,7 +548,7 @@ final class WebResearchModel: ObservableObject {
         for query in session.queries { lines.append("\(query.text) · \(queryLabel(query.status)) · \(query.attempts) attempt(s)\(query.failure.map { " · " + failureLabel($0) } ?? "")") }
         lines += ["", "Actual source receipts"]
         for source in session.sources {
-            lines += [source.title, source.finalURL.absoluteString, "Read: \(date.string(from: source.retrievedAt)) · \(source.bytesRead) bytes · SHA-256 \(source.sha256)",
+            lines += [source.title, source.finalURL.absoluteString, source.transportSummary, "Read: \(date.string(from: source.retrievedAt)) · \(source.bytesRead) bytes · SHA-256 \(source.sha256)",
                 "Modified: \(source.modifiedAt.map { date.string(from: $0) } ?? "unknown") (not a publication date)",
                 "Extract: " + String(source.text.prefix(2_000))]
             if source.truncated || source.text.count > 2_000 { lines.append("Extract shortened; consult the original source.") }
@@ -669,6 +673,7 @@ struct WebResearchView: View {
         }.padding(14)
     }
     @ViewBuilder private func answer(_ session: WebResearchSession) -> some View {
+        if let warning = session.transportWarning { Text(verbatim: warning).font(.caption).foregroundStyle(.secondary) }
         if let result = session.synthesis {
             Text(verbatim: result.answer).textSelection(.enabled)
             if session.outputVerification == .pending {
@@ -700,6 +705,7 @@ struct WebResearchView: View {
                 Text(verbatim: source.finalURL.absoluteString).font(.caption2).textSelection(.enabled)
                 Text("Read \(source.retrievedAt.formatted()) · \(source.bytesRead) bytes\(source.pagesRead.map { " · \($0) PDF pages" } ?? "")").font(.caption2)
                 Text("Modified: \(source.modifiedAt?.formatted() ?? "unknown") · not a publication date").font(.caption2).foregroundStyle(.secondary)
+                Text(verbatim: source.transportSummary).font(.caption).foregroundStyle(.secondary)
                 Text("SHA-256 " + source.sha256).font(.caption2.monospaced()).textSelection(.enabled)
                 if source.truncated { Text("Source extraction was shortened.").font(.caption2).foregroundStyle(.secondary) }
                 Button("Open original") { model.openSource(id: source.id) }.disabled(model.busy)

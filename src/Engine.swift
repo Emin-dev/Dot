@@ -676,7 +676,7 @@ final class EngineManager: ObservableObject {
     private func performResearchSynthesis(session research: WebResearchSession) async throws -> WebResearchSynthesis {
         try Task.checkCancellation()
         let evidence = try research.evidenceJSON()
-        guard research.queries.filter({ $0.status == .completed }).count >= 2, research.sources.count >= 2 else {
+        guard research.queries.filter({ $0.status == .completed }).count >= 2, research.synthesisSources.count >= 2 else {
             throw WebResearchError.insufficientEvidence
         }
         let (base, model) = try await verifyConnection()
@@ -699,7 +699,7 @@ final class EngineManager: ObservableObject {
             "tool_choice": "none", "parallel_tool_calls": false,
             "response_format": ["type": "json_schema", "json_schema": [
                 "name": "dot_research_synthesis", "strict": true,
-                "schema": ResearchSynthesisContract.schema(sourceIDs: research.sources.map(\.id))
+                "schema": ResearchSynthesisContract.schema(sourceIDs: research.synthesisSources.map(\.id))
             ]], "chat_template_kwargs": ["enable_thinking": true, "reasoning_effort": "low"]
         ])
         try Task.checkCancellation()
@@ -842,7 +842,7 @@ private enum ResearchSynthesisContract {
               result.followUpQueries.allSatisfy(readable),
               Set(result.citations.map(\.sourceID)).count >= 2,
               result.citations.allSatisfy({ citation in
-                  research.sources.first(where: { $0.id == citation.sourceID })
+                  research.synthesisSources.first(where: { $0.id == citation.sourceID })
                       .map { String($0.text.prefix(4_000)).contains(citation.excerpt) } == true
               }) else { throw WebResearchError.invalidEvidence }
         return result

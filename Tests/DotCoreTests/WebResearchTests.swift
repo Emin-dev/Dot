@@ -43,7 +43,7 @@ private actor ResearchReadFixture: WebResearchSourceReading {
         return ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: url.lastPathComponent, kind: .webPage,
                               retrievedAt: Date(timeIntervalSince1970: 456), modifiedAt: Date(timeIntervalSince1970: 100),
                               bytesRead: byteCount, sha256: String(repeating: "a", count: 64), pagesRead: nil,
-                              text: text ?? "Evidence for \(url.path). Publication 2026-10-01.", truncated: false)
+                              text: text ?? "Evidence for \(url.path). Publication 2026-10-01.", truncated: false, transportReceipt: .httpsOnlyV1)
     }
     func waiting() -> Bool { continuation != nil }
     func release() { hold = nil; continuation?.resume(); continuation = nil }
@@ -95,6 +95,66 @@ final class WebResearchTests: XCTestCase {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
         XCTFail("Fixture did not reach its barrier"); throw URLError(.timedOut)
+    }
+
+    private func legacyCheckpoint(_ session: WebResearchSession, http: Bool) throws -> WebResearchSession {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: session.encodedCheckpoint()) as? [String: Any])
+        var reads = try XCTUnwrap(root["reads"] as? [[String: Any]])
+        for index in reads.indices {
+            if var source = reads[index]["source"] as? [String: Any] {
+                source.removeValue(forKey: "transportReceipt"); reads[index]["source"] = source
+            }
+        }
+        root["reads"] = reads
+        let data = try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+        let text = String(decoding: data, as: UTF8.self)
+        return try WebResearchSession.decodeCheckpoint(Data((http ? text.replacingOccurrences(of: "https:", with: "http:") : text).utf8))
+    }
+
+    func testLegacyHTTPAndUnmarkedHTTPSCheckpointsStayReadableButCannotSynthesize() async throws {
+        let fetched = try await ready()
+        for http in [false, true] {
+            let legacy = try legacyCheckpoint(fetched, http: http)
+            XCTAssertEqual(legacy.sources.count, 2); XCTAssertTrue(legacy.synthesisSources.isEmpty)
+            XCTAssertNotNil(legacy.transportWarning)
+            XCTAssertEqual(try WebResearchSession.decodeCheckpoint(legacy.encodedCheckpoint()), legacy)
+            XCTAssertThrowsError(try legacy.evidenceJSON()) { XCTAssertEqual($0 as? WebResearchError, .unverifiedTransport) }
+            XCTAssertThrowsError(try legacy.completing(with: self.result(legacy))) { XCTAssertEqual($0 as? WebResearchError, .unverifiedTransport) }
+            let completed = try fetched.completing(with: result(fetched))
+            let oldAnswer = try legacyCheckpoint(completed, http: http)
+            XCTAssertEqual(oldAnswer.synthesis, completed.synthesis)
+            XCTAssertEqual(try WebResearchSession.decodeCheckpoint(oldAnswer.encodedCheckpoint()), oldAnswer)
+        }
+    }
+
+    func testMixedEvidenceExcludesLegacyTextAndRejectsCitationsToLegacySource() async throws {
+        var fetched = try await ready()
+        let url = URL(string: "http://example.org/legacy")!
+        let legacy = ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Legacy",
+            kind: .webPage, retrievedAt: Date(), modifiedAt: nil, bytesRead: 30,
+            sha256: String(repeating: "a", count: 64), pagesRead: nil, text: "UNVERIFIED_SENTINEL", truncated: false)
+        fetched.queries[0].results.append(.init(url: url, title: "Legacy", snippet: "", publicationDateHint: nil))
+        fetched.reads.append(.init(id: UUID(), url: url, status: .completed, source: legacy, failure: nil))
+        XCTAssertEqual(fetched.sources.count, 3); XCTAssertEqual(fetched.synthesisSources.count, 2)
+        let envelope = try fetched.evidenceJSON()
+        XCTAssertFalse(envelope.contains("UNVERIFIED_SENTINEL")); XCTAssertFalse(envelope.contains(legacy.id.uuidString))
+        let good = result(fetched)
+        XCTAssertNoThrow(try fetched.completing(with: good))
+        let bad = WebResearchSynthesis(answer: good.answer, claims: good.claims,
+            citations: [.init(number: 1, sourceID: legacy.id, excerpt: "UNVERIFIED_SENTINEL"), good.citations[1]],
+            conflicts: good.conflicts, followUpQueries: [])
+        XCTAssertThrowsError(try fetched.completing(with: bad)) { XCTAssertEqual($0 as? WebResearchError, .invalidEvidence) }
+    }
+
+    func testResumeDoesNotReadHistoricalPendingHTTPSource() async throws {
+        var legacy = try legacyCheckpoint(try await ready(), http: true)
+        for index in legacy.reads.indices { legacy.reads[index].source = nil; legacy.reads[index].status = .pending }
+        legacy.stage = .paused
+        let reader = ResearchReadFixture(), provider = ResearchSearchFixture()
+        let resumed = try await WebResearchWorkflow(provider: provider, reader: reader).run(legacy) { _ in }
+        let calls = await reader.calls
+        XCTAssertTrue(calls.isEmpty); XCTAssertTrue(resumed.reads.allSatisfy { $0.status == .failed && $0.failure == .source })
+        XCTAssertTrue(resumed.sources.isEmpty)
     }
 
     func testSessionRejectsDuplicateUnboundedAndSingleQueryPlans() throws {
@@ -323,7 +383,7 @@ final class WebResearchTests: XCTestCase {
             copy.source = ResearchSource(id: source.id, originalURL: source.originalURL, finalURL: source.finalURL,
                 title: String(repeating: "x", count: 8_192), kind: source.kind, retrievedAt: source.retrievedAt,
                 modifiedAt: source.modifiedAt, bytesRead: source.bytesRead, sha256: source.sha256,
-                pagesRead: source.pagesRead, text: source.text, truncated: source.truncated)
+                pagesRead: source.pagesRead, text: source.text, truncated: source.truncated, transportReceipt: .httpsOnlyV1)
             return copy
         }
         XCTAssertNoThrow(try metadata.encodedCheckpoint())

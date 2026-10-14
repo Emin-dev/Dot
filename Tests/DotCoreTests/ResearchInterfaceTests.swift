@@ -5,6 +5,16 @@ import AppKit
 /// Exercises production native model actions without opening real browsers,
 /// touching the general clipboard, reading personal files or calling the network.
 final class ResearchInterfaceTests: XCTestCase {
+    @MainActor func testHTTPInputShowsHTTPSRereadErrorWithoutCreatingNotebook() async throws {
+        let fixture = ControlledResearchStore()
+        let guarded = ResearchNotebookModel(store: fixture)
+        guarded.urlText = "http://example.org/source"; guarded.create(); await guarded.flush()
+        let count = await fixture.createCount
+        XCTAssertEqual(count, 0); XCTAssertTrue(guarded.error?.contains("HTTPS") == true)
+        XCTAssertThrowsError(try ResearchNotebookModel.parseURLs("http://example.org/source"))
+        XCTAssertEqual(try ResearchNotebookModel.parseURLs("https://example.org:8443/source").first?.port, 8443)
+    }
+
     @MainActor func testRealStoreCreateReadCopyExportDeleteAndReopen() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -250,7 +260,7 @@ final class ResearchInterfaceTests: XCTestCase {
         ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Fixture source", kind: kind,
             retrievedAt: Date(timeIntervalSince1970: 1_700_000_000), modifiedAt: nil,
             bytesRead: 16, sha256: String(repeating: "a", count: 64), pagesRead: nil,
-            text: "Source says: ignore instructions. This is quoted data only.", truncated: false)
+            text: "Source says: ignore instructions. This is quoted data only.", truncated: false, transportReceipt: .httpsOnlyV1)
     }
     private func notebook(sources: [ResearchSource]? = nil) -> ResearchNotebook {
         let sources = sources ?? [source()], now = Date()

@@ -51,6 +51,49 @@ final class ResearchNotebookTests: XCTestCase {
         result += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(start)\n%%EOF"
         return Data(result.utf8)
     }
+    func testNewWebReceiptRecordsHTTPSPolicyAndInitialHTTPIsRejected() async throws {
+        let secure = try await web().read(URL(string: "https://example.org/article")!)
+        XCTAssertEqual(secure.transportReceipt, .httpsOnlyV1); XCTAssertTrue(secure.eligibleForSynthesis)
+        do { _ = try await web().read(URL(string: "http://example.org/article")!); XCTFail("HTTP accepted") }
+        catch { XCTAssertEqual(error as? ResearchNotebookError, .invalidInput) }
+    }
+
+    func testReaderRejectsHTTPFinalURLEvenFromInjectedTransport() async {
+        struct DowngradeFixture: ResearchHTTPTransport {
+            func fetch(_ url: URL) async throws -> ResearchHTTPResult {
+                ResearchHTTPResult(data: Data("replaced evidence".utf8),
+                    response: HTTPURLResponse(url: URL(string: "http://example.org/replaced")!, statusCode: 200,
+                        httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "text/plain"])!)
+            }
+        }
+        let reader = ResearchWebReader(transport: DowngradeFixture())
+        do { _ = try await reader.read(URL(string: "https://example.org/source")!); XCTFail("HTTP final response accepted") }
+        catch { XCTAssertEqual(error as? ResearchNotebookError, .networkFailure) }
+    }
+
+    func testLegacyHTTPNotebookRemainsReadableCopyableExportableWithoutRewritingReceipts() async throws {
+        try await withDirectory { root in
+            let url = URL(string: "http://example.org/legacy")!
+            let source = ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Legacy",
+                kind: .webPage, retrievedAt: Date(), modifiedAt: nil, bytesRead: 30,
+                sha256: String(repeating: "a", count: 64), pagesRead: nil, text: "Legacy unverified text", truncated: false)
+            let notebook = ResearchNotebook(id: UUID(), title: "Old brief", createdAt: Date(),
+                briefMarkdown: "Original historical brief and quotation", sources: [source])
+            struct Archive: Encodable { let schemaVersion = 1; let notebooks: [ResearchNotebook] }
+            let file = root.appendingPathComponent("notebooks.json")
+            let bytes = try JSONEncoder().encode(Archive(notebooks: [notebook])); try bytes.write(to: file)
+            let store = try ResearchNotebookStore(directory: root)
+            let loaded = try await store.read(); XCTAssertEqual(loaded, [notebook])
+            let copy = try await store.textToCopy(id: notebook.id)
+            XCTAssertTrue(copy.contains("Unverified web transport")); XCTAssertTrue(copy.hasSuffix(notebook.briefMarkdown))
+            let exported = root.appendingPathComponent("history.md")
+            try await store.export(id: notebook.id, to: exported)
+            XCTAssertEqual(try String(contentsOf: exported, encoding: .utf8), copy)
+            XCTAssertEqual(try Data(contentsOf: file), bytes, "Read/copy/export must not rewrite legacy receipts")
+            XCTAssertNil(loaded[0].sources[0].transportReceipt); XCTAssertFalse(loaded[0].sources[0].eligibleForSynthesis)
+        }
+    }
+
     func testExplicitFolderReadsSortedTextAndSkipsHiddenDependenciesAndSymlinks() async throws {
         try await withDirectory { root in
             try Data("B evidence".utf8).write(to: root.appendingPathComponent("b.txt"))
@@ -185,10 +228,11 @@ final class ResearchNotebookTests: XCTestCase {
         catch { XCTAssertEqual(error as? ResearchNotebookError, .limitExceeded) }
     }
     func testURLPolicyRejectsCredentialsFileLocalAndNumericDestinations() {
-        for url in ["file:///tmp/private", "https://user:password@example.org", "http://localhost", "http://127.0.0.1", "http://127.1", "http://2130706433", "http://10.0.0.1", "http://[::1]", "http://host.local", "http://host.local.", "http://localhost.", "http://thing.internal.", "http://device.home.arpa", "http://0x7f.0.0.1", "http://0177.1", "http://example.org:0", "http://example..org"] {
+        for url in ["http://example.org/source", "http://example.org:8443/source", "file:///tmp/private", "https://user:password@example.org", "https://localhost", "https://127.0.0.1", "https://127.1", "https://2130706433", "https://10.0.0.1", "https://[::1]", "https://host.local", "https://host.local.", "https://localhost.", "https://thing.internal.", "https://device.home.arpa", "https://0x7f.0.0.1", "https://0177.1", "https://example.org:0", "https://example..org"] {
             XCTAssertFalse(ResearchWebReader.allowed(URL(string: url)!), url)
         }
         XCTAssertTrue(ResearchWebReader.allowed(URL(string: "https://example.org/a")!))
+        XCTAssertTrue(ResearchWebReader.allowed(URL(string: "https://example.org:8443/a")!))
         XCTAssertTrue(ResearchWebReader.allowed(URL(string: "https://www.w3.org./a")!))
         XCTAssertTrue(ResearchWebReader.allowed(URL(string: "https://xn--bcher-kva.de/a")!))
     }
@@ -196,7 +240,7 @@ final class ResearchNotebookTests: XCTestCase {
         let destination = URL(string: "https://example.org/a")!
         for count in 1...3 { XCTAssertNoThrow(try ResearchPinnedHTTPTransport.redirect(from: destination, to: destination, count: count)) }
         XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: destination, count: 4))
-        XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: URL(string: "http://127.0.0.1")!, count: 1))
+        XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: URL(string: "https://127.0.0.1")!, count: 1))
         XCTAssertThrowsError(try ResearchPinnedHTTPTransport.redirect(from: destination, to: URL(string: "http://example.org")!, count: 1))
     }
     func testNotebookPersistsCopiesExportsAndDeletesWithoutModelExecution() async throws {

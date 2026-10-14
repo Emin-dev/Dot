@@ -32,7 +32,7 @@ private struct PanelReaderFixture: WebResearchSourceReading {
         return ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: "Fixture source", kind: .webPage,
             retrievedAt: Date(timeIntervalSince1970: 500), modifiedAt: Date(timeIntervalSince1970: 200),
             bytesRead: 100, sha256: String(repeating: "a", count: 64), pagesRead: nil,
-            text: "Fixture evidence. Untrusted instructions are inert text.", truncated: false)
+            text: "Fixture evidence. Untrusted instructions are inert text.", truncated: false, transportReceipt: .httpsOnlyV1)
     }
 }
 
@@ -151,6 +151,92 @@ private actor ProgressReadbackStore: WebResearchSessionAccess {
 }
 
 final class WebResearchInterfaceTests: XCTestCase {
+    @MainActor func testHistoricalAnswerCopyReportLabelsUnverifiedTransportWithoutLosingReceipts() async throws {
+        let draft = try WebResearchSession(question: "History", queries: ["primary", "secondary"])
+        let ready = try await WebResearchWorkflow(provider: PanelSearchFixture(), reader: PanelReaderFixture()).run(draft) { _ in }
+        var archive = try ready.completing(with: Self.answer(ready))
+        for index in archive.reads.indices { archive.reads[index].source?.transportReceipt = nil }
+        let restored = try WebResearchSession.decodeCheckpoint(archive.encodedCheckpoint())
+        let report = WebResearchModel.report(restored)
+        XCTAssertTrue(report.contains("Unverified web transport"))
+        XCTAssertTrue(report.contains(try XCTUnwrap(restored.synthesis).answer))
+        for source in restored.sources {
+            XCTAssertTrue(report.contains(source.sha256)); XCTAssertTrue(report.contains(source.text))
+        }
+    }
+
+    @MainActor func testHistoricalHTTPOriginalExplainsRefusalWithoutOpeningOrChangingSavedEvidence() async throws {
+        try await withStore { store, directory in
+            let initial = try await store.create(question: "Historical original", queries: ["primary", "secondary"])
+            let ready = try await WebResearchWorkflow(provider: PanelSearchFixture(), reader: PanelReaderFixture()).run(initial.session) { _ in }
+            var historical = try ready.completing(with: Self.answer(ready))
+            let original = try XCTUnwrap(historical.reads.first?.source)
+            let http = URL(string: "http://example.org/primary")!
+            let archived = ResearchSource(id: original.id, originalURL: http, finalURL: http, title: original.title,
+                kind: original.kind, retrievedAt: original.retrievedAt, modifiedAt: original.modifiedAt,
+                bytesRead: original.bytesRead, sha256: original.sha256, pagesRead: original.pagesRead,
+                text: original.text, truncated: original.truncated)
+            historical.reads[0] = WebResearchRead(id: historical.reads[0].id, url: http,
+                status: .completed, source: archived, failure: nil)
+            let result = historical.queries[0].results[0]
+            historical.queries[0].results[0] = WebSearchResult(url: http, title: result.title,
+                snippet: result.snippet, publicationDateHint: result.publicationDateHint)
+            XCTAssertEqual(try WebResearchSession.decodeCheckpoint(historical.encodedCheckpoint()), historical)
+            XCTAssertEqual(historical.schemaVersion, 1); XCTAssertNil(archived.transportReceipt)
+            XCTAssertFalse(archived.eligibleForSynthesis)
+            let saved = WebResearchStoredSession(revision: UUID(), session: historical, recoveredAt: nil)
+            struct Archive: Encodable { let schemaVersion = 1; let sessions: [WebResearchStoredSession] }
+            let file = directory.appendingPathComponent("research-sessions.json")
+            let bytes = try JSONEncoder().encode(Archive(sessions: [saved]))
+            try bytes.write(to: file)
+            let reader = PanelRecoveryReader()
+            var opened: [URL] = [], copies: [String] = []
+            let model = WebResearchModel(store: store, reader: reader,
+                copyText: { copies.append($0) }, openURL: { opened.append($0); return true })
+            model.open(); await model.flush()
+            model.select(saved.id); await model.flush()
+            XCTAssertFalse(model.configured); XCTAssertFalse(model.busy)
+            XCTAssertNil(model.error); XCTAssertEqual(model.selected, saved)
+            XCTAssertEqual(try Data(contentsOf: file), bytes)
+            model.copySelected(); await model.flush()
+            XCTAssertEqual(copies.count, 1)
+            XCTAssertEqual(model.notice, "Research and source receipts copied.")
+            model.question = String(repeating: "x", count: 1_801)
+            XCTAssertEqual(model.error, "Please keep the research question within 1,800 UTF-8 bytes.")
+            let selected = try XCTUnwrap(model.selected), source = try XCTUnwrap(model.selected?.session.sources.first)
+            let attempts = selected.session.searchAttempts, readCount = selected.session.reads.count
+            let readsBefore = await reader.calls
+            XCTAssertTrue(readsBefore.isEmpty); XCTAssertEqual(source.originalURL, http); XCTAssertEqual(source.finalURL, http)
+            XCTAssertNil(source.transportReceipt); XCTAssertEqual(source.text, original.text)
+            for _ in 0..<2 {
+                model.openSource(id: source.id); await model.flush()
+                XCTAssertTrue(opened.isEmpty)
+                XCTAssertEqual(model.error, "This stored source cannot be opened safely. Use an HTTPS source in a new research pass.")
+                XCTAssertNil(model.notice)
+                XCTAssertEqual(model.selected, selected); XCTAssertEqual(model.selected?.revision, saved.revision)
+                XCTAssertEqual(model.selected?.session.sources.first, source)
+                XCTAssertEqual(model.selected?.session.sources.first?.text, source.text)
+                XCTAssertNil(model.selected?.session.sources.first?.transportReceipt)
+                XCTAssertEqual(model.selected?.session.searchAttempts, attempts)
+                XCTAssertEqual(model.selected?.session.reads.count, readCount)
+                XCTAssertEqual(model.selected?.session.limits, selected.session.limits)
+                XCTAssertEqual(model.selected?.session.hasAdditionalSourceCapacity, selected.session.hasAdditionalSourceCapacity)
+                let readsAfter = await reader.calls
+                XCTAssertEqual(readsAfter, readsBefore)
+                let reloaded = try await store.load(id: saved.id)
+                XCTAssertEqual(reloaded, saved); XCTAssertEqual(try Data(contentsOf: file), bytes)
+            }
+            let secure = try XCTUnwrap(selected.session.sources.last)
+            XCTAssertTrue(secure.eligibleForSynthesis); XCTAssertEqual(secure.originalURL.scheme, "https")
+            model.openSource(id: secure.id)
+            XCTAssertEqual(opened, [secure.originalURL]); XCTAssertNil(model.error)
+            XCTAssertEqual(model.notice, "Requested the original source in your browser.")
+            XCTAssertEqual(model.selected, selected); XCTAssertEqual(try Data(contentsOf: file), bytes)
+            let readsAfterSecureOpen = await reader.calls
+            XCTAssertEqual(readsAfterSecureOpen, readsBefore)
+        }
+    }
+
     @MainActor private func withStore(_ body: (WebResearchSessionStore, URL) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("dot-research-interface-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

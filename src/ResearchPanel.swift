@@ -336,6 +336,7 @@ private struct ResearchNotebookView: View {
                                             Text("Read: \(source.retrievedAt.formatted())").font(.caption)
                                             Text(source.modifiedAt.map { "Source modified: " + $0.formatted() } ?? "Source publication/modification date unavailable.").font(.caption)
                                             Text("\(source.bytesRead) bytes\(source.pagesRead.map { " · \($0) PDF pages" } ?? "")\(source.truncated ? " · shortened extract" : "")").font(.caption)
+                                            Text(verbatim: source.transportSummary).font(.caption).foregroundStyle(.secondary)
                                             Text(verbatim: "SHA-256: " + source.sha256).font(.system(.caption2, design: .monospaced)).textSelection(.enabled)
                                             Button(source.originalURL.isFileURL ? "Reveal in Finder" : "Open original source") {
                                                 model.openOriginal(sourceID: source.id)
@@ -349,7 +350,7 @@ private struct ResearchNotebookView: View {
                                     }
                                 }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
                             } else {
-                                Text(verbatim: notebook.briefMarkdown).font(.system(.callout, design: .monospaced))
+                                Text(verbatim: notebook.presentedBriefMarkdown).font(.system(.callout, design: .monospaced))
                                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).padding(8)
                             }
                         }

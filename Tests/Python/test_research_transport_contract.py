@@ -81,23 +81,58 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class ResearchTransportContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        openssl = shutil.which('openssl')
+        if not openssl:
+            raise unittest.SkipTest('OpenSSL test certificate generator unavailable')
+        cls.state = tempfile.TemporaryDirectory()
+        state = pathlib.Path(cls.state.name)
+        config = state / 'openssl.cnf'
+        config.write_text('[req]\ndistinguished_name=dn\nx509_extensions=ext\nprompt=no\n[dn]\nCN=fixture.invalid\n[ext]\nsubjectAltName=DNS:fixture.invalid\nbasicConstraints=critical,CA:TRUE\n')
+        cls.cert, key = state / 'cert.pem', state / 'key.pem'
+        subprocess.run([openssl, 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-config', str(config),
+                        '-out', str(cls.cert), '-keyout', str(key)], capture_output=True, check=True, timeout=10)
+        # Keep a separate cleartext AIA sink to detect forbidden issuer fetching.
         cls.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
         cls.server.requests = []
-        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
-        cls.thread.start()
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True); cls.thread.start()
+        cls.tls_server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        cls.tls_server.requests = cls.server.requests
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(cls.cert, key)
+        cls.tls_server.socket = context.wrap_socket(cls.tls_server.socket, server_side=True)
+        cls.tls_thread = threading.Thread(target=cls.tls_server.serve_forever, daemon=True); cls.tls_thread.start()
 
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown(); cls.server.server_close(); cls.thread.join(timeout=2)
+        cls.tls_server.shutdown(); cls.tls_server.server_close(); cls.tls_thread.join(timeout=2)
+        cls.state.cleanup()
 
     def setUp(self):
         self.server.requests.clear()
 
     def request(self, path, **kwargs):
         body, metadata = io.BytesIO(), io.BytesIO()
-        connector = kwargs.pop('connector', lambda _address, _port, timeout: socket.create_connection(('127.0.0.1', self.server.server_port), timeout))
-        fetcher.fetch(f'http://fixture.invalid:{self.server.server_port}{path}', '1.1.1.1', 3, body, metadata, connector=connector, **kwargs)
+        connector = kwargs.pop('connector', lambda _address, _port, timeout: socket.create_connection(('127.0.0.1', self.tls_server.server_port), timeout))
+        context = kwargs.pop('context_factory', lambda: ssl.create_default_context(cafile=str(self.cert)))
+        fetcher.fetch(f'https://fixture.invalid:{self.tls_server.server_port}{path}', '1.1.1.1', 3, body, metadata, connector=connector, context_factory=context, **kwargs)
         return body.getvalue(), json.loads(metadata.getvalue())
+
+    def test_initial_http_is_rejected_before_socket_or_tls_and_https_custom_ports_remain_valid(self):
+        connector, context = mock.Mock(), mock.Mock()
+        for url in ['http://example.org/source', 'HTTP://example.org/source', 'http://example.org:8443/source']:
+            with self.assertRaises(ValueError, msg=url):
+                fetcher.fetch(url, '1.1.1.1', 1, io.BytesIO(), io.BytesIO(), connector=connector, context_factory=context)
+        connector.assert_not_called(); context.assert_not_called()
+        self.assertEqual(self.server.requests, [])
+        self.assertEqual(fetcher.parse_url('https://example.org:8443/source').port, 8443)
+
+    def test_tls_policy_cannot_disable_hostname_or_certificate_verification(self):
+        for check_hostname, verify_mode in [(False, ssl.CERT_REQUIRED), (False, ssl.CERT_NONE)]:
+            context = mock.Mock(check_hostname=check_hostname, verify_mode=verify_mode)
+            with self.assertRaisesRegex(ValueError, 'invalid_tls_policy'):
+                self.request('/plain', context_factory=lambda: context)
+            context.wrap_socket.assert_not_called()
+        self.assertEqual(self.server.requests, [])
 
     def test_special_addresses_and_transition_forms_are_rejected(self):
         denied = ['0.0.0.0', '10.0.0.1', '100.64.0.1', '100.127.255.255', '127.255.1.1', '169.254.1.1', '172.31.255.255',
@@ -115,18 +150,18 @@ class ResearchTransportContractTests(unittest.TestCase):
         calls = []
         for pin in ['127.0.0.1', '::1', '::ffff:127.0.0.1', '192.168.0.1']:
             with self.assertRaises(ValueError):
-                fetcher.fetch('http://fixture.invalid/', pin, 1, io.BytesIO(), io.BytesIO(), connector=lambda *args: calls.append(args))
+                fetcher.fetch('https://fixture.invalid/', pin, 1, io.BytesIO(), io.BytesIO(), connector=lambda *args: calls.append(args))
         self.assertEqual(calls, [])
         self.assertEqual(self.server.requests, [])
 
-    def test_http_preserves_original_host_and_separates_metadata(self):
+    def test_https_preserves_original_host_and_separates_metadata(self):
         body, metadata = self.request('/plain')
         self.assertEqual(body, b'original evidence')
         self.assertEqual(metadata['status'], 200)
         self.assertEqual(metadata['headers']['content-type'], 'text/plain')
         self.assertNotIn('set-cookie', metadata['headers'])
         headers = self.server.requests[0][1]
-        self.assertEqual(headers['Host'], f'fixture.invalid:{self.server.server_port}')
+        self.assertEqual(headers['Host'], f'fixture.invalid:{self.tls_server.server_port}')
         for name in ['Cookie', 'Authorization', 'Proxy-Authorization']:
             self.assertNotIn(name, headers)
 
@@ -166,8 +201,8 @@ class ResearchTransportContractTests(unittest.TestCase):
                 self.request(path)
 
     def test_invalid_urls_and_unsafe_timeouts_do_not_connect(self):
-        for url in ['file:///etc/passwd', 'http://localhost/', 'http://127.0.0.1/', 'http://2130706433/', 'https://user:pass@example.org/',
-                    'http://foo.local/', 'http://example.org:0/', 'http://example.org:65536/', 'http://a..example/', 'http://[::1]/', 'https://example.org/#fragment']:
+        for url in ['file:///etc/passwd', 'https://localhost/', 'https://127.0.0.1/', 'https://2130706433/', 'https://user:pass@example.org/',
+                    'https://foo.local/', 'https://example.org:0/', 'https://example.org:65536/', 'https://a..example/', 'https://[::1]/', 'https://example.org/#fragment']:
             with self.assertRaises(ValueError, msg=url):
                 fetcher.fetch(url, '1.1.1.1', 1, io.BytesIO(), io.BytesIO())
         for timeout in [0, -1, 31, float('nan')]:
@@ -282,7 +317,7 @@ class ResearchTransportContractTests(unittest.TestCase):
                 peer, _ = listener.accept()
                 with peer:
                     result = subprocess.run([sys.executable, '-I', '-S', '-B', str(HELPER),
-                        f'http://fixture.invalid:{listener.getsockname()[1]}/private-source-query', '1.1.1.1', '1'],
+                        f'https://fixture.invalid:{listener.getsockname()[1]}/private-source-query', '1.1.1.1', '1'],
                         stdin=inherited, capture_output=True, timeout=3, close_fds=True)
                     self.assertEqual((result.returncode, result.stdout, result.stderr), (1, b'', b''))
                     inherited.shutdown(socket.SHUT_WR)

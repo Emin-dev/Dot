@@ -7,7 +7,7 @@ enum ResearchNotebookError: Error, LocalizedError, Equatable {
     case invalidInput, unsupportedSource, limitExceeded, unreadableSource, networkFailure, corruptNotebook, notFound
     var errorDescription: String? {
         switch self {
-        case .invalidInput: return "Choose a local folder or provide public HTTP/HTTPS source URLs."
+        case .invalidInput: return "Choose a local folder or provide public HTTPS source URLs. HTTP sources must be reread over HTTPS."
         case .unsupportedSource: return "That source is not supported readable text or an unlocked PDF."
         case .limitExceeded: return "The source or notebook exceeds this bounded research pass. Choose fewer or smaller sources."
         case .unreadableSource: return "A selected source could not be read."
@@ -187,6 +187,10 @@ final class ResearchWebReader: @unchecked Sendable {
     private let transport: any ResearchHTTPTransport
     init(transport: any ResearchHTTPTransport = ResearchPinnedHTTPTransport()) { self.transport = transport }
     static func allowed(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && validArchivedURL(url)
+    }
+    /// Structural compatibility for saved receipts only, never network admission.
+    static func validArchivedURL(_ url: URL) -> Bool {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
               url.absoluteString.utf8.count <= 8_192, url.user == nil, url.password == nil,
               var host = url.host?.lowercased(), !host.isEmpty,
@@ -223,7 +227,7 @@ final class ResearchWebReader: @unchecked Sendable {
                                   kind: pdf ? .webPDF : .webPage, retrievedAt: Date(),
                                   modifiedAt: response.value(forHTTPHeaderField: "Last-Modified").flatMap { formatter.date(from: $0) },
                                   bytesRead: data.count, sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
-                                  pagesRead: extracted.pages, text: extracted.text, truncated: extracted.truncated)
+                                  pagesRead: extracted.pages, text: extracted.text, truncated: extracted.truncated, transportReceipt: .httpsOnlyV1)
         } catch is CancellationError { throw CancellationError() }
         catch let error as ResearchNotebookError { throw error }
         catch {
@@ -285,7 +289,7 @@ actor ResearchNotebookStore: ResearchNotebookAccess {
     }
     func textToCopy(id: UUID) throws -> String {
         guard let notebook = try read().first(where: { $0.id == id }) else { throw ResearchNotebookError.notFound }
-        return notebook.briefMarkdown
+        return notebook.presentedBriefMarkdown
     }
     func export(id: UUID, to destination: URL) throws {
         try Task.checkCancellation()
