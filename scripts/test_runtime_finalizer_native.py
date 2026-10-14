@@ -63,6 +63,7 @@ TOOLCHAIN_ASSUMPTIONS = [
     'Admission is only for this temporary synthetic fixture, never production finalizer or owner runtime acceptance.']
 COMPILER_DIAGNOSTIC_BYTES = 512 * 1024 * 1024
 COMPILER_DIAGNOSTIC_SECONDS = 30
+DESCRIPTOR_DIAGNOSTIC_SECONDS = 5
 FIXTURE = 'Tests/Fixtures/runtime_finalizer_canary.c'
 CHECKPOINT = b'dot test-only primitive checkpoint v1\n'
 PAYLOAD = b'dot test-only primitive payload v1\n'
@@ -585,9 +586,68 @@ def metadata(context, receipt, base):
             'file_rejection': target_rejection, 'directory_rejection': directory_rejection}
 
 
+def descriptor_identity_diagnostic(context, receipt, base):
+    """Read only the six configured nodes; observations never change admission.
+
+    The production toolset can reject before any command receipt exists. Retain
+    no-follow metadata and, for regular nodes only, metadata from an open
+    no-follow descriptor. Do not read bytes, resolve aliases, or execute tools.
+    Multiple links are observed here, never accepted by regular_at/toolset.
+    """
+    deadline = min(context.budget.deadline, time.monotonic() + DESCRIPTOR_DIAGNOSTIC_SECONDS)
+    targets = [('synthetic_canary', base / 'payload/canary')]
+    targets.extend(('fixed_tool_' + name, Path(path)) for name, path in m._NS_TOOLS.items())
+    check(len(targets) == 6, 'descriptor diagnostic fixed target count changed')
+
+    def bounded():
+        context.budget.check()
+        check(time.monotonic() < deadline, 'descriptor diagnostic deadline exceeded')
+
+    def node(info, path):
+        kind = next((name for name, predicate in (
+            ('regular', stat.S_ISREG), ('directory', stat.S_ISDIR), ('symlink', stat.S_ISLNK),
+            ('fifo', stat.S_ISFIFO), ('socket', stat.S_ISSOCK), ('character', stat.S_ISCHR),
+            ('block', stat.S_ISBLK)) if predicate(info.st_mode)), 'unknown')
+        return {**toolchain_node(info, path), 'file_type': kind, 'nlink': info.st_nlink,
+                'bytes': info.st_size, 'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns}
+
+    for role, path in targets:
+        bounded()
+        observation = {'role': role, 'configured': str(path), 'nofollow': None,
+                       'held': None, 'after': None, 'authorizes_inspection': False}
+        try:
+            with m.Root(path.parent) as root:
+                root.check()
+                before = os.stat(path.name, dir_fd=root.fd, follow_symlinks=False)
+                observation['nofollow'] = node(before, path)
+                if stat.S_ISREG(before.st_mode):
+                    fd = os.open(path.name, m.FLAGS, dir_fd=root.fd)
+                    try:
+                        held = os.fstat(fd)
+                        observation['held'] = {**node(held, path), **toolchain_fd_path(fd)}
+                        m.same_node(before, held)
+                        m.same_node(before, os.fstat(fd))
+                    finally:
+                        os.close(fd)
+                after = os.stat(path.name, dir_fd=root.fd, follow_symlinks=False)
+                observation['after'] = node(after, path)
+                m.same_node(before, after)
+                root.check()
+            observation['status'] = 'observed'
+        except Exception as error:
+            observation.update(status='fail', error_type=type(error).__name__,
+                               errno=getattr(error, 'errno', None), code=getattr(error, 'code', None),
+                               error=str(error)[:512])
+        receipt.emit('descriptor_identity', **observation)
+        bounded()
+    # No return value, approval or substitute toolset; the original gate follows.
+
+
 def static_inspection(context, receipt, base):
+    descriptor_identity_diagnostic(context, receipt, base)
     path = base / 'payload'
     rows = m.tree(path, context.budget)
+    receipt.emit('descriptor_payload_tree', status='observed', entries=len(rows))
     with m.Root(path) as root:
         with contextlib.closing(m._NativeToolset(context, root, rows)) as tools:
             try:

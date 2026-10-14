@@ -166,7 +166,76 @@ def receive(sock, length):
     return bytes(data)
 
 
-def event_failure(process, stage, reason, *, stdout_bytes=0, settle=False):
+PROBE_PROGRESS_FILE = ".dot-search-canary-progress-v1"
+PROBE_PROGRESS_LIMIT = 1024
+PROBE_PROGRESS_STAGES = (
+    'helper-entry',
+    'imports-complete',
+    'fixture-validated',
+    'file-probes-complete',
+    'shell-denial-complete',
+    'child-cleanup-complete',
+    'listener-validated',
+    'socket-denials-complete',
+    'egress-reconnect-complete',
+    'control-start-validated',
+    'ready-emitted',
+    'inbound-exchange-complete',
+    'control-eof-observed',
+    'stopped-emitted',
+)
+
+
+def read_probe_progress(state):
+    """Read only a bounded fixed-label prefix; never emit file bytes or paths."""
+    result = {"status": "unavailable", "last_observed_stage": None, "stage_count": 0}
+    directory_fd = descriptor = None
+    try:
+        root = Path(state)
+        if root != root.resolve(strict=True):
+            result["status"] = "invalid"
+            return result
+        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+        directory = os.fstat(directory_fd)
+        if not stat.S_ISDIR(directory.st_mode) or stat.S_IMODE(directory.st_mode) != 0o700 or directory.st_uid != os.geteuid():
+            result["status"] = "invalid"
+            return result
+        descriptor = os.open(PROBE_PROGRESS_FILE, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+                             dir_fd=directory_fd)
+        node = os.fstat(descriptor)
+        if (not stat.S_ISREG(node.st_mode) or node.st_nlink != 1 or node.st_uid != os.geteuid()
+                or stat.S_IMODE(node.st_mode) != 0o600 or not 0 < node.st_size <= PROBE_PROGRESS_LIMIT):
+            result["status"] = "invalid"
+            return result
+        data = os.read(descriptor, PROBE_PROGRESS_LIMIT + 1)
+        after = os.fstat(descriptor)
+        if (len(data) != node.st_size or after.st_size != node.st_size or after.st_mtime_ns != node.st_mtime_ns
+                or after.st_ctime_ns != node.st_ctime_ns):
+            result["status"] = "invalid"
+            return result
+        for count in range(1, len(PROBE_PROGRESS_STAGES) + 1):
+            expected = ("\n".join(PROBE_PROGRESS_STAGES[:count]) + "\n").encode("ascii")
+            if data == expected:
+                return {"status": "observed", "last_observed_stage": PROBE_PROGRESS_STAGES[count - 1], "stage_count": count}
+        result["status"] = "invalid"
+    except OSError as error:
+        if error.errno == errno.ENOENT:
+            result["status"] = "absent"
+        elif error.errno in (errno.ELOOP, errno.ENOTDIR):
+            result["status"] = "invalid"
+    except (ValueError, RuntimeError):
+        result["status"] = "invalid"
+    finally:
+        for opened in (descriptor, directory_fd):
+            if opened is not None:
+                try:
+                    os.close(opened)
+                except OSError:
+                    pass
+    return result
+
+
+def event_failure(process, stage, reason, *, stdout_bytes=0, settle=False, progress_state=None):
     """Report observations only; never print child output, argv, paths or env.
 
     EOF can race waitpid. Give an already-closing child a bounded settlement
@@ -196,31 +265,36 @@ def event_failure(process, stage, reason, *, stdout_bytes=0, settle=False):
         "signal": -returncode if returncode is not None and returncode < 0 else None,
         "stdout_bytes_observed": stdout_bytes, "stderr_bytes_sampled": stderr_bytes,
         "stderr_sample_limit": 4096, "production_acceptance": False}
+    if progress_state is not None:
+        diagnostic["probe_progress"] = read_probe_progress(progress_state)
     return AssertionError("native canary failed: " + json.dumps(diagnostic, sort_keys=True))
 
 
-def event(process, timeout=35, *, stage="native-await-ready"):
+def event(process, timeout=35, *, stage="native-await-ready", progress_state=None):
     deadline, data = time.monotonic() + timeout, bytearray()
     while time.monotonic() < deadline:
         if select.select([process.stdout], [], [], min(0.1, max(0, deadline - time.monotonic())))[0]:
             part = os.read(process.stdout.fileno(), 1)
             if not part:
-                raise event_failure(process, stage, "stdout-eof", stdout_bytes=len(data), settle=True)
+                raise event_failure(process, stage, "stdout-eof", stdout_bytes=len(data), settle=True, progress_state=progress_state)
             data.extend(part)
             if len(data) > 4096:
-                raise event_failure(process, stage, "oversized-event", stdout_bytes=len(data))
+                raise event_failure(process, stage, "oversized-event", stdout_bytes=len(data), progress_state=progress_state)
             if part == b"\n":
                 try:
                     return json.loads(data)
                 except (ValueError, UnicodeError):
-                    raise event_failure(process, stage, "invalid-event", stdout_bytes=len(data)) from None
-    raise event_failure(process, stage, "event-timeout", stdout_bytes=len(data))
+                    raise event_failure(process, stage, "invalid-event", stdout_bytes=len(data), progress_state=progress_state) from None
+    raise event_failure(process, stage, "event-timeout", stdout_bytes=len(data), progress_state=progress_state)
 
 
 def drive_probe(command, payload, state, outside, inference, foreign, egress, *, pass_fds=(), env=None, probe_kind="native"):
     """Parents hold all fixture endpoints continuously until child settlement."""
     if probe_kind not in ("native", "profile"):
         raise ValueError("unknown fixed canary probe kind")
+    # Never consume a pre-existing file as this invocation's progress.
+    if os.path.lexists(Path(state) / PROBE_PROGRESS_FILE):
+        raise AssertionError("native canary progress path already exists")
     failures = []
     egress_port = egress.getsockname()[1]
     assert_owned(egress_port)
@@ -249,8 +323,8 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
             process.stdin.write(b'{"protocol":1,"command":"start","generation":"native-canary"}\n')
             process.stdin.flush()
         except BrokenPipeError:
-            raise event_failure(process, probe_kind + "-send-start", "control-pipe-closed", settle=True) from None
-        ready = event(process, stage=probe_kind + "-await-ready")
+            raise event_failure(process, probe_kind + "-send-start", "control-pipe-closed", settle=True, progress_state=state) from None
+        ready = event(process, stage=probe_kind + "-await-ready", progress_state=state)
         assert ready["event"] == "native_canary_ready" and ready["pid"] == process.pid, "unexpected native canary ready event"
         assert_owned(ready["port"])
         assert_owned(egress_port)
@@ -260,9 +334,9 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
             client.sendall(b"fixture")
             assert receive(client, 5) == b"reply"
         process.stdin.close()
-        assert event(process, timeout=10, stage=probe_kind + "-await-stopped") == {"event": "native_canary_stopped"}
+        assert event(process, timeout=10, stage=probe_kind + "-await-stopped", progress_state=state) == {"event": "native_canary_stopped"}
         if process.wait(timeout=5) != 0:
-            raise event_failure(process, probe_kind + "-wait-exit", "nonzero-exit")
+            raise event_failure(process, probe_kind + "-wait-exit", "nonzero-exit", progress_state=state)
         assert process.stderr.read() == b""
         thread.join(timeout=5)
         assert not thread.is_alive() and not failures, failures
@@ -280,6 +354,9 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
         assert (outside / "private.fixture").read_bytes() == b"synthetic-private"
         assert (inference / "model.fixture").read_bytes() == b"synthetic-model"
         assert not any((directory / "write.fixture").exists() for directory in (outside, inference, payload))
+        progress = read_probe_progress(state)
+        assert progress == {"status": "observed", "last_observed_stage": PROBE_PROGRESS_STAGES[-1],
+                            "stage_count": len(PROBE_PROGRESS_STAGES)}, "native canary progress incomplete after successful probe"
         return ready["checks"] + ["continuously-owned-listener", "continuously-owned-egress", "unrelated-listener-no-accept", "control-eof-clean-stop"]
     finally:
         if process.poll() is None:

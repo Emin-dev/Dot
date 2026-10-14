@@ -773,5 +773,148 @@ class HostedCompilerPolicyContractTests(unittest.TestCase):
             root.assert_not_called()
 
 
+class DescriptorDiagnosticContractTests(unittest.TestCase):
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            base = Path(temporary)
+            (base / 'payload').mkdir(mode=0o700)
+            canary = base / 'payload/canary'; canary.write_bytes(b'portable diagnostic fixture')
+            tools = {}
+            for name in ('lipo', 'otool', 'codesign', 'sysctl', 'sandbox'):
+                path = base / name; path.write_bytes(b'portable tool fixture')
+                tools[name] = str(path)
+            with patch.dict(h.m._NS_TOOLS, tools, clear=True):
+                yield base, canary, tools, h.make_context()
+
+    def observe(self, context, base):
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(h.descriptor_identity_diagnostic(context, h.Receipt(), base))
+        return [json.loads(line) for line in output.getvalue().splitlines()]
+
+    def test_actual_held_metadata_reports_hardlinks_without_reading_or_admitting(self):
+        with self.fixture() as (base, canary, tools, context):
+            os.link(tools['lipo'], base / 'lipo-alias')
+            with patch.object(h.os, 'read', side_effect=AssertionError('diagnostic read bytes')), \
+                    patch.object(h.m, 'regular_at') as reader, \
+                    patch.object(h.m, '_native_run_bounded') as runner:
+                records = self.observe(context, base)
+                reader.assert_not_called(); runner.assert_not_called()
+            self.assertEqual(len(records), 6)
+            self.assertEqual([r['role'] for r in records], ['synthetic_canary', 'fixed_tool_lipo',
+                'fixed_tool_otool', 'fixed_tool_codesign', 'fixed_tool_sysctl', 'fixed_tool_sandbox'])
+            for record in records:
+                self.assertEqual(record['status'], 'observed')
+                self.assertFalse(record['authorizes_inspection'])
+                self.assertFalse(record['production_acceptance'])
+                self.assertEqual(record['nofollow'], record['after'])
+                for key in record['nofollow']:
+                    self.assertEqual(record['held'][key], record['nofollow'][key])
+                self.assertEqual(record['held']['file_type'], 'regular')
+            self.assertEqual(records[0]['held']['nlink'], 1)
+            self.assertEqual(records[1]['held']['nlink'], 2)
+            with h.m.Root(base) as root, self.assertRaisesRegex(h.m.Rejected, 'single-link regular file required'):
+                h.m.regular_at(root.fd, 'lipo', context.budget)
+
+    def test_nonregular_nodes_are_observed_but_never_opened(self):
+        with self.fixture() as (base, canary, tools, context):
+            Path(tools['lipo']).unlink(); Path(tools['lipo']).symlink_to(canary)
+            Path(tools['otool']).unlink(); os.mkfifo(tools['otool'], 0o600)
+            Path(tools['codesign']).unlink(); Path(tools['codesign']).mkdir()
+            with patch.object(h.os, 'open', wraps=os.open) as opener:
+                records = self.observe(context, base)
+            for record, kind in zip(records[1:4], ('symlink', 'fifo', 'directory')):
+                self.assertEqual(record['nofollow']['file_type'], kind)
+                self.assertIsNone(record['held'])
+                self.assertEqual(record['status'], 'observed')
+            self.assertFalse(any(call.args[0] in ('lipo', 'otool', 'codesign')
+                                 for call in opener.call_args_list))
+
+    def test_missing_node_is_bounded_diagnostic_and_remaining_nodes_are_observed(self):
+        with self.fixture() as (base, canary, tools, context):
+            Path(tools['lipo']).unlink()
+            records = self.observe(context, base)
+            self.assertEqual(records[1]['status'], 'fail')
+            self.assertEqual(records[1]['errno'], errno.ENOENT)
+            self.assertIsNone(records[1]['nofollow'])
+            self.assertLessEqual(len(records[1]['error']), 512)
+            self.assertEqual(records[-1]['status'], 'observed')
+
+    def test_held_descriptor_closes_on_success_and_observation_failure(self):
+        for failure in (False, True):
+            with self.subTest(failure=failure), self.fixture() as (base, _, _, context):
+                descriptors = []
+                def fd_path(fd):
+                    descriptors.append(fd)
+                    if failure: raise OSError(errno.EIO, 'portable injected diagnostic failure')
+                    return {'fd_path': None, 'fd_path_error': {'type': 'portable_only', 'errno': None}}
+                with patch.object(h, 'toolchain_fd_path', side_effect=fd_path):
+                    records = self.observe(context, base)
+                self.assertEqual(len(descriptors), 6)
+                for fd in descriptors:
+                    with self.assertRaises(OSError) as caught: os.fstat(fd)
+                    self.assertEqual(caught.exception.errno, errno.EBADF)
+                self.assertTrue(all(r['status'] == ('fail' if failure else 'observed') for r in records))
+
+    def test_mutation_is_reported_and_does_not_forge_stable_metadata(self):
+        with self.fixture() as (base, canary, _, context):
+            def mutate(fd):
+                canary.write_bytes(b'changed portable diagnostic fixture')
+                return {'fd_path': None, 'fd_path_error': {'type': 'portable_only', 'errno': None}}
+            with patch.object(h, 'toolchain_fd_path', side_effect=mutate):
+                records = self.observe(context, base)
+            self.assertEqual(records[0]['status'], 'fail')
+            self.assertEqual(records[0]['code'], h.m.MUTATION)
+            self.assertIn('filesystem mutation', records[0]['error'])
+
+    def test_whole_and_local_deadlines_are_not_downgraded_to_observations(self):
+        with self.fixture() as (base, _, _, context), \
+                patch.object(context.budget, 'check', side_effect=h.CanaryDeadline('whole deadline')):
+            with self.assertRaises(h.CanaryDeadline): self.observe(context, base)
+        with self.fixture() as (base, _, _, context), \
+                patch.object(h.time, 'monotonic', side_effect=[1, 1, 7]):
+            with self.assertRaisesRegex(AssertionError, 'descriptor diagnostic deadline exceeded'):
+                self.observe(context, base)
+
+    def test_original_payload_gate_still_rejects_hardlinked_canary_after_diagnostic(self):
+        with self.fixture() as (base, canary, _, context):
+            os.link(canary, base / 'canary-alias')
+            with patch.object(h.m, '_NativeToolset') as tools, \
+                    contextlib.redirect_stdout(io.StringIO()) as output, \
+                    self.assertRaisesRegex(h.m.Rejected, 'single-link regular file required'):
+                h.static_inspection(context, h.Receipt(), base)
+            tools.assert_not_called()
+            records = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(records[0]['held']['nlink'], 2)
+            self.assertEqual(len(records), 6)
+            self.assertFalse(any(r['event'] == 'descriptor_payload_tree' for r in records))
+
+    def test_payload_tree_completion_is_recorded_before_original_toolset_rejection(self):
+        with self.fixture() as (base, _, _, context):
+            with patch.object(h.m, '_NativeToolset', side_effect=h.m.Rejected('single-link regular file required')), \
+                    contextlib.redirect_stdout(io.StringIO()) as output, \
+                    self.assertRaisesRegex(h.m.Rejected, 'single-link regular file required'):
+                h.static_inspection(context, h.Receipt(), base)
+            records = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(records[-1]['event'], 'descriptor_payload_tree')
+            self.assertEqual(records[-1]['status'], 'observed')
+            self.assertEqual(records[-1]['entries'], 2)
+
+    def test_diagnostic_paths_and_bounds_are_fixed_without_acceptance_calls(self):
+        source = PATH.read_text()
+        function = next(node for node in ast.parse(source).body
+                        if isinstance(node, ast.FunctionDef) and node.name == 'descriptor_identity_diagnostic')
+        body = ast.get_source_segment(source, function)
+        self.assertIn("base / 'payload/canary'", body)
+        self.assertIn('m._NS_TOOLS.items()', body)
+        self.assertIn('len(targets) == 6', body)
+        self.assertIn('os.open(path.name, m.FLAGS, dir_fd=root.fd)', body)
+        self.assertNotIn('os.environ', body)
+        self.assertNotIn('.resolve(', body)
+        self.assertNotIn('regular_at(', body)
+        self.assertNotIn('_native_run_bounded(', body)
+        self.assertLessEqual(h.DESCRIPTOR_DIAGNOSTIC_SECONDS, 5)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -1,15 +1,86 @@
 """BUILD-ONLY synthetic probe shared by the profile and bootstrap canaries."""
+# A private, fixture-only journal survives broken stdout/stderr. Import only
+# the modules needed for no-follow file operations before the first marker.
+# A missing marker never proves Python did not start. No native cause is inferred.
+import os
+import stat
+
+PROBE_PROGRESS_FILE = ".dot-search-canary-progress-v1"
+PROBE_PROGRESS_LIMIT = 1024
+PROBE_PROGRESS_STAGES = (
+    'helper-entry',
+    'imports-complete',
+    'fixture-validated',
+    'file-probes-complete',
+    'shell-denial-complete',
+    'child-cleanup-complete',
+    'listener-validated',
+    'socket-denials-complete',
+    'egress-reconnect-complete',
+    'control-start-validated',
+    'ready-emitted',
+    'inbound-exchange-complete',
+    'control-eof-observed',
+    'stopped-emitted',
+)
+
+_progress_count = 0
+_progress_identity = None
+_progress_failed = False
+
+
+def _record_progress(stage):
+    """Best-effort fixed markers; diagnostics must not mask a probe failure."""
+    global _progress_count, _progress_identity, _progress_failed
+    if _progress_failed:
+        return
+    descriptor = None
+    try:
+        if _progress_count >= len(PROBE_PROGRESS_STAGES) or stage != PROBE_PROGRESS_STAGES[_progress_count]:
+            raise ValueError("invalid fixture progress sequence")
+        directory = os.stat(".")
+        if not stat.S_ISDIR(directory.st_mode) or stat.S_IMODE(directory.st_mode) != 0o700 or directory.st_uid != os.geteuid():
+            raise ValueError("fixture state must be private")
+        flags = os.O_WRONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        flags |= os.O_CREAT | os.O_EXCL if _progress_count == 0 else os.O_APPEND
+        descriptor = os.open(PROBE_PROGRESS_FILE, flags, 0o600)
+        node = os.fstat(descriptor)
+        identity = (node.st_dev, node.st_ino)
+        expected_size = sum(len(value) + 1 for value in PROBE_PROGRESS_STAGES[:_progress_count])
+        marker = (stage + "\n").encode("ascii")
+        if (not stat.S_ISREG(node.st_mode) or node.st_nlink != 1 or node.st_uid != os.geteuid()
+                or stat.S_IMODE(node.st_mode) != 0o600 or node.st_size != expected_size
+                or expected_size + len(marker) > PROBE_PROGRESS_LIMIT
+                or (_progress_identity is not None and identity != _progress_identity)):
+            raise ValueError("invalid fixture progress file")
+        if os.write(descriptor, marker) != len(marker):
+            raise ValueError("short fixture progress write")
+        _progress_identity = identity
+        _progress_count += 1
+    except (OSError, ValueError):
+        _progress_failed = True
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                _progress_failed = True
+
+
+_record_progress("helper-entry")
+
 import argparse
 import errno
 import json
 import mmap
-import os
 from pathlib import Path
 import platform
 import signal
 import socket
 import subprocess
 import sys
+
+_record_progress("imports-complete")
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--payload", type=Path, required=True)
@@ -36,6 +107,7 @@ fixture = json.loads((state / "fixture.json").read_text())
 assert fixture["egress_port"] == args.egress_port
 outside, inference = Path(fixture["outside"]), Path(fixture["inference"])
 checks = []
+_record_progress("fixture-validated")
 
 
 def denied(label, operation):
@@ -99,7 +171,9 @@ for name, path in (
     ("state-symlink-write", state / "escape"),
 ):
     denied(name, lambda: path.write_bytes(b"forbidden"))
+_record_progress("file-probes-complete")
 denied("shell-exec", lambda: subprocess.run(["/bin/sh", "-c", "exit 0"], check=True))
+_record_progress("shell-denial-complete")
 # Preserve the existing same-interpreter and same-sandbox child cleanup canary.
 child = subprocess.Popen([sys.executable, "-I", "-S", "-B", "-c", "import time; time.sleep(60)"],
                          start_new_session=True, stdin=subprocess.DEVNULL,
@@ -112,6 +186,7 @@ finally:
         os.killpg(child.pid, signal.SIGKILL)
         child.wait(timeout=3)
 checks.append("same-sandbox-child-cleanup")
+_record_progress("child-cleanup-complete")
 
 with socket.socket(fileno=args.owned_listener) as listener:
     address = listener.getsockname()
@@ -120,6 +195,7 @@ with socket.socket(fileno=args.owned_listener) as listener:
     assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1
     assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
     assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) == 0
+    _record_progress("listener-validated")
     for label, target in (
         ("unrelated-loopback", ("127.0.0.1", fixture["foreign_port"])),
         ("listener-self-egress", address),
@@ -145,6 +221,7 @@ with socket.socket(fileno=args.owned_listener) as listener:
     denied("ipv6-dns-udp", lambda: udp(("::1", 53), socket.AF_INET6))
     # Exercise the resolver's socket surface without issuing a hostname query.
     denied("mdns-resolver-socket", lambda: connect("/private/var/run/mDNSResponder", socket.AF_UNIX))
+    _record_progress("socket-denials-complete")
     # Two fresh connections prove reconnect is allowed only to the held endpoint.
     for sequence in range(2):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
@@ -153,10 +230,13 @@ with socket.socket(fileno=args.owned_listener) as listener:
             client.sendall(b"egress" + bytes([sequence]))
             assert receive(client, 5) == b"reply"
     checks.append("owned-af-inet-egress-reconnect")
+    _record_progress("egress-reconnect-complete")
     control = json.loads(sys.stdin.buffer.readline(2049))
     assert control == {"protocol": 1, "command": "start", "generation": "native-canary"}
+    _record_progress("control-start-validated")
     # Deliberately not a production ready event. It cannot admit a runtime.
     print(json.dumps({"event": "native_canary_ready", "pid": os.getpid(), "port": address[1], "checks": checks}), flush=True)
+    _record_progress("ready-emitted")
     listener.settimeout(5)
     connection, peer = listener.accept()
     with connection:
@@ -164,5 +244,11 @@ with socket.socket(fileno=args.owned_listener) as listener:
         assert peer[0] == "127.0.0.1"
         assert receive(connection, 7) == b"fixture"
         connection.sendall(b"reply")
+    _record_progress("inbound-exchange-complete")
     assert sys.stdin.buffer.read(1) == b""
+    _record_progress("control-eof-observed")
 print(json.dumps({"event": "native_canary_stopped"}), flush=True)
+_record_progress("stopped-emitted")
+# Check only otherwise-successful completion, after the final descriptor close.
+if _progress_failed:
+    raise AssertionError("native canary progress recording failed")
