@@ -7,14 +7,14 @@ permissions:
   contents: read
 concurrency:
   group: dot-native-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 jobs:
   macos:
     # Standard public-repository runner. Test Python is provisioned explicitly.
     # No neural payloads, app launch, dependency caches, microphone access,
     # or publishing credentials. Keep package validation internal; no binary upload.
     runs-on: macos-15
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       # macOS 26 App Intents metadata requires the installed Xcode 26 SDK.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer

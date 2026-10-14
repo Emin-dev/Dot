@@ -151,7 +151,9 @@ class CandidateReceiptTests(unittest.TestCase):
                       "        run: python3 -B scripts/write_candidate_receipt.py\n", workflow)
         self.assertNotIn("always()", workflow)
         self.assertNotIn("continue-on-error", workflow)
-        self.assertIn("timeout-minutes: 15", workflow)
+        self.assertIn("timeout-minutes: 20", workflow)
+        self.assertIn("  cancel-in-progress: false", workflow)
+        self.assertIn("  group: dot-native-${{ github.head_ref || github.ref_name }}", workflow)
         self.assertIn("permissions:\n  contents: read", workflow)
         gates = (ROOT / "scripts/verify_macos.sh").read_text()
         for required in ["set -euo pipefail", "unittest discover -s Tests/Python",

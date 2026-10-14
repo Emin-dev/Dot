@@ -539,21 +539,86 @@ class StartupChildTests(unittest.TestCase):
         process.stderr.close.assert_called_once_with()
         self.assertNotIn(SECRET, json.dumps(result))
 
-    def test_exact_environment_cwd_and_listener_are_inherited(self):
-        program = 'import os, socket; '
-        program += f'assert os.getcwd() == {str(self.state)!r}; '
-        program += f'assert dict(os.environ) == {self.context["env"]!r}; '
-        program += f's = socket.socket(fileno={self.listener.fileno()}); '
+    def inheritance_program(self):
+        lines = ['import os, socket', 'try:',
+            f'    assert os.getcwd() == {str(self.state)!r}, 71',
+            f'    assert dict(os.environ) == {self.context["env"]!r}, 72',
+            f'    s = socket.socket(fileno={self.listener.fileno()})']
         if sys.platform == "darwin":
-            program += 'assert s.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\\x01"; '
+            lines.append('    assert s.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\\x01", 73')
         else:
-            program += 'assert s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1; '
-        program += 'print("dot-search-startup-v1")'
-        # Python can coerce the C locale by adding LC_CTYPE on the portable host.
-        self.context["env"]["LC_CTYPE"] = "C.UTF-8"
-        program = program.replace(repr(support.minimal_env(self.state)), repr(self.context["env"]))
-        self.assertEqual(self.run_child(program)["status"], "success")
+            lines.append('    assert s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1, 73')
+        lines.extend(['except AssertionError as error:', '    raise SystemExit(error.args[0])',
+                      'print("dot-search-startup-v1")'])
+        return "\n".join(lines)
+
+    def test_exact_environment_cwd_and_listener_are_inherited(self):
+        # A nonempty LC_ALL prevents CPython's startup locale coercion from
+        # rewriting LC_CTYPE. The portable C locale also works on Darwin,
+        # where C.UTF-8 is not guaranteed to exist. Production env is unchanged.
+        self.context["env"]["LC_ALL"] = "C"
+        result = self.run_child(self.inheritance_program())
+        self.assertEqual(result["status"], "success",
+            f'fixed fixture exit code {result["returncode"]}: 71=cwd, 72=environment, 73=listener')
+        self.assertEqual(result["returncode"], 0)
+        self.assertEqual(result["cleanup"], "not-needed")
         support.assert_owned(self.listener.getsockname()[1])
+
+    def test_explicit_c_locale_preserves_environment_with_unavailable_locale(self):
+        # Exercise real isolated startup without depending on installed locales.
+        self.context["env"].update(LC_ALL="C", LC_CTYPE="dot-unavailable-locale")
+        result = self.run_child(self.inheritance_program())
+        self.assertEqual(result["status"], "success",
+            f'fixed fixture exit code {result["returncode"]}: 71=cwd, 72=environment, 73=listener')
+        self.assertEqual(result["returncode"], 0)
+        self.assertNotIn("LC_ALL", support.minimal_env(self.state))
+        self.assertNotIn("LC_CTYPE", support.minimal_env(self.state))
+        support.assert_owned(self.listener.getsockname()[1])
+
+    def test_generated_inheritance_checks_are_exact_on_both_platforms(self):
+        self.context["env"]["LC_ALL"] = "C"
+        for platform, query, states in (
+                ("darwin", (socket.IPPROTO_TCP, 0x106, 1),
+                 (b"\x01", b"\x00", b"\x04", b"", b"\x01\x00", b"\\x01")),
+                ("linux", (socket.SOL_SOCKET, socket.SO_ACCEPTCONN), (1, 0, 2))):
+            with mock.patch.object(sys, "platform", platform):
+                program = self.inheritance_program()
+            code = compile(program, "<fixed-inheritance-fixture>", "exec")
+            cases = [(str(self.state), self.context["env"], state, None if index == 0 else 73)
+                     for index, state in enumerate(states)]
+            cases.extend([(SECRET, self.context["env"], states[0], 71),
+                          (str(self.state), {**self.context["env"], "SECRET": SECRET}, states[0], 72),
+                          (str(self.state), {**self.context["env"], "LC_CTYPE": "UTF-8"}, states[0], 72),
+                          (str(self.state), {}, states[0], 72)])
+            for cwd, env, state, exit_code in cases:
+                with self.subTest(platform=platform, exit_code=exit_code):
+                    fake_os = mock.Mock(environ=env)
+                    fake_os.getcwd.return_value = cwd
+                    listener = mock.Mock()
+                    listener.getsockopt.return_value = state
+                    fake_socket = mock.Mock(IPPROTO_TCP=socket.IPPROTO_TCP, TCP_CONNECTION_INFO=0x106,
+                                            SOL_SOCKET=socket.SOL_SOCKET, SO_ACCEPTCONN=socket.SO_ACCEPTCONN)
+                    fake_socket.socket.return_value = listener
+                    output = mock.Mock()
+                    imports = {"os": fake_os, "socket": fake_socket}
+                    namespace = {"__builtins__": {"__import__": lambda name, *args: imports[name],
+                        "dict": dict, "AssertionError": AssertionError, "SystemExit": SystemExit, "print": output}}
+                    if exit_code is None:
+                        exec(code, namespace)
+                        output.assert_called_once_with("dot-search-startup-v1")
+                    else:
+                        with self.assertRaises(SystemExit) as caught:
+                            exec(code, namespace)
+                        self.assertEqual(caught.exception.code, exit_code)
+                        output.assert_not_called()
+                    if exit_code in (None, 73):
+                        fake_socket.socket.assert_called_once_with(fileno=self.listener.fileno())
+                        listener.getsockopt.assert_called_once_with(*query)
+                    else:
+                        fake_socket.socket.assert_not_called()
+                    listener.bind.assert_not_called()
+                    listener.listen.assert_not_called()
+                    listener.connect.assert_not_called()
 
 
 class StartupOriginalFailureTests(unittest.TestCase):
