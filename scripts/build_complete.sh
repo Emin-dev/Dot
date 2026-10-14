@@ -12,13 +12,17 @@ assert_source_snapshot() {
 assert_source_snapshot
 : "${DOT_RUNTIME_PAYLOAD:?Set DOT_RUNTIME_PAYLOAD to the completed, audited local runtime payload}"
 : "${DOT_MODEL_PAYLOAD:?Set DOT_MODEL_PAYLOAD to the verified complete target, draft and vision model payload}"
-: "${DOT_WHISPER_FRAMEWORK:?Set DOT_WHISPER_FRAMEWORK to the verified macOS whisper.framework}"
+: "${DOT_WHISPER_ARCHIVE:?Set DOT_WHISPER_ARCHIVE to the repository-pinned whisper-v1.7.6-xcframework.zip}"
 python3 -B scripts/audit_runtime_payload.py "$DOT_RUNTIME_PAYLOAD"
-test -f "$DOT_WHISPER_FRAMEWORK/Modules/module.modulemap"
-test -f "$DOT_WHISPER_FRAMEWORK/Headers/whisper.h"
-FRAMEWORK_PARENT=$(dirname "$DOT_WHISPER_FRAMEWORK")
 INTENTS_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-intents-complete.XXXXXX")
 trap 'rm -rf "$INTENTS_BUILD"' EXIT
+# Authenticate the archive and derive this framework from those exact bytes.
+# Never link or copy an independently supplied framework directory.
+git ls-files --error-unmatch -- packaging/voice-source-manifest.json scripts/verify_whisper_input.py >/dev/null
+python3 -B scripts/verify_whisper_input.py --archive "$DOT_WHISPER_ARCHIVE" \
+  --output "$INTENTS_BUILD/whisper-input" > "$INTENTS_BUILD/whisper-input.json"
+VERIFIED_WHISPER_FRAMEWORK="$INTENTS_BUILD/whisper-input/whisper.framework"
+FRAMEWORK_PARENT="$INTENTS_BUILD/whisper-input"
 SOURCES=(src/*.swift)
 python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "${SOURCES[@]}"
 APP=build-complete/Dot.app
@@ -35,7 +39,7 @@ xcrun swiftc -O -warnings-as-errors -module-name Dot -D DOT_COMPLETE_BUNDLE -tar
   -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit
 # This is an actual native-library reference check, not a canImport fallback build.
 nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
-/usr/bin/ditto "$DOT_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/whisper.framework"
+/usr/bin/ditto "$VERIFIED_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/whisper.framework"
 /usr/bin/ditto "$DOT_RUNTIME_PAYLOAD" "$APP/Contents/Resources/Offline"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
@@ -56,7 +60,7 @@ python3 -B scripts/package_app_intents.py extract --work-dir "$INTENTS_BUILD" --
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
 codesign --force --sign - "$APP/Contents/Frameworks/whisper.framework"
 assert_source_snapshot
-python3 -B - "$APP" "$SOURCE_COMMIT" <<'PYCODE'
+python3 -B - "$APP" "$SOURCE_COMMIT" "$INTENTS_BUILD/whisper-input.json" <<'PYCODE'
 import hashlib, json, pathlib, sys
 app = pathlib.Path(sys.argv[1]); resources = app / 'Contents/Resources'
 manifest = resources / 'Offline/runtime-manifest.json'
@@ -70,6 +74,16 @@ record = {'commit': sys.argv[2], 'source_dirty': False,
           'runtime_manifest_sha256': hashlib.sha256(manifest.read_bytes()).hexdigest(),
           'model_plan_sha256': hashlib.sha256((resources / 'bundled-models.json').read_bytes()).hexdigest(),
           'embedded_whisper_binary_sha256': digest.hexdigest()}
+# Archive/closure hashes describe authenticated pre-signing input. The separate
+# embedded binary hash above records the final ad-hoc-signed binary.
+sys.path.insert(0, str(pathlib.Path('scripts').resolve()))
+from verify_whisper_input import read_receipt
+whisper = read_receipt(sys.argv[3])
+record.update({'whisper_input_archive_sha256': whisper['archive_sha256'],
+               'whisper_input_archive_bytes': whisper['archive_bytes'],
+               'whisper_input_framework_closure_sha256': whisper['framework_closure_sha256'],
+               'whisper_input_library_identifier': whisper['library_identifier'],
+               'whisper_source_manifest_sha256': whisper['source_manifest_sha256']})
 (resources / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
 PYCODE
 codesign --force --sign - "$APP"
