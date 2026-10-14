@@ -57,19 +57,21 @@ class ReconstructionContract(unittest.TestCase):
 
     def test_offline_missing_and_changed_input_never_fetches(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(prepare, 'fetch') as fetch:
+            # Canonicalize the trusted fixture root (macOS /var may be an alias).
+            root = Path(temporary).resolve(strict=True)
             with self.assertRaisesRegex(ValueError, 'offline artifact'):
-                prepare.acquire(self.lock, Path(temporary), True)
+                prepare.acquire(self.lock, root, True)
             name, pin = prepare.runtime_inputs(self.lock)[0]
-            target = Path(temporary) / name
+            target = root / name
             target.parent.mkdir()
             target.write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError, 'offline artifact'):
-                prepare.acquire(self.lock, Path(temporary), True)
+                prepare.acquire(self.lock, root, True)
             fetch.assert_not_called()
 
     def test_exact_offline_bytes_pass_and_symlink_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(prepare, 'fetch') as fetch:
-            root = Path(temporary)
+            root = Path(temporary).resolve(strict=True)
             data = b'non-executable-fixture'
             pin = {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
             target = root / 'test'
@@ -83,9 +85,25 @@ class ReconstructionContract(unittest.TestCase):
                     prepare.acquire({}, root, True)
             fetch.assert_not_called()
 
+    def test_aliased_input_parent_never_fetches(self):
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(prepare, 'fetch') as fetch:
+            root = Path(temporary).resolve(strict=True)
+            inputs = root / 'inputs'
+            inputs.mkdir()
+            alias = root / 'input-alias'
+            alias.symlink_to(inputs, target_is_directory=True)
+            data = b'non-executable-fixture'
+            (inputs / 'test').write_bytes(data)
+            pin = {'size': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
+            with mock.patch.object(prepare, 'runtime_inputs', return_value=[('test', pin)]):
+                for offline in (True, False):
+                    with self.subTest(offline=offline), self.assertRaisesRegex(ValueError, 'symlink artifact target or parent'):
+                        prepare.acquire({}, alias, offline)
+            fetch.assert_not_called()
+
     def test_changed_or_extra_historical_helper_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
-            helpers = Path(temporary) / 'helpers'
+            helpers = Path(temporary).resolve(strict=True) / 'helpers'
             shutil.copytree(prepare.HELPERS, helpers)
             with mock.patch.object(prepare, 'HELPERS', helpers):
                 (helpers / 'search.sb').write_text('changed')
@@ -97,17 +115,34 @@ class ReconstructionContract(unittest.TestCase):
 
     def test_refuse_existing_or_product_output_before_acquisition(self):
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(prepare, 'acquire') as acquire:
+            root = Path(temporary).resolve(strict=True)
             with self.assertRaisesRegex(ValueError, 'must be new'):
-                prepare.prepare(temporary, temporary, offline=True)
+                prepare.prepare(root, root, offline=True)
             with self.assertRaisesRegex(ValueError, 'independent'):
-                prepare.prepare(temporary, ROOT / 'Resources/Search/never-created', offline=True)
+                prepare.prepare(root, ROOT / 'Resources/Search/never-created', offline=True)
             with self.assertRaisesRegex(ValueError, 'independent'):
-                prepare.prepare(temporary, Path(temporary) / 'Dot.app/Search', offline=True)
+                prepare.prepare(root, root / 'Dot.app/Search', offline=True)
             acquire.assert_not_called()
+
+    def test_aliased_output_parent_stops_before_lock_network_or_assembly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve(strict=True)
+            output_parent = root / 'outputs'
+            output_parent.mkdir()
+            alias = root / 'output-alias'
+            alias.symlink_to(output_parent, target_is_directory=True)
+            with mock.patch.object(prepare, 'verify_source_lock') as verify_lock, \
+                 mock.patch.object(prepare, 'acquire') as acquire, mock.patch.object(prepare, 'assemble') as assemble:
+                with self.assertRaisesRegex(ValueError, 'canary output parent must not be an alias'):
+                    prepare.prepare(root / 'inputs', alias / 'payload', offline=True)
+                verify_lock.assert_not_called()
+                acquire.assert_not_called()
+                assemble.assert_not_called()
+            self.assertFalse((output_parent / 'payload').exists())
 
     def test_semantic_lock_mutation_stops_before_network_or_assembly(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
+            root = Path(temporary).resolve(strict=True)
             changed = copy.deepcopy(self.lock)
             changed['status'] = 'changed'
             lock = root / 'lock.json'
