@@ -32,7 +32,10 @@ def file(path, raw=b'fixture\n', mode=0o644):
 
 class Fixture(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # macOS may spell its system temp directory through /var -> /private/var.
+        # Canonicalize only that trusted base before allocating our test fixture;
+        # production Root must still reject aliases in supplied runtime paths.
+        self.tmp = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
         self.source = self.root / 'source'; self.source.mkdir()
@@ -851,6 +854,28 @@ class Fixture(unittest.TestCase):
     def test_native_contract_requires_native_phase_context(self):
         c,rows,evidence,record=self.native_fixture()
         self.assertIn('native source phase',self.rejects(lambda:m.verify_native_contract(self.context(),self.basis,rows,evidence)))
+
+
+class TemporaryRootTests(unittest.TestCase):
+    def test_fixture_uses_physical_system_temporary_directory(self):
+        outer = tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve())
+        self.addCleanup(outer.cleanup)
+        root = Path(outer.name)
+        physical = root / 'physical'
+        system_temp = physical / 'system-temp'
+        system_temp.mkdir(parents=True)
+        alias = root / 'alias'
+        alias.symlink_to(physical, target_is_directory=True)
+        aliased_temp = alias / 'system-temp'
+        fixture = Fixture('test_prepare_is_inert_and_preserves_source')
+        self.addCleanup(fixture.doCleanups)
+        with patch.object(tempfile, 'tempdir', str(aliased_temp)):
+            fixture.setUp()
+        self.assertEqual(fixture.root.parent, system_temp)
+        fixture.test_prepare_is_inert_and_preserves_source()
+        with self.assertRaisesRegex(m.Rejected, 'symlink/non-directory ancestor'):
+            with m.Root(aliased_temp / fixture.root.name):
+                self.fail('production Root accepted a symlink ancestor')
 
 
 class StrictInputTests(unittest.TestCase):

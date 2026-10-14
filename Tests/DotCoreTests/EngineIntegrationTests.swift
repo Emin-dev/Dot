@@ -337,9 +337,9 @@ final class NativeTLSIntegrationTests: XCTestCase {
             XCTAssertTrue(initial.retainedTask, "The suspended task must be retained before start")
             XCTAssertTrue(initial.retainedSession)
             do {
-                let (bytes, response) = try await transfer.start()
+                let (chunks, response) = try await transfer.start()
                 var body = Data()
-                for try await byte in bytes { body.append(byte) }
+                for try await chunk in chunks { body.append(chunk) }
                 await settle(transfer)
                 return (body, response)
             } catch {
@@ -447,9 +447,9 @@ final class EngineProxyPolicyTests: XCTestCase {
             request.setValue("Bearer model-free-redirect-test", forHTTPHeaderField: "Authorization")
             let transfer = InferenceTransfer(request: request, configuration: configuration, certificateSHA256: nil)
             do {
-                let (bytes, response) = try await transfer.start()
+                let (chunks, response) = try await transfer.start()
                 var body = Data()
-                for try await byte in bytes { body.append(byte) }
+                for try await chunk in chunks { body.append(chunk) }
                 XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 302)
                 XCTAssertEqual(response.url, source)
                 XCTAssertTrue(body.isEmpty)

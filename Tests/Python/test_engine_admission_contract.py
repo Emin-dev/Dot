@@ -25,7 +25,7 @@ class EngineAdmissionContractTests(unittest.TestCase):
         cls.owned = section(cls.engine, 'private func withInference<Value: Sendable>', 'private static let log')
         cls.release = section(cls.engine, 'private func releaseInference(', 'private func withInference<Value: Sendable>')
         cls.transfer = section(cls.engine, 'final class InferenceTransfer:', 'enum EngineError:')
-        cls.bytes = section(cls.engine, 'private func withInferenceBytes<Value: Sendable>', 'nonisolated private static func boundedStatus')
+        cls.chunks = section(cls.engine, 'private func withInferenceChunks<Value: Sendable>', 'nonisolated private static func boundedStatus')
 
     def test_both_entry_points_share_one_owned_admission(self):
         chat = section(self.engine, 'func chat(history:', 'private func performChat(')
@@ -33,9 +33,9 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertIn('purpose: InferencePurpose = .foreground', chat)
         self.assertIn('withInference(purpose: purpose)', chat)
         self.assertIn('withInference(purpose: .background)', research)
-        self.assertEqual(self.engine.count('return try await withInferenceBytes(request: request)'), 2)
-        self.assertNotIn('bytes(for:', self.bytes)
-        self.assertIn('try await transfer.start()', self.bytes)
+        self.assertEqual(self.engine.count('return try await withInferenceChunks(request: request)'), 2)
+        self.assertNotIn('bytes(for:', self.chunks)
+        self.assertIn('try await transfer.start()', self.chunks)
 
     def test_pending_is_one_foreground_slot_reserved_before_preemption(self):
         self.assertIn('private var pendingForeground: PendingInference?', self.engine)
@@ -72,9 +72,9 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertIn('try await Self.boundedStatus(session: session, request: request)\n                try Task.checkCancellation()\n                guard !inferenceClosed', readiness)
 
     def test_client_completion_and_invalidation_fence_all_outcomes(self):
-        self.assertIn('catch { result = .failure(error) }', self.bytes)
-        self.assertLess(self.bytes.index('process(bytes, response)'), self.bytes.index('transfer.resultAfterSettlement(result)'))
-        self.assertIn('onCancel: { transfer.cancel() }', self.bytes)
+        self.assertIn('catch { result = .failure(error) }', self.chunks)
+        self.assertLess(self.chunks.index('process(chunks, response)'), self.chunks.index('transfer.resultAfterSettlement(result)'))
+        self.assertIn('onCancel: { transfer.cancel() }', self.chunks)
         fence = section(self.transfer, 'func resultAfterSettlement<Value: Sendable>', 'private func checkForFailure()')
         self.assertLess(fence.index('cancel()'), fence.index('await waitForCompletion()'))
         self.assertLess(fence.index('await waitForCompletion()'), fence.index('try await checkForFailure()'))
@@ -97,12 +97,12 @@ class EngineAdmissionContractTests(unittest.TestCase):
         installation = section(self.transfer, 'private func install(', '/// Callbacks use')
         self.assertIn('suspendedTask.state == .suspended', installation)
         self.assertIn('task = suspendedTask', installation)
-        start = section(self.transfer, 'func start()', 'struct Bytes:')
+        start = section(self.transfer, 'func start()', 'struct Chunks:')
         self.assertLess(start.index('started = true'), start.index('task.resume()'))
         self.assertIn('guard !cancelled, !invalidated, let task', start)
         self.assertNotIn('didCreateTask', self.transfer)
-        self.assertNotIn('testSession:', self.bytes)
-        self.assertNotIn('testRequest:', self.bytes)
+        self.assertNotIn('testSession:', self.chunks)
+        self.assertNotIn('testRequest:', self.chunks)
 
     def test_serialized_lifecycle_preserves_identity_after_session_release(self):
         self.assertIn('callbackQueue.maxConcurrentOperationCount = 1', self.transfer)
@@ -136,11 +136,30 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertIn('let count = min(Self.chunkBytes, buffer.count)', self.transfer)
         self.assertIn('onCancel: { self.cancel() }', self.transfer)
 
+    def test_chunk_sequence_removes_per_byte_async_boundary_without_extra_buffer(self):
+        chunks = section(self.transfer, 'struct Chunks:', 'private func nextChunk(')
+        self.assertIn('typealias Element = Data', chunks)
+        self.assertIn('mutating func next() async throws -> Data?', chunks)
+        self.assertIn('return try await transfer.nextChunk(consumer: id)', chunks)
+        self.assertIn('if Task.isCancelled { transfer.cancel(); throw CancellationError() }', chunks)
+        for forbidden in ['UInt8?', 'private var chunk', 'private var offset', 'AsyncStream', 'Task.detached']:
+            self.assertNotIn(forbidden, chunks)
+        self.assertIn('consumerID == nil || consumerID == consumer, chunkWaiter == nil', self.transfer)
+        self.assertIn('for byte in detached', self.native)
+        self.assertIn('XCTAssertEqual(detached, Data(wire.utf8))', self.native)
+        benchmark = section(self.native, 'func testExactLimitLargeCallbackAndPostSuspendOverflowAreBounded()',
+                            'func testOversizedSingleCallbackIsRejectedBeforeRetention()')
+        self.assertIn('Data(repeating: 120, count: BoundedSSELines.maximumStreamBytes)', benchmark)
+        self.assertIn('for byte in chunk', benchmark)
+        self.assertIn('if byte != 120', benchmark)
+        self.assertIn('drainedBytes += 1', benchmark)
+        self.assertIn('XCTAssertEqual(drainedBytes, BoundedSSELines.maximumStreamBytes)', benchmark)
+
     def test_inference_delegate_forwards_existing_tls_and_redirect_policy(self):
         self.assertIn('policy = NoRedirects(certificateSHA256: certificateSHA256)', self.transfer)
         self.assertIn('policy.urlSession(session, task: task, didReceive: challenge)', self.transfer)
         self.assertIn('policy.urlSession(session, task: task, willPerformHTTPRedirection: response,', self.transfer)
-        self.assertIn('InferenceTransfer(request: request, configuration: inferenceConfiguration()', self.bytes)
+        self.assertIn('InferenceTransfer(request: request, configuration: inferenceConfiguration()', self.chunks)
         self.assertIn('Self.directConfiguration()', self.engine)
         self.assertIn('guard protocolClasses?.isEmpty == false, let url = LocalEndpoint.validate(configuredEndpoint)', self.engine)
         self.assertNotIn('delegateFactory', self.engine)
@@ -154,7 +173,11 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertEqual(self.chat.count('self.engine.chat(history: snapshot, onDelta:'), 1)
 
     def test_existing_stream_terminal_budgets_and_delivery_remain(self):
-        self.assertEqual(self.engine.count('for try await byte in bytes'), 3)  # chat, synthesis, status
+        self.assertEqual(self.engine.count('stream: for try await chunk in chunks'), 2)
+        self.assertEqual(self.engine.count('for byte in chunk'), 2)
+        self.assertEqual(self.engine.count('for try await byte in bytes'), 1)  # bounded status only
+        self.assertEqual(self.engine.count('break stream'), 2)
+        self.assertEqual(self.engine.count('try Task.checkCancellation()\n                    guard let line = try lines.feed(byte)'), 2)
         self.assertIn('guard sawDone else { throw EngineError.response }', self.engine)
         self.assertIn('guard done else { throw EngineError.response }', self.engine)
         self.assertIn('defer { updates.cancel() }', self.engine)
@@ -200,9 +223,11 @@ class EngineAdmissionContractTests(unittest.TestCase):
             'testCompletionBeforeWaitDuplicateAndForeignReceiptsAreSafe',
             'testInlineResponseCallbackCanReenterCancellationAndReceipts',
             'testSynchronousCallbackBurstPreservesSplitUTF8AndSSELines',
+            'testFixedChunkBoundariesPreserveUTF8AndCRLF',
+            'testSecondChunkIteratorCannotConsumeOrPoisonFirstIterator',
             'testSlowConsumerSuspendsOnceThenDrainingBalancesResume',
             'testCancelSuspendedProductionTaskSettlesAndReleasesDelegateCycle',
-            'testCancellationOfPendingByteConsumerWakesBeforeTransportSettles',
+            'testCancellationOfPendingChunkConsumerWakesBeforeTransportSettles',
             'testExactLimitLargeCallbackAndPostSuspendOverflowAreBounded',
             'testOversizedSingleCallbackIsRejectedBeforeRetention',
             'testDetachedDoneChunkCannotHideStickyReceiveOrTransportFailure',
@@ -214,7 +239,7 @@ class EngineAdmissionContractTests(unittest.TestCase):
         for name in names:
             self.assertIn('func ' + name, self.native)
         self.assertIn('waitingForCompletion', self.native)
-        self.assertIn('return priming == 32 && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0', self.native)
+        self.assertIn('return priming == Data([32]) && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0', self.native)
         self.assertIn('XCTAssertNil(try questionIntent.completed()', self.native)
         self.assertIn('await barrier.wait()', self.native)
         for name in ['testExplicitInferenceTransferPinsEveryReconnectAndSettles',
@@ -231,17 +256,17 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertIn('defer { callbacks.isSuspended = false; transfer.cancel() }', self.native)
         self.assertIn('addTeardownBlock { callbacks.isSuspended = false; transfer.cancel(); await transfer.waitForCompletion() }', self.native)
         self.assertIn('XCTAssertFalse(held.completed); XCTAssertFalse(held.invalidated); XCTAssertFalse(held.settled)', self.native)
-        self.assertLess(self.bytes.index('transfer.resultAfterSettlement(result)'), self.bytes.index('let snapshot = await transfer.snapshot()'))
-        self.assertLess(self.bytes.index('if activeInference?.id == admissionID'), self.bytes.index('lastInferenceTransportSettlement = (admissionID, snapshot)'))
-        self.assertLess(self.bytes.index('lastInferenceTransportSettlement = (admissionID, snapshot)'), self.bytes.index('return try settledResult.get()'))
+        self.assertLess(self.chunks.index('transfer.resultAfterSettlement(result)'), self.chunks.index('let snapshot = await transfer.snapshot()'))
+        self.assertLess(self.chunks.index('if activeInference?.id == admissionID'), self.chunks.index('lastInferenceTransportSettlement = (admissionID, snapshot)'))
+        self.assertLess(self.chunks.index('lastInferenceTransportSettlement = (admissionID, snapshot)'), self.chunks.index('return try settledResult.get()'))
         self.assertLess(self.owned.index('lastInferenceTransportSettlement = nil'), self.owned.index('try Task.checkCancellation()'))
         self.assertIn('await receipts.wait(requiresCompletion: state.started)', self.native)
         self.assertIn('task.cancel(); task.resume()', self.native)
         self.assertIn('DOT_TEST_HEADER_DELIVERY typed=', self.native)
-        self.assertIn('return priming == 32 && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0', self.native)
-        self.assertLess(self.bytes.index('transfer.resultAfterSettlement(result)'), self.bytes.index('inferenceTransportSettlements.append((admissionID, snapshot))'))
-        self.assertIn('inferenceTransportSettlements.removeFirst(inferenceTransportSettlements.count - 2)', self.bytes)
-        self.assertIn('if inferenceTransportSettlements.count > 2', self.bytes)
+        self.assertIn('return priming == Data([32]) && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0', self.native)
+        self.assertLess(self.chunks.index('transfer.resultAfterSettlement(result)'), self.chunks.index('inferenceTransportSettlements.append((admissionID, snapshot))'))
+        self.assertIn('inferenceTransportSettlements.removeFirst(inferenceTransportSettlements.count - 2)', self.chunks)
+        self.assertIn('if inferenceTransportSettlements.count > 2', self.chunks)
         overlap = section(self.native, 'func testDoneBeforeHTTPCompletionAndInvalidResponseStillSettleTransport()', 'func testShutdownCancelsQueuedRequestAndRetainsActiveUntilSetupSettles()')
         self.assertLess(overlap.index('let next = Task'), overlap.index('manager.inferenceAdmission.pendingForeground'))
         self.assertLess(overlap.index('manager.inferenceAdmission.pendingForeground'), overlap.index('fixture.releaseHeaders()'))

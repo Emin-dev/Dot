@@ -64,7 +64,7 @@ final class InferenceTransfer: NSObject, URLSessionDataDelegate, @unchecked Send
     private var buffer = Data()
     private var receivedBytes = 0
     private var consumerID: UUID?
-    private var responseWaiter: CheckedContinuation<(Bytes, URLResponse), Error>?
+    private var responseWaiter: CheckedContinuation<(Chunks, URLResponse), Error>?
     private var chunkWaiter: CheckedContinuation<Data?, Error>?
     private var settlementWaiter: CheckedContinuation<Void, Never>?
     private var suspendCount = 0
@@ -128,7 +128,7 @@ final class InferenceTransfer: NSObject, URLSessionDataDelegate, @unchecked Send
         else { lifecycle.async(execute: operation) }
     }
 
-    func start() async throws -> (Bytes, URLResponse) {
+    func start() async throws -> (Chunks, URLResponse) {
         try await withTaskCancellationHandler {
             try Task.checkCancellation()
             return try await withCheckedThrowingContinuation { continuation in
@@ -148,24 +148,19 @@ final class InferenceTransfer: NSObject, URLSessionDataDelegate, @unchecked Send
         } onCancel: { self.cancel() }
     }
 
-    struct Bytes: AsyncSequence, Sendable {
-        typealias Element = UInt8
+    /// One suspension per bounded chunk. The SSE consumers keep their existing
+    /// synchronous byte parser, so fragmentation and limit semantics are unchanged.
+    struct Chunks: AsyncSequence, Sendable {
+        typealias Element = Data
         fileprivate let transfer: InferenceTransfer
         func makeAsyncIterator() -> Iterator { Iterator(transfer: transfer) }
         struct Iterator: AsyncIteratorProtocol {
             fileprivate let transfer: InferenceTransfer
             private let id = UUID()
-            private var chunk = Data()
-            private var offset = 0
             fileprivate init(transfer: InferenceTransfer) { self.transfer = transfer }
-            mutating func next() async throws -> UInt8? {
+            mutating func next() async throws -> Data? {
                 if Task.isCancelled { transfer.cancel(); throw CancellationError() }
-                if offset == chunk.count {
-                    guard let next = try await transfer.nextChunk(consumer: id) else { return nil }
-                    chunk = next; offset = 0
-                }
-                let value = chunk[chunk.startIndex + offset]; offset += 1
-                return value
+                return try await transfer.nextChunk(consumer: id)
             }
         }
     }
@@ -307,7 +302,7 @@ final class InferenceTransfer: NSObject, URLSessionDataDelegate, @unchecked Send
             }
             self.response = response
             let waiter = responseWaiter; responseWaiter = nil
-            waiter?.resume(returning: (Bytes(transfer: self), response))
+            waiter?.resume(returning: (Chunks(transfer: self), response))
             completionHandler(.allow)
         }
     }
@@ -624,7 +619,7 @@ final class EngineManager: ObservableObject {
         // closed if the screen has aged out before the transport is submitted.
         try Task.checkCancellation()
         try capturedImage?.validateFreshness(now: clock())
-        return try await withInferenceBytes(request: request) { bytes, response in
+        return try await withInferenceChunks(request: request) { chunks, response in
             try Task.checkCancellation()
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   http.value(forHTTPHeaderField: "Server") == "Splash" else {
@@ -639,20 +634,22 @@ final class EngineManager: ObservableObject {
             var questionIntent = QuestionIntentStream()
             let updates = StreamDelivery(onDelta: onDelta)
             defer { updates.cancel() }
-            for try await byte in bytes {
-                try Task.checkCancellation()
-                guard let line = try lines.feed(byte) else { continue }
-                do { try questionIntent.feed(line) } catch { throw EngineError.response }
-                guard let delta = StreamDelta.parse(line) else { continue }
-                try textBudget.accept(delta.content)
-                try textBudget.accept(delta.reasoning)
-                if delta.done {
-                    sawDone = true; break
-                }
-                if !delta.reasoning.isEmpty && !sawReasoning { sawReasoning = true; onReasoning() }
-                if !delta.content.isEmpty {
-                    hasContent = true
-                    updates.feed(delta.content)
+            stream: for try await chunk in chunks {
+                for byte in chunk {
+                    try Task.checkCancellation()
+                    guard let line = try lines.feed(byte) else { continue }
+                    do { try questionIntent.feed(line) } catch { throw EngineError.response }
+                    guard let delta = StreamDelta.parse(line) else { continue }
+                    try textBudget.accept(delta.content)
+                    try textBudget.accept(delta.reasoning)
+                    if delta.done {
+                        sawDone = true; break stream
+                    }
+                    if !delta.reasoning.isEmpty && !sawReasoning { sawReasoning = true; onReasoning() }
+                    if !delta.content.isEmpty {
+                        hasContent = true
+                        updates.feed(delta.content)
+                    }
                 }
             }
             try Task.checkCancellation()
@@ -703,19 +700,21 @@ final class EngineManager: ObservableObject {
             ]], "chat_template_kwargs": ["enable_thinking": true, "reasoning_effort": "low"]
         ])
         try Task.checkCancellation()
-        return try await withInferenceBytes(request: request) { bytes, response in
+        return try await withInferenceChunks(request: request) { chunks, response in
             guard let http = response as? HTTPURLResponse, http.statusCode == 200,
                   http.value(forHTTPHeaderField: "Server") == "Splash" else { throw EngineError.response }
             var lines = BoundedSSELines(), budget = ResponseTextBudget(), terminal = QuestionIntentStream()
             var text = "", done = false
-            for try await byte in bytes {
-                try Task.checkCancellation()
-                guard let line = try lines.feed(byte) else { continue }
-                do { try terminal.feed(line) } catch { throw EngineError.response }
-                guard let delta = StreamDelta.parse(line) else { continue }
-                try budget.accept(delta.content); try budget.accept(delta.reasoning)
-                if delta.done { done = true; break }
-                text += delta.content
+            stream: for try await chunk in chunks {
+                for byte in chunk {
+                    try Task.checkCancellation()
+                    guard let line = try lines.feed(byte) else { continue }
+                    do { try terminal.feed(line) } catch { throw EngineError.response }
+                    guard let delta = StreamDelta.parse(line) else { continue }
+                    try budget.accept(delta.content); try budget.accept(delta.reasoning)
+                    if delta.done { done = true; break stream }
+                    text += delta.content
+                }
             }
             try Task.checkCancellation()
             guard done else { throw EngineError.response }
@@ -728,8 +727,8 @@ final class EngineManager: ObservableObject {
         }
     }
 
-    private func withInferenceBytes<Value: Sendable>(request: URLRequest,
-        process: @MainActor (InferenceTransfer.Bytes, URLResponse) async throws -> Value) async throws -> Value {
+    private func withInferenceChunks<Value: Sendable>(request: URLRequest,
+        process: @MainActor (InferenceTransfer.Chunks, URLResponse) async throws -> Value) async throws -> Value {
         try Task.checkCancellation()
         guard let admissionID = activeInference?.id else { throw EngineError.response }
         let transfer = InferenceTransfer(request: request, configuration: inferenceConfiguration(),
@@ -737,9 +736,9 @@ final class EngineManager: ObservableObject {
         return try await withTaskCancellationHandler {
             let result: Result<Value, Error>
             do {
-                let (bytes, response) = try await transfer.start()
+                let (chunks, response) = try await transfer.start()
                 try Task.checkCancellation()
-                result = .success(try await process(bytes, response))
+                result = .success(try await process(chunks, response))
             } catch { result = .failure(error) }
             // [DONE], parser failure and cancelled iteration can all precede the
             // URLSession task's terminal callback. Do not free admission early.

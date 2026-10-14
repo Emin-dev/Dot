@@ -857,25 +857,92 @@ final class InferenceTransferTests: XCTestCase {
     }
     @MainActor func testSynchronousCallbackBurstPreservesSplitUTF8AndSSELines() async throws {
         let text = "data: café 🟢\r\n\r\ndata: [DONE]\n\n"
-        let chunks = text.utf8.map { Data([$0]) }
-        let fixture = AdmissionTransport([.init(hold: false, chunks: chunks)]); defer { fixture.close() }
+        let callbackChunks = text.utf8.map { Data([$0]) }
+        let fixture = AdmissionTransport([.init(hold: false, chunks: callbackChunks)]); defer { fixture.close() }
         let transfer = production(fixture); defer { transfer.cancel() }
-        let (bytes, _) = try await transfer.start()
+        let (chunks, _) = try await transfer.start()
         var received = Data(), parser = BoundedSSELines(), lines: [String] = []
-        for try await byte in bytes { received.append(byte); if let line = try parser.feed(byte) { lines.append(line) } }
+        for try await chunk in chunks {
+            XCTAssertLessThanOrEqual(chunk.count, InferenceTransfer.chunkBytes)
+            for byte in chunk { received.append(byte); if let line = try parser.feed(byte) { lines.append(line) } }
+        }
         await transfer.waitForCompletion()
         XCTAssertEqual(received, Data(text.utf8)); XCTAssertEqual(lines, ["data: café 🟢", "", "data: [DONE]", ""])
         let final = await transfer.snapshot(); XCTAssertTrue(final.completed); XCTAssertTrue(final.invalidated)
+    }
+    @MainActor func testFixedChunkBoundariesPreserveUTF8AndCRLF() async throws {
+        // A single accepted callback makes the 16 KiB consumer boundary exact,
+        // independently of how URLProtocol coalesces its own delivery callbacks.
+        let prefix = "data: " + String(repeating: "x", count: InferenceTransfer.chunkBytes - 7)
+        for splitUTF8 in [false, true] {
+            let wire = prefix + (splitUTF8 ? "🟢\r\n\n" : "\r\n\n")
+            let payload = Data(wire.utf8)
+            let fixture = AdmissionTransport([.init(holdHeaders: true)]); defer { fixture.close() }
+            let (transfer, session, task) = controlled(fixture); defer { session.invalidateAndCancel() }
+            let start = Task { try await transfer.start() }
+            try await eventually { (await transfer.snapshot()).started }
+            transfer.urlSession(session, dataTask: task, didReceive: response(fixture)) { _ in }
+            let (chunks, _) = try await start.value
+            transfer.urlSession(session, dataTask: task, didReceive: payload)
+            let accepted = await transfer.snapshot(); XCTAssertEqual(accepted.bufferedBytes, payload.count)
+            task.cancel()
+            transfer.urlSession(session, task: task, didCompleteWithError: nil)
+            var received = Data(), lines: [String] = [], parser = BoundedSSELines(), count = 0
+            for try await chunk in chunks {
+                XCTAssertFalse(chunk.isEmpty); XCTAssertLessThanOrEqual(chunk.count, InferenceTransfer.chunkBytes)
+                if count == 0 {
+                    XCTAssertEqual(chunk.count, InferenceTransfer.chunkBytes)
+                    XCTAssertEqual(chunk.last, splitUTF8 ? 0xf0 : 13)
+                }
+                count += 1
+                for byte in chunk { received.append(byte); if let line = try parser.feed(byte) { lines.append(line) } }
+            }
+            XCTAssertEqual(count, 2); XCTAssertEqual(received, payload)
+            XCTAssertEqual(lines, [prefix + (splitUTF8 ? "🟢" : ""), ""])
+            transfer.urlSession(session, didBecomeInvalidWithError: nil)
+            await transfer.waitForCompletion()
+        }
+    }
+    @MainActor func testSecondChunkIteratorCannotConsumeOrPoisonFirstIterator() async throws {
+        let payload = Data((0..<(InferenceTransfer.chunkBytes * 2 + 17)).map { UInt8($0 % 251) })
+        let fixture = AdmissionTransport([.init(holdHeaders: true)]); defer { fixture.close() }
+        let (transfer, session, task) = controlled(fixture); defer { session.invalidateAndCancel() }
+        let start = Task { try await transfer.start() }
+        try await eventually { (await transfer.snapshot()).started }
+        transfer.urlSession(session, dataTask: task, didReceive: response(fixture)) { _ in }
+        let (chunks, _) = try await start.value
+        transfer.urlSession(session, dataTask: task, didReceive: payload)
+        let accepted = await transfer.snapshot(); XCTAssertEqual(accepted.bufferedBytes, payload.count)
+        task.cancel()
+        transfer.urlSession(session, task: task, didCompleteWithError: nil)
+        var first = chunks.makeAsyncIterator(), second = chunks.makeAsyncIterator(), received = Data()
+        let initial = try await first.next()
+        let initialChunk = try XCTUnwrap(initial)
+        XCTAssertEqual(initialChunk.count, InferenceTransfer.chunkBytes); received.append(initialChunk)
+        do { _ = try await second.next(); XCTFail("Second consumer stole a chunk") }
+        catch { XCTAssertEqual(error as? EngineError, .response) }
+        while let chunk = try await first.next() {
+            XCTAssertFalse(chunk.isEmpty); XCTAssertLessThanOrEqual(chunk.count, InferenceTransfer.chunkBytes)
+            received.append(chunk)
+        }
+        XCTAssertEqual(received, payload)
+        transfer.urlSession(session, didBecomeInvalidWithError: nil)
+        await transfer.waitForCompletion()
     }
     @MainActor func testSlowConsumerSuspendsOnceThenDrainingBalancesResume() async throws {
         let payload = Data(repeating: 120, count: InferenceTransfer.highWaterBytes + 32_768)
         let fixture = AdmissionTransport([.init(chunks: [payload])]); defer { fixture.close() }
         let transfer = production(fixture); defer { transfer.cancel() }
-        let (bytes, _) = try await transfer.start()
+        let (chunks, _) = try await transfer.start()
         try await eventually { (await transfer.snapshot()).paused }
         let paused = await transfer.snapshot(); XCTAssertEqual(paused.suspendCount, 1); XCTAssertEqual(paused.resumeCount, 0)
-        var iterator = bytes.makeAsyncIterator(), received = Data()
-        while received.count < payload.count { if let byte = try await iterator.next() { received.append(byte) } else { XCTFail("Truncated stream"); break } }
+        var iterator = chunks.makeAsyncIterator(), received = Data()
+        while received.count < payload.count {
+            if let chunk = try await iterator.next() {
+                XCTAssertFalse(chunk.isEmpty); XCTAssertLessThanOrEqual(chunk.count, InferenceTransfer.chunkBytes)
+                received.append(chunk)
+            } else { XCTFail("Truncated stream"); break }
+        }
         let drained = await transfer.snapshot()
         XCTAssertFalse(drained.paused); XCTAssertEqual(drained.suspendCount, drained.resumeCount); XCTAssertEqual(received, payload)
         transfer.cancel(); await transfer.waitForCompletion()
@@ -885,7 +952,7 @@ final class InferenceTransferTests: XCTestCase {
         var transfer: InferenceTransfer? = production(fixture)
         let lifetime = LifetimeProbe(transfer)
         XCTAssertNotNil(lifetime.transfer)
-        // Do not retain the returned Bytes; the only lasting owner should be this
+        // Do not retain the returned Chunks; the only lasting owner should be this
         // local variable and the session's delegate retention until invalidation.
         _ = try await transfer!.start()
         try await eventually { (await transfer!.snapshot()).paused }
@@ -896,7 +963,7 @@ final class InferenceTransferTests: XCTestCase {
         transfer = nil
         try await eventually { lifetime.transfer == nil }
     }
-    @MainActor func testCancellationOfPendingByteConsumerWakesBeforeTransportSettles() async throws {
+    @MainActor func testCancellationOfPendingChunkConsumerWakesBeforeTransportSettles() async throws {
         let fixture = AdmissionTransport([.init(body: " ")]); defer { fixture.close() }
         let configuration = EngineManager.directConfiguration(); configuration.protocolClasses = [AdmissionProtocol.self]
         let request = URLRequest(url: URL(string: "http://127.0.0.1:\(fixture.port)/v1/chat/completions")!)
@@ -906,18 +973,18 @@ final class InferenceTransferTests: XCTestCase {
         // Resume before cancellation/join on every success or failure path.
         defer { callbacks.isSuspended = false; transfer.cancel() }
         addTeardownBlock { callbacks.isSuspended = false; transfer.cancel(); await transfer.waitForCompletion() }
-        let (bytes, _) = try await transfer.start()
-        var priming: UInt8?
+        let (chunks, _) = try await transfer.start()
+        var priming: Data?
         let consumer = Task {
-            var iterator = bytes.makeAsyncIterator()
+            var iterator = chunks.makeAsyncIterator()
             priming = try await iterator.next()
             return try await iterator.next()
         }
         try await eventually {
             let state = await transfer.snapshot()
-            return priming == 32 && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0
+            return priming == Data([32]) && state.waitingForChunk && state.receivedBytes == 1 && state.bufferedBytes == 0
         }
-        XCTAssertEqual(priming, 32)
+        XCTAssertEqual(priming, Data([32]))
         let ready = await transfer.snapshot()
         XCTAssertFalse(ready.completed); XCTAssertFalse(ready.invalidated); XCTAssertEqual(ready.bufferedBytes, 0)
         callbacks.isSuspended = true // Held empty body is quiescent before the gate.
@@ -977,7 +1044,7 @@ final class InferenceTransferTests: XCTestCase {
             let start = Task { try await transfer.start() }
             try await eventually { (await transfer.snapshot()).started }
             transfer.urlSession(session, dataTask: task, didReceive: response(fixture)) { _ in }
-            let (bytes, _) = try await start.value
+            let (chunks, _) = try await start.value
             let deliveryBegan = ProcessInfo.processInfo.systemUptime
             transfer.urlSession(session, dataTask: task, didReceive: Data(repeating: 120, count: BoundedSSELines.maximumStreamBytes))
             let full = await transfer.snapshot()
@@ -989,7 +1056,7 @@ final class InferenceTransferTests: XCTestCase {
                 transfer.urlSession(session, dataTask: task, didReceive: Data([121]))
                 let rejected = await transfer.snapshot()
                 XCTAssertEqual(rejected.receivedBytes, BoundedSSELines.maximumStreamBytes); XCTAssertEqual(rejected.bufferedBytes, 0)
-                var iterator = bytes.makeAsyncIterator()
+                var iterator = chunks.makeAsyncIterator()
                 do { _ = try await iterator.next(); XCTFail("Overflow accepted") } catch { XCTAssertTrue(error is ResponseLimit) }
             } else {
                 // This manual receipt must not orphan the underlying suspended
@@ -997,7 +1064,13 @@ final class InferenceTransferTests: XCTestCase {
                 task.cancel(); task.resume()
                 transfer.urlSession(session, task: task, didCompleteWithError: nil)
                 let drainBegan = ProcessInfo.processInfo.systemUptime
-                for try await byte in bytes { if byte != 120 { XCTFail("Byte order/content changed"); break }; drainedBytes += 1 }
+                drain: for try await chunk in chunks {
+                    XCTAssertFalse(chunk.isEmpty); XCTAssertLessThanOrEqual(chunk.count, InferenceTransfer.chunkBytes)
+                    for byte in chunk {
+                        if byte != 120 { XCTFail("Byte order/content changed"); break drain }
+                        drainedBytes += 1
+                    }
+                }
                 drainMicroseconds = Int((ProcessInfo.processInfo.systemUptime - drainBegan) * 1_000_000)
                 XCTAssertEqual(drainedBytes, BoundedSSELines.maximumStreamBytes)
             }
@@ -1020,10 +1093,10 @@ final class InferenceTransferTests: XCTestCase {
         let start = Task { try await transfer.start() }
         try await eventually { (await transfer.snapshot()).started }
         transfer.urlSession(session, dataTask: task, didReceive: response(fixture)) { _ in }
-        let (bytes, _) = try await start.value
+        let (chunks, _) = try await start.value
         transfer.urlSession(session, dataTask: task, didReceive: Data(repeating: 120, count: BoundedSSELines.maximumStreamBytes + 1))
         let rejected = await transfer.snapshot(); XCTAssertEqual(rejected.receivedBytes, 0); XCTAssertEqual(rejected.bufferedBytes, 0)
-        var iterator = bytes.makeAsyncIterator()
+        var iterator = chunks.makeAsyncIterator()
         do { _ = try await iterator.next(); XCTFail("Oversized callback accepted") } catch { XCTAssertTrue(error is ResponseLimit) }
         transfer.urlSession(session, task: task, didCompleteWithError: URLError(.cancelled))
         transfer.urlSession(session, didBecomeInvalidWithError: nil)
@@ -1031,7 +1104,8 @@ final class InferenceTransferTests: XCTestCase {
     }
     @MainActor func testDetachedDoneChunkCannotHideStickyReceiveOrTransportFailure() async throws {
         // A <= chunkBytes frame is detached by the first next(). Later failure
-        // clears the transfer buffer, but the parser can still reach cached DONE.
+        // clears the transfer buffer, but the consumer still owns that Data and
+        // can synchronously parse its DONE. Publication must keep the failure.
         let wire = "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Valid answer\"}}]}\n\n"
             + "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
         XCTAssertLessThan(wire.utf8.count, InferenceTransfer.chunkBytes)
@@ -1041,12 +1115,13 @@ final class InferenceTransferTests: XCTestCase {
             let start = Task { try await transfer.start() }
             try await eventually { (await transfer.snapshot()).started }
             transfer.urlSession(session, dataTask: task, didReceive: response(fixture)) { _ in }
-            let (bytes, _) = try await start.value
+            let (chunks, _) = try await start.value
             transfer.urlSession(session, dataTask: task, didReceive: Data(wire.utf8))
-            var iterator = bytes.makeAsyncIterator(), lines = BoundedSSELines()
+            var iterator = chunks.makeAsyncIterator(), lines = BoundedSSELines()
             var questionIntent = QuestionIntentStream(), budget = ResponseTextBudget()
-            let first = try await iterator.next(); XCTAssertNotNil(first)
-            _ = try lines.feed(try XCTUnwrap(first))
+            let first = try await iterator.next()
+            let detached = try XCTUnwrap(first)
+            XCTAssertEqual(detached, Data(wire.utf8))
             if failure == "overflow" {
                 transfer.urlSession(session, dataTask: task, didReceive: Data(repeating: 120, count: BoundedSSELines.maximumStreamBytes + 1))
             } else {
@@ -1056,7 +1131,7 @@ final class InferenceTransferTests: XCTestCase {
             let failed = await transfer.snapshot()
             XCTAssertEqual(failed.bufferedBytes, 0); XCTAssertEqual(failed.receivedBytes, wire.utf8.count)
             var answer = "", done = false
-            while let byte = try await iterator.next() {
+            for byte in detached {
                 guard let line = try lines.feed(byte) else { continue }
                 try questionIntent.feed(line)
                 guard let delta = StreamDelta.parse(line) else { continue }
