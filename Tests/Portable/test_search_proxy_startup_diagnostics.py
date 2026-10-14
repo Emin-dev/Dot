@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest import mock
 import ast
 import contextlib
+import errno
 import hashlib
 import importlib.util
 import json
@@ -158,6 +159,80 @@ class StartupContextTests(unittest.TestCase):
         with socket.socket() as sock:
             self.assertIn("invalid", self.context(pass_fds=(sock.fileno(),)))
         self.assertIn("invalid", self.context(pass_fds=(sock.fileno(),)))
+
+    def test_listener_platform_query_requires_exact_listening_state_without_mutation(self):
+        cases = (("darwin", (socket.IPPROTO_TCP, 0x106, 1),
+                  (b"\x01", b"\x00", b"\x04", b"", b"\x01\x00")),
+                 ("linux", (socket.SOL_SOCKET, socket.SO_ACCEPTCONN), (1, 0, 2)))
+        for platform, query, states in cases:
+            for index, state in enumerate(states):
+                with self.subTest(platform=platform, state=state):
+                    listener = mock.MagicMock(family=socket.AF_INET)
+                    listener.__enter__.return_value = listener
+                    listener.getsockname.return_value = self.listener.getsockname()
+                    def getsockopt(*args):
+                        if args == (socket.SOL_SOCKET, socket.SO_TYPE):
+                            return socket.SOCK_STREAM
+                        self.assertEqual(args, query)
+                        return state
+                    listener.getsockopt.side_effect = getsockopt
+                    with mock.patch.object(support.sys, "platform", platform), \
+                         mock.patch.object(support.socket, "TCP_CONNECTION_INFO", 0x106, create=True), \
+                         mock.patch.object(support.socket, "fromfd", return_value=listener):
+                        if index == 0:
+                            self.assertEqual(support._startup_listener(self.fd),
+                                (support._startup_stamp(os.fstat(self.fd)), self.listener.getsockname()[1]))
+                        else:
+                            with self.assertRaises(ValueError):
+                                support._startup_listener(self.fd)
+                    self.assertEqual(listener.getsockopt.call_args_list[0], mock.call(*query))
+                    self.assertEqual(listener.getsockopt.call_count, 2 if index == 0 else 1)
+                    listener.bind.assert_not_called()
+                    listener.listen.assert_not_called()
+                    listener.connect.assert_not_called()
+                    os.fstat(self.fd)
+
+    def test_listener_query_error_fails_closed_without_fallback_or_mutation(self):
+        for platform, query in (("darwin", (socket.IPPROTO_TCP, 0x106, 1)),
+                                ("linux", (socket.SOL_SOCKET, socket.SO_ACCEPTCONN))):
+            with self.subTest(platform=platform):
+                listener = mock.MagicMock()
+                listener.__enter__.return_value = listener
+                error = OSError(errno.ENOPROTOOPT, "unsupported socket option")
+                listener.getsockopt.side_effect = error
+                with mock.patch.object(support.sys, "platform", platform), \
+                     mock.patch.object(support.socket, "TCP_CONNECTION_INFO", 0x106, create=True), \
+                     mock.patch.object(support.socket, "fromfd", return_value=listener):
+                    with self.assertRaises(OSError) as caught:
+                        support._startup_listener(self.fd)
+                    self.assertIs(caught.exception, error)
+                    self.assertEqual(self.context(), {"invalid": True, "used": False})
+                self.assertEqual(listener.getsockopt.call_args_list, [mock.call(*query)] * 2)
+                listener.bind.assert_not_called()
+                listener.listen.assert_not_called()
+                listener.connect.assert_not_called()
+                os.fstat(self.fd)
+
+    def test_real_unbound_bound_connected_and_accepted_sockets_stay_rejected(self):
+        with socket.socket() as bound:
+            with self.assertRaises(ValueError):
+                support._startup_listener(bound.fileno())
+            bound.bind(("127.0.0.1", 0))
+            with self.assertRaises(ValueError):
+                support._startup_listener(bound.fileno())
+            os.fstat(bound.fileno())
+            self.assertEqual(bound.getsockname()[0], "127.0.0.1")
+        before = support._startup_listener(self.fd)
+        with socket.create_connection(self.listener.getsockname(), timeout=2) as client:
+            accepted, _ = self.listener.accept()
+            with accepted:
+                for connection in (client, accepted):
+                    with self.assertRaises(ValueError):
+                        support._startup_listener(connection.fileno())
+                    os.fstat(connection.fileno())
+                client.sendall(b"fixture")
+                self.assertEqual(accepted.recv(7), b"fixture")
+        self.assertEqual(support._startup_listener(self.fd), before)
 
     def test_target_mutation_and_same_bytes_replacement_are_rejected(self):
         for mutation in ("content", "replacement", "symlink", "hardlink", "mode"):
@@ -469,7 +544,10 @@ class StartupChildTests(unittest.TestCase):
         program += f'assert os.getcwd() == {str(self.state)!r}; '
         program += f'assert dict(os.environ) == {self.context["env"]!r}; '
         program += f's = socket.socket(fileno={self.listener.fileno()}); '
-        program += 'assert s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1; '
+        if sys.platform == "darwin":
+            program += 'assert s.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\\x01"; '
+        else:
+            program += 'assert s.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1; '
         program += 'print("dot-search-startup-v1")'
         # Python can coerce the C locale by adding LC_CTYPE on the portable host.
         self.context["env"]["LC_CTYPE"] = "C.UTF-8"
@@ -479,6 +557,50 @@ class StartupChildTests(unittest.TestCase):
 
 
 class StartupOriginalFailureTests(unittest.TestCase):
+    def test_native_probe_uses_exact_read_only_platform_listener_expression(self):
+        # Parse the canary but execute only its allowlisted read-only expression.
+        # Never import the native probe or execute its surrounding body.
+        tree = ast.parse((ROOT / "Tests/Native/search_proxy_bootstrap_probe.py").read_text())
+        block = next(node for node in tree.body if isinstance(node, ast.With)
+                     and any(ast.unparse(item.context_expr) == "socket.socket(fileno=args.owned_listener)"
+                             for item in node.items))
+        index, assignment = next((index, node) for index, node in enumerate(block.body)
+                                 if isinstance(node, ast.Assign)
+                                 and [ast.unparse(target) for target in node.targets] == ["listening"])
+        expression = ast.Expression(assignment.value)
+        self.assertEqual(ast.unparse(expression),
+            "listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b'\\x01' "
+            "if sys.platform == 'darwin' else listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1")
+        self.assertIsInstance(block.body[index + 1], ast.Assert)
+        self.assertEqual(ast.unparse(block.body[index + 1].test), "listening")
+        code = compile(expression, "<native-probe-listener-expression>", "eval")
+        cases = (("darwin", (socket.IPPROTO_TCP, 0x106, 1),
+                  (b"\x01", b"\x00", b"\x04", b"", b"\x01\x00")),
+                 ("linux", (socket.SOL_SOCKET, socket.SO_ACCEPTCONN), (1, 0, 2)))
+        for platform, query, states in cases:
+            error = OSError(errno.ENOPROTOOPT, "unsupported socket option")
+            for index, state in enumerate((*states, error)):
+                with self.subTest(platform=platform, state=state):
+                    listener = mock.Mock()
+                    if state is error:
+                        listener.getsockopt.side_effect = error
+                    else:
+                        listener.getsockopt.return_value = state
+                    namespace = {"__builtins__": {}, "listener": listener, "socket": socket,
+                                 "sys": mock.Mock(platform=platform)}
+                    with mock.patch.object(socket, "TCP_CONNECTION_INFO", 0x106, create=True):
+                        if state is error:
+                            with self.assertRaises(OSError) as caught:
+                                eval(code, namespace)
+                            self.assertIs(caught.exception, error)
+                        else:
+                            self.assertIs(eval(code, namespace), index == 0)
+                    listener.getsockopt.assert_called_once_with(*query)
+                    listener.bind.assert_not_called()
+                    listener.listen.assert_not_called()
+                    listener.connect.assert_not_called()
+                    listener.close.assert_not_called()
+
     def test_native_host_guard_requires_every_fixed_host_field(self):
         environment = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "macOS",
                        "RUNNER_ARCH": "ARM64", "GITHUB_WORKFLOW": "Build-only native Search proxy canaries"}

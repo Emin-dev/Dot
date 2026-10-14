@@ -648,7 +648,7 @@ class InputBoundsContract(unittest.TestCase):
         entrypoint_pin = ast.literal_eval(assignments['REVIEWED_ENTRYPOINT_SHA256'])
         exact = {
             'packaging/search/dot-search-bootstrap.c': '637c9778cfdf0a7e790f3a4fc43069da05cfd5eb299273a5aab01491fa77f55d',
-            'scripts/search_proxy_canary_support.py': '107edd91f27ed66d522e4721b41e433d55dbc2a6aae02fff6b32b10b147ed19d',
+            'scripts/search_proxy_canary_support.py': '456b2a4cc66475487a405e4b87efeac8ed03f6db6ff82fa2f0c8e1bf2b95eb0d',
             'Tests/Fixtures/search_real_vertical_entry.py': 'a9bef0fd8db827e2e8bf6cc29af208797a3d443794b2fc94461152555c8feda4',
         }
         for name, expected in exact.items():

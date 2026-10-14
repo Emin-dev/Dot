@@ -192,7 +192,10 @@ with socket.socket(fileno=args.owned_listener) as listener:
     address = listener.getsockname()
     assert listener.family == socket.AF_INET and address[0] == "127.0.0.1"
     assert 1 <= address[1] <= 65535 and address[1] != args.egress_port
-    assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1
+    # Darwin exposes the read-only listener state through TCP_CONNECTION_INFO.
+    listening = (listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\x01"
+                 if sys.platform == "darwin" else listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1)
+    assert listening
     assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 0
     assert listener.getsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) == 0
     _record_progress("listener-validated")

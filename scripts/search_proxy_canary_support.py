@@ -299,7 +299,10 @@ def _startup_listener(descriptor):
     if type(descriptor) is not int or descriptor < 3:
         raise ValueError("listener")
     with socket.fromfd(descriptor, socket.AF_INET, socket.SOCK_STREAM) as listener:
-        if (listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1
+        # Darwin does not implement SO_ACCEPTCONN; inspect exact TCP state without mutation.
+        listening = (listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b"\x01"
+                     if sys.platform == "darwin" else listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1)
+        if (not listening
                 or listener.getsockname()[0] != "127.0.0.1"
                 or listener.family != socket.AF_INET
                 or listener.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM):

@@ -880,6 +880,7 @@ class DescriptorDiagnosticContractTests(unittest.TestCase):
         with self.fixture() as (base, canary, _, context):
             os.link(canary, base / 'canary-alias')
             with patch.object(h.m, '_NativeToolset') as tools, \
+                    patch.object(h, 'fixed_tool_identity_diagnostic'), \
                     contextlib.redirect_stdout(io.StringIO()) as output, \
                     self.assertRaisesRegex(h.m.Rejected, 'single-link regular file required'):
                 h.static_inspection(context, h.Receipt(), base)
@@ -892,6 +893,7 @@ class DescriptorDiagnosticContractTests(unittest.TestCase):
     def test_payload_tree_completion_is_recorded_before_original_toolset_rejection(self):
         with self.fixture() as (base, _, _, context):
             with patch.object(h.m, '_NativeToolset', side_effect=h.m.Rejected('single-link regular file required')), \
+                    patch.object(h, 'fixed_tool_identity_diagnostic'), \
                     contextlib.redirect_stdout(io.StringIO()) as output, \
                     self.assertRaisesRegex(h.m.Rejected, 'single-link regular file required'):
                 h.static_inspection(context, h.Receipt(), base)
@@ -914,6 +916,490 @@ class DescriptorDiagnosticContractTests(unittest.TestCase):
         self.assertNotIn('regular_at(', body)
         self.assertNotIn('_native_run_bounded(', body)
         self.assertLessEqual(h.DESCRIPTOR_DIAGNOSTIC_SECONDS, 5)
+
+
+class FixedToolIdentityDiagnosticContractTests(unittest.TestCase):
+    """Synthetic ownership/signatures/mount flags; real bounded descriptor IO."""
+
+    @contextlib.contextmanager
+    def fixture(self, owner=0):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            base = Path(temporary)
+            system = base / 'system'; system.mkdir()
+            paths = {}
+            for role in h.FIXED_TOOL_DIAGNOSTIC_PATHS:
+                path = system / role; path.write_bytes(b'portable mock system file\x00')
+                path.chmod(0o755); paths[role] = str(path)
+            developer = base / 'Xcode.app/Contents/Developer'
+            toolchain = developer / 'Toolchains/XcodeDefault.xctoolchain/usr/bin'
+            toolchain.mkdir(parents=True)
+            selected = {}
+            for role in ('lipo', 'otool'):
+                path = toolchain / role; path.write_bytes(b'portable mock selected tool\x00')
+                path.chmod(0o755); selected[role] = path
+            original_stat, original_fstat = os.stat, os.fstat
+
+            def metadata(info):
+                values = {key: getattr(info, key) for key in dir(info) if key.startswith('st_')}
+                values.update(st_uid=owner, st_gid=0)
+                # Synthetic external-ancestor protection only; leaf modes and
+                # all held-edge/inode/byte mutation checks remain real.
+                if stat.S_ISDIR(info.st_mode): values['st_mode'] &= ~0o022
+                return SimpleNamespace(**values)
+
+            with patch.dict(h.FIXED_TOOL_DIAGNOSTIC_PATHS, paths, clear=True), \
+                    patch.object(h, 'DEVELOPER', str(developer)), \
+                    patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_APPLICATIONS', str(base)), \
+                    patch.object(h.os, 'stat', side_effect=lambda *a, **k: metadata(original_stat(*a, **k))), \
+                    patch.object(h.os, 'fstat', side_effect=lambda fd: metadata(original_fstat(fd))), \
+                    patch.object(h.os, 'fstatvfs', return_value=SimpleNamespace(f_flag=os.ST_RDONLY)):
+                yield base, paths, developer, selected, h.make_context()
+
+    def result(self, paths, developer, selected, argv):
+        executable = argv[3]
+        if executable == paths['xcode_select']:
+            stdout, stderr = str(developer).encode() + b'\n', b''
+        elif executable == paths['xcrun']:
+            stdout, stderr = str(selected[argv[-1]]).encode() + b'\n', b''
+        else:
+            self.assertEqual(executable, paths['codesign'])
+            stdout, stderr = b'', b'Identifier=portable.mock.only\nAuthority=not-native-evidence\n'
+        return {**successful(stdout), 'stderr': stderr, 'argv': argv}
+
+    def observe(self, fixture, effect=None):
+        base, paths, developer, selected, context = fixture
+        descriptors = []
+        def descriptor(fd):
+            descriptors.append(fd)
+            return {'fd_path': None, 'fd_path_error': {'type': 'portable_mock_only', 'errno': None}}
+        def command(argv, deadline, **kwargs):
+            if effect is not None:
+                value = effect(argv, deadline, kwargs)
+                if value is not None: return value
+            return self.result(paths, developer, selected, argv)
+        with patch.object(h.m, '_native_run_bounded', side_effect=command) as runner, \
+                patch.object(h, 'toolchain_fd_path', side_effect=descriptor), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            receipt = h.Receipt()
+            self.assertIsNone(h.fixed_tool_identity_diagnostic(context, receipt))
+            self.assertEqual(receipt.gates, {})
+        for fd in descriptors:
+            with self.assertRaises(OSError) as error: os.fstat(fd)
+            self.assertEqual(error.exception.errno, errno.EBADF)
+        return [json.loads(line) for line in output.getvalue().splitlines()], runner
+
+    def test_fixed_commands_raw_evidence_and_no_delegated_execution(self):
+        with self.fixture() as fixture:
+            _, paths, developer, selected, context = fixture
+            records, runner = self.observe(fixture)
+            self.assertEqual(runner.call_count, 22)
+            scope = records[0]
+            self.assertEqual(scope['event'], 'fixed_tool_identity_scope')
+            self.assertEqual(scope['discovery_context'], 'scrubbed_system_default')
+            self.assertEqual(scope['inspector_environment'], h.m._NS_ENV)
+            self.assertNotIn('DEVELOPER_DIR', scope['inspector_environment'])
+            self.assertEqual(scope['fixture_configured_developer'], str(developer))
+            commands = [r for r in records if r['event'] == 'command']
+            self.assertEqual(len(commands), 22)
+            self.assertEqual([r['result']['argv'][3:] for r in commands if 'find_' in r['label']],
+                             [[paths['xcrun'], '--find', 'lipo'], [paths['xcrun'], '--find', 'otool']])
+            self.assertEqual(next(r for r in commands if r['label'] == 'fixed_tool_selected_developer')
+                             ['result']['argv'][3:], [paths['xcode_select'], '-p'])
+            for call in runner.call_args_list:
+                argv = call.args[0]
+                self.assertEqual(argv[:2], [paths['sandbox'], '-p'])
+                self.assertIn(argv[3], (paths['codesign'], paths['xcrun'], paths['xcode_select']))
+                self.assertIn('(deny file-write*)', argv[2])
+                self.assertIn('(deny network*)', argv[2])
+                self.assertIn('(deny process-fork)', argv[2])
+                execution = argv[2].split('(allow process-exec ', 1)[1].split('(allow sysctl-read)', 1)[0]
+                self.assertNotIn(str(developer), execution)
+                self.assertLessEqual(call.args[1], context.budget.deadline)
+                self.assertEqual(call.kwargs, {'pass_fds': (), 'env': h.m._NS_ENV, 'cap': h.OUTPUT_BYTES})
+            verifies = [r for r in commands if r['label'].endswith('_apple_anchor')]
+            self.assertEqual(len(verifies), 9)
+            for row in verifies:
+                self.assertEqual(row['result']['argv'][4:-1], ['--verify', '--strict', '--all-architectures',
+                                 '--verbose=4', '--test-requirement', '=anchor apple'])
+                self.assertEqual(base64.b64decode(row['result']['stderr']['base64']),
+                                 b'Identifier=portable.mock.only\nAuthority=not-native-evidence\n')
+            snapshots = [r for r in records if r['event'] == 'fixed_tool_identity_snapshot']
+            self.assertEqual(len(snapshots), 18)
+            for role in (*paths, 'selected_lipo', 'selected_otool'):
+                pair = [r for r in snapshots if r['role'] == role]
+                self.assertEqual([r['phase'] for r in pair], ['before', 'after'])
+                self.assertEqual(pair[0]['snapshot'], pair[1]['snapshot'])
+                self.assertEqual(pair[0]['snapshot']['sha256'], h.m.digest(Path(pair[0]['resolved']).read_bytes()))
+                self.assertTrue(all(row['flags'] & os.ST_RDONLY for row in pair[0]['snapshot']['mounts']))
+            self.assertTrue(all(r['production_acceptance'] is False and r['owner_runtime_acceptance'] is False
+                                for r in records))
+            self.assertTrue(all(r['authorizes_delegated_execution'] is False for r in records
+                                if 'authorizes_delegated_execution' in r))
+
+    def test_hardlinked_fixed_tools_are_observed_but_generic_reader_still_rejects(self):
+        with self.fixture() as fixture:
+            base, paths, _, _, context = fixture
+            Path(paths['otool']).unlink(); os.link(paths['lipo'], paths['otool'])
+            records, _ = self.observe(fixture)
+            pair = [r for r in records if r['event'] == 'fixed_tool_identity_snapshot'
+                    and r['phase'] == 'before' and r['role'] in ('lipo', 'otool')]
+            self.assertEqual([r['snapshot']['nlink'] for r in pair], [2, 2])
+            self.assertEqual(pair[0]['snapshot']['identity'], pair[1]['snapshot']['identity'])
+            with h.m.Root(Path(paths['lipo']).parent) as root, self.assertRaisesRegex(h.m.Rejected, 'single-link'):
+                h.m.regular_at(root.fd, 'lipo', context.budget)
+
+    def test_internal_selected_symlink_is_observed_without_becoming_an_executable(self):
+        with self.fixture() as fixture:
+            _, paths, _, selected, _ = fixture
+            target = selected['lipo'].with_name('llvm-lipo')
+            selected['lipo'].rename(target); selected['lipo'].symlink_to(target.name)
+            records, runner = self.observe(fixture)
+            event = next(r for r in records if r['event'] == 'fixed_tool_dispatch' and r['role'] == 'lipo')
+            self.assertEqual(event['configured'], str(selected['lipo']))
+            self.assertEqual(event['resolved'], str(target))
+            self.assertFalse(any(call.args[0][3] == str(target) for call in runner.call_args_list))
+
+    def test_unsafe_missing_and_nonregular_bootstrap_never_executes(self):
+        for kind in ('missing', 'directory', 'fifo', 'symlink', 'writable', 'setuid', 'nonexecutable', 'oversized'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                base, paths, _, _, _ = fixture
+                path = Path(paths['codesign'])
+                if kind in ('missing', 'directory', 'fifo', 'symlink'): path.unlink()
+                if kind == 'directory': path.mkdir()
+                elif kind == 'fifo': os.mkfifo(path)
+                elif kind == 'symlink': path.symlink_to(paths['lipo'])
+                elif kind == 'writable': path.chmod(0o775)
+                elif kind == 'setuid': path.chmod(0o4755)
+                elif kind == 'nonexecutable': path.chmod(0o644)
+                elif kind == 'oversized':
+                    with path.open('wb') as stream: stream.truncate(h.FIXED_TOOL_DIAGNOSTIC_FILE_BYTES + 1)
+                records, runner = self.observe(fixture)
+                runner.assert_not_called()
+                self.assertTrue(any(r.get('status') == 'fail' and r.get('role') == 'codesign' for r in records))
+        with self.fixture(owner=501) as fixture:
+            _, runner = self.observe(fixture)
+            runner.assert_not_called()
+
+    def test_failed_apple_anchor_cannot_authorize_discovery(self):
+        with self.fixture() as fixture:
+            _, paths, _, _, _ = fixture
+            def effect(argv, deadline, kwargs):
+                if argv[3] == paths['codesign'] and '--verify' in argv and argv[-1] == paths['xcrun']:
+                    return {**successful(), 'argv': argv, 'returncode': 3,
+                            'stderr': b'Identifier=com.apple.fake\nAuthority=Apple\n'}
+            records, runner = self.observe(fixture, effect)
+            self.assertFalse(any(call.args[0][3] == paths['xcrun'] for call in runner.call_args_list))
+            self.assertTrue(any(r.get('role') == 'xcrun' and r.get('status') == 'fail' for r in records))
+            self.assertTrue(any(r.get('role') == 'xcrun' and r.get('apple_anchor_verified') is False for r in records))
+
+    def test_discovery_output_is_bounded_canonical_and_contained(self):
+        for kind in ('outside', 'prefix_collision', 'relative', 'multiline', 'nul', 'bad_utf8', 'oversized', 'wrong_name'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                base, paths, developer, selected, _ = fixture
+                outside = base / 'lipo'; outside.write_bytes(b'outside must not be inspected')
+                outputs = {'outside': str(outside).encode() + b'\n',
+                           'prefix_collision': str(developer).encode() + b'-other/Toolchains/lipo\n',
+                           'relative': b'lipo\n', 'multiline': b'/a\n/b\n', 'nul': b'/a\x00\n',
+                           'bad_utf8': b'/\xff\n', 'oversized': b'/' + b'a' * 4096 + b'\n',
+                           'wrong_name': str(selected['otool']).encode() + b'\n'}
+                def effect(argv, deadline, kwargs):
+                    if argv[3:] == [paths['xcrun'], '--find', 'lipo']:
+                        return {**successful(outputs[kind]), 'argv': argv}
+                records, runner = self.observe(fixture, effect)
+                self.assertFalse(any(r.get('event') == 'fixed_tool_identity_snapshot'
+                                     and r.get('role') == 'selected_lipo' for r in records))
+                self.assertFalse(any(call.args[0][-1] == str(outside) for call in runner.call_args_list))
+                self.assertTrue(any(r.get('role') == 'selected_lipo' and r.get('status') == 'fail' for r in records))
+
+    def test_selected_escape_and_alias_retarget_never_authorize_or_execute(self):
+        for kind in ('outside', 'retarget'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                base, paths, _, selected, _ = fixture
+                outside = base / 'outside'; outside.write_bytes(b'outside')
+                target = selected['lipo'].with_name('llvm-lipo')
+                selected['lipo'].rename(target)
+                selected['lipo'].symlink_to(outside if kind == 'outside' else target)
+                def effect(argv, deadline, kwargs):
+                    if kind == 'retarget' and argv[3] == paths['codesign'] and argv[-1] == str(target):
+                        selected['lipo'].unlink(); selected['lipo'].symlink_to(outside)
+                records, runner = self.observe(fixture, effect)
+                self.assertTrue(any(r.get('role') == 'selected_lipo' and r.get('status') == 'fail' for r in records))
+                self.assertFalse(any(call.args[0][3] in (str(target), str(outside)) for call in runner.call_args_list))
+                self.assertFalse(any(call.args[0][-1] == str(outside) for call in runner.call_args_list))
+
+    def test_wrong_developer_selection_does_not_invoke_xcrun(self):
+        with self.fixture() as fixture:
+            _, paths, _, _, _ = fixture
+            def effect(argv, deadline, kwargs):
+                if argv[3] == paths['xcode_select']:
+                    return {**successful(b'/Applications/Other.app/Contents/Developer\n'), 'argv': argv}
+            records, runner = self.observe(fixture, effect)
+            self.assertFalse(any(call.args[0][3] == paths['xcrun'] for call in runner.call_args_list))
+            self.assertTrue(any(r.get('role') == 'dispatch' and r.get('status') == 'fail' for r in records))
+
+    def test_default_xcode_can_differ_from_fixture_without_authorizing_execution(self):
+        with self.fixture() as fixture:
+            _, _, developer, _, _ = fixture
+            with patch.object(h, 'DEVELOPER', '/Applications/Xcode_26.3.app/Contents/Developer'):
+                records, runner = self.observe(fixture)
+            scope = records[0]
+            self.assertEqual(scope['fixture_configured_developer'], '/Applications/Xcode_26.3.app/Contents/Developer')
+            dispatch = [r for r in records if r['event'] == 'fixed_tool_dispatch']
+            self.assertEqual(len(dispatch), 2)
+            self.assertTrue(all(r['developer'] == str(developer) and
+                                r['selection_context'] == 'scrubbed_system_default' for r in dispatch))
+
+    def test_clt_and_canonical_selected_developer_alias_are_read_only_observations(self):
+        for kind in ('clt', 'alias'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                base, paths, developer, selected, context = fixture
+                if kind == 'clt':
+                    replacement = base / 'CommandLineTools'
+                    (replacement / 'usr/bin').mkdir(parents=True)
+                    for role in ('lipo', 'otool'):
+                        selected[role].rename(replacement / 'usr/bin' / role)
+                        selected[role] = replacement / 'usr/bin' / role
+                    fixture = (base, paths, replacement, selected, context)
+                    with patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_CLT', str(replacement)):
+                        records, runner = self.observe(fixture)
+                else:
+                    real_app = base / 'Xcode_16.4.app'
+                    (base / 'Xcode.app').rename(real_app)
+                    (base / 'Xcode.app').symlink_to(real_app.name)
+                    records, runner = self.observe(fixture)
+                dispatch = [r for r in records if r['event'] == 'fixed_tool_dispatch']
+                self.assertEqual(len(dispatch), 2)
+                self.assertTrue(all(r['authorizes_delegated_execution'] is False for r in dispatch))
+                self.assertFalse(any(call.args[0][3] in [r['resolved'] for r in dispatch]
+                                     for call in runner.call_args_list))
+
+    def test_changed_selected_developer_is_reported(self):
+        with self.fixture() as fixture:
+            _, paths, developer, _, _ = fixture
+            selections = 0
+            def effect(argv, deadline, kwargs):
+                nonlocal selections
+                if argv[3] == paths['xcode_select']:
+                    selections += 1
+                    if selections == 2:
+                        return {**successful(b'/Applications/Xcode_17.app/Contents/Developer\n'), 'argv': argv}
+            records, _ = self.observe(fixture, effect)
+            self.assertEqual(selections, 2)
+            self.assertTrue(any(r.get('role') == 'dispatch' and 'changed during discovery' in r.get('error', '')
+                                for r in records))
+
+    def test_full_byte_digest_catches_mutation_even_with_hidden_metadata_change(self):
+        with self.fixture() as fixture:
+            _, paths, _, _, _ = fixture
+            changed = False
+            def effect(argv, deadline, kwargs):
+                nonlocal changed
+                if argv[3] == paths['codesign'] and argv[-1] == paths['lipo'] and not changed:
+                    path = Path(paths['lipo']); data = path.read_bytes()
+                    path.write_bytes(b'x' * len(data)); changed = True
+            with patch.object(h.m, 'same_node'):
+                records, _ = self.observe(fixture, effect)
+            snapshots = [r for r in records if r['event'] == 'fixed_tool_identity_snapshot' and r['role'] == 'lipo']
+            self.assertEqual(len(snapshots), 2)
+            self.assertNotEqual(snapshots[0]['snapshot']['sha256'], snapshots[1]['snapshot']['sha256'])
+            self.assertTrue(any(r.get('role') == 'lipo' and 'bytes/metadata/mounts changed' in r.get('error', '')
+                                for r in records))
+
+    def test_system_path_and_mount_mutation_are_detected(self):
+        for kind in ('bytes', 'replace', 'ancestor', 'mount'):
+            with self.subTest(kind=kind), self.fixture() as fixture:
+                base, paths, _, _, _ = fixture
+                def effect(argv, deadline, kwargs):
+                    path = Path(paths['lipo'])
+                    if kind == 'bytes': path.write_bytes(b'mutated')
+                    elif kind == 'replace':
+                        replacement = path.with_name('replacement'); replacement.write_bytes(path.read_bytes())
+                        replacement.chmod(0o755); replacement.replace(path)
+                    elif kind == 'ancestor':
+                        path.parent.rename(base / 'old-system'); path.parent.mkdir()
+                    else: h.os.fstatvfs.return_value = SimpleNamespace(f_flag=0)
+                records, runner = self.observe(fixture, effect)
+                self.assertEqual(runner.call_count, 1)
+                self.assertTrue(any(r.get('status') == 'fail' for r in records))
+                self.assertFalse(any(r.get('apple_anchor_verified') is True for r in records))
+
+    def test_resource_failures_preserve_raw_evidence_without_discovery(self):
+        for field, value in (('returncode', 1), ('reason', 'deadline'), ('reason', 'output_limit'),
+                             ('cleanup', {'complete': False, 'remaining_owned_processes': 1, 'open_output_pipes': 1})):
+            with self.subTest(field=field), self.fixture() as fixture:
+                _, paths, _, _, _ = fixture
+                def effect(argv, deadline, kwargs):
+                    result = {**successful(b'raw mock failure\x00'), 'argv': argv}; result[field] = value
+                    return result
+                records, runner = self.observe(fixture, effect)
+                self.assertFalse(any(call.args[0][3] in (paths['xcrun'], paths['xcode_select'])
+                                     for call in runner.call_args_list))
+                command = next(r for r in records if r['event'] == 'command')
+                self.assertEqual(base64.b64decode(command['result']['stdout']['base64']), b'raw mock failure\x00')
+
+    def test_aggregate_and_deadline_bounds_stop_without_admission(self):
+        with self.fixture() as fixture, patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES', 1):
+            records, runner = self.observe(fixture)
+            runner.assert_not_called()
+            self.assertTrue(any('byte bound' in r.get('error', '') for r in records))
+        with self.fixture() as fixture:
+            fixture[-1].budget.deadline = 0
+            _, runner = self.observe(fixture); runner.assert_not_called()
+        with self.fixture() as fixture, \
+                patch.object(fixture[-1].budget, 'check', side_effect=h.CanaryDeadline('whole deadline')):
+            with self.assertRaises(h.CanaryDeadline): self.observe(fixture)
+
+    def test_exhausted_aggregate_never_starts_another_read_or_eof_sentinel(self):
+        for limit in (0, 26, 52):
+            with self.subTest(limit=limit), self.fixture() as fixture, \
+                    patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES', limit):
+                original_read = os.read
+                observations, consumed = [], 0
+                def read(fd, amount):
+                    nonlocal consumed
+                    self.assertGreater(limit - consumed, 0)
+                    self.assertLessEqual(amount, limit - consumed)
+                    data = original_read(fd, amount)
+                    observations.append((amount, len(data))); consumed += len(data)
+                    return data
+                with patch.object(h.os, 'read', side_effect=read):
+                    records, _ = self.observe(fixture)
+                self.assertEqual(consumed, limit)
+                self.assertEqual(observations, [(26, 26)] * (limit // 26))
+                self.assertTrue(any('aggregate byte bound before read' in r.get('error', '') for r in records))
+
+    def test_each_chunk_obeys_exact_remaining_aggregate_allowance(self):
+        with self.fixture() as fixture:
+            _, paths, _, _, _ = fixture
+            limit = 1024 * 1024 + 17
+            Path(paths['codesign']).write_bytes(b'x' * limit)
+            original_read = os.read
+            observations, consumed = [], 0
+            def read(fd, amount):
+                nonlocal consumed
+                self.assertGreater(limit - consumed, 0)
+                self.assertLessEqual(amount, min(1024 * 1024, limit - consumed))
+                data = original_read(fd, amount)
+                observations.append((amount, len(data))); consumed += len(data)
+                return data
+            with patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES', limit), \
+                    patch.object(h.os, 'read', side_effect=read):
+                _, runner = self.observe(fixture)
+            runner.assert_not_called()
+            self.assertEqual(consumed, limit)
+            self.assertEqual(observations, [(1024 * 1024, 1024 * 1024), (17, 17)])
+
+    def test_insufficient_aggregate_rejects_known_file_before_any_read(self):
+        with self.fixture() as fixture, patch.object(h, 'FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES', 24), \
+                patch.object(h.os, 'read', side_effect=AssertionError('no aggregate capacity')) as reader:
+            records, runner = self.observe(fixture)
+            reader.assert_not_called(); runner.assert_not_called()
+            self.assertTrue(any('aggregate byte bound before read' in r.get('error', '') for r in records))
+
+    def test_optional_diagnostic_skips_without_reading_or_spawning_when_reserve_would_be_spent(self):
+        for remaining in (10, 80, 87):
+            with self.subTest(remaining=remaining), self.fixture() as fixture, \
+                    patch.object(h.time, 'monotonic', return_value=100), \
+                    patch.object(h.m, 'Root') as root, patch.object(h.os, 'read') as reader:
+                fixture[-1].budget.deadline = 100 + remaining
+                records, runner = self.observe(fixture)
+                root.assert_not_called(); reader.assert_not_called(); runner.assert_not_called()
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]['status'], 'skipped_for_budget')
+                self.assertEqual(records[0]['remaining_ms'], remaining * 1000)
+                self.assertEqual(records[0]['original_gate_reserve_seconds'], 80)
+                self.assertFalse(records[0]['authorizes_inspection'])
+
+    def test_timeout_and_cleanup_leave_original_gate_reserve_intact(self):
+        with self.fixture() as fixture:
+            context = fixture[-1]; now = [100.0]; context.budget.deadline = 195
+            deadlines = []
+            def timeout(argv, deadline, kwargs):
+                deadlines.append(deadline)
+                self.assertLessEqual(deadline, context.budget.deadline - 80 - 2 - 1)
+                now[0] = deadline + 2  # Exercise the runner's complete cleanup allowance.
+                return {**successful(), 'argv': argv, 'reason': 'deadline'}
+            with patch.object(h.time, 'monotonic', side_effect=lambda: now[0]):
+                records, runner = self.observe(fixture, timeout)
+                context.budget.check()
+            self.assertEqual(len(deadlines), 2)
+            self.assertLessEqual(now[0], context.budget.deadline - 81)
+            self.assertTrue(any(r.get('status') == 'fail' for r in records))
+            self.assertFalse(any(r.get('apple_anchor_verified') is True for r in records))
+
+    def test_fractional_clock_budget_skip_emits_canonical_integer_milliseconds(self):
+        for budget_deadline, expected_ms in ((110.875, 10750), (100.125, 0)):
+            with self.subTest(deadline=budget_deadline), self.fixture() as fixture, \
+                    patch.object(h.time, 'monotonic', return_value=100.125), \
+                    patch.object(h.m, 'Root') as root, patch.object(h.os, 'read') as reader:
+                fixture[-1].budget.deadline = budget_deadline
+                records, runner = self.observe(fixture)
+                root.assert_not_called(); reader.assert_not_called(); runner.assert_not_called()
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]['status'], 'skipped_for_budget')
+                self.assertEqual(records[0]['remaining_ms'], expected_ms)
+                self.assertIs(type(records[0]['remaining_ms']), int)
+                self.assertEqual(h.m.strict_json(h.m.canonical(records[0])), records[0])
+
+    def test_budget_skip_preserves_original_single_link_gate_attribution(self):
+        with self.fixture() as fixture:
+            base, _, _, _, context = fixture
+            (base / 'payload').mkdir(); (base / 'payload/canary').write_bytes(b'portable payload')
+            context.budget.deadline = 110
+            with patch.object(h.time, 'monotonic', return_value=100), \
+                    patch.object(h, 'descriptor_identity_diagnostic'), \
+                    patch.object(h.m, '_native_run_bounded') as runner, \
+                    patch.object(h.m, '_NativeToolset', side_effect=h.m.Rejected('single-link regular file required')) as tools, \
+                    contextlib.redirect_stdout(io.StringIO()) as output:
+                receipt = h.Receipt()
+                self.assertFalse(receipt.gate('descriptor_inspection', lambda: h.static_inspection(context, receipt, base)))
+            runner.assert_not_called(); tools.assert_called_once()
+            records = [json.loads(line) for line in output.getvalue().splitlines()]
+            self.assertEqual(records[0]['status'], 'skipped_for_budget')
+            self.assertEqual(records[-1]['gate'], 'descriptor_inspection')
+            self.assertEqual(records[-1]['error'], 'single-link regular file required')
+            self.assertEqual(records[-1]['code'], h.m.INVALID)
+
+    def test_diagnostic_does_not_override_original_toolset_rejection(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            base = Path(temporary); (base / 'payload').mkdir()
+            (base / 'payload/canary').write_bytes(b'portable payload')
+            with patch.object(h, 'descriptor_identity_diagnostic'), \
+                    patch.object(h, 'fixed_tool_identity_diagnostic', return_value=True) as diagnostic, \
+                    patch.object(h.m, '_NativeToolset', side_effect=h.m.Rejected('single-link regular file required')), \
+                    contextlib.redirect_stdout(io.StringIO()), \
+                    self.assertRaisesRegex(h.m.Rejected, 'single-link regular file required'):
+                h.static_inspection(h.make_context(), h.Receipt(), base)
+            diagnostic.assert_called_once()
+
+    def test_source_owned_scope_and_production_profile_are_separate(self):
+        source = PATH.read_text()
+        function = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
+                        and n.name == 'fixed_tool_identity_diagnostic')
+        body = ast.get_source_segment(source, function)
+        self.assertEqual([arg.arg for arg in function.args.args], ['context', 'receipt'])
+        for forbidden in ('os.environ', 'receipt.gates', 'm._ns_profile', 'regular_at(',
+                          'chown(', 'chmod(', 'anchor apple generic', 'return True', '--kill-cache'):
+            self.assertNotIn(forbidden, body)
+        self.assertEqual(h.FIXED_TOOL_DIAGNOSTIC_PATHS,
+                         {'codesign': '/usr/bin/codesign', 'sandbox': '/usr/bin/sandbox-exec',
+                          'xcrun': '/usr/bin/xcrun', 'xcode_select': '/usr/bin/xcode-select',
+                          'lipo': '/usr/bin/lipo', 'otool': '/usr/bin/otool', 'sysctl': '/usr/sbin/sysctl'})
+        self.assertLessEqual(h.FIXED_TOOL_DIAGNOSTIC_SECONDS, 45)
+        self.assertLessEqual(h.FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS, 5)
+        self.assertEqual(h.FIXED_TOOL_DIAGNOSTIC_GATE_RESERVE_SECONDS,
+                         h.make_context().bounds['native_static_total_seconds'] + h.COMMAND_SECONDS)
+        self.assertEqual(h.FIXED_TOOL_DIAGNOSTIC_CLEANUP_SECONDS, 2)
+        self.assertLessEqual(h.FIXED_TOOL_DIAGNOSTIC_FILE_BYTES, 64 * 1024 * 1024)
+        self.assertLessEqual(h.FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES, 256 * 1024 * 1024)
+
+    def test_original_toolset_rejection_fixture_uses_physical_aliased_temp_parent(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as temporary:
+            base = Path(temporary)
+            physical = base / 'physical'; physical.mkdir()
+            alias = base / 'alias'; alias.symlink_to(physical, target_is_directory=True)
+            with patch.object(tempfile, 'tempdir', str(alias)):
+                self.test_diagnostic_does_not_override_original_toolset_rejection()
 
 
 if __name__ == '__main__':

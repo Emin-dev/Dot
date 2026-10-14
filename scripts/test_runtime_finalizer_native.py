@@ -17,6 +17,7 @@ import ctypes
 import errno
 import fcntl
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -64,6 +65,21 @@ TOOLCHAIN_ASSUMPTIONS = [
 COMPILER_DIAGNOSTIC_BYTES = 512 * 1024 * 1024
 COMPILER_DIAGNOSTIC_SECONDS = 30
 DESCRIPTOR_DIAGNOSTIC_SECONDS = 5
+FIXED_TOOL_DIAGNOSTIC_SECONDS = 45
+FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS = 5
+# Preserve the existing 60-second native-static window plus a 20-second
+# independent-gate window; optional probes must not consume that remaining time.
+FIXED_TOOL_DIAGNOSTIC_GATE_RESERVE_SECONDS = 60 + COMMAND_SECONDS
+FIXED_TOOL_DIAGNOSTIC_CLEANUP_SECONDS = 2
+FIXED_TOOL_DIAGNOSTIC_RETURN_SECONDS = 1
+FIXED_TOOL_DIAGNOSTIC_FILE_BYTES = 64 * 1024 * 1024
+FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES = 256 * 1024 * 1024
+FIXED_TOOL_DIAGNOSTIC_APPLICATIONS = '/Applications'
+FIXED_TOOL_DIAGNOSTIC_CLT = '/Library/Developer/CommandLineTools'
+FIXED_TOOL_DIAGNOSTIC_PATHS = {
+    'codesign': '/usr/bin/codesign', 'sandbox': '/usr/bin/sandbox-exec',
+    'xcrun': '/usr/bin/xcrun', 'xcode_select': '/usr/bin/xcode-select',
+    'lipo': '/usr/bin/lipo', 'otool': '/usr/bin/otool', 'sysctl': '/usr/sbin/sysctl'}
 FIXTURE = 'Tests/Fixtures/runtime_finalizer_canary.c'
 CHECKPOINT = b'dot test-only primitive checkpoint v1\n'
 PAYLOAD = b'dot test-only primitive payload v1\n'
@@ -643,8 +659,286 @@ def descriptor_identity_diagnostic(context, receipt, base):
     # No return value, approval or substitute toolset; the original gate follows.
 
 
+def fixed_tool_identity_diagnostic(context, receipt):
+    """Bounded signature/dispatch evidence; never tool or payload admission.
+
+    The only executable choices are source-fixed Apple system paths. Discovered
+    lipo/otool targets are read and verified, never executed. A separate probe
+    sandbox denies writes/network/forks and does not change the production
+    profile. The protected OS is the verifier/bootstrap trust base. Displayed
+    identifiers are evidence, never automatically adopted identity policy.
+    https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements
+    https://developer.apple.com/library/archive/technotes/tn2339/_index.html
+    """
+    started = time.monotonic()
+    finish_deadline = min(started + FIXED_TOOL_DIAGNOSTIC_SECONDS,
+                          context.budget.deadline - FIXED_TOOL_DIAGNOSTIC_GATE_RESERVE_SECONDS
+                          - FIXED_TOOL_DIAGNOSTIC_RETURN_SECONDS)
+    deadline = finish_deadline - FIXED_TOOL_DIAGNOSTIC_CLEANUP_SECONDS
+    read_bytes, command_count = 0, 0
+    retained, verified = {}, set()
+    developer_root, developer_reads, developer_configured = None, (), None
+    flags = {'authorizes_inspection': False, 'fixed_tool_policy_applied': False,
+             'authorizes_delegated_execution': False}
+
+    def bounded():
+        context.budget.check()
+        check(time.monotonic() < deadline, 'fixed tool diagnostic deadline exceeded')
+
+    def failed(role, error):
+        receipt.emit('fixed_tool_identity_diagnostic', role=role, status='fail', **flags,
+                     error_type=type(error).__name__, errno=getattr(error, 'errno', None),
+                     code=getattr(error, 'code', None), error=str(error)[:512])
+
+    def path_line(raw):
+        check(type(raw) is bytes and 1 < len(raw) <= 4097 and raw.endswith(b'\n'),
+              'invalid fixed discovery path output')
+        value = raw[:-1].decode('utf-8', 'strict')
+        check(value.startswith('/') and value == os.path.normpath(value)
+              and all(ord(c) >= 32 and ord(c) != 127 for c in value)
+              and '\\' not in value, 'noncanonical fixed discovery path')
+        m.relative(value[1:])
+        return Path(value)
+
+    def developer_layout(path):
+        applications = Path(FIXED_TOOL_DIAGNOSTIC_APPLICATIONS)
+        relative_app = path.relative_to(applications) if path.is_relative_to(applications) else None
+        if (relative_app is not None and len(relative_app.parts) == 3
+                and re.fullmatch(r'Xcode(?:[-_][A-Za-z0-9._-]+)?\.app', relative_app.parts[0])
+                and relative_app.parts[1:] == ('Contents', 'Developer')):
+            return 'Toolchains'
+        if str(path) == FIXED_TOOL_DIAGNOSTIC_CLT:
+            return 'usr/bin'
+        return None
+
+    def snapshot(item, phase):
+        nonlocal read_bytes
+        bounded()
+        root, fd, path = item['root'], item['fd'], item['path']
+        root.check()
+        if item['configured'] != str(path):
+            check(Path(item['configured']).resolve(strict=True) == path,
+                  'discovered target resolution changed')
+        current = os.stat(path.name, dir_fd=root.fd, follow_symlinks=False)
+        m.same_node(item['info'], current)
+        m.same_node(item['info'], os.fstat(fd))
+        check(0 < current.st_size <= FIXED_TOOL_DIAGNOSTIC_FILE_BYTES,
+              'fixed tool diagnostic file byte bound')
+        mounts = []
+        ancestors = []
+        held_path = Path('/')
+        for index, ancestor in enumerate(root.fds):
+            if index: held_path /= root.path.parts[index]
+            info = os.fstat(ancestor)
+            if item['system']:
+                check(info.st_uid == 0 and not info.st_mode & 0o022,
+                      'untrusted fixed diagnostic ancestor')
+            ancestors.append(toolchain_node(info, held_path))
+            mounts.append({'path': str(held_path), 'flags': os.fstatvfs(ancestor).f_flag})
+        mounts.append({'path': str(path), 'flags': os.fstatvfs(fd).f_flag})
+        check(current.st_size <= FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES - read_bytes,
+              'fixed tool diagnostic aggregate byte bound before read')
+        os.lseek(fd, 0, os.SEEK_SET)
+        hasher, size = hashlib.sha256(), 0
+        # The known regular-file size bounds every read. Post-read descriptor
+        # and path metadata detect growth; no extra EOF sentinel is necessary.
+        while size < current.st_size:
+            bounded()
+            remaining = FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES - read_bytes
+            check(remaining > 0, 'fixed tool diagnostic aggregate byte budget exhausted')
+            chunk = os.read(fd, min(1024 * 1024, current.st_size - size, remaining))
+            if not chunk: break
+            size += len(chunk); read_bytes += len(chunk)
+            check(size <= current.st_size and read_bytes <= FIXED_TOOL_DIAGNOSTIC_TOTAL_BYTES,
+                  'fixed tool diagnostic streamed/aggregate byte bound')
+            hasher.update(chunk)
+        m.same_node(item['info'], os.fstat(fd))
+        m.same_node(item['info'], os.stat(path.name, dir_fd=root.fd, follow_symlinks=False))
+        root.check()
+        check(size == current.st_size, 'fixed tool diagnostic size changed')
+        result = {'identity': list(m.identity(current)), 'node': toolchain_node(current, path),
+                  'nlink': current.st_nlink, 'bytes': size, 'sha256': hasher.hexdigest(),
+                  'ancestors': ancestors, 'mounts': mounts,
+                  'mount_readonly_bit': os.ST_RDONLY}
+        receipt.emit('fixed_tool_identity_snapshot', role=item['role'], phase=phase,
+                     configured=item['configured'], resolved=str(path), snapshot=result,
+                     descriptor_path=toolchain_fd_path(fd), **flags)
+        return result
+
+    def acquire(stack, role, path, system, configured=None):
+        bounded()
+        root = stack.enter_context(m.Root(path.parent))
+        root.check()
+        info = os.stat(path.name, dir_fd=root.fd, follow_symlinks=False)
+        check(stat.S_ISREG(info.st_mode) and info.st_nlink >= 1,
+              'fixed diagnostic regular linked file required')
+        if system:
+            check(info.st_uid == 0 and info.st_gid == 0 and not info.st_mode & 0o7022
+                  and info.st_mode & 0o111 and info.st_mode & 0o400,
+                  'untrusted fixed diagnostic executable')
+        check(0 < info.st_size <= FIXED_TOOL_DIAGNOSTIC_FILE_BYTES,
+              'fixed tool diagnostic file byte bound')
+        fd = os.open(path.name, m.FLAGS, dir_fd=root.fd)
+        stack.callback(os.close, fd)
+        m.same_node(info, os.fstat(fd))
+        item = {'role': role, 'path': path, 'configured': configured or str(path),
+                'system': system, 'root': root, 'fd': fd, 'info': info}
+        item['before'] = snapshot(item, 'before')
+        retained[role] = item
+        return item
+
+    def recheck(item):
+        bounded(); item['root'].check()
+        m.same_node(item['info'], os.fstat(item['fd']))
+        m.same_node(item['info'], os.stat(item['path'].name, dir_fd=item['root'].fd,
+                                        follow_symlinks=False))
+        check([os.fstatvfs(fd).f_flag for fd in (*item['root'].fds, item['fd'])] ==
+              [row['flags'] for row in item['before']['mounts']],
+              'fixed diagnostic mount flags changed')
+        if item['configured'] != str(item['path']):
+            check(Path(item['configured']).resolve(strict=True) == item['path'],
+                  'discovered target resolution changed')
+
+    def command(label, executable, args):
+        nonlocal command_count
+        bounded()
+        check(executable in ('codesign', 'xcrun', 'xcode_select'), 'unconfigured diagnostic command')
+        check(executable in retained and 'sandbox' in retained, 'diagnostic executable unavailable')
+        if executable != 'codesign':
+            check({executable, 'codesign', 'sandbox'} <= verified,
+                  'discovery system signature not verified')
+        if developer_root is not None:
+            developer_root.check()
+            check(developer_configured.resolve(strict=True) == developer_root.path,
+                  'selected developer alias changed')
+        for item in retained.values(): recheck(item)
+        command_count += 1
+        check(command_count <= 22, 'fixed tool diagnostic command count bound')
+        quote = lambda value: json.dumps(value, ensure_ascii=True)
+        execute = ' '.join('(literal ' + quote(FIXED_TOOL_DIAGNOSTIC_PATHS[name]) + ')'
+                           for name in ('codesign', 'xcrun', 'xcode_select'))
+        read_paths = ('/System', '/usr/lib', '/usr/share', '/Library/Apple',
+                      '/private/var/db', '/var/db', '/private/var/folders', '/dev/fd')
+        read_paths += developer_reads
+        reads = ' '.join('(subpath ' + quote(path) + ')' for path in read_paths)
+        literals = ' '.join('(literal ' + quote(path) + ')'
+                            for path in FIXED_TOOL_DIAGNOSTIC_PATHS.values())
+        profile = ('(version 1)(deny default)(deny network*)(deny file-write*)(deny process-fork)'
+                   '(allow file-read* ' + reads + ' ' + literals + ' (literal "/dev/null"))'
+                   '(allow process-exec ' + execute + ')(allow sysctl-read)(allow mach-lookup)')
+        argv = [FIXED_TOOL_DIAGNOSTIC_PATHS['sandbox'], '-p', profile,
+                FIXED_TOOL_DIAGNOSTIC_PATHS[executable], *args]
+        # run() clamps to this absolute local deadline; its existing runner may
+        # then use two seconds for teardown without spending the gate reserve.
+        command_context = SimpleNamespace(budget=SimpleNamespace(check=bounded, deadline=deadline))
+        try:
+            return run(command_context, receipt, label, argv,
+                       seconds=min(FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS, deadline - time.monotonic()))
+        finally:
+            if not isinstance(sys.exception(), CanaryDeadline):
+                if developer_root is not None:
+                    developer_root.check()
+                    check(developer_configured.resolve(strict=True) == developer_root.path,
+                          'selected developer alias changed')
+                for item in retained.values(): recheck(item)
+
+    def signatures(item):
+        for suffix, args in (
+            ('display', ['--display', '--verbose=4', '--requirements', '-', str(item['path'])]),
+            ('apple_anchor', ['--verify', '--strict', '--all-architectures', '--verbose=4',
+                              '--test-requirement', '=anchor apple', str(item['path'])])):
+            command('fixed_tool_' + item['role'] + '_' + suffix, 'codesign', args)
+        verified.add(item['role'])
+
+    try:
+        context.budget.check()
+        if deadline - started < FIXED_TOOL_DIAGNOSTIC_COMMAND_SECONDS:
+            receipt.emit('fixed_tool_identity_diagnostic', role='diagnostic', status='skipped_for_budget',
+                         remaining_ms=max(0, int((context.budget.deadline - started) * 1000)),
+                         original_gate_reserve_seconds=FIXED_TOOL_DIAGNOSTIC_GATE_RESERVE_SECONDS,
+                         cleanup_reserve_seconds=FIXED_TOOL_DIAGNOSTIC_CLEANUP_SECONDS,
+                         return_reserve_seconds=FIXED_TOOL_DIAGNOSTIC_RETURN_SECONDS, **flags)
+            return
+        receipt.emit('fixed_tool_identity_scope', discovery_context='scrubbed_system_default',
+                     inspector_environment=dict(m._NS_ENV), fixture_configured_developer=DEVELOPER,
+                     original_gate_reserve_seconds=FIXED_TOOL_DIAGNOSTIC_GATE_RESERVE_SECONDS,
+                     cleanup_reserve_seconds=FIXED_TOOL_DIAGNOSTIC_CLEANUP_SECONDS,
+                     production_profile_unchanged=True, **flags)
+        check(set(FIXED_TOOL_DIAGNOSTIC_PATHS) ==
+              {'codesign', 'sandbox', 'xcrun', 'xcode_select', 'lipo', 'otool', 'sysctl'},
+              'fixed diagnostic tool set changed')
+        with contextlib.ExitStack() as stack:
+            for role, value in FIXED_TOOL_DIAGNOSTIC_PATHS.items():
+                bounded()
+                try:
+                    acquire(stack, role, Path(value), True)
+                except Exception as error:
+                    failed(role, error)
+            check({'codesign', 'sandbox'} <= retained.keys(), 'fixed diagnostic bootstrap unavailable')
+            for role in FIXED_TOOL_DIAGNOSTIC_PATHS:
+                if role not in retained: continue
+                try:
+                    signatures(retained[role])
+                except Exception as error:
+                    failed(role, error)
+            try:
+                selection = command('fixed_tool_selected_developer', 'xcode_select', ['-p'])
+                configured_developer = path_line(selection['stdout'])
+                layout = developer_layout(configured_developer)
+                check(selection['stderr'] == b'' and layout is not None,
+                      'selected developer is outside canonical system developer locations')
+                developer = configured_developer.resolve(strict=True)
+                check(developer_layout(developer) == layout, 'resolved developer escaped supported locations')
+                developer_root = stack.enter_context(m.Root(developer))
+                developer_configured = configured_developer
+                developer_reads = tuple(dict.fromkeys((str(developer), str(configured_developer))))
+                toolchains = developer / layout
+                check(toolchains.resolve(strict=True) == toolchains,
+                      'selected toolchain root is aliased')
+                for role in ('lipo', 'otool'):
+                    bounded()
+                    try:
+                        selection = command('fixed_tool_find_' + role, 'xcrun', ['--find', role])
+                        configured = path_line(selection['stdout'])
+                        check(selection['stderr'] == b'' and configured.name == role
+                              and (configured.is_relative_to(toolchains)
+                                   or configured.is_relative_to(configured_developer / layout)),
+                              'discovered tool escaped fixed developer toolchains')
+                        resolved = configured.resolve(strict=True)
+                        check(resolved.is_relative_to(toolchains),
+                              'resolved tool escaped fixed developer toolchains')
+                        m.relative(str(resolved)[1:])
+                        item = acquire(stack, 'selected_' + role, resolved, False, str(configured))
+                        receipt.emit('fixed_tool_dispatch', role=role, configured=str(configured),
+                                     resolved=str(resolved), developer=str(developer),
+                                     configured_developer=str(configured_developer),
+                                     selection_context='scrubbed_system_default', **flags)
+                        signatures(item)
+                    except Exception as error:
+                        failed('selected_' + role, error)
+                after_selection = command('fixed_tool_selected_developer_after', 'xcode_select', ['-p'])
+                check(after_selection['stderr'] == b''
+                      and path_line(after_selection['stdout']) == configured_developer,
+                      'selected developer changed during discovery')
+            except Exception as error:
+                failed('dispatch', error)
+            for role, item in retained.items():
+                bounded()
+                try:
+                    check(snapshot(item, 'after') == item['before'],
+                          'fixed diagnostic bytes/metadata/mounts changed')
+                    receipt.emit('fixed_tool_identity_diagnostic', role=role, status='observed',
+                                 apple_anchor_verified=role in verified, **flags)
+                except Exception as error:
+                    failed(role, error)
+    except Exception as error:
+        failed('diagnostic', error)
+    # No capability return and no production gate mutation, even on success.
+
+
 def static_inspection(context, receipt, base):
     descriptor_identity_diagnostic(context, receipt, base)
+    fixed_tool_identity_diagnostic(context, receipt)
     path = base / 'payload'
     rows = m.tree(path, context.budget)
     receipt.emit('descriptor_payload_tree', status='observed', entries=len(rows))
