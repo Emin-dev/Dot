@@ -12,6 +12,8 @@ TEST_PYTHON=$(python3 -B -c 'import sys,ssl; assert sys.version_info >= (3,11), 
 python3 -B -m unittest discover -s Tests/Python -v 2>&1 | tee "$LOGS/python.log"
 python3 -B scripts/test_voice_sandbox.py 2>&1 | tee "$LOGS/sandbox.log"
 python3 -B scripts/test_splash_sandbox.py 2>&1 | tee "$LOGS/splash-sandbox.log"
+# Test-only Darwin capabilities; this never creates runtime acceptance.
+python3 -B scripts/test_runtime_finalizer_native.py 2>&1 | tee "$LOGS/runtime-finalizer-canary.log"
 python3 -B scripts/check_contracts.py
 swift test 2>&1 | tee "$LOGS/swift.log"
 xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \
