@@ -980,6 +980,8 @@ final class SearchEgressBroker: @unchecked Sendable {
         let actualCloses: Int
         let partialWrites: Int
         let wouldBlockWrites: Int
+        let clientSendBufferBytes: [Int32]
+        let tunnelPhases: [String]
         let deferredCloseReceipts: Int
         let requestDeadline: TimeInterval?
         let drained: Bool
@@ -987,12 +989,20 @@ final class SearchEgressBroker: @unchecked Sendable {
     func testSnapshot() async -> Snapshot {
         await withCheckedContinuation { continuation in
             queue.async { [self] in
+                // Read actual kernel sizes after the TCP handshake; the OS may
+                // round the requested DEBUG send buffer. Never expose descriptors.
+                let clientSendBufferBytes = sockets.values.compactMap { socket -> Int32? in
+                    guard case .client = socket.role, !socket.closing, !socket.closed else { return nil }
+                    var bytes: Int32 = 0, size = socklen_t(MemoryLayout<Int32>.size)
+                    return getsockopt(socket.descriptor, SOL_SOCKET, SO_SNDBUF, &bytes, &size) == 0 ? bytes : -1
+                }
                 continuation.resume(returning: Snapshot(listenerDescriptor: listener?.descriptor,
                     sockets: sockets.count, headers: tunnels.values.filter { $0.admission == nil }.count,
                     admissions: budget?.authenticatedAdmissions ?? 0, upstreamBytes: budget?.upstreamBytes ?? 0,
                     downstreamBytes: budget?.downstreamBytes ?? 0, pendingWrites: budget?.pendingWriteCount ?? 0,
                     resolverCalls: resolverCalls, connectAttempts: connectAttempts, actualCloses: actualCloses,
-                    partialWrites: partialWrites, wouldBlockWrites: wouldBlockWrites, deferredCloseReceipts: deferredCloses.count, requestDeadline: budget?.absoluteDeadline, drained: drained))
+                    partialWrites: partialWrites, wouldBlockWrites: wouldBlockWrites, clientSendBufferBytes: clientSendBufferBytes,
+                    tunnelPhases: tunnels.values.map { String(describing: $0.phase) }.sorted(), deferredCloseReceipts: deferredCloses.count, requestDeadline: budget?.absoluteDeadline, drained: drained))
             }
         }
     }

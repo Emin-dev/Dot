@@ -630,9 +630,17 @@ final class SearchEgressSocketOwnerTests: XCTestCase {
         }
         return (listener, port)
     }
-    private func connect(_ port: UInt16) async throws -> FD {
+    private func connect(_ port: UInt16, receiveBufferBytes: Int32? = nil) async throws -> FD {
         let client = try socket()
         try client.use { fd in
+            // Request a small receive window before the handshake. This changes
+            // only a fixture-owned socket; actual kernel sizes are checked below.
+            if var bytes = receiveBufferBytes {
+                guard bytes > 0, bytes <= 32_768,
+                      setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bytes, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                    throw FixtureError.socket
+                }
+            }
             var target = address(port)
             let result = withUnsafePointer(to: &target) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -648,6 +656,18 @@ final class SearchEgressSocketOwnerTests: XCTestCase {
                 var error: Int32 = 0, count = socklen_t(MemoryLayout<Int32>.size)
                 guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &count) == 0, error == 0 else { throw FixtureError.socket }
                 return true
+            }
+        }
+        if var bytes = receiveBufferBytes {
+            try client.use { fd in
+                // Darwin can grow even a user-sized receive buffer by 16 MSS
+                // units twice. Bound that growth on this fixture peer, then
+                // restore the small requested buffer after handshake rounding.
+                var maximumSegmentBytes: Int32 = 512
+                guard setsockopt(fd, IPPROTO_TCP, TCP_MAXSEG, &maximumSegmentBytes, socklen_t(MemoryLayout<Int32>.size)) == 0,
+                      setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bytes, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                    throw FixtureError.socket
+                }
             }
         }
         return client
@@ -724,8 +744,9 @@ final class SearchEgressSocketOwnerTests: XCTestCase {
         }
         return owner
     }
-    private func tunnel(_ endpoint: SearchEgressEndpoint, server: FD) async throws -> (FD, FD) {
-        let client = try await connect(endpoint.port)
+    private func tunnel(_ endpoint: SearchEgressEndpoint, server: FD,
+                        receiveBufferBytes: Int32? = nil) async throws -> (FD, FD) {
+        let client = try await connect(endpoint.port, receiveBufferBytes: receiveBufferBytes)
         try await send(frame(endpoint.proxyAuthorization), to: client)
         let origin = try await accept(server)
         let reply = try await read(client, count: Self.connected.count)
@@ -880,15 +901,42 @@ final class SearchEgressSocketOwnerTests: XCTestCase {
         let (server, port) = try listener(listening: false); defer { server.close() }
         let broker = try broker(port: port)
         let endpoint = try await broker.prepare(); try await broker.beginSearch()
-        for _ in 0..<3 {
-            let client = try await connect(endpoint.port)
+        for attempt in 1...2 {
+            let client = try await connect(endpoint.port); defer { client.close() }
             try await send(frame(endpoint.proxyAuthorization), to: client)
-            let response = try await read(client); XCTAssertTrue(response.isEmpty); client.close()
+            // A bound, non-listening Darwin target can use the full connect
+            // deadline. The fixture must allow its timer and close receipts to
+            // finish rather than race them with an identical five-second wait.
+            let response: Data
+            do { response = try await read(client, timeout: SearchEgressBroker.connectSeconds + 2) }
+            catch {
+                let failed = await broker.testSnapshot()
+                XCTFail("Failed-connect close missing: attempt=\(attempt), admissions=\(failed.admissions), connects=\(failed.connectAttempts), phases=\(failed.tunnelPhases), sockets=\(failed.sockets), closes=\(failed.actualCloses), pending=\(failed.pendingWrites), drained=\(failed.drained)")
+                throw error
+            }
+            XCTAssertTrue(response.isEmpty)
+            try await eventually { await broker.testSnapshot().actualCloses == attempt * 2 }
+            let failed = await broker.testSnapshot()
+            XCTAssertEqual(failed.admissions, attempt); XCTAssertEqual(failed.connectAttempts, attempt)
+            XCTAssertEqual(failed.sockets, 1); XCTAssertEqual(failed.pendingWrites, 0)
+            XCTAssertEqual(failed.upstreamBytes, 0); XCTAssertEqual(failed.downstreamBytes, 0)
+            XCTAssertFalse(failed.drained)
         }
-        await broker.drain()
+        let third = try await connect(endpoint.port); defer { third.close() }
+        try await send(frame(endpoint.proxyAuthorization), to: third)
+        let response = try await read(third)
+        XCTAssertTrue(response.isEmpty)
+        // Observe the third admission terminating the generation BEFORE drain(),
+        // which would itself invalidate it and conceal a missing terminal path.
+        try await eventually { await broker.testSnapshot().drained }
         let snapshot = await broker.testSnapshot()
         XCTAssertEqual(snapshot.admissions, 2); XCTAssertEqual(snapshot.connectAttempts, 2)
-        XCTAssertEqual(snapshot.upstreamBytes, 0); XCTAssertTrue(snapshot.drained)
+        XCTAssertEqual(snapshot.upstreamBytes, 0); XCTAssertEqual(snapshot.downstreamBytes, 0)
+        XCTAssertEqual(snapshot.pendingWrites, 0); XCTAssertEqual(snapshot.sockets, 0)
+        XCTAssertEqual(snapshot.actualCloses, 6); XCTAssertTrue(snapshot.drained)
+        await broker.drain()
+        let drained = await broker.testSnapshot()
+        XCTAssertEqual(drained.actualCloses, 6)
     }
 
     func testRealHalfClosesFlushBothDirectionsWithoutCredentialForwarding() async throws {
@@ -935,21 +983,64 @@ final class SearchEgressSocketOwnerTests: XCTestCase {
 
     func testShortOSWritesSettleExactPermitsUnderRealBackpressure() async throws {
         let (server, port) = try listener(); defer { server.close() }
-        let broker = try broker(port: port, socketSendBufferBytes: 1024)
+        let broker = try broker(port: port, socketSendBufferBytes: 8192)
         let endpoint = try await broker.prepare(); try await broker.beginSearch()
-        let (client, origin) = try await tunnel(endpoint, server: server)
+        let (client, origin) = try await tunnel(endpoint, server: server, receiveBufferBytes: 4096)
         defer { client.close(); origin.close() }
-        let payload = Data(repeating: 73, count: 65_535)
-        let writer = Task { try await self.send(payload, to: client) }
-        try await eventually { await broker.testSnapshot().upstreamBytes > 0 }
-        try await Task.sleep(nanoseconds: 100_000_000)
-        let received = try await read(origin, count: payload.count)
-        try await writer.value
+        func peerOption(_ level: Int32, _ option: Int32) throws -> Int32 {
+            try client.use { fd in
+                var value: Int32 = 0, size = socklen_t(MemoryLayout<Int32>.size)
+                guard getsockopt(fd, level, option, &value, &size) == 0 else { throw FixtureError.socket }
+                return value
+            }
+        }
+        let receiveBufferBytes = try peerOption(SOL_SOCKET, SO_RCVBUF)
+        let maximumSegmentBytes = try peerOption(IPPROTO_TCP, TCP_MAXSEG)
+        XCTAssertEqual(maximumSegmentBytes, 512)
+        let initial = await broker.testSnapshot()
+        let sendBufferBytes = try XCTUnwrap(initial.clientSendBufferBytes.first)
+        XCTAssertEqual(initial.clientSendBufferBytes.count, 1)
+        XCTAssertGreaterThan(receiveBufferBytes, 0); XCTAssertGreaterThan(sendBufferBytes, 0)
+        // Downstream has enough room under its existing 8 MiB cap to exhaust
+        // both TCP buffers. A 65,535-byte upload could fit the old receive window.
+        let payload = Data((0..<524_287).map { UInt8(truncatingIfNeeded: $0 ^ ($0 >> 8) ^ ($0 >> 16)) })
+        XCTAssertLessThan(payload.count, SearchEgressBudget.maximumDownstreamBytes)
+        XCTAssertLessThan(Int(receiveBufferBytes) + Int(sendBufferBytes), payload.count)
+        let writer = Task { try await self.send(payload, to: origin, timeout: 15) }
+        defer { writer.cancel() }
+        // Keep the real receiving peer unread until a real Darwin.send result
+        // proves a short write. No maximumWriteBytes seam or simulated receipt.
+        do { try await eventually { await broker.testSnapshot().partialWrites > 0 } }
+        catch {
+            let stalled = await broker.testSnapshot()
+            let currentReceiveBuffer = try? peerOption(SOL_SOCKET, SO_RCVBUF)
+            XCTFail("No short OS write before reading: SO_SNDBUF=\(sendBufferBytes), currentSNDBUF=\(stalled.clientSendBufferBytes), SO_RCVBUF=\(receiveBufferBytes), currentRCVBUF=\(currentReceiveBuffer ?? -1), TCP_MAXSEG=\(maximumSegmentBytes), payload=\(payload.count), downstream=\(stalled.downstreamBytes), partial=\(stalled.partialWrites), wouldBlock=\(stalled.wouldBlockWrites), pending=\(stalled.pendingWrites), phases=\(stalled.tunnelPhases), sockets=\(stalled.sockets), closes=\(stalled.actualCloses), drained=\(stalled.drained)")
+            throw error
+        }
+        let pressured = await broker.testSnapshot()
+        XCTAssertGreaterThan(pressured.downstreamBytes, 0)
+        XCTAssertLessThan(pressured.downstreamBytes, payload.count)
+        XCTAssertEqual(pressured.pendingWrites, 0)
+        let received: Data
+        do {
+            received = try await read(client, count: payload.count, timeout: 15)
+            try await writer.value
+        } catch {
+            let failed = await broker.testSnapshot()
+            let currentReceiveBuffer = try? peerOption(SOL_SOCKET, SO_RCVBUF)
+            XCTFail("Backpressured transfer failed: SO_SNDBUF=\(failed.clientSendBufferBytes), SO_RCVBUF=\(currentReceiveBuffer ?? -1), TCP_MAXSEG=\(maximumSegmentBytes), downstream=\(failed.downstreamBytes), partial=\(failed.partialWrites), wouldBlock=\(failed.wouldBlockWrites), pending=\(failed.pendingWrites), phases=\(failed.tunnelPhases), sockets=\(failed.sockets), closes=\(failed.actualCloses), drained=\(failed.drained)")
+            throw error
+        }
         XCTAssertEqual(received, payload)
         let snapshot = await broker.testSnapshot()
-        XCTAssertEqual(snapshot.upstreamBytes, payload.count); XCTAssertEqual(snapshot.pendingWrites, 0)
-        XCTAssertGreaterThan(snapshot.partialWrites, 0, "Fixture did not exercise a short OS write; native partial-write proof is missing")
+        XCTAssertEqual(snapshot.upstreamBytes, 0); XCTAssertEqual(snapshot.downstreamBytes, payload.count)
+        XCTAssertEqual(snapshot.pendingWrites, 0)
+        XCTAssertGreaterThan(snapshot.partialWrites, 0, "SO_SNDBUF=\(sendBufferBytes), SO_RCVBUF=\(receiveBufferBytes), downstream=\(snapshot.downstreamBytes), wouldBlock=\(snapshot.wouldBlockWrites)")
         await broker.drain()
+        let drained = await broker.testSnapshot()
+        XCTAssertEqual(drained.downstreamBytes, payload.count); XCTAssertEqual(drained.pendingWrites, 0)
+        XCTAssertEqual(drained.actualCloses, 3); XCTAssertEqual(drained.sockets, 0); XCTAssertTrue(drained.drained)
+        print("Search short-write receipt: SO_SNDBUF=\(sendBufferBytes), SO_RCVBUF=\(receiveBufferBytes), TCP_MAXSEG=\(maximumSegmentBytes), payload=\(payload.count), downstream=\(drained.downstreamBytes), partial=\(drained.partialWrites), wouldBlock=\(drained.wouldBlockWrites), pending=\(drained.pendingWrites), closes=\(drained.actualCloses)")
     }
 
     func testEarlyPayloadWhileConnectingNeverReceives200() async throws {

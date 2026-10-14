@@ -42,6 +42,8 @@ RECEIPT_BYTES = 4_000_000
 DEVELOPER = '/Applications/Xcode_26.3.app/Contents/Developer'
 CLANG = DEVELOPER + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang'
 SDK = DEVELOPER + '/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'
+COMPILER_DIAGNOSTIC_BYTES = 512 * 1024 * 1024
+COMPILER_DIAGNOSTIC_SECONDS = 30
 FIXTURE = 'Tests/Fixtures/runtime_finalizer_canary.c'
 CHECKPOINT = b'dot test-only primitive checkpoint v1\n'
 PAYLOAD = b'dot test-only primitive payload v1\n'
@@ -203,8 +205,77 @@ def trusted_toolchain(path, receipt):
     return str(resolved)
 
 
+
+def compiler_identity_diagnostic(context, receipt):
+    """Read-only, source-bound evidence before the unchanged ownership gate.
+
+    No caller-selected path or environment value selects an executable. The
+    compiler is only read, never executed by this diagnostic. Display output is
+    retained verbatim; neither a displayed identifier/Authority nor an Apple
+    anchor result is a compiler identity policy or permission to build.
+    Apple TN3127 documents display of the actual designated requirement and
+    '=anchor apple' (distinct from 'anchor apple generic') evaluation:
+    https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements
+    """
+    deadline = min(context.budget.deadline, time.monotonic() + COMPILER_DIAGNOSTIC_SECONDS)
+
+    def bounded():
+        context.budget.check()
+        check(time.monotonic() < deadline, 'compiler diagnostic deadline exceeded')
+
+    budget = SimpleNamespace(check=bounded)
+    try:
+        bounded()
+        resolved = Path(CLANG).resolve(strict=True)
+        check(str(resolved).startswith(DEVELOPER + '/'), 'compiler diagnostic escaped fixed Xcode')
+        check(len(str(resolved).encode('utf-8')) <= 4096, 'compiler diagnostic path byte bound')
+        with m.Root(resolved.parent) as root:
+            def snapshot():
+                bounded()
+                root.check()
+                check(Path(CLANG).resolve(strict=True) == resolved, 'configured compiler resolution changed')
+                info = os.stat(resolved.name, dir_fd=root.fd, follow_symlinks=False)
+                row, _ = m.regular_at(root.fd, resolved.name, budget,
+                                      maximum=COMPILER_DIAGNOSTIC_BYTES)
+                m.same_node(info, os.stat(resolved.name, dir_fd=root.fd, follow_symlinks=False))
+                root.check()
+                return {**toolchain_node(info, resolved), 'bytes': row['bytes'], 'sha256': row['sha256'],
+                        'nlink': info.st_nlink, 'mtime_ns': info.st_mtime_ns, 'ctime_ns': info.st_ctime_ns,
+                        'identity': list(m.identity(info))}
+
+            before = snapshot()
+            receipt.emit('compiler_identity_snapshot', phase='before', configured=CLANG,
+                         node=before, authorizes_build=False)
+            try:
+                for label, argv in (
+                    ('compiler_signature_display', ['/usr/bin/codesign', '-d', '--verbose=4',
+                                                    '--requirements', '-', str(resolved)]),
+                    ('compiler_signature_apple_anchor', ['/usr/bin/codesign', '--verify', '--strict',
+                                                        '--verbose=4', '--test-requirement',
+                                                        '=anchor apple', str(resolved)])):
+                    bounded()
+                    root.check()
+                    check(Path(CLANG).resolve(strict=True) == resolved, 'configured compiler resolution changed')
+                    current = os.stat(resolved.name, dir_fd=root.fd, follow_symlinks=False)
+                    check(list(m.identity(current)) == before['identity'], 'compiler metadata changed before inspection')
+                    run(context, receipt, label, argv, seconds=min(10, deadline - time.monotonic()))
+            finally:
+                after = snapshot()
+                receipt.emit('compiler_identity_snapshot', phase='after', configured=CLANG,
+                             node=after, authorizes_build=False)
+                check(before == after, 'compiler changed during signature inspection')
+        receipt.emit('compiler_identity_diagnostic', status='observed', configured=CLANG,
+                     authorizes_build=False, compiler_identity_policy_applied=False)
+    except Exception as error:
+        receipt.emit('compiler_identity_diagnostic', status='fail', configured=CLANG,
+                     authorizes_build=False, compiler_identity_policy_applied=False,
+                     error_type=type(error).__name__, error=str(error)[:2000])
+    # Deliberately no success value. Only trusted_toolchain may admit the build.
+
+
 def build(context, receipt, base):
     toolchain_configuration(receipt)
+    compiler_identity_diagnostic(context, receipt)
     compiler, sdk = trusted_toolchain(CLANG, receipt), trusted_toolchain(SDK, receipt)
     check(Path(compiler).is_file() and Path(sdk).is_dir(), 'fixed Apple compiler/SDK unavailable')
     source = base / 'fixture.c'

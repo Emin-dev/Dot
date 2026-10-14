@@ -453,5 +453,155 @@ exit 0
                 with self.assertRaises(FileNotFoundError): h.transaction_worker(root.fd, 'resume')
 
 
+
+class CompilerIdentityDiagnosticContractTests(unittest.TestCase):
+    """Portable mock runner contracts only, never native signing acceptance."""
+
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory:
+            base = Path(directory)
+            developer = base / 'Xcode_26.3.app/Contents/Developer'
+            compiler = developer / 'Toolchains/XcodeDefault.xctoolchain/usr/bin/clang'
+            compiler.parent.mkdir(parents=True)
+            compiler.write_bytes(b'portable test-only compiler-shaped bytes\x00')
+            compiler.chmod(0o755)
+            with patch.object(h, 'DEVELOPER', str(developer)), patch.object(h, 'CLANG', str(compiler)):
+                yield base, compiler, h.make_context()
+
+    def observe(self, context, effect=None):
+        def result(argv, deadline, **kwargs):
+            value = successful(b'portable mock output only\x00\n')
+            value.update(argv=argv, stderr=b'Identifier=mock-only\nAuthority=not-native-evidence\n')
+            return value
+        with patch.object(h.m, '_native_run_bounded', side_effect=effect or result) as runner, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertIsNone(h.compiler_identity_diagnostic(context, h.Receipt()))
+        return [json.loads(line) for line in output.getvalue().splitlines()], runner
+
+    def test_exact_fixed_read_only_argv_and_positive_environment_bounds(self):
+        with self.fixture() as (_, compiler, context):
+            records, runner = self.observe(context)
+            self.assertEqual([call.args[0] for call in runner.call_args_list], [
+                ['/usr/bin/codesign', '-d', '--verbose=4', '--requirements', '-', str(compiler)],
+                ['/usr/bin/codesign', '--verify', '--strict', '--verbose=4',
+                 '--test-requirement', '=anchor apple', str(compiler)]])
+            for call in runner.call_args_list:
+                self.assertLessEqual(call.args[1], context.budget.deadline)
+                self.assertEqual(call.kwargs, {'pass_fds': (), 'env': h.m._NS_ENV, 'cap': h.OUTPUT_BYTES})
+            snapshots = [r for r in records if r['event'] == 'compiler_identity_snapshot']
+            self.assertEqual([r['phase'] for r in snapshots], ['before', 'after'])
+            self.assertEqual(snapshots[0]['node'], snapshots[1]['node'])
+            self.assertEqual(snapshots[0]['node']['sha256'], h.m.digest(compiler.read_bytes()))
+            for key in ('device', 'inode', 'uid', 'gid', 'mode', 'bytes', 'mtime_ns', 'ctime_ns'):
+                self.assertIn(key, snapshots[0]['node'])
+            commands = [r for r in records if r['event'] == 'command']
+            self.assertEqual(len(commands), 2)
+            self.assertEqual(base64.b64decode(commands[0]['result']['stdout']['base64']),
+                             b'portable mock output only\x00\n')
+            self.assertEqual(base64.b64decode(commands[0]['result']['stderr']['base64']),
+                             b'Identifier=mock-only\nAuthority=not-native-evidence\n')
+            self.assertEqual(commands[0]['result']['returncode'], 0)
+            self.assertEqual(records[-1]['status'], 'observed')
+            self.assertIs(records[-1]['authorizes_build'], False)
+            self.assertIs(records[-1]['compiler_identity_policy_applied'], False)
+            self.assertTrue(all(r['production_acceptance'] is False for r in records))
+
+    def test_missing_nonregular_oversized_and_outside_symlink_never_spawn(self):
+        for kind in ('missing', 'directory', 'oversized', 'symlink_outside', 'prefix_collision'):
+            with self.subTest(kind=kind), self.fixture() as (base, compiler, context):
+                compiler.unlink()
+                if kind == 'directory': compiler.mkdir()
+                elif kind == 'oversized':
+                    with compiler.open('wb') as stream: stream.truncate(h.COMPILER_DIAGNOSTIC_BYTES + 1)
+                elif kind in ('symlink_outside', 'prefix_collision'):
+                    target = (base / 'outside') if kind == 'symlink_outside' else Path(h.DEVELOPER + '-other/clang')
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(b'outside')
+                    compiler.symlink_to(target)
+                records, runner = self.observe(context)
+                runner.assert_not_called()
+                self.assertEqual(records[-1]['status'], 'fail')
+                self.assertIs(records[-1]['authorizes_build'], False)
+
+    def test_symlink_after_resolution_is_rejected_without_following(self):
+        with self.fixture() as (base, compiler, context):
+            target = base / 'outside'; target.write_bytes(b'outside')
+            compiler.unlink(); compiler.symlink_to(target)
+            with patch.object(h.Path, 'resolve', return_value=compiler):
+                records, runner = self.observe(context)
+            runner.assert_not_called()
+            self.assertEqual(records[-1]['status'], 'fail')
+            self.assertIn('regular file required', records[-1]['error'])
+
+    def test_mutation_during_signing_is_rejected_and_hashes_retained(self):
+        with self.fixture() as (_, compiler, context):
+            def mutate(argv, deadline, **kwargs):
+                compiler.write_bytes(b'mutated portable bytes')
+                result = successful(); result['argv'] = argv
+                return result
+            records, runner = self.observe(context, mutate)
+            self.assertEqual(runner.call_count, 1)
+            snapshots = [r for r in records if r['event'] == 'compiler_identity_snapshot']
+            self.assertEqual(len(snapshots), 2)
+            self.assertNotEqual(snapshots[0]['node']['sha256'], snapshots[1]['node']['sha256'])
+            self.assertEqual(records[-1]['status'], 'fail')
+            self.assertIn('compiler changed', records[-1]['error'])
+
+    def test_bad_exit_limit_timeout_cleanup_and_warning_preserve_raw_failure(self):
+        for field, value in (('returncode', 1), ('reason', 'output_limit'), ('reason', 'deadline'),
+                             ('cleanup', {'complete': False, 'remaining_owned_processes': 1, 'open_output_pipes': 1}),
+                             ('stderr', b'warning: mock signing diagnostic\n')):
+            with self.subTest(field=field, value=value), self.fixture() as (_, _, context):
+                def failed(argv, deadline, **kwargs):
+                    result = successful(b'raw failure\x00\n'); result.update(argv=argv)
+                    result[field] = value
+                    return result
+                records, runner = self.observe(context, failed)
+                self.assertEqual(runner.call_count, 1)
+                command = next(r for r in records if r['event'] == 'command')
+                self.assertEqual(base64.b64decode(command['result']['stdout']['base64']), b'raw failure\x00\n')
+                self.assertEqual(records[-1]['status'], 'fail')
+                self.assertIs(records[-1]['authorizes_build'], False)
+
+    def test_expired_budget_never_spawns_and_whole_canary_deadline_propagates(self):
+        with self.fixture() as (_, _, context):
+            context.budget.deadline = 0
+            records, runner = self.observe(context)
+            runner.assert_not_called()
+            self.assertEqual(records[-1]['status'], 'fail')
+        with self.fixture() as (_, _, context), \
+                patch.object(context.budget, 'check', side_effect=h.CanaryDeadline('whole canary deadline')):
+            with self.assertRaises(h.CanaryDeadline): self.observe(context)
+
+    def test_observation_never_overrides_the_original_ownership_failure(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(h, 'toolchain_configuration'), \
+                patch.object(h, 'compiler_identity_diagnostic', return_value=True) as diagnostic, \
+                patch.object(h, 'trusted_toolchain', side_effect=AssertionError('untrusted toolchain ancestry: uid 501')) as trust, \
+                patch.object(h, 'run') as command, contextlib.redirect_stdout(io.StringIO()) as output:
+            context = h.make_context(); receipt = h.Receipt()
+            self.assertFalse(receipt.gate('fixture_build', lambda: h.build(context, receipt, Path(directory))))
+            diagnostic.assert_called_once_with(context, receipt)
+            trust.assert_called_once_with(h.CLANG, receipt)
+            command.assert_not_called()
+            self.assertEqual(receipt.gates, {'fixture_build': 'fail'})
+            self.assertIn('untrusted toolchain ancestry: uid 501', output.getvalue())
+
+    def test_diagnostic_has_no_caller_path_or_trust_state(self):
+        tree = ast.parse(PATH.read_text())
+        function = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                        and n.name == 'compiler_identity_diagnostic')
+        self.assertEqual([a.arg for a in function.args.args], ['context', 'receipt'])
+        source = ast.get_source_segment(PATH.read_text(), function)
+        self.assertNotIn('os.environ', source)
+        self.assertNotIn('receipt.gates', source)
+        self.assertNotIn('chown', source)
+        self.assertNotIn('chmod', source)
+        self.assertNotIn('=anchor apple generic', source)
+        self.assertNotIn('return True', source)
+        self.assertEqual(h.COMPILER_DIAGNOSTIC_BYTES, 512 * 1024 * 1024)
+        self.assertEqual(h.COMPILER_DIAGNOSTIC_SECONDS, 30)
+
 if __name__ == '__main__':
     unittest.main()
