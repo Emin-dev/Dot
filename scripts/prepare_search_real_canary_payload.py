@@ -32,7 +32,7 @@ SOURCE_PINS = {
     'packaging/search/dot-search-bootstrap.c': '637c9778cfdf0a7e790f3a4fc43069da05cfd5eb299273a5aab01491fa77f55d',
     'scripts/build_search_bootstrap.sh': '3307e84fbb7ca6911ae23f2a83baefccc0086f62ee484c6647227f5a12d427e2',
     'packaging/search/search-lock-native-owner.json': '25394a63db4084d606e56e25c7cec6a8fc979b03901c3b9739f2754e104a8920',
-    'scripts/search_proxy_canary_support.py': 'af366611ff5d9a9feacb314fa04b0e65bf27cb13072a81da9f771bb0f409bfb5',
+    'scripts/search_proxy_canary_support.py': '107edd91f27ed66d522e4721b41e433d55dbc2a6aae02fff6b32b10b147ed19d',
 }
 BUILDER_SOURCE = 'scripts/prepare_search_real_canary_payload.py'
 ENTRYPOINT = 'Tests/Fixtures/search_real_vertical_entry.py'

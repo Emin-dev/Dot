@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/search-proxy-canary.yml'
+      - 'Package.swift'
+      - 'Resources/Search/dot_search.py'
+      - 'Resources/Search/search.sb'
+      - 'Tests/DotCoreTests/**'
       - 'Tests/Fixtures/search-proxy-native-owner/helpers/dot_search.py'
       - 'Tests/Fixtures/search-proxy-native-owner/helpers/search-dependency-pins.json'
       - 'Tests/Fixtures/search-proxy-native-owner/helpers/search.sb'
@@ -14,24 +18,58 @@ on:
       - 'Tests/Fixtures/search_proxy_fixture_support.py'
       - 'Tests/Fixtures/search_proxy_pinned_hashes.json'
       - 'Tests/Fixtures/search_proxy_transport_fixture.py'
+      - 'Tests/Fixtures/search_real_vertical_entry.py'
+      - 'Tests/Fixtures/search_real_vertical_fixture.py'
       - 'Tests/Native/search-proxy-bootstrap-canary.c'
       - 'Tests/Native/search_proxy_bootstrap_probe.py'
       - 'Tests/Portable/test_search_proxy_ci_reconstruction.py'
+      - 'Tests/Portable/test_search_proxy_exit_diagnostics.py'
       - 'Tests/Portable/test_search_proxy_fixture.py'
       - 'Tests/Portable/test_search_proxy_lock_identity.py'
+      - 'Tests/Portable/test_search_proxy_probe_progress.py'
+      - 'Tests/Portable/test_search_proxy_startup_diagnostics.py'
+      - 'Tests/Portable/test_search_real_canary_contract.py'
       - 'Tests/Python/test_search_proxy_profile_contract.py'
       - 'canary-inputs.json'
+      - 'packaging/search/dot-search-bootstrap.c'
       - 'packaging/search/portable-test-requirements.txt'
       - 'packaging/search/search-lock-native-owner.json'
       - 'profile-bootstrap-basis.json'
+      - 'scripts/build_search_bootstrap.sh'
       - 'scripts/fetch_search_inputs.py'
       - 'scripts/prepare_search_proxy_canary_payload.py'
+      - 'scripts/prepare_search_real_canary_payload.py'
       - 'scripts/search_download.py'
       - 'scripts/search_payload.py'
       - 'scripts/search_proxy_canary_support.py'
       - 'scripts/test_search_proxy_bootstrap_canary.py'
       - 'scripts/test_search_proxy_sandbox_canary.py'
       - 'scripts/verify_search_proxy_native_fixture.sh'
+      - 'scripts/verify_search_real_vertical_canary.sh'
+      - 'src/ConversationHistory.swift'
+      - 'src/DotIntents.swift'
+      - 'src/IdleMotion.swift'
+      - 'src/InteractionCore.swift'
+      - 'src/LongTaskProgress.swift'
+      - 'src/NativeActions.swift'
+      - 'src/ProactiveBehavior.swift'
+      - 'src/ProjectBrief.swift'
+      - 'src/ResearchHTTPTransport.swift'
+      - 'src/ResearchNotebook.swift'
+      - 'src/ResearchTaskProgress.swift'
+      - 'src/RoamingCore.swift'
+      - 'src/SearXNGSearchProvider.swift'
+      - 'src/SearchEgressBroker.swift'
+      - 'src/SearchRuntimeManager.swift'
+      - 'src/SearchRuntimePayload.swift'
+      - 'src/SearchRuntimeProtocol.swift'
+      - 'src/SkinPreferences.swift'
+      - 'src/SourceReference.swift'
+      - 'src/VoiceFollowup.swift'
+      - 'src/VoiceTiming.swift'
+      - 'src/WebResearch.swift'
+      - 'src/WebResearchStore.swift'
+      - 'src/WebSearchProviders.swift'
 permissions:
   contents: read
 concurrency:
@@ -71,7 +109,9 @@ jobs:
         run: |
           python3 -B -m unittest discover -s Tests/Portable -p 'test_search_proxy*.py'
           python3 -B Tests/Python/test_search_proxy_profile_contract.py
+          python3 -B Tests/Portable/test_search_real_canary_contract.py
       - name: Reconstruct exact unaccepted historical Search payload
+        id: reconstruct
         run: |
           python3 -B scripts/prepare_search_proxy_canary_payload.py \
             --inputs "$RUNNER_TEMP/search-proxy-canary-inputs" \
@@ -96,6 +136,14 @@ jobs:
             4268358594bf02881357334812b8f7ee84764940752071b1febd3ace26adbbab \
             packaging/search/search-lock-native-owner.json \
             "$RUNNER_TEMP/search-proxy-canary-reports/transport.json"
+      - name: 4. Real Swift Search vertical
+        # Independent evidence after a synthetic failure; its failure still fails the job.
+        if: ${{ always() && steps.reconstruct.outcome == 'success' && !cancelled() }}
+        run: |
+          set -euo pipefail
+          bash scripts/verify_search_real_vertical_canary.sh \
+            "$RUNNER_TEMP/search-proxy-canary-payload" \
+            "$RUNNER_TEMP/search-real-vertical" > /dev/null 2>&1
       - name: Record available sanitized evidence, including partial failure
         if: ${{ always() }}
         run: |
@@ -106,3 +154,11 @@ jobs:
               cat "$path"
             fi
           done
+          # Only the reviewed controller report may leave the private work tree.
+          path="$RUNNER_TEMP/search-real-vertical/real-search-vertical-report.json"
+          if test -s "$path"; then
+            printf '\n--- real-search-vertical ---\n'
+            cat "$path"
+          else
+            printf '%s\n' 'Real Search vertical sanitized report not produced.'
+          fi

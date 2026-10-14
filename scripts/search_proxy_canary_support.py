@@ -37,7 +37,11 @@ def verify_source_lock(path, assembly_lock_sha256):
 
 
 def fixture_hashes(root, relative_paths):
-    return {name: sha_file(Path(root) / name) for name in relative_paths}
+    hashes = {name: sha_file(Path(root) / name) for name in relative_paths}
+    if Path(root) == Path(__file__).resolve().parents[1] and set(hashes) == set(STARTUP_SOURCES):
+        _startup_sources.clear()
+        _startup_sources.update(hashes)
+    return hashes
 
 
 def require_native():
@@ -112,6 +116,9 @@ def verify_payload(path, expected_receipt_sha256):
     records = [{"path": name, "sha256": expected[name]["sha256"], "size": expected[name]["size"]} for name in sorted(expected)]
     # Defined digest: SHA-256 of canonical JSON records, sorted by relative path.
     tree_hash = hashlib.sha256(json.dumps(records, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    if (expected_receipt_sha256 == STARTUP_RECEIPT_SHA256
+            and expected["python/bin/python3"]["sha256"] == STARTUP_INTERPRETER_SHA256):
+        _startup_payloads.add(payload)
     return payload, {"assembly_receipt_sha256": expected_receipt_sha256,
                      "assembly_lock_sha256": receipt["lock_sha256"],
                      "interpreter_sha256": expected["python/bin/python3"]["sha256"],
@@ -235,6 +242,281 @@ def read_probe_progress(state):
     return result
 
 
+# This slice diagnoses only the already-reviewed public hosted fixture. These
+# caches come from the runners' existing full verification, not caller input.
+STARTUP_RECEIPT_SHA256 = "4268358594bf02881357334812b8f7ee84764940752071b1febd3ace26adbbab"
+STARTUP_INTERPRETER_SHA256 = "bfb00f17c254d903fac15265ad47653724c3a753d2c36414062fa2025b9ac523"
+STARTUP_SOURCES = (
+    "scripts/test_search_proxy_sandbox_canary.py", "scripts/search_proxy_canary_support.py",
+    "Tests/Native/search_proxy_bootstrap_probe.py", "Tests/Fixtures/search_proxy_canary.sb",
+    "profile-bootstrap-basis.json",
+)
+STARTUP_MARKER = b"dot-search-startup-v1\n"
+_startup_payloads = set()
+_startup_sources = {}
+
+
+def _startup_host():
+    # An accidental-local-execution guard, not an authentication/trust claim.
+    return (sys.platform == "darwin" and platform.machine() == "arm64"
+            and os.environ.get("GITHUB_ACTIONS") == "true"
+            and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+            and os.environ.get("RUNNER_OS") == "macOS"
+            and os.environ.get("RUNNER_ARCH") == "ARM64"
+            and os.environ.get("GITHUB_WORKFLOW") == "Build-only native Search proxy canaries")
+
+
+def _startup_stamp(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+
+def _startup_file(path, digest, limit):
+    if path != path.resolve(strict=True):
+        raise ValueError("identity")
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+            or info.st_uid != os.geteuid() or info.st_mode & 0o022 or not 0 < info.st_size <= limit):
+        raise ValueError("identity")
+    return (path, digest, limit, _startup_stamp(info))
+
+
+def _startup_directory(path):
+    if path != path.resolve(strict=True):
+        raise ValueError("directory")
+    descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("directory")
+        # Original fixture/progress writes legitimately change directory times.
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid)
+    finally:
+        os.close(descriptor)
+
+
+def _startup_listener(descriptor):
+    if type(descriptor) is not int or descriptor < 3:
+        raise ValueError("listener")
+    with socket.fromfd(descriptor, socket.AF_INET, socket.SOCK_STREAM) as listener:
+        if (listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1
+                or listener.getsockname()[0] != "127.0.0.1"
+                or listener.family != socket.AF_INET
+                or listener.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE) != socket.SOCK_STREAM):
+            raise ValueError("listener")
+        return (_startup_stamp(os.fstat(descriptor)), listener.getsockname()[1])
+
+
+def _startup_context(command, payload, state, foreign, egress, pass_fds, env, probe_kind):
+    if probe_kind != "profile" or not _startup_host():
+        return None
+    try:
+        root = Path(__file__).resolve().parents[1]
+        python, helper = payload / "python/bin/python3", state / "profile_probe.py"
+        profile = root / "Tests/Fixtures/search_proxy_canary.sb"
+        if (payload not in _startup_payloads or payload != payload.resolve(strict=True)
+                or ".app" in {part[-4:] for part in payload.parts}
+                or state != state.resolve(strict=True) or stat.S_IMODE(state.stat().st_mode) != 0o700
+                or state.stat().st_uid != os.geteuid() or type(pass_fds) is not tuple or len(pass_fds) != 1
+                or env != minimal_env(state) or set(_startup_sources) != set(STARTUP_SOURCES)):
+            raise ValueError("context")
+        endpoints = [(fd, _startup_listener(fd)) for fd in (pass_fds[0], foreign.fileno(), egress.fileno())]
+        if len({fd for fd, _ in endpoints}) != 3:
+            raise ValueError("endpoints")
+        listener_port, egress_port = endpoints[0][1][1], endpoints[2][1][1]
+        expected = ["/usr/bin/sandbox-exec"]
+        for key, value in (("DOT_SEARCH_PAYLOAD", str(payload)), ("DOT_SEARCH_STATE", str(state)),
+                           ("DOT_SEARCH_PYTHON", str(python)), ("DOT_SEARCH_LISTENER", f"localhost:{listener_port}"),
+                           ("DOT_SEARCH_EGRESS", f"localhost:{egress_port}")):
+            expected.extend(["-D", key + "=" + value])
+        expected.extend(["-f", str(profile), str(python), "-I", "-S", "-B", str(helper),
+            "--payload", str(payload), "--state-root", str(state), "--owned-listener", str(pass_fds[0]),
+            "--egress-port", str(egress_port), "--probe-kind", "profile"])
+        if type(command) is not list or command != expected:
+            raise ValueError("command")
+        files = [_startup_file(root / name, _startup_sources[name], 256 * 1024) for name in STARTUP_SOURCES]
+        files += [_startup_file(helper, _startup_sources["Tests/Native/search_proxy_bootstrap_probe.py"], 256 * 1024),
+                  _startup_file(payload / "evidence/assembly-input-receipt.json", STARTUP_RECEIPT_SHA256, 2 * 1024 * 1024),
+                  _startup_file(python, STARTUP_INTERPRETER_SHA256, 32 * 1024 * 1024)]
+        directories = [(path, _startup_directory(path)) for path in sorted(
+            {state, payload, root, python.parent.parent} | {item[0].parent for item in files})]
+        return {"files": files, "directories": directories, "endpoints": endpoints, "python": str(python), "prefix": tuple(command[:13]),
+                "cwd": state, "env": dict(env), "pass_fds": pass_fds, "used": False}
+    except Exception:
+        # Bad/missing diagnostic provenance must not alter the original probe.
+        return {"invalid": True, "used": False}
+
+
+def _startup_verify(context, deadline):
+    """Targeted identity only: never claim that the whole donor was reverified."""
+    for path, expected in context["directories"]:
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        if _startup_directory(path) != expected:
+            raise ValueError("directory")
+    for path, expected, limit, stamp in context["files"]:
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        if path != path.resolve(strict=True):
+            raise ValueError("identity")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        try:
+            before = os.fstat(descriptor)
+            if _startup_stamp(before) != stamp or before.st_size > limit:
+                raise ValueError("identity")
+            digest, remaining = hashlib.sha256(), before.st_size
+            while remaining:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError
+                part = os.read(descriptor, min(65536, remaining))
+                if not part:
+                    raise ValueError("identity")
+                digest.update(part)
+                remaining -= len(part)
+            if (os.read(descriptor, 1) or _startup_stamp(os.fstat(descriptor)) != stamp
+                    or _startup_stamp(path.lstat()) != stamp or digest.hexdigest() != expected):
+                raise ValueError("identity")
+        finally:
+            os.close(descriptor)
+    for fd, expected in context["endpoints"]:
+        if time.monotonic() >= deadline:
+            raise TimeoutError
+        if _startup_listener(fd) != expected:
+            raise ValueError("listener")
+    if time.monotonic() >= deadline:
+        raise TimeoutError
+
+
+def _startup_child(command, context, deadline, seconds, stdout_limit, stderr_limit, *, signature=False):
+    """Bound output and exact-child lifetime; never return pipe/exception text."""
+    result = {"status": "unavailable", "returncode": None, "cleanup": "not-needed"}
+    process = None
+    output = [bytearray(), bytearray()]
+    end = min(deadline - 2, time.monotonic() + seconds)
+    try:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            cwd=context["cwd"], env=context["env"], pass_fds=context["pass_fds"], close_fds=True)
+        result["pid"] = process.pid
+        streams = {process.stdout: 0, process.stderr: 1}
+        while True:
+            now = time.monotonic()
+            if now >= end:
+                result["status"] = "timeout"
+                break
+            ready = select.select(list(streams), [], [], min(0.05, end - now))[0]
+            for stream in ready:
+                index = streams[stream]
+                limit = stdout_limit if index == 0 else stderr_limit
+                # Read at most cap + one, including combined signature output.
+                room = limit - len(output[index])
+                if signature:
+                    room = min(room, 8192 - sum(map(len, output)))
+                part = os.read(stream.fileno(), min(4096, room + 1))
+                if not part:
+                    del streams[stream]
+                else:
+                    output[index].extend(part)
+                if len(output[index]) > limit or (signature and sum(map(len, output)) > 8192):
+                    result["status"] = "output-limit"
+                    break
+            if result["status"] == "output-limit":
+                break
+            returncode = process.poll()
+            if returncode is not None and not streams:
+                result["returncode"] = returncode
+                if signature:
+                    result["status"] = "accepted" if returncode == 0 else "rejected"
+                elif returncode < 0:
+                    result["status"] = "signal"
+                elif returncode != 0:
+                    result["status"] = "nonzero-exit"
+                elif output[0] != STARTUP_MARKER or output[1]:
+                    result["status"] = "wrong-output"
+                else:
+                    result["status"] = "success"
+                break
+    except Exception:
+        result["status"] = "unavailable"
+    finally:
+        if process is not None:
+            try:
+                if process.poll() is None:
+                    process.kill()
+                    result["cleanup"] = "kill-sent"
+                remaining = min(2, max(0, deadline - time.monotonic()))
+                process.wait(timeout=remaining)
+                result["returncode"] = process.returncode
+                if result["cleanup"] == "kill-sent":
+                    result["cleanup"] = "killed-and-reaped"
+            except Exception:
+                result["cleanup"] = "unconfirmed"
+            finally:
+                for stream in (process.stdout, process.stderr):
+                    if stream is not None:
+                        try:
+                            stream.close()
+                        except Exception:
+                            result["cleanup"] = "unconfirmed"
+    return result
+
+
+def _startup_differential(context):
+    started = time.monotonic()
+    deadline = started + 45
+    result = {"schema": 1, "kind": "build-only-fixed-startup-differential", "production_acceptance": False,
+              "status": "unavailable", "identity_scope": "targeted-files-and-held-listeners", "post_identity": "not-checked"}
+    try:
+        if context.get("invalid") or not _startup_host():
+            return result
+        _startup_verify(context, deadline - 5)
+        # Keep a final five-second targeted check inside the same total budget.
+        if deadline - time.monotonic() < 12:
+            raise TimeoutError
+        signature = _startup_child(["/usr/bin/codesign", "--verify", "--strict", context["python"]],
+            context, deadline - 5, 5, 8192, 8192, signature=True)
+        result["signature"] = signature
+        if signature["status"] != "accepted" or signature["cleanup"] == "unconfirmed":
+            result["status"] = "signature-stopped"
+            return result
+        # Literal source only. The prefix was validated against the entire
+        # original command; no logs, payload source or caller command is run.
+        command = [context["python"], "-I", "-S", "-B", "-c", 'print("dot-search-startup-v1")']
+        for name, argv in (("outside", command), ("inside", list(context["prefix"]) + command)):
+            _startup_verify(context, deadline - 15)
+            if deadline - time.monotonic() < 15:
+                raise TimeoutError
+            result[name] = _startup_child(argv, context, deadline - 5, 8, 128, 4096)
+            if result[name]["cleanup"] == "unconfirmed":
+                result["status"] = "cleanup-unconfirmed"
+                return result
+        outside, inside = result["outside"]["status"], result["inside"]["status"]
+        if outside == inside == "success":
+            result["status"] = "both-minimal-startups-succeeded"
+        elif outside == "success" and inside in ("signal", "nonzero-exit", "wrong-output"):
+            result["status"] = "sandbox-context-dependent-failure"
+        elif outside in ("signal", "nonzero-exit", "wrong-output") and inside in ("signal", "nonzero-exit", "wrong-output"):
+            result["status"] = "failure-without-sandbox"
+        else:
+            result["status"] = "inconclusive"
+    except TimeoutError:
+        result["status"] = "budget-exceeded"
+    except Exception:
+        result["status"] = "identity-failed"
+    finally:
+        if not context.get("invalid"):
+            try:
+                _startup_verify(context, deadline)
+                result["post_identity"] = "verified-targets-only"
+            except TimeoutError:
+                result["post_identity"] = "budget-exceeded"
+                result["status"] = "budget-exceeded"
+            except Exception:
+                result["post_identity"] = "failed"
+                result["status"] = "identity-failed"
+        result["elapsed_ms"] = min(2147483647, max(0, int((time.monotonic() - started) * 1000)))
+    return result
+
+
 def event_failure(process, stage, reason, *, stdout_bytes=0, settle=False, progress_state=None):
     """Report observations only; never print child output, argv, paths or env.
 
@@ -267,6 +549,13 @@ def event_failure(process, stage, reason, *, stdout_bytes=0, settle=False, progr
         "stderr_sample_limit": 4096, "production_acceptance": False}
     if progress_state is not None:
         diagnostic["probe_progress"] = read_probe_progress(progress_state)
+    context = getattr(process, "_dot_startup_context", None)
+    if stage.startswith("profile-") and returncode is not None and returncode < 0 and context is not None and not context["used"]:
+        context["used"] = True
+        try:
+            diagnostic["startup_differential"] = _startup_differential(context)
+        except Exception:
+            diagnostic["startup_differential"] = {"status": "unavailable", "production_acceptance": False}
     return AssertionError("native canary failed: " + json.dumps(diagnostic, sort_keys=True))
 
 
@@ -315,8 +604,11 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
             failures.append(repr(error))
 
     thread = threading.Thread(target=echo, name="owned-synthetic-egress")
+    startup_context = _startup_context(command, payload, state, foreign, egress, pass_fds,
+                                       env if env is not None else minimal_env(state), probe_kind)
     process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         cwd=state, env=env if env is not None else minimal_env(state), pass_fds=pass_fds)
+    process._dot_startup_context = startup_context
     thread.start()
     try:
         try:
