@@ -211,6 +211,63 @@ class TLSAdmissionTests(unittest.TestCase):
         self.assertTrue(self.relay.closed); self.assertFalse(self.relay.workers)
         self.assertFalse(self.relay.connections); self.assert_closed(raw); self.no_upstream()
 
+    def test_valid_slow_handshake_and_header_survive_cancellation_poll_timeouts(self):
+        handshake_timeouts = []; header_timeouts = []
+        handshake_retried = threading.Event(); header_retried = threading.Event()
+        handshake = ssl.SSLSocket.do_handshake; recv = ssl.SSLSocket.recv
+        def observed_handshake(connection, *args, **kwargs):
+            try: return handshake(connection, *args, **kwargs)
+            except socket.timeout:
+                if connection.server_side:
+                    handshake_timeouts.append(True)
+                    if len(handshake_timeouts) >= 2: handshake_retried.set()
+                raise
+        def observed_recv(connection, *args, **kwargs):
+            try: return recv(connection, *args, **kwargs)
+            except socket.timeout:
+                if connection.server_side:
+                    header_timeouts.append(True)
+                    if len(header_timeouts) >= 2: header_retried.set()
+                raise
+        with patch.object(ssl.SSLSocket, 'do_handshake', observed_handshake), \
+             patch.object(ssl.SSLSocket, 'recv', observed_recv):
+            raw = self.client(handshake=False); self.wait_workers(1)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
+            incoming = ssl.MemoryBIO(); outgoing = ssl.MemoryBIO()
+            client = context.wrap_bio(incoming, outgoing, server_hostname='dot.local')
+            # Send a real ClientHello, then withhold the remaining handshake
+            # until the server has retried its partially advanced TLS state.
+            with self.assertRaises(ssl.SSLWantReadError): client.do_handshake()
+            raw.sendall(outgoing.read())
+            self.assertTrue(handshake_retried.wait(timeout=0.8))
+            while True:
+                try:
+                    client.do_handshake(); break
+                except ssl.SSLWantReadError:
+                    if outgoing.pending: raw.sendall(outgoing.read())
+                    data = raw.recv(16384); self.assertTrue(data)
+                    incoming.write(data)
+            if outgoing.pending: raw.sendall(outgoing.read())
+            self.assertEqual(hashlib.sha256(client.getpeercert(binary_form=True)).hexdigest(), self.relay.certificate_sha256)
+            client.write(HEADER[:-2]); raw.sendall(outgoing.read())
+            self.assertTrue(header_retried.wait(timeout=0.8)); self.no_upstream()
+            client.write(HEADER[-2:]); raw.sendall(outgoing.read())
+            upstream = self.upstream()
+            self.assertEqual(self.receive_exact(upstream, len(HEADER)), HEADER)
+            upstream.sendall(RESPONSE)
+            response = bytearray()
+            while len(response) < len(RESPONSE):
+                try:
+                    data = client.read(len(RESPONSE) - len(response)); self.assertTrue(data)
+                    response.extend(data)
+                except ssl.SSLWantReadError:
+                    data = raw.recv(16384); self.assertTrue(data)
+                    incoming.write(data)
+            self.assertEqual(response, RESPONSE)
+        self.assertGreaterEqual(len(handshake_timeouts), 2)
+        self.assertGreaterEqual(len(header_timeouts), 2)
+
     def test_each_keepalive_request_and_response_remains_byte_identical(self):
         response = RESPONSE.replace(b'Connection: close', b'Connection: keep-alive')
         client, upstream = self.exchange(response=response)
@@ -290,6 +347,20 @@ class TLSAdmissionTests(unittest.TestCase):
             self.assertEqual(accepted.recv(5), b'owned')
         with self.assertRaises(OSError): socket.create_connection(('127.0.0.1', self.relay.port), timeout=1)
         self.relay.close()  # Repeated Stop is safe.
+
+    def test_stop_does_not_require_cross_thread_tls_socket_wakeup(self):
+        # Model platforms where closing a socket in another thread does not
+        # interrupt an in-flight TLS operation. Workers still own final close.
+        stopper = threading.current_thread()
+        close = ssl.SSLSocket.close
+        shutdown = ssl.SSLSocket.shutdown
+        def worker_close(connection):
+            if threading.current_thread() is not stopper: close(connection)
+        def worker_shutdown(connection, how):
+            if threading.current_thread() is not stopper: shutdown(connection, how)
+        with patch.object(ssl.SSLSocket, 'close', worker_close), \
+             patch.object(ssl.SSLSocket, 'shutdown', worker_shutdown):
+            self.test_stop_joins_pending_and_authenticated_workers_before_backend_release()
 
     def test_stop_racing_backend_connect_does_not_leave_untracked_socket(self):
         entered = threading.Event(); release = threading.Event()

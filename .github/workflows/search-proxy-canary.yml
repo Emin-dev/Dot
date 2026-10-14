@@ -1,0 +1,108 @@
+name: Build-only native Search proxy canaries
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/search-proxy-canary.yml'
+      - 'Tests/Fixtures/search-proxy-native-owner/helpers/dot_search.py'
+      - 'Tests/Fixtures/search-proxy-native-owner/helpers/search-dependency-pins.json'
+      - 'Tests/Fixtures/search-proxy-native-owner/helpers/search.sb'
+      - 'Tests/Fixtures/search-proxy-native-owner/helpers/searxng-transient-cache-patch.json'
+      - 'Tests/Fixtures/search-proxy-native-owner/helpers/searxng-transient-cache.patch'
+      - 'Tests/Fixtures/search_proxy_canary.sb'
+      - 'Tests/Fixtures/search_proxy_fixture_support.py'
+      - 'Tests/Fixtures/search_proxy_pinned_hashes.json'
+      - 'Tests/Fixtures/search_proxy_transport_fixture.py'
+      - 'Tests/Native/search-proxy-bootstrap-canary.c'
+      - 'Tests/Native/search_proxy_bootstrap_probe.py'
+      - 'Tests/Portable/test_search_proxy_ci_reconstruction.py'
+      - 'Tests/Portable/test_search_proxy_fixture.py'
+      - 'Tests/Portable/test_search_proxy_lock_identity.py'
+      - 'Tests/Python/test_search_proxy_profile_contract.py'
+      - 'canary-inputs.json'
+      - 'packaging/search/portable-test-requirements.txt'
+      - 'packaging/search/search-lock-native-owner.json'
+      - 'profile-bootstrap-basis.json'
+      - 'scripts/fetch_search_inputs.py'
+      - 'scripts/prepare_search_proxy_canary_payload.py'
+      - 'scripts/search_download.py'
+      - 'scripts/search_payload.py'
+      - 'scripts/search_proxy_canary_support.py'
+      - 'scripts/test_search_proxy_bootstrap_canary.py'
+      - 'scripts/test_search_proxy_sandbox_canary.py'
+      - 'scripts/verify_search_proxy_native_fixture.sh'
+permissions:
+  contents: read
+concurrency:
+  group: dot-search-proxy-canary-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  native-proxy-canary:
+    # Standard public-repository runner only; no user Mac, secrets or paid runner.
+    if: ${{ github.event.repository.private == false }}
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Record actual hosted platform and fail closed on wrong architecture
+        run: |
+          set -euo pipefail
+          test "$(uname -s)" = Darwin
+          test "$(uname -m)" = arm64
+          mkdir "$RUNNER_TEMP/search-proxy-canary-reports"
+          python3 -B - <<'PY' > "$RUNNER_TEMP/search-proxy-canary-reports/host.json"
+          import json, os, platform, subprocess
+          print(json.dumps({'kind': 'build-only-host-identity', 'source_commit': os.environ['GITHUB_SHA'],
+            'image_os': os.environ.get('ImageOS'), 'image_version': os.environ.get('ImageVersion'),
+            'os': platform.system(), 'architecture': platform.machine(),
+            'macos_version': platform.mac_ver()[0], 'macos_build': subprocess.check_output(['/usr/bin/sw_vers', '-buildVersion'], text=True).strip(),
+            'kernel': platform.release(), 'controller_python': platform.python_version(),
+            'production_acceptance': False, 'owner_macos_26_4_accepted': False, 'full_neural_app_accepted': False}, sort_keys=True))
+          PY
+      - name: Install existing hash-pinned pure Python assembly parser
+        run: python3 -m pip install --disable-pip-version-check --no-deps --require-hashes -r packaging/search/portable-test-requirements.txt
+      - name: Test portable fixture and reconstruction contracts
+        run: |
+          python3 -B -m unittest discover -s Tests/Portable -p 'test_search_proxy*.py'
+          python3 -B Tests/Python/test_search_proxy_profile_contract.py
+      - name: Reconstruct exact unaccepted historical Search payload
+        run: |
+          python3 -B scripts/prepare_search_proxy_canary_payload.py \
+            --inputs "$RUNNER_TEMP/search-proxy-canary-inputs" \
+            --output "$RUNNER_TEMP/search-proxy-canary-payload" \
+            > "$RUNNER_TEMP/search-proxy-canary-reports/assembly.json"
+      - name: 1. Native fixture profile
+        run: |
+          python3 -B scripts/test_search_proxy_sandbox_canary.py \
+            --search-payload "$RUNNER_TEMP/search-proxy-canary-payload" \
+            --expected-receipt-sha256 4268358594bf02881357334812b8f7ee84764940752071b1febd3ace26adbbab \
+            > "$RUNNER_TEMP/search-proxy-canary-reports/profile.json"
+      - name: 2. Native fixture bootstrap
+        run: |
+          python3 -B scripts/test_search_proxy_bootstrap_canary.py \
+            --search-payload "$RUNNER_TEMP/search-proxy-canary-payload" \
+            --expected-receipt-sha256 4268358594bf02881357334812b8f7ee84764940752071b1febd3ace26adbbab \
+            > "$RUNNER_TEMP/search-proxy-canary-reports/bootstrap.json"
+      - name: 3. Actual pinned curl and SearXNG transport
+        run: |
+          bash scripts/verify_search_proxy_native_fixture.sh \
+            "$RUNNER_TEMP/search-proxy-canary-payload" \
+            4268358594bf02881357334812b8f7ee84764940752071b1febd3ace26adbbab \
+            packaging/search/search-lock-native-owner.json \
+            "$RUNNER_TEMP/search-proxy-canary-reports/transport.json"
+      - name: Record available sanitized evidence, including partial failure
+        if: ${{ always() }}
+        run: |
+          for report in host assembly profile bootstrap transport; do
+            path="$RUNNER_TEMP/search-proxy-canary-reports/$report.json"
+            if test -s "$path"; then
+              printf '\n--- %s ---\n' "$report"
+              cat "$path"
+            fi
+          done

@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "searxng_revision": "22c64b8d394b680c7ea96be25f36dad14126420a",
+  "curl_cffi_version": "0.16.3",
+  "files": {
+    "searx/__init__.py": "8c0ff0356393bb698f9a6b5f71ef5d86d6eb66d39b7592739554fc7378efa4b2",
+    "searx/network/__init__.py": "e7770ee60ad8f8433785fc8824e034fd90646df2fbc4d6a2a7b071838fdf876c",
+    "searx/network/client.py": "ff720490c36bf378d5ea9132c050f236b5e83075e59fb251422e72ef234220e4",
+    "searx/network/network.py": "231c47a12ebad29b3bbdcd567ab7b2165a4354406d096c71ade6d5ff985612f6",
+    "curl_cffi/__init__.py": "e9827081dfedf066ee1e4da6a9eecf58daa69185538e15fd802571cd323261d7",
+    "curl_cffi/curl.py": "5d0bb4f8fd99446c3a99edf145ab935252fad7c3d074c0800921d9e96fc4dd52",
+    "curl_cffi/requests/session.py": "ff3152f6e1c37078c21f9cca11da1adbed8ce7bbb67d88846597df329b940c55",
+    "curl_cffi/requests/utils.py": "bb61f6493a70f0524a10d27a74983ef85de92526ad873bc226a55c69ebb749d4"
+  }
+}

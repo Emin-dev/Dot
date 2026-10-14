@@ -1,0 +1,28 @@
+{
+  "base_files": {
+    "Resources/Search/search.sb": "84f188db99897db04dfa5f9e803149b74c26e4bda471232803abb3ac172eec5c",
+    "Tests/Fixtures/search_native_fixture.py": "e8ff706ed7da984bdb5ee8350623999da90f36d48c61514dc01dfdc9f0c3c61f",
+    "Tests/Native/search-bootstrap-canary.c": "63726f191e47672ab2304b5035de8120a90ae304df48700270d16472f212a656",
+    "Tests/Native/search_bootstrap_probe.py": "378c2cf79aa3b475f777c8e1a7d20ece34512c3ee11aeeb83224fccb16e9f5f8",
+    "packaging/search/dot-search-bootstrap.c": "b6fc53c8ed2f2bc26c6557a2f22529fad410c303c36a70bda59ac6d09493b8b1",
+    "packaging/search/search-lock.json": "7cb53e3b734dc82537b8512ec0bb70931855c639c2557f6f6a10fd882e6c7041",
+    "scripts/test_search_native_bootstrap.py": "4248461ec54b18548095cd08f0c851280a89d4d856e47598265365ec67518628",
+    "scripts/test_search_sandbox.py": "5e7da63eff15afe8fb0b09e02c56286ef352259d0c44acaca1534c3f085df822",
+    "scripts/verify_search_native_fixture.sh": "d654b575e84b2a468fd662e17a5df096cf0e0e3cd5cfbac49027c7f13add4818"
+  },
+  "production_changes": false,
+  "proposal_sha256": "97713396d164835b95a1ddd44dc869df7a04aa5c6666c7a339295cc7ecd8476b",
+  "publication": false,
+  "read_only_base_root": "/workspace/shared/dot-cloud-build",
+  "reviewed_transport_sources": {
+    "curl_cffi/__init__.py": "e9827081dfedf066ee1e4da6a9eecf58daa69185538e15fd802571cd323261d7",
+    "curl_cffi/curl.py": "5d0bb4f8fd99446c3a99edf145ab935252fad7c3d074c0800921d9e96fc4dd52",
+    "curl_cffi/requests/session.py": "ff3152f6e1c37078c21f9cca11da1adbed8ce7bbb67d88846597df329b940c55",
+    "curl_cffi/requests/utils.py": "bb61f6493a70f0524a10d27a74983ef85de92526ad873bc226a55c69ebb749d4",
+    "searx/__init__.py": "8c0ff0356393bb698f9a6b5f71ef5d86d6eb66d39b7592739554fc7378efa4b2",
+    "searx/network/__init__.py": "e7770ee60ad8f8433785fc8824e034fd90646df2fbc4d6a2a7b071838fdf876c",
+    "searx/network/client.py": "ff720490c36bf378d5ea9132c050f236b5e83075e59fb251422e72ef234220e4",
+    "searx/network/network.py": "231c47a12ebad29b3bbdcd567ab7b2165a4354406d096c71ade6d5ff985612f6"
+  },
+  "schema": 1
+}

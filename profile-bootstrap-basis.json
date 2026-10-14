@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "scope": "Read-only basis for independent build-only loopback proxy profile/bootstrap canaries; not production integration.",
+  "base_root": "/workspace/shared/dot-cloud-build",
+  "files": {
+    "scripts/test_search_sandbox.py": "5e7da63eff15afe8fb0b09e02c56286ef352259d0c44acaca1534c3f085df822",
+    "scripts/test_search_native_bootstrap.py": "4248461ec54b18548095cd08f0c851280a89d4d856e47598265365ec67518628",
+    "Tests/Native/search-bootstrap-canary.c": "63726f191e47672ab2304b5035de8120a90ae304df48700270d16472f212a656",
+    "Tests/Native/search_bootstrap_probe.py": "378c2cf79aa3b475f777c8e1a7d20ece34512c3ee11aeeb83224fccb16e9f5f8",
+    "Resources/Search/search.sb": "84f188db99897db04dfa5f9e803149b74c26e4bda471232803abb3ac172eec5c",
+    "packaging/search/dot-search-bootstrap.c": "b6fc53c8ed2f2bc26c6557a2f22529fad410c303c36a70bda59ac6d09493b8b1"
+  },
+  "proposal": {
+    "path": "/workspace/shared/dot-search-egress-review-stage/PROPOSAL.md",
+    "sha256": "97713396d164835b95a1ddd44dc869df7a04aa5c6666c7a339295cc7ecd8476b"
+  }
+}

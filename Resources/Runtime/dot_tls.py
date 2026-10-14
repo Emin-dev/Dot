@@ -77,6 +77,7 @@ class TLSRelay:
     pending_limit = 8
     forwarding_limit = 4
     admission_timeout = 2
+    admission_poll_interval = 0.1
     header_limit = 16384
     io_timeout = 2
     connection_lifetime = 180
@@ -122,13 +123,27 @@ class TLSRelay:
             self.connections.add(connection)
         return True
 
+    def _handshake(self, secure, deadline):
+        # Cross-thread shutdown/close need not wake a TLS read on every OS.
+        # Check Stop between short waits without resetting the admission budget.
+        while not self.stopping.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0: return False
+            secure.settimeout(min(self.admission_poll_interval, remaining))
+            try:
+                secure.do_handshake()
+                return time.monotonic() < deadline
+            except socket.timeout: continue
+        return False
+
     def _admit(self, secure, deadline):
         buffered = bytearray()
         while not self.stopping.is_set():
             remaining = deadline - time.monotonic()
             if remaining <= 0: return None
-            secure.settimeout(remaining)
-            data = secure.recv(min(4096, self.header_limit - len(buffered)))
+            secure.settimeout(min(self.admission_poll_interval, remaining))
+            try: data = secure.recv(min(4096, self.header_limit - len(buffered)))
+            except socket.timeout: continue
             if not data: return None
             buffered.extend(data)
             end = buffered.find(b'\r\n\r\n')
@@ -160,7 +175,7 @@ class TLSRelay:
             raw.settimeout(max(0.001, admission_deadline - time.monotonic()))
             secure = self.context.wrap_socket(raw, server_side=True, do_handshake_on_connect=False)
             if not self._track(secure, previous=raw): return
-            secure.do_handshake()
+            if not self._handshake(secure, admission_deadline): return
             initial = self._admit(secure, admission_deadline)
             if initial is None or self.stopping.is_set(): return
             if not self.capacity.acquire(blocking=False): return

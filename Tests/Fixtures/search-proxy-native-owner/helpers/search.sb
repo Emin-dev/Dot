@@ -1,0 +1,55 @@
+(version 1)
+; Candidate Search-only policy. Exact-artifact macOS canaries must pass before
+; admission. No inference, model, document, screen or voice path is granted.
+(deny default)
+(allow process-fork)
+(allow process-exec (literal (param "DOT_SEARCH_PYTHON")))
+(allow process-info* (target same-sandbox))
+(allow signal (target same-sandbox))
+(allow sysctl-read)
+(allow file-read-metadata
+  (path-ancestors (param "DOT_SEARCH_PAYLOAD"))
+  (path-ancestors (param "DOT_SEARCH_STATE"))
+  (literal "/") (literal "/tmp") (literal "/var") (literal "/etc"))
+(allow file-read*
+  (subpath (param "DOT_SEARCH_PAYLOAD"))
+  (subpath (param "DOT_SEARCH_STATE"))
+  (subpath "/System/Library") (subpath "/Library/Apple/System")
+  (subpath "/usr/lib") (subpath "/usr/share/locale")
+  (subpath "/private/var/db/dyld") (subpath "/private/var/db/timezone")
+  (literal "/private/etc/localtime")
+  (literal "/private/etc/hosts") (literal "/private/etc/resolv.conf")
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/random") (literal "/dev/urandom"))
+(allow file-map-executable
+  (subpath (string-append (param "DOT_SEARCH_PAYLOAD") "/python"))
+  (subpath "/System/Library") (subpath "/Library/Apple/System") (subpath "/usr/lib"))
+(allow file-write* (subpath (param "DOT_SEARCH_STATE")))
+(allow file-write-data (literal "/dev/null"))
+; The listener was already bound once by the native bootstrap. No network-bind
+; permission, wildcard listening, second listener, IPv6 or generic LAN connection.
+(allow network-inbound
+  (require-all (socket-domain AF_INET) (local tcp (param "DOT_SEARCH_LISTENER"))))
+; libc resolver only, not arbitrary UDP, proxy sockets or broad Mach services.
+(allow network-outbound (literal "/private/var/run/mDNSResponder"))
+(allow mach-lookup (global-name "com.apple.mDNSResponder"))
+; Snapshot of public IPv4 A records for the fixed html.duckduckgo.com hostname.
+; Any later DNS rotation fails closed; a new explicit research launch may re-resolve.
+(allow network-outbound
+  (require-all (socket-domain AF_INET)
+    (require-any
+      (remote tcp (param "DOT_SEARCH_REMOTE_00"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_01"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_02"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_03"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_04"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_05"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_06"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_07"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_08"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_09"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_10"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_11"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_12"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_13"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_14"))
+      (remote tcp (param "DOT_SEARCH_REMOTE_15")))))
