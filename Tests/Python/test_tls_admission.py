@@ -36,8 +36,18 @@ class TLSAdmissionTests(unittest.TestCase):
         for connection in self.clients + self.upstreams: connection.close()
         self.backend.close(); self.temporary.cleanup()
 
-    def client(self, handshake=True):
-        raw = socket.create_connection(('127.0.0.1', self.relay.port), timeout=2)
+    def client(self, handshake=True, *, receive_buffer=None):
+        if receive_buffer is None:
+            raw = socket.create_connection(('127.0.0.1', self.relay.port), timeout=2)
+        else:
+            # TCP cannot retract a previously advertised receive window. Set
+            # the pressure fixture's bound before connect/window negotiation.
+            raw = socket.socket(); raw.settimeout(2)
+            try:
+                raw.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, receive_buffer)
+                raw.connect(('127.0.0.1', self.relay.port))
+            except BaseException:
+                raw.close(); raise
         if not handshake:
             self.clients.append(raw); return raw
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -81,8 +91,8 @@ class TLSAdmissionTests(unittest.TestCase):
         try: self.assertEqual(connection.recv(1), b'')
         except (ConnectionResetError, ssl.SSLError): pass
 
-    def exchange(self, response=RESPONSE):
-        client = self.client(); client.sendall(HEADER)
+    def exchange(self, response=RESPONSE, *, receive_buffer=None):
+        client = self.client(receive_buffer=receive_buffer); client.sendall(HEADER)
         upstream = self.upstream()
         self.assertEqual(self.receive_exact(upstream, len(HEADER)), HEADER)
         upstream.sendall(response)
@@ -444,23 +454,41 @@ class TLSAdmissionTests(unittest.TestCase):
 
     def test_authenticated_tls_backpressure_keeps_total_send_deadline(self):
         self.relay.io_timeout = 0.35
-        client, upstream = self.exchange(); self.pressure_tls_output(client)
+        client, upstream = self.exchange(receive_buffer=4096); self.pressure_tls_output(client)
         retried = threading.Event(); send = ssl.SSLSocket.send
+        sendall = self.relay._sendall; operations = []
+        def observed_sendall(connection, data):
+            if not isinstance(connection, ssl.SSLSocket): return sendall(connection, data)
+            operation = {'started': time.monotonic(), 'retries': 0}
+            operations.append(operation)
+            result = sendall(connection, data)
+            operation.update(result=result, elapsed=time.monotonic() - operation['started'])
+            return result
         def observed_send(connection, *args, **kwargs):
             try: return send(connection, *args, **kwargs)
             except (socket.timeout, ssl.SSLWantReadError, ssl.SSLWantWriteError):
-                if connection.server_side: retried.set()
+                if connection.server_side:
+                    operations[-1]['retries'] += 1; retried.set()
                 raise
         def flood():
             try: upstream.sendall(b'fixture response' * 131072)
             except OSError: pass
         sender = threading.Thread(target=flood)
-        with patch.object(ssl.SSLSocket, 'send', observed_send):
+        with patch.object(ssl.SSLSocket, 'send', observed_send), \
+             patch.object(self.relay, '_sendall', observed_sendall):
             started = time.monotonic(); sender.start()
             try:
                 self.assertTrue(retried.wait(timeout=0.8))
                 self.wait_workers(0, timeout=0.8)
                 self.assertLess(time.monotonic() - started, 0.9)
+                # A transient WANT can finish normally. Prove one particular
+                # unfinished production send exhausted its unchanged budget.
+                failed = [operation for operation in operations if not operation['result']]
+                self.assertEqual(len(failed), 1)
+                self.assertGreaterEqual(failed[0]['retries'], 2)
+                self.assertGreaterEqual(failed[0]['elapsed'], 0.3)
+                self.assertLess(failed[0]['elapsed'], 0.8)
+                self.assertFalse(self.relay.stopping.is_set())
             finally:
                 self.relay.close(); sender.join(timeout=3)
         self.assertFalse(sender.is_alive()); self.assertFalse(self.relay.connections)
@@ -627,15 +655,23 @@ class TLSAdmissionTests(unittest.TestCase):
             result = getsockopt(connection, level, option, *args)
             if level == socket.SOL_SOCKET and option == socket.SO_ERROR: errors.append(result)
             return result
-        # Keep the rejected port owned but non-listening, so refusal is genuine
-        # and no port discovery/rebind race is involved.
-        with socket.socket() as refusing:
-            refusing.bind(('127.0.0.1', 0))
-            with patch.object(self.relay, 'backend', refusing), \
-                 patch.object(socket.socket, 'connect_ex', observed_connect), \
-                 patch.object(socket.socket, 'getsockopt', observed_error):
-                client = self.client(); client.sendall(HEADER)
-                self.assert_closed(client); self.wait_workers(0)
+        # Darwin silently drops SYNs to a merely bound TCPS_CLOSED socket.
+        # An established socket keeps the non-reusable port owned after its
+        # listener closes, but cannot match the new connection's four-tuple.
+        with tls.owned_listener() as listener:
+            with socket.create_connection(listener.getsockname(), timeout=2) as owner:
+                refusing, _ = listener.accept()
+                with refusing:
+                    listener.close()
+                    with socket.socket() as contender:
+                        with self.assertRaises(OSError): contender.bind(refusing.getsockname())
+                    with patch.object(self.relay, 'backend', refusing), \
+                         patch.object(socket.socket, 'connect_ex', observed_connect), \
+                         patch.object(socket.socket, 'getsockopt', observed_error):
+                        client = self.client(); client.sendall(HEADER)
+                        self.assert_closed(client); self.wait_workers(0)
+                    owner.sendall(b'owned'); refusing.settimeout(2)
+                    self.assertEqual(refusing.recv(5), b'owned')
         self.assertIn(errno.ECONNREFUSED, results + errors)
         self.assertFalse(self.relay.connections); self.no_upstream(); self.exchange()
 
