@@ -568,25 +568,75 @@ class RealVerticalBuildDiagnosticsContract(unittest.TestCase):
                 self.assertIs(caught.exception.build_failure['leader_exit_observed_before_cleanup'], False)
                 self.assertIsNone(caught.exception.build_failure['signal'])
 
-    def test_seven_build_commands_have_exact_fixed_phases_and_unchanged_budgets(self):
+    def test_source_fixed_toolchain_matches_native_ci_and_ignores_caller_overrides(self):
+        vertical = self.vertical
+        fixed = '/Applications/Xcode_26.3.app/Contents/Developer'
+        self.assertEqual(vertical.DEVELOPER_DIR, fixed)
+        self.assertEqual(vertical.XCODE_VERSION, b'Xcode 26.3\nBuild version 17C529')
+        self.assertEqual(vertical.MACOS_SDK_VERSION, '26.2')
+        self.assertIn('      DEVELOPER_DIR: ' + fixed + '\n',
+                      (ROOT / '.github/workflows/ci.yml').read_text())
+        hostile = {name: 'synthetic-private-caller-override' for name in (
+            'DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS', 'SWIFT_EXEC', 'SWIFT_DRIVER_SWIFT_FRONTEND_EXEC',
+            'PYTHONPATH', 'HTTPS_PROXY', 'SSL_CERT_FILE', 'DOT_REAL_SEARCH_FIXTURE_CONFIG')}
+        with mock.patch.dict(os.environ, hostile):
+            env = vertical.clean_environment(Path('/synthetic/home'), Path('/synthetic/tmp'))
+            child = vertical.clean_environment(Path('/synthetic/home'), Path('/synthetic/tmp'),
+                                               Path('/synthetic/config'), 'a' * 64)
+        self.assertEqual(env, {'PATH': '/usr/bin:/bin', 'HOME': '/synthetic/home', 'TMPDIR': '/synthetic/tmp',
+                              'LANG': 'en_US.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1', 'DEVELOPER_DIR': fixed})
+        self.assertEqual(child, {**env, 'DOT_REAL_SEARCH_FIXTURE_CONFIG': '/synthetic/config',
+                                 'DOT_REAL_SEARCH_FIXTURE_CONFIG_SHA256': 'a' * 64})
+        self.assertNotIn('synthetic-private', vertical.canonical([env, child]).decode())
+
+    def test_shell_scrub_sets_fixed_toolchain_without_forwarding_caller_values(self):
+        script = (ROOT / 'scripts/verify_search_real_vertical_canary.sh').read_text()
+        # Run only the source environment construction, not the native driver.
+        body = script[script.index('environment=('):script.index('"${environment[@]}" /usr/bin/python3')]
+        self.assertIn('DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer)', body)
+        self.assertIn('for name in ImageOS ImageVersion RUNNER_OS RUNNER_ARCH; do', body)
+        probe = body + '\nexec "${environment[@]}" /usr/bin/python3 -I -B -c \'import json, os; print(json.dumps(dict(os.environ)))\'\n'
+        hostile = {name: 'synthetic-private-caller-override' for name in (
+            'DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS', 'SWIFT_EXEC', 'PYTHONPATH',
+            'HTTPS_PROXY', 'SSL_CERT_FILE', 'DOT_REAL_SEARCH_FIXTURE_CONFIG')}
+        result = subprocess.run(['/bin/bash', '-e', '-u', '-c', probe],
+            env={**os.environ, **hostile, 'ImageOS': 'synthetic-image'},
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        observed = json.loads(result.stdout)
+        self.assertEqual(observed['DEVELOPER_DIR'], self.vertical.DEVELOPER_DIR)
+        self.assertEqual(observed['PATH'], '/usr/bin:/bin')
+        self.assertEqual(observed['ImageOS'], 'synthetic-image')
+        for name in set(hostile) - {'DEVELOPER_DIR'}:
+            self.assertNotIn(name, observed)
+        self.assertNotIn('synthetic-private', result.stdout + result.stderr)
+        self.assertEqual(script.count('"${environment[@]}" /usr/bin/python3 -I -B'), 2)
+
+    def test_fixed_xcode_query_and_seven_existing_commands_keep_exact_phases_and_budgets(self):
         vertical = self.vertical
         with tempfile.TemporaryDirectory() as temporary:
             work = Path(temporary).resolve(strict=True)
             executable = work / 'build/DotCorePackageTests.xctest/Contents/MacOS/DotCorePackageTests'
             executable.parent.mkdir(parents=True)
             executable.write_bytes(b'synthetic test executable never executed')
-            clang, swift, sdk = work / 'clang', work / 'swift', work / 'sdk'
+            developer = work / 'Developer'
+            tool_bin = developer / 'Toolchains/XcodeDefault.xctoolchain/usr/bin'
+            tool_bin.mkdir(parents=True)
+            clang, swift = tool_bin / 'clang', tool_bin / 'swift'
+            sdk = developer / 'Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk'
             clang.write_bytes(b'synthetic clang never executed')
             swift.write_bytes(b'synthetic swift never executed')
-            sdk.mkdir()
-            (sdk / 'SDKSettings.json').write_bytes(b'synthetic SDK settings')
-            responses = [(b'build stdout', b'build stderr'), (str(clang).encode(), b''),
+            sdk.mkdir(parents=True)
+            (sdk / 'SDKSettings.json').write_bytes(b'{"Version":"26.2"}')
+            responses = [(vertical.XCODE_VERSION + b'\n', b''), (b'build stdout', b'build stderr'), (str(clang).encode(), b''),
                          (str(swift).encode(), b''), (str(sdk).encode(), b''),
-                         (b'clang version fixture', b''), (b'swift version fixture', b''), (b'sdk version fixture', b'')]
-            with mock.patch.object(vertical, 'run_owned', side_effect=responses) as run:
+                         (b'clang version fixture', b''), (b'swift version fixture', b''), (b'26.2\n', b'')]
+            with mock.patch.object(vertical, 'DEVELOPER_DIR', str(developer)), \
+                 mock.patch.object(vertical, 'run_owned', side_effect=responses) as run:
                 found, build = vertical.build_artifacts(work, {'fixed': 'environment'})
             self.assertEqual(found, executable)
             commands = [
+                (['xcodebuild', '-version'], 10, 'xcode-version'),
                 (['swift', 'build', '--build-tests', '--configuration', 'debug', '--scratch-path', str(work / 'build')], 600, 'swift-build-tests'),
                 (['--find', 'clang'], 10, 'find-clang'), (['--find', 'swift'], 10, 'find-swift'),
                 (['--show-sdk-path'], 10, 'sdk-path'), (['clang', '--version'], 10, 'clang-version'),
@@ -596,11 +646,12 @@ class RealVerticalBuildDiagnosticsContract(unittest.TestCase):
             self.assertEqual(run.call_args_list, [mock.call(['/usr/bin/xcrun', *command], cwd=ROOT,
                 env={'fixed': 'environment'}, seconds=seconds, phase=phase) for command, seconds, phase in commands])
             self.assertEqual(build, {
+                'developer_dir': str(developer), 'xcode_version': 'Xcode 26.3\nBuild version 17C529',
                 'test_executable_sha256': vertical.sha(executable.read_bytes()), 'clang_path': str(clang),
                 'clang_executable_sha256': vertical.sha(clang.read_bytes()), 'swift_executable_sha256': vertical.sha(swift.read_bytes()),
                 'sdk_settings_sha256': vertical.sha((sdk / 'SDKSettings.json').read_bytes()), 'swift_path': str(swift),
                 'sdk_path': str(sdk), 'clang_version': 'clang version fixture', 'swift_version': 'swift version fixture',
-                'sdk_version': 'sdk version fixture', 'swift_flags': ['build', '--build-tests', '--configuration', 'debug'],
+                'sdk_version': '26.2', 'swift_flags': ['build', '--build-tests', '--configuration', 'debug'],
                 'bootstrap_flags': ['-arch', 'arm64', '-mmacosx-version-min=15.0', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2', '-lsandbox']})
             for index, (_, _, phase) in enumerate(commands):
                 failure = vertical.CanaryFailure('owned-process-failed')
@@ -610,6 +661,27 @@ class RealVerticalBuildDiagnosticsContract(unittest.TestCase):
                         vertical.build_artifacts(work, {})
                     self.assertIs(caught.exception, failure)
                     self.assertEqual(run.call_count, index + 1)
+
+            for index, changed, category in (
+                    (0, b'Xcode 16.4\nBuild version 16F6\n', 'selected-xcode-version-mismatch'),
+                    (2, str(executable).encode(), 'selected-toolchain-mismatch'),
+                    (3, str(executable).encode(), 'selected-toolchain-mismatch'),
+                    (4, str(work).encode(), 'selected-toolchain-mismatch'),
+                    (7, b'15.5\n', 'selected-toolchain-mismatch')):
+                bad = list(responses)
+                bad[index] = (changed, b'')
+                with self.subTest(index=index), mock.patch.object(vertical, 'DEVELOPER_DIR', str(developer)), \
+                     mock.patch.object(vertical, 'run_owned', side_effect=bad) as run:
+                    with self.assertRaisesRegex(vertical.CanaryFailure, '^' + category + '$'):
+                        vertical.build_artifacts(work, {})
+                    self.assertEqual(run.call_count, 1 if index == 0 else 8)
+            for metadata in (b'{"Version":"15.5"}', b'{"Version":26.2}', b'{}', b'null',
+                             b'[]', b'{', b'\xff', b' ' * 65537):
+                (sdk / 'SDKSettings.json').write_bytes(metadata)
+                with self.subTest(metadata=metadata[:40]), mock.patch.object(vertical, 'DEVELOPER_DIR', str(developer)), \
+                     mock.patch.object(vertical, 'run_owned', side_effect=responses):
+                    with self.assertRaisesRegex(vertical.CanaryFailure, '^selected-sdk-version-mismatch$'):
+                        vertical.build_artifacts(work, {})
 
     def test_failure_report_keeps_all_seven_pending_and_never_starts_capabilities(self):
         vertical = self.vertical
@@ -650,14 +722,14 @@ class RealVerticalBuildDiagnosticsContract(unittest.TestCase):
                 self.assertNotIn(temporary.encode(), raw)
                 self.assertNotIn(b'synthetic-private', raw)
 
-    def test_only_seven_pre_capability_calls_request_diagnostics_and_no_output_parser_exists(self):
+    def test_only_eight_pre_capability_calls_request_diagnostics_and_no_output_parser_exists(self):
         tree = ast.parse((ROOT / 'Tests/Fixtures/search_real_vertical_fixture.py').read_text())
         calls = [(function.name, node) for function in tree.body if isinstance(function, ast.FunctionDef)
                  for node in ast.walk(function) if isinstance(node, ast.Call)
                  and isinstance(node.func, ast.Name) and node.func.id == 'run_owned']
         tagged = [(name, ast.literal_eval(keyword.value)) for name, call in calls
                   for keyword in call.keywords if keyword.arg == 'phase']
-        self.assertEqual(len(tagged), 7)
+        self.assertEqual(len(tagged), 8)
         self.assertEqual({name for name, _ in tagged}, {'build_artifacts'})
         self.assertEqual({phase for _, phase in tagged}, set(self.vertical.BUILD_PHASES))
         receipt = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'build_failure_receipt')

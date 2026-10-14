@@ -12,7 +12,9 @@ if [[ $# != 2 ]]; then
 fi
 # No PYTHONPATH, proxy/CA, credentials, or generic launch overrides survive.
 # Only nonsecret hosted-image labels are deliberately retained for provenance.
-environment=(env -i PATH=/usr/bin:/bin LANG=en_US.UTF-8 PYTHONDONTWRITEBYTECODE=1)
+# The build-only toolchain is source-fixed, matching native CI, never inherited.
+environment=(env -i PATH=/usr/bin:/bin LANG=en_US.UTF-8 PYTHONDONTWRITEBYTECODE=1
+  DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer)
 for name in ImageOS ImageVersion RUNNER_OS RUNNER_ARCH; do
   if [[ -n "${!name:-}" ]]; then environment+=("$name=${!name}"); fi
 done

@@ -61,8 +61,8 @@
       "sha256": "78475b502b417093f78d608245f4f024ebaa2a811ee28d606310a3531cfe303c"
     },
     "Resources/Runtime/dot_tls.py": {
-      "bytes": 11356,
-      "sha256": "c1297cb6f3800a90f3fe0eb9ce96c23b8487dc4fb16f7623500168e13793176a"
+      "bytes": 14753,
+      "sha256": "9be79444ead41a8a6303cc26530290b87b78d56dd77b2507ebea5bfbb75f65bf"
     },
     "Resources/Runtime/splash.sb": {
       "bytes": 1978,

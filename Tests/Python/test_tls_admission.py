@@ -3,6 +3,7 @@
 Run directly with python3 -B Tests/Python/test_tls_admission.py -v.
 Synthetic credentials only; never starts Splash or loads a model.
 """
+import errno
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -319,14 +320,178 @@ class TLSAdmissionTests(unittest.TestCase):
         self.wait_workers(0); self.exchange()
 
     def test_failed_backend_connect_releases_both_pools(self):
-        with patch.object(tls.socket, 'create_connection', side_effect=ConnectionRefusedError):
-            # create the local client without using the patched convenience API.
+        with patch.object(socket.socket, 'connect_ex', return_value=errno.ECONNREFUSED):
+            # Client setup still uses connect(); only the backend attempt fails.
             raw = socket.socket(); raw.settimeout(2); raw.connect(('127.0.0.1', self.relay.port))
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
             client = context.wrap_socket(raw, server_hostname='dot.local'); self.clients.append(client)
             client.sendall(HEADER); self.assert_closed(client); self.wait_workers(0)
         self.no_upstream(); self.exchange()
+
+    def bio_client(self):
+        raw = self.client(handshake=False)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
+        incoming = ssl.MemoryBIO(); outgoing = ssl.MemoryBIO()
+        client = context.wrap_bio(incoming, outgoing, server_hostname='dot.local')
+        while True:
+            try:
+                client.do_handshake(); break
+            except ssl.SSLWantReadError:
+                if outgoing.pending: raw.sendall(outgoing.read())
+                data = raw.recv(16384); self.assertTrue(data); incoming.write(data)
+        if outgoing.pending: raw.sendall(outgoing.read())
+        self.assertEqual(hashlib.sha256(client.getpeercert(binary_form=True)).hexdigest(), self.relay.certificate_sha256)
+        client.write(HEADER); raw.sendall(outgoing.read())
+        upstream = self.upstream()
+        self.assertEqual(self.receive_exact(upstream, len(HEADER)), HEADER)
+        return raw, client, outgoing, upstream
+
+    def assert_prompt_stop_without_tls_wakeup(self):
+        stopper = threading.current_thread()
+        close = ssl.SSLSocket.close; shutdown = ssl.SSLSocket.shutdown
+        def worker_close(connection):
+            if threading.current_thread() is not stopper: close(connection)
+        def worker_shutdown(connection, how):
+            if threading.current_thread() is not stopper: shutdown(connection, how)
+        with patch.object(ssl.SSLSocket, 'close', worker_close), \
+             patch.object(ssl.SSLSocket, 'shutdown', worker_shutdown):
+            started = time.monotonic(); self.relay.close()
+            self.assertLess(time.monotonic() - started, 1)
+        self.assertTrue(self.relay.closed); self.assertFalse(self.relay.thread.is_alive())
+        self.assertFalse(self.relay.workers); self.assertFalse(self.relay.connections)
+        with socket.socket() as contender:
+            with self.assertRaises(OSError): contender.bind(self.backend.getsockname())
+        with socket.create_connection(self.backend.getsockname(), timeout=1) as direct:
+            accepted = self.upstream(); direct.sendall(b'owned')
+            self.assertEqual(accepted.recv(5), b'owned')
+        with self.assertRaises(OSError): socket.create_connection(('127.0.0.1', self.relay.port), timeout=1)
+
+    def test_stop_during_partial_authenticated_tls_record_needs_no_cross_thread_wakeup(self):
+        raw, client, outgoing, upstream = self.bio_client()
+        client.write(b'next authenticated request'); encrypted = outgoing.read()
+        entered = threading.Event(); recv = ssl.SSLSocket.recv
+        def observed_recv(connection, *args, **kwargs):
+            if connection.server_side: entered.set()
+            return recv(connection, *args, **kwargs)
+        with patch.object(ssl.SSLSocket, 'recv', observed_recv):
+            # select() sees real encrypted bytes, but SSL_read still needs the
+            # remainder of this valid record. Stop must not wait its full budget.
+            raw.sendall(encrypted[:1]); self.assertTrue(entered.wait(timeout=1))
+            self.assert_prompt_stop_without_tls_wakeup()
+        self.assertEqual(upstream.recv(1), b'')
+
+    def test_slow_authenticated_tls_record_survives_readiness_retries_without_byte_changes(self):
+        raw, client, outgoing, upstream = self.bio_client()
+        payload = b'next authenticated request' * 200
+        client.write(payload); encrypted = outgoing.read()
+        retried = threading.Event(); timeouts = []; recv = ssl.SSLSocket.recv
+        def observed_recv(connection, *args, **kwargs):
+            try: return recv(connection, *args, **kwargs)
+            except (socket.timeout, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                if connection.server_side:
+                    timeouts.append(True)
+                    if len(timeouts) >= 2: retried.set()
+                raise
+        with patch.object(ssl.SSLSocket, 'recv', observed_recv):
+            raw.sendall(encrypted[:1]); self.assertTrue(retried.wait(timeout=0.8))
+            raw.sendall(encrypted[1:])
+            self.assertEqual(self.receive_exact(upstream, len(payload)), payload)
+        self.assertGreaterEqual(len(timeouts), 2)
+        self.wait_workers(1)
+
+    def test_partial_authenticated_record_keeps_total_io_deadline(self):
+        self.relay.io_timeout = 0.35
+        raw, client, outgoing, upstream = self.bio_client()
+        client.write(b'never completed'); encrypted = outgoing.read()
+        started = time.monotonic(); raw.sendall(encrypted[:1])
+        for byte in encrypted[1:5]:
+            time.sleep(0.1)
+            try: raw.sendall(bytes([byte]))
+            except OSError: break
+        self.wait_workers(0, timeout=0.3)
+        self.assertLess(time.monotonic() - started, 0.8)
+        self.assertEqual(upstream.recv(1), b'')
+
+    def pressure_tls_output(self, client):
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        with self.relay.lock:
+            secure = next(connection for connection in self.relay.connections
+                          if isinstance(connection, ssl.SSLSocket))
+        secure.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+
+    def test_stop_during_authenticated_tls_backpressure_needs_no_cross_thread_wakeup(self):
+        client, upstream = self.exchange(); self.pressure_tls_output(client)
+        retried = threading.Event(); send = ssl.SSLSocket.send
+        def observed_send(connection, *args, **kwargs):
+            try: return send(connection, *args, **kwargs)
+            except (socket.timeout, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                if connection.server_side: retried.set()
+                raise
+        def flood():
+            try: upstream.sendall(b'fixture response' * 131072)
+            except OSError: pass  # Stop closes the actual upstream endpoint.
+        sender = threading.Thread(target=flood)
+        with patch.object(ssl.SSLSocket, 'send', observed_send):
+            sender.start()
+            try:
+                self.assertTrue(retried.wait(timeout=0.8))
+                self.assert_prompt_stop_without_tls_wakeup()
+            finally:
+                self.relay.close(); sender.join(timeout=3)
+        self.assertFalse(sender.is_alive())
+
+    def test_authenticated_tls_backpressure_keeps_total_send_deadline(self):
+        self.relay.io_timeout = 0.35
+        client, upstream = self.exchange(); self.pressure_tls_output(client)
+        retried = threading.Event(); send = ssl.SSLSocket.send
+        def observed_send(connection, *args, **kwargs):
+            try: return send(connection, *args, **kwargs)
+            except (socket.timeout, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                if connection.server_side: retried.set()
+                raise
+        def flood():
+            try: upstream.sendall(b'fixture response' * 131072)
+            except OSError: pass
+        sender = threading.Thread(target=flood)
+        with patch.object(ssl.SSLSocket, 'send', observed_send):
+            started = time.monotonic(); sender.start()
+            try:
+                self.assertTrue(retried.wait(timeout=0.8))
+                self.wait_workers(0, timeout=0.8)
+                self.assertLess(time.monotonic() - started, 0.9)
+            finally:
+                self.relay.close(); sender.join(timeout=3)
+        self.assertFalse(sender.is_alive()); self.assertFalse(self.relay.connections)
+
+    def test_authenticated_tls_backpressure_retries_preserve_every_response_byte(self):
+        client, upstream = self.exchange(); self.pressure_tls_output(client)
+        payload = bytes(range(256)) * 512
+        retried = threading.Event(); timeouts = []; errors = []; send = ssl.SSLSocket.send
+        def observed_send(connection, *args, **kwargs):
+            try: return send(connection, *args, **kwargs)
+            except (socket.timeout, ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                if connection.server_side:
+                    timeouts.append(True)
+                    if len(timeouts) >= 2: retried.set()
+                raise
+        def flood():
+            try: upstream.sendall(payload)
+            except OSError as error: errors.append(error)
+        sender = threading.Thread(target=flood)
+        with patch.object(ssl.SSLSocket, 'send', observed_send):
+            sender.start()
+            try:
+                self.assertTrue(retried.wait(timeout=0.8))
+                client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 262144)
+                self.assertEqual(self.receive_exact(client, len(payload)), payload)
+            finally:
+                sender.join(timeout=3)
+        self.assertFalse(sender.is_alive()); self.assertEqual(errors, [])
+        self.assertGreaterEqual(len(timeouts), 2)
+        upstream.sendall(b'next response')
+        self.assertEqual(self.receive_exact(client, 13), b'next response')
 
     def test_stop_joins_pending_and_authenticated_workers_before_backend_release(self):
         self.client(handshake=False)
@@ -362,15 +527,130 @@ class TLSAdmissionTests(unittest.TestCase):
              patch.object(ssl.SSLSocket, 'shutdown', worker_shutdown):
             self.test_stop_joins_pending_and_authenticated_workers_before_backend_release()
 
+    def fill_backend_accept_queue(self):
+        # Discover the platform's actual finite queue length, rather than assume
+        # Linux's backlog+1 behavior. A real connect timeout proves saturation.
+        for count in range(64):
+            connection = socket.socket(); connection.settimeout(0.05)
+            try: connection.connect(self.backend.getsockname())
+            except socket.timeout:
+                connection.close(); return count
+            except BaseException:
+                connection.close(); raise
+            self.clients.append(connection)
+        self.fail('backend accept queue did not saturate within fixture bound')
+
+    def test_stop_during_saturated_backend_connect_closes_tracked_socket_and_worker(self):
+        client = self.client(); queued = self.fill_backend_accept_queue()
+        entered = threading.Event(); captured = []; tracked = []
+        connect = socket.socket.connect; connect_ex = socket.socket.connect_ex
+        close = socket.socket.close; shutdown = socket.socket.shutdown
+        stopper = threading.current_thread()
+        def worker_close(connection):
+            if connection not in captured or threading.current_thread() is not stopper: close(connection)
+        def worker_shutdown(connection, how):
+            if connection not in captured or threading.current_thread() is not stopper: shutdown(connection, how)
+        def observed(operation, connection, address):
+            if address == self.backend.getsockname():
+                captured.append(connection)
+                with self.relay.lock: tracked.append(connection in self.relay.connections)
+                entered.set()
+            return operation(connection, address)
+        with patch.object(socket.socket, 'connect', lambda connection, address: observed(connect, connection, address)), \
+             patch.object(socket.socket, 'connect_ex', lambda connection, address: observed(connect_ex, connection, address)), \
+             patch.object(socket.socket, 'close', worker_close), \
+             patch.object(socket.socket, 'shutdown', worker_shutdown):
+            client.sendall(HEADER); self.assertTrue(entered.wait(timeout=1))
+            with self.relay.lock: workers = list(self.relay.workers)
+            started = time.monotonic(); self.relay.close()
+            self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(tracked, [True]); self.assertEqual([item.fileno() for item in captured], [-1])
+        self.assertTrue(self.relay.closed); self.assertFalse(self.relay.thread.is_alive())
+        self.assertFalse(self.relay.workers); self.assertFalse(self.relay.connections)
+        self.assertTrue(workers); self.assertTrue(all(not worker.is_alive() for worker in workers))
+        with socket.socket() as contender:
+            with self.assertRaises(OSError): contender.bind(self.backend.getsockname())
+        for _ in range(queued): self.upstream().close()
+        with socket.create_connection(self.backend.getsockname(), timeout=1) as direct:
+            accepted = self.upstream(); direct.sendall(b'owned')
+            self.assertEqual(accepted.recv(5), b'owned')
+        self.assert_closed(client)
+
+    def test_saturated_backend_connect_keeps_absolute_deadline_without_sending(self):
+        self.relay.io_timeout = 0.35
+        client = self.client(); queued = self.fill_backend_accept_queue()
+        entered = threading.Event(); captured = []; sent = []
+        connect_ex = socket.socket.connect_ex; send = socket.socket.send
+        def observed_connect(connection, address):
+            captured.append(connection); entered.set()
+            return connect_ex(connection, address)
+        def observed_send(connection, data, *args, **kwargs):
+            if connection in captured: sent.append(bytes(data))
+            return send(connection, data, *args, **kwargs)
+        with patch.object(socket.socket, 'connect_ex', observed_connect), \
+             patch.object(socket.socket, 'send', observed_send):
+            started = time.monotonic(); client.sendall(HEADER)
+            self.assertTrue(entered.wait(timeout=1)); self.wait_workers(0, timeout=0.8)
+            elapsed = time.monotonic() - started
+        self.assertGreaterEqual(elapsed, 0.3); self.assertLess(elapsed, 0.9)
+        self.assertEqual(sent, []); self.assertEqual([item.fileno() for item in captured], [-1])
+        self.assertFalse(self.relay.connections); self.assert_closed(client)
+        for _ in range(queued): self.upstream().close()
+        self.no_upstream(); self.exchange()
+
+    def test_successful_backend_connect_is_tracked_nonblocking_and_checks_socket_error(self):
+        observations = []; errors = []
+        connect_ex = socket.socket.connect_ex; getsockopt = socket.socket.getsockopt
+        def observed_connect(connection, address):
+            with self.relay.lock: tracked = connection in self.relay.connections
+            observations.append((connection, address, tracked, connection.getblocking()))
+            return connect_ex(connection, address)
+        def observed_error(connection, level, option, *args):
+            result = getsockopt(connection, level, option, *args)
+            if level == socket.SOL_SOCKET and option == socket.SO_ERROR:
+                errors.append((connection, result))
+            return result
+        with patch.object(socket.socket, 'connect_ex', observed_connect), \
+             patch.object(socket.socket, 'getsockopt', observed_error):
+            self.exchange()
+        self.assertEqual(len(observations), 1)
+        connection, address, tracked, blocking = observations[0]
+        self.assertEqual(address, self.backend.getsockname()); self.assertTrue(tracked); self.assertFalse(blocking)
+        self.assertEqual(errors, [(connection, 0)])
+
+    def test_real_refused_backend_connect_releases_both_pools(self):
+        results = []; errors = []
+        connect_ex = socket.socket.connect_ex; getsockopt = socket.socket.getsockopt
+        def observed_connect(connection, address):
+            result = connect_ex(connection, address); results.append(result); return result
+        def observed_error(connection, level, option, *args):
+            result = getsockopt(connection, level, option, *args)
+            if level == socket.SOL_SOCKET and option == socket.SO_ERROR: errors.append(result)
+            return result
+        # Keep the rejected port owned but non-listening, so refusal is genuine
+        # and no port discovery/rebind race is involved.
+        with socket.socket() as refusing:
+            refusing.bind(('127.0.0.1', 0))
+            with patch.object(self.relay, 'backend', refusing), \
+                 patch.object(socket.socket, 'connect_ex', observed_connect), \
+                 patch.object(socket.socket, 'getsockopt', observed_error):
+                client = self.client(); client.sendall(HEADER)
+                self.assert_closed(client); self.wait_workers(0)
+        self.assertIn(errno.ECONNREFUSED, results + errors)
+        self.assertFalse(self.relay.connections); self.no_upstream(); self.exchange()
+
     def test_stop_racing_backend_connect_does_not_leave_untracked_socket(self):
         entered = threading.Event(); release = threading.Event()
-        create = socket.create_connection
-        def paused(address, **kwargs):
-            connection = create(address, **kwargs)
+        connect = socket.socket.connect_ex
+        tracked = []; sockets = []
+        def paused(connection, address):
+            with self.relay.lock: tracked.append(connection in self.relay.connections)
+            sockets.append(connection)
+            result = connect(connection, address)
             entered.set(); release.wait(timeout=2)
-            return connection
+            return result
         client = self.client()
-        with patch.object(tls.socket, 'create_connection', side_effect=paused):
+        with patch.object(socket.socket, 'connect_ex', paused):
             client.sendall(HEADER); self.assertTrue(entered.wait(timeout=1))
             upstream = self.upstream()
             closer = threading.Thread(target=self.relay.close); closer.start()
@@ -379,6 +659,7 @@ class TLSAdmissionTests(unittest.TestCase):
         self.assertTrue(self.relay.closed); self.assertFalse(self.relay.workers)
         self.assertFalse(self.relay.connections); self.assertEqual(upstream.recv(1), b'')
         self.assert_closed(client)
+        self.assertEqual(tracked, [True]); self.assertEqual([item.fileno() for item in sockets], [-1])
 
     def test_bad_tls_and_prehandshake_disconnect_release_pending_capacity(self):
         for _ in range(3):

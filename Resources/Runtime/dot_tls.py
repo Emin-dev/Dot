@@ -1,6 +1,7 @@
 """Bounded per-launch TLS relay to a continuously owned inherited Splash listener.
 No remote networking, persistent key, system trust changes or backend discovery.
 """
+import errno
 import hashlib
 import hmac
 import http.client
@@ -80,6 +81,7 @@ class TLSRelay:
     admission_poll_interval = 0.1
     header_limit = 16384
     io_timeout = 2
+    io_poll_interval = 0.1
     connection_lifetime = 180
     _field_name = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 
@@ -168,6 +170,61 @@ class TLSRelay:
             if len(buffered) >= self.header_limit: return None
         return None
 
+    def _connect(self, connection):
+        # The caller tracks this nonblocking socket before connect can begin.
+        # A full backend accept queue must not hide an uncancellable socket.
+        deadline = time.monotonic() + self.io_timeout
+        if self.stopping.is_set(): return False
+        result = connection.connect_ex(self.backend.getsockname())
+        if result in (0, errno.EISCONN):
+            return (not self.stopping.is_set() and time.monotonic() < deadline
+                    and connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0)
+        if result not in (errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK, errno.EINTR): return False
+        while not self.stopping.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0: return False
+            _, writable, exceptional = select.select([], [connection], [connection],
+                                                      min(self.io_poll_interval, remaining))
+            if self.stopping.is_set() or time.monotonic() >= deadline: return False
+            if writable or exceptional:
+                return connection.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0
+        return False
+
+    def _wait_io(self, connection, *, writable, deadline):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or self.stopping.is_set(): return False
+        # Both TLS reads and writes may require either transport direction.
+        select.select([] if writable else [connection], [connection] if writable else [], [],
+                      min(self.io_poll_interval, remaining))
+        return not self.stopping.is_set() and time.monotonic() < deadline
+
+    def _receive(self, connection):
+        # TCP readability may be only part of a TLS record. Keep the original
+        # total I/O budget while checking Stop between bounded readiness waits.
+        deadline = time.monotonic() + self.io_timeout
+        while not self.stopping.is_set() and time.monotonic() < deadline:
+            try: return connection.recv(32768)
+            except ssl.SSLWantWriteError: writable = True
+            except (ssl.SSLWantReadError, BlockingIOError): writable = False
+            if not self._wait_io(connection, writable=writable, deadline=deadline): return b''
+        return b''
+
+    def _sendall(self, connection, data):
+        # An SSL WANT retry must retain identical data and length, since some
+        # bytes may already be processed. Advance only by a returned count.
+        pending = memoryview(data)
+        deadline = time.monotonic() + self.io_timeout
+        while pending and not self.stopping.is_set() and time.monotonic() < deadline:
+            try: sent = connection.send(pending)
+            except ssl.SSLWantReadError: writable = False
+            except (ssl.SSLWantWriteError, BlockingIOError): writable = True
+            else:
+                if sent <= 0: return False
+                pending = pending[sent:]
+                continue
+            if not self._wait_io(connection, writable=writable, deadline=deadline): return False
+        return not pending
+
     def _forward(self, raw, admission_deadline):
         secure = upstream = None
         pending = True; admitted = False
@@ -182,18 +239,22 @@ class TLSRelay:
             admitted = True
             self.pending_capacity.release(); pending = False
             if self.stopping.is_set(): return
-            secure.settimeout(self.io_timeout)
-            upstream = socket.create_connection(self.backend.getsockname(), timeout=self.io_timeout)
+            secure.setblocking(False)
+            upstream = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             if not self._track(upstream): return
-            upstream.sendall(initial)
+            upstream.setblocking(False)
+            if not self._connect(upstream): return
+            if not self._sendall(upstream, initial): return
             deadline = time.monotonic() + self.connection_lifetime
             while not self.stopping.is_set() and time.monotonic() < deadline:
                 readable, _, _ = select.select([secure, upstream], [], [], 0.2)
+                if self.stopping.is_set(): return
                 if secure.pending() and secure not in readable: readable.append(secure)
                 for source in readable:
-                    data = source.recv(32768)
-                    if not data: return
-                    (upstream if source is secure else secure).sendall(data)
+                    if self.stopping.is_set(): return
+                    data = self._receive(source)
+                    if not data or self.stopping.is_set(): return
+                    if not self._sendall(upstream if source is secure else secure, data): return
         except (OSError, ssl.SSLError, ValueError, http.client.HTTPException): pass
         finally:
             for connection in (raw, secure, upstream):

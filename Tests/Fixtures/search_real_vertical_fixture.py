@@ -26,6 +26,10 @@ import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / 'Tests/Fixtures'
+# Match native CI explicitly; never inherit a caller's toolchain override.
+DEVELOPER_DIR = '/Applications/Xcode_26.3.app/Contents/Developer'
+XCODE_VERSION = b'Xcode 26.3\nBuild version 17C529'
+MACOS_SDK_VERSION = '26.2'
 SCENARIOS = {
     'success-close': 'testSuccessCloseReceipts', 'success-exit': 'testSuccessHelperExit',
     'startup-failure': 'testFullInitializationStartupFailure', 'cancellation': 'testInFlightCancellation',
@@ -41,7 +45,7 @@ SOURCE_FIXED = (
     'Tests/Fixtures/search_proxy_fixture_support.py', 'Tests/Fixtures/search_proxy_pinned_hashes.json',
 )
 BUILD_PHASES = frozenset({
-    'swift-build-tests', 'find-clang', 'find-swift', 'sdk-path',
+    'xcode-version', 'swift-build-tests', 'find-clang', 'find-swift', 'sdk-path',
     'clang-version', 'swift-version', 'sdk-version',
 })
 BOOTSTRAP_SOURCE_SHA256 = '637c9778cfdf0a7e790f3a4fc43069da05cfd5eb299273a5aab01491fa77f55d'
@@ -173,7 +177,8 @@ def preflight(donor):
 
 def clean_environment(home, temporary, config=None, digest=None):
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(temporary),
-           'LANG': 'en_US.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1'}
+           'LANG': 'en_US.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1',
+           'DEVELOPER_DIR': DEVELOPER_DIR}
     if config is not None:
         env['DOT_REAL_SEARCH_FIXTURE_CONFIG'] = str(config)
         env['DOT_REAL_SEARCH_FIXTURE_CONFIG_SHA256'] = digest
@@ -266,6 +271,10 @@ def run_owned(command, *, cwd, env, seconds, phase=None):
 
 
 def build_artifacts(work, env):
+    xcode_version, _ = run_owned(['/usr/bin/xcrun', 'xcodebuild', '-version'],
+                                cwd=ROOT, env=env, seconds=10, phase='xcode-version')
+    if xcode_version.strip() != XCODE_VERSION:
+        raise CanaryFailure('selected-xcode-version-mismatch')
     _, _ = run_owned(['/usr/bin/xcrun', 'swift', 'build', '--build-tests', '--configuration', 'debug',
                       '--scratch-path', str(work / 'build')], cwd=ROOT, env=env, seconds=600, phase='swift-build-tests')
     candidates = list((work / 'build').glob('**/DotCorePackageTests.xctest/Contents/MacOS/DotCorePackageTests'))
@@ -282,6 +291,12 @@ def build_artifacts(work, env):
     clang_path = Path(clang.decode().strip()).resolve(strict=True)
     swift_path = Path(swift.decode().strip()).resolve(strict=True)
     sdk_path = Path(sdk.decode().strip()).resolve(strict=True)
+    developer = Path(DEVELOPER_DIR)
+    if (not clang_path.is_relative_to(developer / 'Toolchains/XcodeDefault.xctoolchain/usr/bin') or
+            not swift_path.is_relative_to(developer / 'Toolchains/XcodeDefault.xctoolchain/usr/bin') or
+            not sdk_path.is_relative_to(developer / 'Platforms/MacOSX.platform/Developer/SDKs') or
+            sdk_version.decode().strip() != MACOS_SDK_VERSION):
+        raise CanaryFailure('selected-toolchain-mismatch')
     def tool_hash(path):
         value = hashlib.sha256()
         with path.open('rb') as stream:
@@ -291,9 +306,20 @@ def build_artifacts(work, env):
     sdk_settings = sdk_path / 'SDKSettings.json'
     if not sdk_settings.is_file():
         raise CanaryFailure('sdk-settings-identity-missing')
-    return executable, {'test_executable_sha256': binary['sha256'], 'clang_path': str(clang_path),
+    with sdk_settings.open('rb') as stream:
+        sdk_settings_raw = stream.read(65537)
+    if len(sdk_settings_raw) > 65536:
+        raise CanaryFailure('selected-sdk-version-mismatch')
+    try:
+        sdk_metadata = json.loads(sdk_settings_raw)
+    except (ValueError, UnicodeError):
+        raise CanaryFailure('selected-sdk-version-mismatch') from None
+    if type(sdk_metadata) is not dict or sdk_metadata.get('Version') != MACOS_SDK_VERSION:
+        raise CanaryFailure('selected-sdk-version-mismatch')
+    return executable, {'developer_dir': str(developer), 'xcode_version': xcode_version.decode().strip(),
+        'test_executable_sha256': binary['sha256'], 'clang_path': str(clang_path),
         'clang_executable_sha256': tool_hash(clang_path), 'swift_executable_sha256': tool_hash(swift_path),
-        'sdk_settings_sha256': tool_hash(sdk_settings),
+        'sdk_settings_sha256': sha(sdk_settings_raw),
         'swift_path': str(swift_path), 'sdk_path': str(sdk_path),
         'clang_version': clang_version.decode().strip(), 'swift_version': swift_version.decode().strip(),
         'sdk_version': sdk_version.decode().strip(), 'swift_flags': ['build', '--build-tests', '--configuration', 'debug'],
