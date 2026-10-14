@@ -1409,6 +1409,28 @@ class FixedCodesignSelfObservationContractTests(unittest.TestCase):
     observe = FixedToolIdentityDiagnosticContractTests.observe
     result = FixedToolIdentityDiagnosticContractTests.result
 
+    # Exact historical display bytes from native source
+    # 86028d5cc25f3af5f8a31d37a39d4e8ba2eac236. Replaying text is not a fresh
+    # native signature, anchor, snapshot or capability acceptance result.
+    observed_display = (
+        'Executable=/usr/bin/codesign\n'
+        'Identifier=com.apple.security.codesign\n'
+        'Format=Mach-O universal (x86_64 arm64e)\n'
+        'CodeDirectory v=20400 size=1588 flags=0x0(none) hashes=44+2 location=embedded\n'
+        'Platform identifier=16\nVersionPlatform=1\nVersionMin=984832\nVersionSDK=984832\n'
+        'Hash type=sha256 size=32\n'
+        'CandidateCDHash sha256=5d10564fb97ea909933732e280eae350f2c40424\n'
+        'CandidateCDHashFull sha256=5d10564fb97ea909933732e280eae350f2c4042479a4387bf6158e7d17115e90\n'
+        'Hash choices=sha256\n'
+        'CMSDigest=5d10564fb97ea909933732e280eae350f2c4042479a4387bf6158e7d17115e90\n'
+        'CMSDigestType=2\nExecutable Segment base=0\nExecutable Segment limit=114688\n'
+        'Executable Segment flags=0x1\nPage size=4096\n'
+        'CDHash=5d10564fb97ea909933732e280eae350f2c40424\nSignature size=4442\n'
+        'Authority=Software Signing\nAuthority=Apple Code Signing Certification Authority\n'
+        'Authority=Apple Root CA\nSigned Time=Jun 23, 2026 at 4:04:51\u202fAM\n'
+        'Info.plist entries=5\nTeamIdentifier=not set\nSealed Resources=none\n').encode('utf-8')
+    observed_requirement = b'designated => identifier "com.apple.security.codesign" and anchor apple\n'
+
     def self_result(self, argv):
         target = argv[0]
         if argv[1] == '-d':
@@ -1434,6 +1456,86 @@ class FixedCodesignSelfObservationContractTests(unittest.TestCase):
 
     def observation(self, records):
         return next(r for r in records if r['event'] == 'fixed_codesign_self_identity_observation')
+
+    def test_exact_historical_signed_time_bytes_parse_without_normalization(self):
+        self.assertEqual(len(self.observed_display), 936)
+        self.assertEqual(h.m.digest(self.observed_display),
+                         'ad818e484ce5e9c57e9dff7b88c7e3106b9206069ba53201009fe3cc3f5175fe')
+        self.assertEqual(len(self.observed_requirement), 72)
+        self.assertEqual(h.m.digest(self.observed_requirement),
+                         '3dfbc5792b2971ab23b00948fb51aa0a7471e5543f5f295666fd4c194dd496a3')
+        lines = h.codesign_self_display_lines(self.observed_display)
+        self.assertEqual(('\n'.join(lines) + '\n').encode('utf-8'), self.observed_display)
+        self.assertEqual([c for c in ''.join(lines) if ord(c) > 127], ['\u202f'])
+        with self.fixture() as fixture:
+            def effect(argv, deadline, kwargs):
+                if argv[1] == '-d':
+                    # Only redirect the displayed target to the disposable
+                    # portable fixture; retain every other historical byte.
+                    return {**self.self_result(argv), 'stdout': self.observed_requirement,
+                            'stderr': self.observed_display.replace(b'/usr/bin/codesign', argv[0].encode())}
+            records, runner = self.observe_self(fixture, effect)
+            self.assertEqual(runner.call_count, 9)
+            observation = self.observation(records)
+            self.assertEqual(observation['status'], 'observed')
+            self.assertEqual(observation['displayed_identifier'], 'com.apple.security.codesign')
+            self.assertFalse(observation['codesign_identity_policy_applied'])
+            display = next(r for r in records if r.get('label') == 'fixed_codesign_self_display')['result']
+            raw = self.observed_display.replace(b'/usr/bin/codesign', fixture[1]['codesign'].encode())
+            self.assertEqual(display['stderr'], h.raw_record(raw))
+            self.assertEqual(display['stdout'], h.raw_record(self.observed_requirement))
+
+    def test_signed_time_is_optional_and_accepts_only_bounded_diagnostic_text(self):
+        for signed_time in (b'', b'Signed Time=Jun 23, 2026 at 4:04:51 AM\n',
+                            b'Signed Time=' + b'x' * 244 + b'\n',
+                            b'Signed Time=' + b'x' * 241 + '\u202f\n'.encode()):
+            with self.subTest(signed_time=signed_time), self.fixture() as fixture:
+                def effect(argv, deadline, kwargs):
+                    result = self.self_result(argv)
+                    if argv[1] == '-d': result['stderr'] += signed_time
+                    return result
+                records, runner = self.observe_self(fixture, effect)
+                self.assertEqual(runner.call_count, 9)
+                self.assertEqual(self.observation(records)['status'], 'observed')
+                display = next(r for r in records if r.get('label') == 'fixed_codesign_self_display')['result']
+                self.assertTrue(base64.b64decode(display['stderr']['base64']).endswith(signed_time))
+
+    def test_invalid_signed_time_or_unicode_never_runs_anchor(self):
+        prefix = b'Executable=TARGET\nIdentifier=x\n'
+        narrow = '\u202f'.encode()
+        displays = [
+            prefix + b'Signed Time=x\nSigned Time=x\n',
+            prefix + b'Signed Time=x\nSigned Time=x' + narrow + b'\n',
+            prefix + b'Signed Time=\n',
+            prefix + b'Signed Time=' + b'x' * 245 + b'\n',
+            prefix + b'Signed Time=' + b'x' * 242 + narrow + b'\n',
+            prefix + b'Signed Time=x' + narrow * 2 + b'AM\n',
+            prefix + b'Signed Time=x' + narrow + b'AM',
+            prefix + b'Signed Time=x\xff\n',
+            b'Executable=TARGET' + narrow + b'\nIdentifier=x\n',
+            b'Executable=TARGET\nIdentifier=x' + narrow + b'\n',
+            prefix + b'Authority=Apple' + narrow + b'\n',
+            prefix + b'Other=' + narrow + b'\n',
+            prefix + b'Signed' + narrow + b'Time=x\n',
+            prefix + b'Signed Time =' + narrow + b'\n',
+        ]
+        for character in ('\x00', '\t', '\r', '\x1b', '\x7f', '\x85', '\u00a0',
+                          '\u2009', '\u200b', '\u2028', '\u2029', '\u202e', '\ufffd', '\u00e9'):
+            displays.append(prefix + ('Signed Time=x' + character + '\n').encode())
+        mutations = [('stderr', raw) for raw in displays] + [
+            ('stdout', b'designated => identifier "x' + narrow + b'" and anchor apple\n'),
+            ('stdout', b'designated => x\xff\n')]
+        for field, raw in mutations:
+            with self.subTest(field=field, raw=raw), self.fixture() as fixture:
+                def effect(argv, deadline, kwargs):
+                    result = self.self_result(argv)
+                    result[field] = raw.replace(b'TARGET', argv[0].encode())
+                    return result
+                records, runner = self.observe_self(fixture, effect)
+                self.assertEqual(runner.call_count, 8)
+                self.assertEqual(self.observation(records)['status'], 'fail')
+                self.assertFalse(any(r.get('label') == 'fixed_codesign_self_apple_anchor' for r in records))
+                self.assertFalse(any(r.get('apple_anchor_verified') is True for r in records))
 
     def test_independent_success_keeps_all_seven_sandbox_failures_unchanged(self):
         with self.fixture() as fixture:

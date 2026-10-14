@@ -591,25 +591,34 @@ class RealVerticalBuildDiagnosticsContract(unittest.TestCase):
 
     def test_shell_scrub_sets_fixed_toolchain_without_forwarding_caller_values(self):
         script = (ROOT / 'scripts/verify_search_real_vertical_canary.sh').read_text()
-        # Run only the source environment construction, not the native driver.
+        # Observe the source shell boundary directly: the macOS Python shim can
+        # add SDKROOT and other developer-tool variables after env -i dispatch.
         body = script[script.index('environment=('):script.index('"${environment[@]}" /usr/bin/python3')]
         self.assertIn('DEVELOPER_DIR=/Applications/Xcode_26.3.app/Contents/Developer)', body)
         self.assertIn('for name in ImageOS ImageVersion RUNNER_OS RUNNER_ARCH; do', body)
-        probe = body + '\nexec "${environment[@]}" /usr/bin/python3 -I -B -c \'import json, os; print(json.dumps(dict(os.environ)))\'\n'
+        probe = body + '\nexec "${environment[@]}" /usr/bin/env\n'
         hostile = {name: 'synthetic-private-caller-override' for name in (
-            'DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS', 'SWIFT_EXEC', 'PYTHONPATH',
-            'HTTPS_PROXY', 'SSL_CERT_FILE', 'DOT_REAL_SEARCH_FIXTURE_CONFIG')}
-        result = subprocess.run(['/bin/bash', '-e', '-u', '-c', probe],
-            env={**os.environ, **hostile, 'ImageOS': 'synthetic-image'},
-            capture_output=True, text=True, timeout=10)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        observed = json.loads(result.stdout)
-        self.assertEqual(observed['DEVELOPER_DIR'], self.vertical.DEVELOPER_DIR)
-        self.assertEqual(observed['PATH'], '/usr/bin:/bin')
-        self.assertEqual(observed['ImageOS'], 'synthetic-image')
-        for name in set(hostile) - {'DEVELOPER_DIR'}:
-            self.assertNotIn(name, observed)
-        self.assertNotIn('synthetic-private', result.stdout + result.stderr)
+            'DEVELOPER_DIR', 'SDKROOT', 'TOOLCHAINS', 'SWIFT_EXEC', 'SWIFT_DRIVER_SWIFT_FRONTEND_EXEC',
+            'PYTHONPATH', 'HTTPS_PROXY', 'SSL_CERT_FILE', 'DOT_REAL_SEARCH_FIXTURE_CONFIG',
+            'CPATH', 'LIBRARY_PATH', 'MANPATH', 'HOME', 'TMPDIR')}
+        image_labels = {'ImageOS': 'synthetic-image', 'ImageVersion': 'synthetic-version=fixture',
+                        'RUNNER_OS': 'synthetic-os', 'RUNNER_ARCH': 'synthetic-arch'}
+        for labels in ({}, dict.fromkeys(image_labels, ''), image_labels):
+            with self.subTest(labels=labels):
+                result = subprocess.run(['/bin/bash', '-e', '-u', '-c', probe],
+                    env={'PATH': '/usr/bin:/bin', **hostile, **labels},
+                    capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                entries = [line.split('=', 1) for line in result.stdout.splitlines()]
+                observed = dict(entries)
+                self.assertEqual(len(entries), len(observed))
+                self.assertEqual(observed, {
+                    'PATH': '/usr/bin:/bin', 'LANG': 'en_US.UTF-8', 'PYTHONDONTWRITEBYTECODE': '1',
+                    'DEVELOPER_DIR': self.vertical.DEVELOPER_DIR,
+                    **{name: value for name, value in labels.items() if value}})
+                for name in set(hostile) - {'DEVELOPER_DIR'}:
+                    self.assertNotIn(name, observed)
+                self.assertNotIn('synthetic-private', result.stdout + result.stderr)
         self.assertEqual(script.count('"${environment[@]}" /usr/bin/python3 -I -B'), 2)
 
     def test_fixed_xcode_query_and_seven_existing_commands_keep_exact_phases_and_budgets(self):

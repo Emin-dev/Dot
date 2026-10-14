@@ -660,6 +660,28 @@ def descriptor_identity_diagnostic(context, receipt, base):
     # No return value, approval or substitute toolset; the original gate follows.
 
 
+def codesign_self_display_lines(raw):
+    """Validate diagnostic text without normalizing bytes or granting trust."""
+    text = raw.decode('utf-8', 'strict')
+    check(text.endswith('\n'), 'invalid codesign self display text')
+    lines = text[:-1].split('\n')
+    signed_times = 0
+    for line in lines:
+        if line.startswith('Signed Time='):
+            # Observed native output has a narrow no-break space before AM.
+            # Only this bounded, optional diagnostic value may contain it;
+            # the timestamp never supplies identity or anchor evidence.
+            signed_times += 1
+            value = line[len('Signed Time='):]
+            check(signed_times == 1 and value and len(line.encode('utf-8')) <= 256
+                  and value.count('\u202f') <= 1
+                  and all(32 <= ord(c) < 127 or c == '\u202f' for c in value),
+                  'invalid codesign self Signed Time diagnostic')
+        else:
+            check(all(32 <= ord(c) < 127 for c in line), 'invalid codesign self display text')
+    return lines
+
+
 def fixed_tool_identity_diagnostic(context, receipt):
     """Bounded signature/dispatch evidence; never tool or payload admission.
 
@@ -900,10 +922,7 @@ def fixed_tool_identity_diagnostic(context, receipt):
                         # policy. Retain full bounded raw output in the command.
                         check(re.fullmatch(rb'designated => [ -~]{1,4096}\n', result['stdout']) is not None,
                               'invalid codesign self designated requirement output')
-                        text = result['stderr'].decode('utf-8', 'strict')
-                        check(text.endswith('\n') and all(c == '\n' or 32 <= ord(c) < 127 for c in text),
-                              'invalid codesign self display text')
-                        lines = text.splitlines()
+                        lines = codesign_self_display_lines(result['stderr'])
                         check(lines and lines[0] == 'Executable=' + FIXED_CODESIGN_SELF_PATH
                               and sum(line.startswith('Executable=') for line in lines) == 1,
                               'invalid codesign self display target')
