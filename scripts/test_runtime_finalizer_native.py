@@ -127,24 +127,85 @@ def run(context, receipt, label, argv, *, pass_fds=(), expected=0, seconds=COMMA
     return result
 
 
-def trusted_toolchain(path):
-    """Resolve only fixed Apple toolchain paths; reject writable/user-owned nodes."""
+def toolchain_configuration(receipt):
+    """Bounded observations of two fixed paths, never command-selection input."""
+    paths = {}
+    for role, path in (('compiler', CLANG), ('sdk', SDK)):
+        item = {'configured': path, 'resolved': None, 'resolution_error': None}
+        try:
+            resolved = str(Path(path).resolve(strict=True))
+            item.update(resolved=resolved[:4096], path_truncated=len(resolved) > 4096)
+        except (OSError, RuntimeError) as error:
+            item['resolution_error'] = {'type': type(error).__name__, 'errno': getattr(error, 'errno', None),
+                                        'message': str(error)[:512]}
+        paths[role] = item
+    receipt.emit('toolchain_configuration', paths=paths, hosted_image={
+        name: os.environ.get(name, '')[:256] for name in ('ImageOS', 'ImageVersion', 'RUNNER_OS', 'RUNNER_ARCH')})
+
+
+def toolchain_fd_path(fd):
+    """Read-only diagnostic; its result can never authorize a toolchain.
+
+    Apple bsd/sys/fcntl.h: F_GETPATH=50; bsd/sys/param.h maps MAXPATHLEN to
+    PATH_MAX, and bsd/sys/syslimits.h fixes PATH_MAX=1024. fcntl(2) requires
+    that full buffer. CPython 3.13 fcntl.fcntl(bytes) passes its address and
+    returns exactly the buffer length. See the official sources:
+    https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/fcntl.h
+    https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/param.h
+    https://github.com/apple-oss-distributions/xnu/blob/main/bsd/sys/syslimits.h
+    https://docs.python.org/3.13/library/fcntl.html
+    """
+    if sys.platform != 'darwin':
+        return {'fd_path': None, 'fd_path_error': {'type': 'unsupported_platform', 'errno': None}}
+    try:
+        raw = fcntl.fcntl(fd, 50, b'\0' * 1024)
+        if type(raw) is not bytes or len(raw) != 1024 or b'\0' not in raw:
+            raise ValueError('invalid bounded F_GETPATH buffer')
+        path = raw.split(b'\0', 1)[0].decode('utf-8', 'strict')
+        if not path.startswith('/'):
+            raise ValueError('nonabsolute F_GETPATH diagnostic')
+        return {'fd_path': path, 'fd_path_error': None}
+    except (OSError, ValueError) as error:
+        return {'fd_path': None, 'fd_path_error': {'type': type(error).__name__,
+                'errno': getattr(error, 'errno', None), 'message': str(error)[:256]}}
+
+
+def toolchain_node(info, path):
+    return {'held_path': str(path)[:4096], 'path_truncated': len(str(path)) > 4096,
+            'uid': info.st_uid, 'gid': info.st_gid, 'mode': format(stat.S_IMODE(info.st_mode), '04o'),
+            'st_mode': info.st_mode, 'device': info.st_dev, 'inode': info.st_ino}
+
+
+def trusted_toolchain(path, receipt):
+    """Unchanged trust predicates, with bounded evidence from each held node."""
     resolved = Path(path).resolve(strict=True)
     check(str(resolved).startswith(DEVELOPER + '/'), 'toolchain escaped fixed Xcode')
     with m.Root(resolved.parent) as root:
-        for fd in root.fds:
+        held_path = Path('/')
+        for index, fd in enumerate(root.fds):
+            if index:
+                held_path /= resolved.parent.parts[index]
             info = os.fstat(fd)
-            # /Applications is conventionally root:admin group-writable on macOS.
-            # The fixed Xcode tree and compiler remain root-owned and not world-writable.
-            check(info.st_uid == 0 and not info.st_mode & 0o002, 'untrusted toolchain ancestry')
+            observation = {**toolchain_node(info, held_path), **toolchain_fd_path(fd)}
+            receipt.emit('toolchain_node', role='ancestor', configured=path,
+                         resolved=str(resolved)[:4096], node=observation)
+            # Preserve the existing predicates exactly. Diagnostic paths and
+            # hosted-image labels are observations, never an ownership bypass.
+            check(info.st_uid == 0 and not info.st_mode & 0o002,
+                  'untrusted toolchain ancestry: ' + json.dumps(observation, sort_keys=True))
         info = resolved.stat(follow_symlinks=False)
-        check(info.st_uid == 0 and not info.st_mode & 0o022, 'untrusted toolchain node')
+        observation = toolchain_node(info, resolved)
+        receipt.emit('toolchain_node', role='target_nofollow_stat', configured=path,
+                     resolved=str(resolved)[:4096], node=observation)
+        check(info.st_uid == 0 and not info.st_mode & 0o022,
+              'untrusted toolchain node: ' + json.dumps(observation, sort_keys=True))
         root.check()
     return str(resolved)
 
 
 def build(context, receipt, base):
-    compiler, sdk = trusted_toolchain(CLANG), trusted_toolchain(SDK)
+    toolchain_configuration(receipt)
+    compiler, sdk = trusted_toolchain(CLANG, receipt), trusted_toolchain(SDK, receipt)
     check(Path(compiler).is_file() and Path(sdk).is_dir(), 'fixed Apple compiler/SDK unavailable')
     source = base / 'fixture.c'
     source.write_bytes((ROOT / FIXTURE).read_bytes()); source.chmod(0o600)
