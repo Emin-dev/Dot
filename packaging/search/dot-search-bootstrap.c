@@ -7,6 +7,9 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
+#ifdef __APPLE__
+#include <libproc.h>
+#endif
 #include <mach-o/dyld.h>
 #include <sandbox.h>
 #include <signal.h>
@@ -57,6 +60,56 @@ static void canonical(const char *input, char out[PATH_MAX], bool directory, boo
     if (node.st_uid != getuid() && node.st_uid != 0) fail();
     if ((node.st_mode & 0022) || (!directory && node.st_nlink != 1)) fail();
     if (private_state && (node.st_uid != getuid() || (node.st_mode & 0777) != 0700)) fail();
+}
+#ifdef __APPLE__
+static int descriptor_order(const void *left, const void *right) {
+    int a = ((const struct proc_fdinfo *)left)->proc_fd;
+    int b = ((const struct proc_fdinfo *)right)->proc_fd;
+    return (a > b) - (a < b);
+}
+#endif
+static void close_inherited_descriptors(void) {
+#ifdef __APPLE__
+    /* macOS has no closefrom. Snapshot actual descriptors, including those above
+     * a lowered RLIMIT_NOFILE. This launcher is single-threaded; no descriptor
+     * opens or allocating signal handlers may run during this closure phase.
+     * Any incomplete snapshot, close error (including EINTR), or survivor fails
+     * closed under the startup alarm. Never retry a possibly reused descriptor.
+     */
+    const int stride = (int)sizeof(struct proc_fdinfo);
+    int capacity = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, NULL, 0);
+    if (capacity <= 0 || capacity > 1024 * 1024 || capacity % stride) fail();
+    struct proc_fdinfo *descriptors = malloc((size_t)capacity);
+    if (!descriptors) fail();
+    int bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, descriptors, capacity);
+    /* A full buffer could be truncated. Do not guess or use an rlimit fallback. */
+    if (bytes <= 0 || bytes >= capacity || bytes % stride) fail();
+    size_t count = (size_t)(bytes / stride);
+    qsort(descriptors, count, sizeof(*descriptors), descriptor_order);
+    unsigned int retained = 0;
+    for (size_t index = 0; index < count; index++) {
+        int descriptor = descriptors[index].proc_fd;
+        if (descriptor < 0 || (index && descriptors[index - 1].proc_fd == descriptor)) fail();
+        if (descriptor < 4) retained |= 1U << descriptor;
+        else if (close(descriptor)) fail();
+    }
+    free(descriptors);
+    if (retained != 15U) fail();
+    /* Five slots distinguish exactly stdin/stdout/stderr/listener from any
+     * surviving or newly appeared descriptor; duplicates also fail closed.
+     */
+    struct proc_fdinfo remaining[5];
+    bytes = proc_pidinfo(getpid(), PROC_PIDLISTFDS, 0, remaining, (int)sizeof(remaining));
+    if (bytes != 4 * stride) fail();
+    retained = 0;
+    for (size_t index = 0; index < 4; index++) {
+        int descriptor = remaining[index].proc_fd;
+        if (descriptor < 0 || descriptor > 3 || (retained & (1U << descriptor))) fail();
+        retained |= 1U << descriptor;
+    }
+#else
+    closefrom(4);
+#endif
 }
 /* A nonsecret decimal scalar, deliberately without aliases or leading zeroes. */
 static unsigned int parse_port(const char *value) {
@@ -112,7 +165,7 @@ int main(int argc, char **argv) {
     if (snprintf(listen_address, sizeof(listen_address), "localhost:%u", ntohs(local.sin_port)) >= (int)sizeof(listen_address)) fail();
     if (listener != 3) { if (dup2(listener, 3) != 3) fail(); close(listener); }
     if (fcntl(3, F_SETFD, 0)) fail();
-    closefrom(4);
+    close_inherited_descriptors();
     char egress_address[32];
     if (snprintf(egress_address, sizeof(egress_address), "localhost:%u", egress_port) >= (int)sizeof(egress_address)) fail();
     const char *parameters[] = {

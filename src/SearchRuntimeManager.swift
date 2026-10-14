@@ -279,6 +279,12 @@ final class SearchOwnedProcess: @unchecked Sendable {
                   onFailure: onFailure)
         self.beforeControlWrite = beforeControlWrite
     }
+    /// In-memory observation of this owner's existing handoff, never preparation
+    /// or admission. Callers must keep its capability out of diagnostics.
+    func testPreparedEndpoint() -> SearchEgressEndpoint? {
+        lock.lock(); defer { lock.unlock() }
+        return lease.isValid ? egress : nil
+    }
     #endif
 
     var isRunning: Bool { process.isRunning }

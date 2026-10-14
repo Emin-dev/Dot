@@ -20,6 +20,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import plistlib
 import re
 import signal
 import stat
@@ -42,6 +43,24 @@ RECEIPT_BYTES = 4_000_000
 DEVELOPER = '/Applications/Xcode_26.3.app/Contents/Developer'
 CLANG = DEVELOPER + '/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang'
 SDK = DEVELOPER + '/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'
+XCODE = '/Applications/Xcode_26.3.app'
+XCODE_VERSION = XCODE + '/Contents/version.plist'
+# Observed unchanged before/after Apple-anchor verification in native run
+# 38624949109, job 116061609757 (source d4205a0d21ef649a6f58c0dc46105b84814ac7d8).
+# Complete 1197984-byte job log SHA-256:
+# f4cddf0a66018f741396e0ea6c21e07e2455eabd755e061af69974aa82b998f8
+COMPILER_PIN = {'bytes': 272034048,
+                'sha256': '15339439a6be4a9d33d281ec040a7e0092190b1c8d7de5f94d824b50ffae0769'}
+COMPILER_REQUIREMENT = '=identifier "com.apple.clang" and anchor apple'
+HOSTED_IMAGE = {'ImageOS': 'macos15', 'ImageVersion': '20260907.0337.1',
+                'RUNNER_OS': 'macOS', 'RUNNER_ARCH': 'ARM64', 'GITHUB_ACTIONS': 'true'}
+TOOLCHAIN_POLICY_SECONDS = 75
+TOOLCHAIN_METADATA_BYTES = 65536
+TOOLCHAIN_ASSUMPTIONS = [
+    'Trusted preinstalled isolated hosted runner; image labels alone do not authenticate it.',
+    'SDK, linker, resource headers and compiler dylibs are trusted image inputs, not a cryptographic closure inventory.',
+    'Root/admin-controlled ancestors and uid 501 Xcode tree are trusted; no hostile same-UID or admin-process guarantee.',
+    'Admission is only for this temporary synthetic fixture, never production finalizer or owner runtime acceptance.']
 COMPILER_DIAGNOSTIC_BYTES = 512 * 1024 * 1024
 COMPILER_DIAGNOSTIC_SECONDS = 30
 FIXTURE = 'Tests/Fixtures/runtime_finalizer_canary.c'
@@ -125,7 +144,7 @@ def run(context, receipt, label, argv, *, pass_fds=(), expected=0, seconds=COMMA
         'stdout': raw_record(result['stdout']), 'stderr': raw_record(result['stderr'])})
     completed(result, expected)
     check(re.search(rb'(?im)(^|\s)warning:|xcodebuild: WARNING:',
-                    result['stdout'] + result['stderr']) is None, 'command emitted warning diagnostic')
+                    result['stdout'] + b'\n' + result['stderr']) is None, 'command emitted warning diagnostic')
     return result
 
 
@@ -178,36 +197,123 @@ def toolchain_node(info, path):
             'st_mode': info.st_mode, 'device': info.st_dev, 'inode': info.st_ino}
 
 
-def trusted_toolchain(path, receipt):
-    """Unchanged trust predicates, with bounded evidence from each held node."""
-    resolved = Path(path).resolve(strict=True)
-    check(str(resolved).startswith(DEVELOPER + '/'), 'toolchain escaped fixed Xcode')
-    with m.Root(resolved.parent) as root:
-        held_path = Path('/')
-        for index, fd in enumerate(root.fds):
-            if index:
-                held_path /= resolved.parent.parts[index]
-            info = os.fstat(fd)
-            observation = {**toolchain_node(info, held_path), **toolchain_fd_path(fd)}
-            receipt.emit('toolchain_node', role='ancestor', configured=path,
-                         resolved=str(resolved)[:4096], node=observation)
-            # Preserve the existing predicates exactly. Diagnostic paths and
-            # hosted-image labels are observations, never an ownership bypass.
-            check(info.st_uid == 0 and not info.st_mode & 0o002,
-                  'untrusted toolchain ancestry: ' + json.dumps(observation, sort_keys=True))
-        info = resolved.stat(follow_symlinks=False)
-        observation = toolchain_node(info, resolved)
-        receipt.emit('toolchain_node', role='target_nofollow_stat', configured=path,
-                     resolved=str(resolved)[:4096], node=observation)
-        check(info.st_uid == 0 and not info.st_mode & 0o022,
-              'untrusted toolchain node: ' + json.dumps(observation, sort_keys=True))
-        root.check()
-    return str(resolved)
+def toolchain_owner(info, path):
+    """Only the fixed app admits its recorded installer UID, never arbitrary user tools."""
+    inside = Path(path).is_relative_to(Path(XCODE))
+    if inside:
+        return info.st_uid in (0, 501) and not info.st_mode & 0o7022
+    # /Applications is root:admin 0775 in the observed hosted image. Retain the
+    # original root-owned/non-world-writable external-ancestor predicate.
+    return info.st_uid == 0 and not info.st_mode & 0o002
 
+
+@contextlib.contextmanager
+def trusted_toolchain(path, receipt):
+    """Hold no-follow edges throughout signing/build; reject aliases and mutations."""
+    check(path in (CLANG, SDK, XCODE_VERSION), 'unconfigured toolchain path')
+    resolved = Path(path).resolve(strict=True)
+    check(resolved == Path(path), 'toolchain aliases are not admitted')
+    check(resolved.is_relative_to(Path(XCODE)), 'toolchain escaped fixed Xcode')
+    directory = path == SDK
+    with m.Root(resolved if directory else resolved.parent) as root:
+        def snapshot(phase):
+            root.check()
+            ancestors = []
+            held_path = Path('/')
+            for index, fd in enumerate(root.fds):
+                if index:
+                    held_path /= root.path.parts[index]
+                info = os.fstat(fd)
+                observation = {**toolchain_node(info, held_path), **toolchain_fd_path(fd)}
+                receipt.emit('toolchain_node', role='ancestor', phase=phase, configured=path,
+                             resolved=str(resolved), node=observation)
+                check(toolchain_owner(info, held_path),
+                      'untrusted toolchain ancestry: ' + json.dumps(observation, sort_keys=True))
+                ancestors.append(list(m.directory_identity(info)))
+            info = os.fstat(root.fd) if directory else os.stat(
+                resolved.name, dir_fd=root.fd, follow_symlinks=False)
+            observation = toolchain_node(info, resolved)
+            receipt.emit('toolchain_node', role='target_nofollow_stat', phase=phase, configured=path,
+                         resolved=str(resolved), node=observation)
+            check((stat.S_ISDIR(info.st_mode) if directory else
+                   stat.S_ISREG(info.st_mode) and info.st_nlink == 1)
+                  and toolchain_owner(info, resolved),
+                  'untrusted toolchain node: ' + json.dumps(observation, sort_keys=True))
+            root.check()
+            return {'ancestors': ancestors, 'target': list(m.identity(info))}
+
+        before = snapshot('before')
+        try:
+            yield str(resolved), root
+        finally:
+            if not isinstance(sys.exception(), CanaryDeadline):
+                check(snapshot('after') == before, 'toolchain metadata changed during fixture build')
+
+
+@contextlib.contextmanager
+def fixture_toolchain(context, receipt):
+    """Test-only exception for the exact observed, trusted hosted Xcode image.
+
+    Apple's TN3127 requires evaluating anchor apple plus the intended identifier;
+    displayed Authority/Identifier text is not signature verification. The hash
+    pins the observed compiler, not the un-inventoried SDK/linker/dylib closure.
+    https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements
+    https://github.com/actions/runner-images/blob/main/images/macos/macos-15-arm64-Readme.md
+    """
+    check(all(os.environ.get(key) == value for key, value in HOSTED_IMAGE.items()),
+          'unsupported hosted toolchain image')
+    deadline = min(context.budget.deadline, time.monotonic() + TOOLCHAIN_POLICY_SECONDS)
+
+    def bounded():
+        context.budget.check()
+        check(time.monotonic() < deadline, 'fixture toolchain policy deadline exceeded')
+
+    budget = SimpleNamespace(check=bounded)
+    with trusted_toolchain(CLANG, receipt) as (compiler, compiler_root), \
+            trusted_toolchain(SDK, receipt) as (sdk, sdk_root), \
+            trusted_toolchain(XCODE_VERSION, receipt) as (version, version_root):
+        def file_snapshot(root, name, maximum, collect=False):
+            bounded()
+            root.check()
+            info = os.stat(name, dir_fd=root.fd, follow_symlinks=False)
+            check(toolchain_owner(info, root.path / name), 'untrusted toolchain metadata owner/mode')
+            row, data = m.regular_at(root.fd, name, budget, collect=collect, maximum=maximum)
+            m.same_node(info, os.stat(name, dir_fd=root.fd, follow_symlinks=False))
+            root.check()
+            return {'identity': list(m.identity(info)), **row}, data
+
+        def snapshot(phase):
+            compiler_row, _ = file_snapshot(compiler_root, Path(compiler).name, COMPILER_DIAGNOSTIC_BYTES)
+            sdk_row, sdk_data = file_snapshot(sdk_root, 'SDKSettings.json', TOOLCHAIN_METADATA_BYTES, True)
+            version_row, version_data = file_snapshot(version_root, Path(version).name, TOOLCHAIN_METADATA_BYTES, True)
+            result = {'compiler': compiler_row, 'sdk_settings': sdk_row, 'xcode_version': version_row}
+            receipt.emit('fixture_toolchain_snapshot', phase=phase, nodes=result)
+            check(all(compiler_row[key] == value for key, value in COMPILER_PIN.items()),
+                  'unsupported compiler bytes/hash')
+            check(m.strict_json(sdk_data).get('Version') == '26.2', 'unsupported fixed SDK version')
+            metadata = plistlib.loads(version_data)
+            check(type(metadata) is dict and metadata.get('CFBundleShortVersionString') == '26.3'
+                  and metadata.get('ProductBuildVersion') == '17C529', 'unsupported fixed Xcode version/build')
+            return result
+
+        before = snapshot('before')
+        try:
+            bounded()
+            run(context, receipt, 'fixture_compiler_identity', ['/usr/bin/codesign', '--verify', '--strict',
+                '--verbose=4', '--test-requirement', COMPILER_REQUIREMENT, compiler],
+                seconds=min(10, deadline - time.monotonic()))
+            check(snapshot('after_signature') == before, 'toolchain changed during signature verification')
+            receipt.emit('fixture_toolchain_policy', status='admitted', compiler_requirement=COMPILER_REQUIREMENT,
+                         compiler_pin=COMPILER_PIN, hosted_image=HOSTED_IMAGE,
+                         authorizes_synthetic_fixture_build=True, assumptions=TOOLCHAIN_ASSUMPTIONS)
+            yield compiler, sdk, deadline
+        finally:
+            if not isinstance(sys.exception(), CanaryDeadline):
+                check(snapshot('after_build') == before, 'toolchain changed during fixture build')
 
 
 def compiler_identity_diagnostic(context, receipt):
-    """Read-only, source-bound evidence before the unchanged ownership gate.
+    """Read-only, source-bound evidence before the separate fixture admission gate.
 
     No caller-selected path or environment value selects an executable. The
     compiler is only read, never executed by this diagnostic. Display output is
@@ -270,21 +376,20 @@ def compiler_identity_diagnostic(context, receipt):
         receipt.emit('compiler_identity_diagnostic', status='fail', configured=CLANG,
                      authorizes_build=False, compiler_identity_policy_applied=False,
                      error_type=type(error).__name__, error=str(error)[:2000])
-    # Deliberately no success value. Only trusted_toolchain may admit the build.
+    # Deliberately no success value. Only fixture_toolchain may admit the build.
 
 
 def build(context, receipt, base):
     toolchain_configuration(receipt)
     compiler_identity_diagnostic(context, receipt)
-    compiler, sdk = trusted_toolchain(CLANG, receipt), trusted_toolchain(SDK, receipt)
-    check(Path(compiler).is_file() and Path(sdk).is_dir(), 'fixed Apple compiler/SDK unavailable')
     source = base / 'fixture.c'
     source.write_bytes((ROOT / FIXTURE).read_bytes()); source.chmod(0o600)
     payload = base / 'payload'; payload.mkdir(mode=0o700)
     binary = payload / 'canary'
-    run(context, receipt, 'compile_fixture', [compiler, '-arch', 'arm64', '-isysroot', sdk,
-        '-mmacosx-version-min=15.0', '-std=c11', '-O0', '-Wall', '-Wextra', '-Werror',
-        str(source), '-o', str(binary)], seconds=30)
+    with fixture_toolchain(context, receipt) as (compiler, sdk, deadline):
+        run(context, receipt, 'compile_fixture', [compiler, '--no-default-config', '-arch', 'arm64', '-isysroot', sdk,
+            '-mmacosx-version-min=15.0', '-std=c11', '-O0', '-Wall', '-Wextra', '-Werror',
+            str(source), '-o', str(binary)], seconds=min(30, deadline - time.monotonic()))
     binary.chmod(0o700)
     run(context, receipt, 'adhoc_sign_fixture', ['/usr/bin/codesign', '--force', '--sign', '-',
         '--timestamp=none', '--identifier', 'org.dot.test.runtime-finalizer-canary', str(binary)])
@@ -700,7 +805,8 @@ def main(argv=None):
                      temporary_tree_removed=True, limitations=[
                          'No genuine owner inventory, model, dynamic harness or production native approval.',
                          'Synthetic thin executable only; no production bundle-layout acceptance.',
-                         'Primitive crash replay is not a power-loss or production transaction proof.'])
+                         'Primitive crash replay is not a power-loss or production transaction proof.',
+                         *TOOLCHAIN_ASSUMPTIONS])
         return 0 if passed else 1
     except (Exception, CanaryDeadline) as error:
         receipt.emit('summary', status='fail', gates=receipt.gates, error=str(error)[:2000])

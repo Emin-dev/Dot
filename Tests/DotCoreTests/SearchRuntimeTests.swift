@@ -862,3 +862,136 @@ private final class RuntimeGatewayFixture: URLProtocol {
     override func stopLoading() { }
 }
 #endif
+
+#if DEBUG && os(macOS)
+/// The real owner prepares a real broker listener, but never launches a helper,
+/// arms a request, transmits a capability or constructs an accepted payload.
+final class SearchPreparedEndpointTests: XCTestCase {
+    private func withOwner(holdCloseReceipts: Bool = false,
+                           _ body: (SearchOwnedProcess, SearchGenerationLease, SearchEgressBroker) async throws -> Void) async throws {
+        let lease = SearchGenerationLease()
+        let broker = try SearchEgressBroker(generation: lease.generation,
+            testing: .init(resolve: { ["8.8.8.8"] }, loopbackPort: 1, holdCloseReceipts: holdCloseReceipts))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("dot-endpoint-unused-" + UUID().uuidString)
+        let owner = SearchOwnedProcess(testingBootstrap: root.appendingPathComponent("unused"),
+            fixtureRoot: root, lease: lease, broker: broker, onFailure: {})
+        do { try await body(owner, lease, broker) }
+        catch {
+            await broker.testReleaseCloseReceipts()
+            await owner.cleanup().value
+            throw error
+        }
+        await broker.testReleaseCloseReceipts()
+        await owner.cleanup().value
+    }
+
+    func testPreparedEndpointReadsDoNotPrepareOrArmAndRetainExactValue() async throws {
+        try await withOwner { owner, lease, broker in
+            let before = await broker.testSnapshot()
+            XCTAssertEqual(before.resolverCalls, 0)
+            XCTAssertEqual(before.sockets, 0)
+            for _ in 0..<8 { XCTAssertTrue(owner.testPreparedEndpoint() == nil) }
+            let unprepared = await broker.testSnapshot()
+            XCTAssertEqual(unprepared.resolverCalls, before.resolverCalls)
+            XCTAssertEqual(unprepared.sockets, before.sockets)
+            XCTAssertNil(unprepared.listenerDescriptor)
+            XCTAssertNil(unprepared.requestDeadline)
+            XCTAssertEqual(unprepared.admissions, 0)
+            XCTAssertEqual(unprepared.connectAttempts, 0)
+
+            try await owner.prepare()
+            guard let first = owner.testPreparedEndpoint() else { XCTFail("Prepared endpoint missing"); return }
+            let prepared = await broker.testSnapshot()
+            let descriptor = try XCTUnwrap(prepared.listenerDescriptor)
+            var address = sockaddr_in(), length = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let result = withUnsafeMutablePointer(to: &address) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    Darwin.getsockname(descriptor, $0, &length)
+                }
+            }
+            XCTAssertEqual(result, 0)
+            XCTAssertEqual(address.sin_family, sa_family_t(AF_INET))
+            XCTAssertEqual(first.port, UInt16(bigEndian: address.sin_port))
+            XCTAssertGreaterThan(first.port, 0)
+            XCTAssertFalse(first.proxyAuthorization.isEmpty)
+            for _ in 0..<8 {
+                let observed = owner.testPreparedEndpoint()
+                let sameEndpoint = observed?.port == first.port && observed?.proxyAuthorization == first.proxyAuthorization
+                XCTAssertTrue(sameEndpoint, "Prepared endpoint changed during observation")
+            }
+            let observed = await broker.testSnapshot()
+            XCTAssertTrue(lease.isValid)
+            XCTAssertFalse(owner.isRunning)
+            XCTAssertEqual(observed.listenerDescriptor, prepared.listenerDescriptor)
+            XCTAssertEqual(observed.resolverCalls, 1)
+            XCTAssertEqual(observed.sockets, prepared.sockets)
+            XCTAssertEqual(observed.admissions, 0)
+            XCTAssertEqual(observed.connectAttempts, 0)
+            XCTAssertEqual(observed.upstreamBytes, 0)
+            XCTAssertEqual(observed.downstreamBytes, 0)
+            XCTAssertNil(observed.requestDeadline)
+            XCTAssertFalse(observed.drained)
+        }
+    }
+
+    func testPreparedEndpointDisappearsOnRevocationBeforeHeldDrainAndAfterCleanup() async throws {
+        try await withOwner(holdCloseReceipts: true) { owner, lease, broker in
+            try await owner.prepare()
+            XCTAssertTrue(owner.testPreparedEndpoint() != nil)
+            lease.invalidate()
+            XCTAssertTrue(owner.testPreparedEndpoint() == nil)
+            let cleanup = owner.cleanup()
+            let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+            var snapshot = await broker.testSnapshot()
+            while snapshot.deferredCloseReceipts == 0, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(5))
+                snapshot = await broker.testSnapshot()
+            }
+            XCTAssertGreaterThan(snapshot.actualCloses, 0)
+            XCTAssertGreaterThan(snapshot.deferredCloseReceipts, 0)
+            XCTAssertFalse(snapshot.drained)
+            XCTAssertTrue(owner.testPreparedEndpoint() == nil)
+            await broker.testReleaseCloseReceipts()
+            await cleanup.value
+            let drained = await broker.testSnapshot()
+            XCTAssertTrue(drained.drained)
+            XCTAssertEqual(drained.sockets, 0)
+            XCTAssertEqual(drained.deferredCloseReceipts, 0)
+            XCTAssertFalse(lease.isValid)
+            XCTAssertTrue(owner.testPreparedEndpoint() == nil)
+        }
+    }
+
+    func testPreparedEndpointRemainsBoundToItsOwnerGeneration() async throws {
+        try await withOwner { firstOwner, firstLease, firstBroker in
+            try await firstOwner.prepare()
+            guard let first = firstOwner.testPreparedEndpoint() else { XCTFail("First prepared endpoint missing"); return }
+            firstLease.invalidate()
+            await firstOwner.cleanup().value
+            let firstDrained = await firstBroker.testSnapshot()
+            XCTAssertTrue(firstDrained.drained)
+            XCTAssertTrue(firstOwner.testPreparedEndpoint() == nil)
+            try await self.withOwner { currentOwner, currentLease, currentBroker in
+                try await currentOwner.prepare()
+                guard let current = currentOwner.testPreparedEndpoint() else { XCTFail("Current prepared endpoint missing"); return }
+                let distinctGenerations = firstLease.generation != currentLease.generation
+                let distinctCapabilities = first.proxyAuthorization != current.proxyAuthorization
+                XCTAssertTrue(distinctGenerations)
+                XCTAssertTrue(distinctCapabilities, "Replacement reused the preceding capability")
+                firstOwner.requestStop()
+                XCTAssertTrue(firstOwner.testPreparedEndpoint() == nil)
+                let observed = currentOwner.testPreparedEndpoint()
+                let sameCurrentEndpoint = observed?.port == current.port && observed?.proxyAuthorization == current.proxyAuthorization
+                XCTAssertTrue(sameCurrentEndpoint, "Observation returned another generation's endpoint")
+                XCTAssertTrue(currentLease.isValid)
+                let snapshot = await currentBroker.testSnapshot()
+                XCTAssertEqual(snapshot.resolverCalls, 1)
+                XCTAssertEqual(snapshot.admissions, 0)
+                XCTAssertEqual(snapshot.connectAttempts, 0)
+                XCTAssertNil(snapshot.requestDeadline)
+                XCTAssertFalse(snapshot.drained)
+            }
+        }
+    }
+}
+#endif

@@ -6,11 +6,13 @@ real sandbox is used. The production deadline stays fixed at ten seconds, with
 no environment flag or runtime test hook. This is not native macOS acceptance.
 """
 import contextlib
+import fcntl
 import os
 from pathlib import Path
 import select
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -31,6 +33,7 @@ WRAPPER = r'''
 #endif
 #include "BOOTSTRAP_SOURCE"
 #undef alarm
+#include <sys/resource.h>
 extern unsigned int alarm(unsigned int);
 
 static const char *mode;
@@ -66,6 +69,12 @@ static void setup_fixture(void) __attribute__((constructor));
 static void setup_fixture(void) {
     mode = getenv("FIXTURE_MODE");
     if (!mode) _exit(93);
+    if (strstr(mode, "low_limit")) {
+        struct rlimit limit;
+        if (getrlimit(RLIMIT_NOFILE, &limit)) _exit(91);
+        limit.rlim_cur = 64;
+        if (setrlimit(RLIMIT_NOFILE, &limit)) _exit(92);
+    }
     if (strstr(mode, "blocked")) {
         sigset_t set;
         if (signal(SIGALRM, SIG_IGN) == SIG_ERR || sigemptyset(&set) ||
@@ -76,6 +85,8 @@ static void setup_fixture(void) {
 
 INTERPRETER = r'''
 #define _DEFAULT_SOURCE 1
+#include <errno.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -99,9 +110,14 @@ int main(int argc, char **argv) {
     if (getsockopt(3, SOL_SOCKET, SO_ACCEPTCONN, &listening, &size) || listening != 1) return 97;
 #endif
     if (fcntl(3, F_GETFD) != 0) return 97;
-    for (int descriptor = 4; descriptor < 64; descriptor++) {
-        if (fcntl(descriptor, F_GETFD) != -1) return 98;
+    for (int descriptor = 0; descriptor < 3; descriptor++) {
+        struct stat node;
+        if (fstat(descriptor, &node) || !S_ISFIFO(node.st_mode)) return 98;
     }
+    for (int descriptor = 4; descriptor < 64; descriptor++) {
+        if (fcntl(descriptor, F_GETFD) != -1 || errno != EBADF) return 98;
+    }
+    if (fcntl(FIXTURE_HIGH_FD, F_GETFD) != -1 || errno != EBADF) return 98;
     size_t count = 0;
     while (environ[count]) count++;
     if (count != 5 || getenv("FIXTURE_MODE") || getenv("HTTP_PROXY") ||
@@ -126,12 +142,27 @@ class BootstrapDeadlineTests(unittest.TestCase):
         wrapper = cls.root / "wrapper.c"
         wrapper.write_text(WRAPPER.replace("BOOTSTRAP_SOURCE", str(SOURCE)))
         cls.binary = cls.root / "bootstrap"
+        if sys.platform == "darwin":
+            # Compile and link the unwrapped production translation unit with its
+            # real SDK headers and production flags. Fixture headers cannot hide
+            # a missing declaration or link dependency from this check.
+            production = subprocess.run([
+                "xcrun", "clang", "-arch", "arm64", "-mmacosx-version-min=15.0",
+                "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", str(SOURCE),
+                "-o", str(cls.root / "production-bootstrap"), "-lsandbox"],
+                capture_output=True, text=True, timeout=20)
+            if production.returncode: raise AssertionError(production.stderr)
         compile_flags = [COMPILER, "-std=c11", "-Wall", "-Wextra", "-Werror", "-Wno-unknown-pragmas", "-O2"]
         compiled = subprocess.run([*compile_flags, "-I", str(include), str(wrapper), "-o", str(cls.binary)],
                                   capture_output=True, text=True, timeout=20)
         if compiled.returncode: raise AssertionError(compiled.stderr)
         interpreter = cls.root / "interpreter.c"
-        interpreter.write_text(INTERPRETER)
+        # A real inherited descriptor above both the old 64-fd check and the
+        # lowered child rlimit must be closed, without touching the parent copy.
+        with open(os.devnull, "rb") as decoy:
+            cls.high_fd = fcntl.fcntl(decoy.fileno(), fcntl.F_DUPFD, 200)
+        cls.addClassCleanup(os.close, cls.high_fd)
+        interpreter.write_text(INTERPRETER.replace("FIXTURE_HIGH_FD", str(cls.high_fd)))
         cls.interpreter = cls.root / "interpreter"
         subprocess.run([*compile_flags, str(interpreter), "-o", str(cls.interpreter)],
                        check=True, capture_output=True, timeout=20)
@@ -163,7 +194,7 @@ class BootstrapDeadlineTests(unittest.TestCase):
             process = subprocess.Popen([str(binary), "--payload", str(payload), "--state-root", str(state),
                                         "--egress-port", port, *extra_args],
                 stdin=subprocess.PIPE, stdout=output[1] if output else subprocess.PIPE, stderr=subprocess.PIPE,
-                pass_fds=(decoy_r, decoy_w),
+                pass_fds=(decoy_r, decoy_w, self.high_fd),
                 env={**os.environ, "FIXTURE_EXECUTABLE": str(binary), "FIXTURE_MODE": mode,
                      "HTTP_PROXY": "http://forbidden.invalid", "SSL_CERT_FILE": "/forbidden",
                      "PYTHONPATH": "/forbidden", "DOT_PRIVATE_CAPABILITY": "synthetic-secret"})
@@ -213,10 +244,12 @@ class BootstrapDeadlineTests(unittest.TestCase):
             self.assert_expired(process)
 
     def test_successful_exec_preserves_listener_and_only_positive_environment(self):
-        with self.launch("success") as process:
-            self.assertEqual(process.wait(timeout=3), 0)
-            self.assertEqual(process.stdout.read(), b"fixture_exec_ok\n")
-            self.assertEqual(process.stderr.read(), b"")
+        for mode in ("success", "success_low_limit"):
+            with self.subTest(mode=mode), self.launch(mode) as process:
+                self.assertEqual(process.wait(timeout=3), 0)
+                self.assertEqual(process.stdout.read(), b"fixture_exec_ok\n")
+                self.assertEqual(process.stderr.read(), b"")
+            self.assertGreaterEqual(fcntl.fcntl(self.high_fd, fcntl.F_GETFD), 0)
 
     def test_exec_failure_full_output_is_bounded(self):
         with self.launch("success", full_output=True, bad_exec=True) as process:
@@ -236,6 +269,132 @@ class BootstrapDeadlineTests(unittest.TestCase):
                 self.assertEqual(process.wait(timeout=3), 2)
                 self.assertEqual(process.stdout.read(), b'{"protocol":1,"event":"failed","reason":"native_boundary_failed"}\n')
                 self.assertEqual(process.stderr.read(), b"")
+
+
+DESCRIPTOR_MODEL = r'''
+#define _DEFAULT_SOURCE 1
+#include <errno.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+/* Apple ABI shape for an algorithm model only; no Darwin API is emulated by
+ * the real bootstrap wrapper, which uses its host's actual closure mechanism. */
+struct proc_fdinfo { int32_t proc_fd; uint32_t proc_fdtype; };
+#define PROC_PIDLISTFDS 1
+static const char *scenario;
+static int queries, closes;
+static void fail(void) { printf("%d\n", closes); fflush(stdout); _Exit(2); }
+static int model_close(int descriptor) {
+    if (descriptor < 4 || ++closes > 3) _Exit(90);
+    if (!strcmp(scenario, "close_eintr")) { errno = EINTR; return -1; }
+    if (!strcmp(scenario, "close_ebadf")) { errno = EBADF; return -1; }
+    if (!strcmp(scenario, "close_eio")) { errno = EIO; return -1; }
+    return 0;
+}
+static void *model_malloc(size_t size) {
+    return !strcmp(scenario, "allocation_failure") ? NULL : malloc(size);
+}
+static int proc_pidinfo(int pid, int flavor, uint64_t arg, void *buffer, int capacity) {
+    const int stride = (int)sizeof(struct proc_fdinfo);
+    if (pid != getpid() || flavor != PROC_PIDLISTFDS || arg) _Exit(91);
+    switch (queries++) {
+    case 0:
+        if (buffer || capacity) _Exit(92);
+        if (!strcmp(scenario, "query_zero")) return 0;
+        if (!strcmp(scenario, "query_negative")) return -1;
+        if (!strcmp(scenario, "query_oversize")) return 1024 * 1024 + stride;
+        if (!strcmp(scenario, "query_partial")) return 8 * stride - 1;
+        return 8 * stride;
+    case 1: {
+        if (!buffer || capacity != 8 * stride) _Exit(93);
+        if (!strcmp(scenario, "snapshot_zero")) return 0;
+        if (!strcmp(scenario, "snapshot_negative")) return -1;
+        if (!strcmp(scenario, "snapshot_full")) return capacity;
+        if (!strcmp(scenario, "snapshot_overflow")) return capacity + stride;
+        if (!strcmp(scenario, "snapshot_partial")) return 6 * stride - 1;
+        struct proc_fdinfo entries[] = {{200, 0}, {3, 0}, {1, 0}, {800000, 0}, {0, 0}, {2, 0}};
+        if (!strcmp(scenario, "snapshot_duplicate")) entries[5].proc_fd = 3;
+        if (!strcmp(scenario, "snapshot_negative_fd")) entries[5].proc_fd = -1;
+        if (!strcmp(scenario, "snapshot_missing_stdio")) entries[5].proc_fd = 10;
+        memcpy(buffer, entries, sizeof(entries));
+        return (int)sizeof(entries);
+    }
+    case 2: {
+        if (!buffer || capacity != 5 * stride || closes != 2) _Exit(94);
+        if (!strcmp(scenario, "verify_zero")) return 0;
+        if (!strcmp(scenario, "verify_negative")) return -1;
+        if (!strcmp(scenario, "verify_full")) return capacity;
+        if (!strcmp(scenario, "verify_overflow")) return capacity + stride;
+        if (!strcmp(scenario, "verify_partial")) return 4 * stride - 1;
+        struct proc_fdinfo entries[] = {{3, 0}, {1, 0}, {0, 0}, {2, 0}};
+        if (!strcmp(scenario, "verify_survivor")) entries[3].proc_fd = 200;
+        if (!strcmp(scenario, "verify_duplicate")) entries[3].proc_fd = 3;
+        if (!strcmp(scenario, "verify_negative_fd")) entries[3].proc_fd = -1;
+        memcpy(buffer, entries, sizeof(entries));
+        return (int)sizeof(entries);
+    }
+    default: _Exit(95);
+    }
+}
+/* Select only the extracted algorithm after system headers are parsed. */
+#ifndef __APPLE__
+#define __APPLE__ 1
+#endif
+#define close model_close
+#define malloc model_malloc
+CLOSURE_SOURCE
+int main(int argc, char **argv) {
+    if (argc != 2) return 96;
+    scenario = argv[1];
+    close_inherited_descriptors();
+    return queries == 3 && closes == 2 ? 0 : 97;
+}
+'''
+
+
+@unittest.skipUnless(os.name == "posix" and COMPILER, "POSIX C compiler required")
+class DarwinDescriptorAlgorithmModelTests(unittest.TestCase):
+    """Exact production algorithm plus failure models, never native Darwin proof."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.temporary = tempfile.TemporaryDirectory(prefix="dot-search-fd-model-")
+        cls.addClassCleanup(cls.temporary.cleanup)
+        root = Path(cls.temporary.name)
+        source = SOURCE.read_text()
+        begin = source.index("#ifdef __APPLE__\nstatic int descriptor_order(")
+        end = source.index("/* A nonsecret decimal scalar", begin)
+        harness = root / "descriptor-model.c"
+        harness.write_text(DESCRIPTOR_MODEL.replace("CLOSURE_SOURCE", source[begin:end]))
+        cls.binary = root / "descriptor-model"
+        subprocess.run([COMPILER, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2",
+                        str(harness), "-o", str(cls.binary)],
+                       check=True, capture_output=True, timeout=20)
+
+    def test_model_accepts_unsorted_complete_snapshot_and_exact_stdio_listener(self):
+        result = subprocess.run([str(self.binary), "success"], capture_output=True, timeout=3)
+        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b"", b""))
+
+    def test_model_rejects_incomplete_invalid_or_failed_snapshot(self):
+        cases = ("query_zero", "query_negative", "query_oversize", "query_partial",
+                 "allocation_failure", "snapshot_zero", "snapshot_negative", "snapshot_full",
+                 "snapshot_overflow", "snapshot_partial", "snapshot_duplicate", "snapshot_negative_fd")
+        for scenario in cases:
+            with self.subTest(scenario=scenario):
+                result = subprocess.run([str(self.binary), scenario], capture_output=True, timeout=3)
+                self.assertEqual((result.returncode, result.stdout, result.stderr), (2, b"0\n", b""))
+
+    def test_model_does_not_retry_close_errors_or_accept_a_survivor(self):
+        cases = {"close_eintr": 1, "close_ebadf": 1, "close_eio": 1, "snapshot_missing_stdio": 3,
+                 **{name: 2 for name in ("verify_zero", "verify_negative", "verify_full", "verify_overflow",
+                                        "verify_partial", "verify_survivor", "verify_duplicate", "verify_negative_fd")}}
+        for scenario, closes in cases.items():
+            with self.subTest(scenario=scenario):
+                result = subprocess.run([str(self.binary), scenario], capture_output=True, timeout=3)
+                self.assertEqual((result.returncode, result.stdout, result.stderr),
+                                 (2, f"{closes}\n".encode(), b""))
 
 
 if __name__ == "__main__":

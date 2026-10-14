@@ -5,6 +5,7 @@ Never edits Resources, invokes live search, or creates production acceptance.
 from pathlib import Path
 import json
 import shutil
+import sys
 import tempfile
 from search_proxy_canary_support import (
     drive_probe, fixture_directories, fixture_hashes, owned_listener,
@@ -38,8 +39,13 @@ def main():
                 "--payload", str(payload), "--state-root", str(state),
                 "--owned-listener", str(listener.fileno()), "--egress-port", str(egress.getsockname()[1]),
                 "--probe-kind", "profile"])
+            # Controller provenance only: this does not claim the child entered
+            # Python, the probe, or any particular sandbox operation.
+            print(json.dumps({"kind": "build-only-native-canary-stage", "controller_stage": "profile-prelaunch",
+                "production_acceptance": False, "payload": identity, "fixture_sources": sources},
+                sort_keys=True), file=sys.stderr, flush=True)
             checks = drive_probe(command, payload, state, outside, inference, foreign, egress,
-                                 pass_fds=(listener.fileno(),))
+                                 pass_fds=(listener.fileno(),), probe_kind="profile")
     _, after = verify_payload(payload, args.expected_receipt_sha256)
     assert after == identity, "source payload changed during fixture run"
     assert sources == fixture_hashes(root, list(sources)), "fixture source changed during run"

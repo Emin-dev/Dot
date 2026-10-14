@@ -166,24 +166,61 @@ def receive(sock, length):
     return bytes(data)
 
 
-def event(process, timeout=35):
+def event_failure(process, stage, reason, *, stdout_bytes=0, settle=False):
+    """Report observations only; never print child output, argv, paths or env.
+
+    EOF can race waitpid. Give an already-closing child a bounded settlement
+    window, but distinguish a still-running child from an observed exit. Never
+    attribute the later cleanup kill to the original failure.
+    """
+    stages = {kind + "-" + phase for kind in ("native", "profile")
+              for phase in ("send-start", "await-ready", "await-stopped", "wait-exit")}
+    reasons = {"stdout-eof", "event-timeout", "oversized-event", "invalid-event",
+               "control-pipe-closed", "nonzero-exit"}
+    if stage not in stages or reason not in reasons:
+        raise ValueError("unknown fixed canary diagnostic stage or reason")
+    if settle:
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+    returncode = process.poll()
+    # Even an exited direct child may have descendants holding stderr open.
+    # One readiness check and one raw read cannot wait for their pipe EOF.
+    stderr_bytes = 0
+    if select.select([process.stderr], [], [], 0)[0]:
+        stderr_bytes = len(os.read(process.stderr.fileno(), 4096))
+    diagnostic = {"kind": "build-only-native-canary-failure", "controller_stage": stage,
+        "reason": reason, "returncode": returncode,
+        "exit_status": returncode if returncode is not None and returncode >= 0 else None,
+        "signal": -returncode if returncode is not None and returncode < 0 else None,
+        "stdout_bytes_observed": stdout_bytes, "stderr_bytes_sampled": stderr_bytes,
+        "stderr_sample_limit": 4096, "production_acceptance": False}
+    return AssertionError("native canary failed: " + json.dumps(diagnostic, sort_keys=True))
+
+
+def event(process, timeout=35, *, stage="native-await-ready"):
     deadline, data = time.monotonic() + timeout, bytearray()
     while time.monotonic() < deadline:
-        if select.select([process.stdout], [], [], 0.1)[0]:
+        if select.select([process.stdout], [], [], min(0.1, max(0, deadline - time.monotonic())))[0]:
             part = os.read(process.stdout.fileno(), 1)
             if not part:
-                error = process.stderr.read(4096).decode(errors="replace") if process.poll() is not None else "stdout closed"
-                raise AssertionError("native canary exited: " + error)
+                raise event_failure(process, stage, "stdout-eof", stdout_bytes=len(data), settle=True)
             data.extend(part)
             if len(data) > 4096:
-                raise AssertionError("oversized native canary event")
+                raise event_failure(process, stage, "oversized-event", stdout_bytes=len(data))
             if part == b"\n":
-                return json.loads(data)
-    raise AssertionError("native canary startup timed out")
+                try:
+                    return json.loads(data)
+                except (ValueError, UnicodeError):
+                    raise event_failure(process, stage, "invalid-event", stdout_bytes=len(data)) from None
+    raise event_failure(process, stage, "event-timeout", stdout_bytes=len(data))
 
 
-def drive_probe(command, payload, state, outside, inference, foreign, egress, *, pass_fds=(), env=None):
+def drive_probe(command, payload, state, outside, inference, foreign, egress, *, pass_fds=(), env=None, probe_kind="native"):
     """Parents hold all fixture endpoints continuously until child settlement."""
+    if probe_kind not in ("native", "profile"):
+        raise ValueError("unknown fixed canary probe kind")
     failures = []
     egress_port = egress.getsockname()[1]
     assert_owned(egress_port)
@@ -208,10 +245,13 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
         cwd=state, env=env if env is not None else minimal_env(state), pass_fds=pass_fds)
     thread.start()
     try:
-        process.stdin.write(b'{"protocol":1,"command":"start","generation":"native-canary"}\n')
-        process.stdin.flush()
-        ready = event(process)
-        assert ready["event"] == "native_canary_ready" and ready["pid"] == process.pid, ready
+        try:
+            process.stdin.write(b'{"protocol":1,"command":"start","generation":"native-canary"}\n')
+            process.stdin.flush()
+        except BrokenPipeError:
+            raise event_failure(process, probe_kind + "-send-start", "control-pipe-closed", settle=True) from None
+        ready = event(process, stage=probe_kind + "-await-ready")
+        assert ready["event"] == "native_canary_ready" and ready["pid"] == process.pid, "unexpected native canary ready event"
         assert_owned(ready["port"])
         assert_owned(egress_port)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
@@ -220,8 +260,9 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
             client.sendall(b"fixture")
             assert receive(client, 5) == b"reply"
         process.stdin.close()
-        assert event(process, timeout=10) == {"event": "native_canary_stopped"}
-        assert process.wait(timeout=5) == 0
+        assert event(process, timeout=10, stage=probe_kind + "-await-stopped") == {"event": "native_canary_stopped"}
+        if process.wait(timeout=5) != 0:
+            raise event_failure(process, probe_kind + "-wait-exit", "nonzero-exit")
         assert process.stderr.read() == b""
         thread.join(timeout=5)
         assert not thread.is_alive() and not failures, failures
@@ -246,7 +287,12 @@ def drive_probe(command, payload, state, outside, inference, foreign, egress, *,
             process.wait(timeout=5)
         for stream in (process.stdin, process.stdout, process.stderr):
             if stream and not stream.closed:
-                stream.close()
+                try:
+                    stream.close()
+                except BrokenPipeError:
+                    # Closing buffered stdin may retry the same failed flush.
+                    # Preserve the original, pre-cleanup exit diagnostic.
+                    pass
         if thread.is_alive():
             # Closing the listener settles a still-blocked accept on failure.
             try:

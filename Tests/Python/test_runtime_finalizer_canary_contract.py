@@ -14,6 +14,7 @@ import json
 import os
 import stat
 from pathlib import Path
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -268,70 +269,37 @@ class CapabilityContractTests(unittest.TestCase):
             h.toolchain_configuration(h.Receipt())
         self.assertEqual(json.loads(output.getvalue())['paths']['compiler']['resolution_error']['errno'], errno.ENOENT)
 
-    def test_toolchain_diagnostics_preserve_exact_trust_predicates(self):
-        tree = ast.parse(PATH.read_text())
-        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                        and node.name == 'trusted_toolchain')
-        predicates = [ast.unparse(node.args[0]) for node in ast.walk(function)
-                      if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                      and node.func.id == 'check']
-        self.assertCountEqual(predicates, ["str(resolved).startswith(DEVELOPER + '/')",
-                                     'info.st_uid == 0 and (not info.st_mode & 2)',
-                                     'info.st_uid == 0 and (not info.st_mode & 18)'])
-        build = ast.get_source_segment(PATH.read_text(), next(node for node in tree.body
-            if isinstance(node, ast.FunctionDef) and node.name == 'build'))
-        self.assertIn('trusted_toolchain(CLANG, receipt)', build)
-        self.assertIn('trusted_toolchain(SDK, receipt)', build)
-        self.assertNotIn("['resolved']", build)
+    def test_hosted_owner_exception_is_fixed_and_strictly_inside_xcode(self):
+        def info(uid, mode):
+            return SimpleNamespace(st_uid=uid, st_mode=stat.S_IFDIR | mode)
+        for path in (h.XCODE, h.CLANG, h.SDK):
+            for uid in (0, 501):
+                with self.subTest(path=path, uid=uid):
+                    self.assertTrue(h.toolchain_owner(info(uid, 0o755), path))
+                    for mode in (0o775, 0o757, 0o777, 0o4755, 0o2755, 0o1755):
+                        self.assertFalse(h.toolchain_owner(info(uid, mode), path))
+            for uid in (1, 500, 502, 1000):
+                self.assertFalse(h.toolchain_owner(info(uid, 0o755), path))
+        for path in ('/', '/Applications', h.XCODE + '-other/clang', '/tmp/clang'):
+            self.assertFalse(h.toolchain_owner(info(501, 0o755), path))
+            self.assertTrue(h.toolchain_owner(info(0, 0o775), path))
+            self.assertFalse(h.toolchain_owner(info(0, 0o777), path))
 
-    def test_toolchain_rejection_reports_exact_held_node_without_bypass(self):
-        def info(uid, mode, inode):
-            return SimpleNamespace(st_uid=uid, st_gid=20, st_mode=stat.S_IFDIR | mode,
-                                   st_dev=7, st_ino=inode)
-        class HeldRoot:
-            fds = [10, 11]
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-            def check(self): raise AssertionError('unsafe toolchain must not pass')
-        for bad in (info(501, 0o755, 11), info(0, 0o777, 12)):
-            with self.subTest(uid=bad.st_uid, mode=bad.st_mode), \
-                    patch.object(h.Path, 'resolve', return_value=Path(h.CLANG)), \
-                    patch.object(h.m, 'Root', return_value=HeldRoot()), \
-                    patch.object(h.os, 'fstat', side_effect=[info(0, 0o755, 10), bad]), \
-                    patch.object(h, 'toolchain_fd_path', return_value={
-                        'fd_path': None, 'fd_path_error': {'type': 'OSError', 'errno': errno.EACCES}}), \
-                    contextlib.redirect_stdout(io.StringIO()) as output:
-                with self.assertRaisesRegex(AssertionError, 'untrusted toolchain ancestry:') as caught:
-                    h.trusted_toolchain(h.CLANG, h.Receipt())
-            records = [json.loads(line) for line in output.getvalue().splitlines()]
-            node = records[-1]['node']
-            self.assertEqual(node['held_path'], '/Applications')
-            self.assertEqual(node['uid'], bad.st_uid)
-            self.assertEqual(node['gid'], 20)
-            self.assertEqual(node['mode'], format(stat.S_IMODE(bad.st_mode), '04o'))
-            self.assertEqual(node['inode'], bad.st_ino)
-            self.assertIn('"held_path": "/Applications"', str(caught.exception))
-            self.assertIs(records[-1]['production_acceptance'], False)
-
-    def test_toolchain_target_predicate_stays_stricter_than_ancestor(self):
-        class HeldRoot:
-            fds = [10]
-            def __enter__(self): return self
-            def __exit__(self, *args): pass
-            def check(self): raise AssertionError('unsafe target must not pass')
-        root = SimpleNamespace(st_uid=0, st_gid=20, st_mode=stat.S_IFDIR | 0o775, st_dev=7, st_ino=10)
-        for uid, mode in ((501, 0o755), (0, 0o775)):
-            target = SimpleNamespace(st_uid=uid, st_gid=20, st_mode=stat.S_IFREG | mode, st_dev=7, st_ino=20)
-            with self.subTest(uid=uid, mode=mode), patch.object(h.Path, 'resolve', return_value=Path(h.CLANG)), \
-                    patch.object(h.m, 'Root', return_value=HeldRoot()), patch.object(h.os, 'fstat', return_value=root), \
-                    patch.object(h.Path, 'stat', return_value=target), \
-                    patch.object(h, 'toolchain_fd_path', return_value={'fd_path': '/', 'fd_path_error': None}), \
-                    contextlib.redirect_stdout(io.StringIO()) as output:
-                with self.assertRaisesRegex(AssertionError, 'untrusted toolchain node:'):
-                    h.trusted_toolchain(h.CLANG, h.Receipt())
-            record = json.loads(output.getvalue().splitlines()[-1])
-            self.assertEqual(record['role'], 'target_nofollow_stat')
-            self.assertEqual(record['node']['uid'], uid)
+    def test_policy_pins_exact_observed_compiler_image_and_requirement(self):
+        self.assertEqual(h.COMPILER_PIN, {'bytes': 272034048,
+            'sha256': '15339439a6be4a9d33d281ec040a7e0092190b1c8d7de5f94d824b50ffae0769'})
+        self.assertEqual(h.COMPILER_REQUIREMENT, '=identifier "com.apple.clang" and anchor apple')
+        self.assertEqual(h.HOSTED_IMAGE, {'ImageOS': 'macos15', 'ImageVersion': '20260907.0337.1',
+            'RUNNER_OS': 'macOS', 'RUNNER_ARCH': 'ARM64', 'GITHUB_ACTIONS': 'true'})
+        source = PATH.read_text()
+        self.assertIn("'--no-default-config'", source)
+        self.assertIn('no hostile same-UID', ' '.join(h.TOOLCHAIN_ASSUMPTIONS))
+        self.assertIn('not a cryptographic closure inventory', ' '.join(h.TOOLCHAIN_ASSUMPTIONS))
+        owner_source = ast.get_source_segment(source, next(node for node in ast.parse(source).body
+            if isinstance(node, ast.FunctionDef) and node.name == 'toolchain_owner'))
+        self.assertNotIn('os.getuid(', owner_source)
+        self.assertNotIn('os.geteuid(', owner_source)
+        self.assertNotIn('os.chown(', source)
 
     def run_verification_shell_fixture(self, canary_status, *, tee_status=0, swift_status=0, warning=False):
         # Run the actual shell control flow with inert temporary commands. These
@@ -574,19 +542,19 @@ class CompilerIdentityDiagnosticContractTests(unittest.TestCase):
                 patch.object(context.budget, 'check', side_effect=h.CanaryDeadline('whole canary deadline')):
             with self.assertRaises(h.CanaryDeadline): self.observe(context)
 
-    def test_observation_never_overrides_the_original_ownership_failure(self):
+    def test_observation_never_overrides_separate_fixture_policy_failure(self):
         with tempfile.TemporaryDirectory() as directory, \
                 patch.object(h, 'toolchain_configuration'), \
                 patch.object(h, 'compiler_identity_diagnostic', return_value=True) as diagnostic, \
-                patch.object(h, 'trusted_toolchain', side_effect=AssertionError('untrusted toolchain ancestry: uid 501')) as trust, \
+                patch.object(h, 'fixture_toolchain', side_effect=AssertionError('unsupported compiler bytes/hash')) as trust, \
                 patch.object(h, 'run') as command, contextlib.redirect_stdout(io.StringIO()) as output:
             context = h.make_context(); receipt = h.Receipt()
             self.assertFalse(receipt.gate('fixture_build', lambda: h.build(context, receipt, Path(directory))))
             diagnostic.assert_called_once_with(context, receipt)
-            trust.assert_called_once_with(h.CLANG, receipt)
+            trust.assert_called_once_with(context, receipt)
             command.assert_not_called()
             self.assertEqual(receipt.gates, {'fixture_build': 'fail'})
-            self.assertIn('untrusted toolchain ancestry: uid 501', output.getvalue())
+            self.assertIn('unsupported compiler bytes/hash', output.getvalue())
 
     def test_diagnostic_has_no_caller_path_or_trust_state(self):
         tree = ast.parse(PATH.read_text())
@@ -602,6 +570,208 @@ class CompilerIdentityDiagnosticContractTests(unittest.TestCase):
         self.assertNotIn('return True', source)
         self.assertEqual(h.COMPILER_DIAGNOSTIC_BYTES, 512 * 1024 * 1024)
         self.assertEqual(h.COMPILER_DIAGNOSTIC_SECONDS, 30)
+
+class HostedCompilerPolicyContractTests(unittest.TestCase):
+    """Portable control-flow/filesystem tests; mock signing is never native evidence."""
+
+    @contextlib.contextmanager
+    def fixture(self):
+        with tempfile.TemporaryDirectory(dir=Path(tempfile.gettempdir()).resolve()) as directory:
+            base = Path(directory)
+            xcode = base / 'Xcode_26.3.app'
+            developer = xcode / 'Contents/Developer'
+            compiler = developer / 'Toolchains/XcodeDefault.xctoolchain/usr/bin/clang'
+            sdk = developer / 'Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk'
+            version = xcode / 'Contents/version.plist'
+            compiler.parent.mkdir(parents=True)
+            sdk.mkdir(parents=True)
+            compiler.write_bytes(b'portable compiler-shaped fixture, not native code')
+            compiler.chmod(0o755)
+            (sdk / 'SDKSettings.json').write_text('{"Version":"26.2"}')
+            version.write_bytes(plistlib.dumps({'CFBundleShortVersionString': '26.3',
+                                               'ProductBuildVersion': '17C529'}))
+            original_owner = h.toolchain_owner
+            def portable_owner(info, path):
+                # Only ownership/external-ancestor assumptions are injected;
+                # held edges, no-follow IO, hashes and mutation checks are real.
+                if not Path(path).is_relative_to(xcode):
+                    return True
+                return original_owner(SimpleNamespace(st_uid=501, st_mode=info.st_mode), path)
+            with contextlib.ExitStack() as stack:
+                for key, value in {'XCODE': str(xcode), 'DEVELOPER': str(developer),
+                                   'CLANG': str(compiler), 'SDK': str(sdk),
+                                   'XCODE_VERSION': str(version), 'COMPILER_PIN': h.source_pin(compiler)}.items():
+                    stack.enter_context(patch.object(h, key, value))
+                stack.enter_context(patch.object(h, 'toolchain_owner', side_effect=portable_owner))
+                stack.enter_context(patch.dict(os.environ, h.HOSTED_IMAGE, clear=True))
+                yield base, compiler, sdk, version, h.make_context()
+
+    @staticmethod
+    def signing_result(argv, deadline, **kwargs):
+        # Deliberately irrelevant display text: authorization must be the exact
+        # codesign requirement argument and successful command contract.
+        return {**successful(b'portable mock, not a native signing result'), 'argv': argv}
+
+    def exercise(self, context, operation=None, effect=None):
+        with patch.object(h.m, '_native_run_bounded', side_effect=effect or self.signing_result) as runner, \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            receipt = h.Receipt()
+            error = None
+            try:
+                with h.fixture_toolchain(context, receipt) as selected:
+                    if operation:
+                        operation(selected)
+            except Exception as caught:
+                error = caught
+        return error, [json.loads(line) for line in output.getvalue().splitlines()], runner
+
+    def test_signature_requires_exact_identity_anchor_and_post_build_snapshots(self):
+        with self.fixture() as (_, compiler, sdk, _, context):
+            chosen = []
+            error, records, runner = self.exercise(context, chosen.append)
+            self.assertIsNone(error)
+            self.assertEqual(len(chosen), 1)
+            self.assertEqual(chosen[0][:2], (str(compiler), str(sdk)))
+            self.assertLessEqual(chosen[0][2], context.budget.deadline)
+            self.assertEqual(runner.call_count, 1)
+            call = runner.call_args
+            self.assertEqual(call.args[0], ['/usr/bin/codesign', '--verify', '--strict', '--verbose=4',
+                '--test-requirement', '=identifier "com.apple.clang" and anchor apple', str(compiler)])
+            self.assertLessEqual(call.args[1], context.budget.deadline)
+            self.assertEqual(call.kwargs, {'pass_fds': (), 'env': h.m._NS_ENV, 'cap': h.OUTPUT_BYTES})
+            snapshots = [r for r in records if r['event'] == 'fixture_toolchain_snapshot']
+            self.assertEqual([r['phase'] for r in snapshots], ['before', 'after_signature', 'after_build'])
+            self.assertTrue(all(r['nodes'] == snapshots[0]['nodes'] for r in snapshots))
+            policy = next(r for r in records if r['event'] == 'fixture_toolchain_policy')
+            self.assertEqual(policy['assumptions'], h.TOOLCHAIN_ASSUMPTIONS)
+            self.assertIs(policy['production_acceptance'], False)
+            self.assertIs(policy['owner_runtime_acceptance'], False)
+            self.assertIs(policy['authorizes_synthetic_fixture_build'], True)
+
+    def test_image_missing_or_drift_never_opens_toolchain_or_spawns(self):
+        for key in h.HOSTED_IMAGE:
+            for value in ('unsupported', None):
+                with self.subTest(key=key, value=value), self.fixture() as (_, _, _, _, context):
+                    if value is None: os.environ.pop(key)
+                    else: os.environ[key] = value
+                    with patch.object(h.m, 'Root') as root:
+                        error, _, runner = self.exercise(context)
+                    self.assertIn('unsupported hosted toolchain image', str(error))
+                    root.assert_not_called()
+                    runner.assert_not_called()
+
+    def test_wrong_hash_size_sdk_version_or_xcode_build_never_spawns(self):
+        for kind in ('hash', 'size', 'sdk_version', 'xcode_version', 'xcode_build', 'sdk_duplicate_version'):
+            with self.subTest(kind=kind), self.fixture() as (_, _, sdk, version, context):
+                if kind == 'hash': h.COMPILER_PIN = {**h.COMPILER_PIN, 'sha256': '0' * 64}
+                elif kind == 'size': h.COMPILER_PIN = {**h.COMPILER_PIN, 'bytes': h.COMPILER_PIN['bytes'] + 1}
+                elif kind == 'sdk_version': (sdk / 'SDKSettings.json').write_text('{"Version":"27.0"}')
+                elif kind == 'sdk_duplicate_version':
+                    (sdk / 'SDKSettings.json').write_text('{"Version":"27.0","Version":"26.2"}')
+                else:
+                    metadata = plistlib.loads(version.read_bytes())
+                    metadata['CFBundleShortVersionString' if kind == 'xcode_version' else 'ProductBuildVersion'] = 'other'
+                    version.write_bytes(plistlib.dumps(metadata))
+                error, _, runner = self.exercise(context)
+                self.assertIsNotNone(error)
+                runner.assert_not_called()
+
+    def test_alias_nonregular_hardlink_and_unsafe_mode_never_spawn(self):
+        for kind in ('compiler_alias', 'sdk_alias', 'ancestor_alias', 'directory', 'hardlink',
+                     'group_writable', 'world_writable', 'sdk_writable', 'metadata_alias', 'metadata_oversized'):
+            with self.subTest(kind=kind), self.fixture() as (base, compiler, sdk, _, context):
+                if kind == 'compiler_alias':
+                    target = compiler.with_name('other-clang'); compiler.rename(target); compiler.symlink_to(target)
+                elif kind == 'sdk_alias':
+                    target = sdk.with_name('other-sdk'); sdk.rename(target); sdk.symlink_to(target, target_is_directory=True)
+                elif kind == 'ancestor_alias':
+                    target = compiler.parent.with_name('other-bin'); compiler.parent.rename(target)
+                    compiler.parent.symlink_to(target, target_is_directory=True)
+                elif kind == 'directory': compiler.unlink(); compiler.mkdir()
+                elif kind == 'hardlink': os.link(compiler, base / 'second-link')
+                elif kind == 'group_writable': compiler.chmod(0o775)
+                elif kind == 'world_writable': compiler.parent.chmod(0o757)
+                elif kind == 'sdk_writable': sdk.chmod(0o775)
+                elif kind == 'metadata_alias':
+                    metadata = sdk / 'SDKSettings.json'; target = base / 'settings'; metadata.rename(target)
+                    metadata.symlink_to(target)
+                elif kind == 'metadata_oversized':
+                    (sdk / 'SDKSettings.json').write_bytes(b' ' * (h.TOOLCHAIN_METADATA_BYTES + 1))
+                error, _, runner = self.exercise(context)
+                self.assertIsNotNone(error)
+                runner.assert_not_called()
+
+    def test_signature_wrong_identity_bad_exit_timeout_warning_or_cleanup_blocks_body(self):
+        for field, value in (('returncode', 1), ('returncode', False), ('reason', 'deadline'),
+                             ('reason', 'output_limit'), ('stderr', b'warning: portable failure'),
+                             ('cleanup', {'complete': False, 'remaining_owned_processes': 1, 'open_output_pipes': 0})):
+            with self.subTest(field=field, value=value), self.fixture() as (_, _, _, _, context):
+                def rejected(argv, deadline, **kwargs):
+                    result = self.signing_result(argv, deadline, **kwargs); result[field] = value
+                    return result
+                body = []
+                error, records, runner = self.exercise(context, body.append, rejected)
+                self.assertIsNotNone(error)
+                self.assertFalse(body)
+                self.assertEqual(runner.call_count, 1)
+                self.assertFalse(any(r['event'] == 'fixture_toolchain_policy' for r in records))
+
+    def test_changes_during_signature_or_build_are_rejected(self):
+        for when in ('signature', 'build'):
+            for kind in ('compiler_bytes', 'compiler_mode', 'compiler_replace', 'ancestor_replace',
+                         'sdk_settings', 'sdk_replace', 'xcode_version'):
+                with self.subTest(when=when, kind=kind), self.fixture() as (_, compiler, sdk, version, context):
+                    def mutate():
+                        if kind == 'compiler_bytes': compiler.write_bytes(b'changed compiler bytes')
+                        elif kind == 'compiler_mode': compiler.chmod(0o700)
+                        elif kind == 'compiler_replace':
+                            data = compiler.read_bytes(); compiler.unlink(); compiler.write_bytes(data); compiler.chmod(0o755)
+                        elif kind == 'ancestor_replace':
+                            old = compiler.parent.with_name('old-bin'); compiler.parent.rename(old)
+                            compiler.parent.mkdir()
+                            (compiler.parent / compiler.name).write_bytes((old / compiler.name).read_bytes())
+                        elif kind == 'sdk_settings':
+                            (sdk / 'SDKSettings.json').write_text('{"Version":"26.2","changed":true}')
+                        elif kind == 'sdk_replace': sdk.rename(sdk.with_name('old-sdk')); sdk.mkdir()
+                        elif kind == 'xcode_version':
+                            metadata = plistlib.loads(version.read_bytes()); metadata['Changed'] = True
+                            version.write_bytes(plistlib.dumps(metadata))
+                    def signing(argv, deadline, **kwargs):
+                        if when == 'signature': mutate()
+                        return self.signing_result(argv, deadline, **kwargs)
+                    body = []
+                    def operation(selected):
+                        body.append(selected)
+                        if when == 'build': mutate()
+                    error, _, runner = self.exercise(context, operation, signing)
+                    self.assertIsNotNone(error)
+                    self.assertEqual(runner.call_count, 1)
+                    self.assertEqual(len(body), 0 if when == 'signature' else 1)
+
+    def test_expired_policy_and_whole_canary_deadlines_cannot_admit(self):
+        with self.fixture() as (_, _, _, _, context):
+            context.budget.deadline = 0
+            error, _, runner = self.exercise(context)
+            self.assertIsNotNone(error); runner.assert_not_called()
+        with self.fixture() as (_, _, _, _, context), \
+                patch.object(context.budget, 'check', side_effect=h.CanaryDeadline('whole deadline')):
+            with self.assertRaises(h.CanaryDeadline): self.exercise(context)
+
+    def test_whole_deadline_during_signing_or_build_is_not_swallowed_by_cleanup(self):
+        for when in ('signature', 'build'):
+            with self.subTest(when=when), self.fixture() as (_, _, _, _, context):
+                def expired(*args, **kwargs):
+                    raise h.CanaryDeadline('whole deadline')
+                runner = expired if when == 'signature' else self.signing_result
+                operation = expired if when == 'build' else None
+                with self.assertRaises(h.CanaryDeadline): self.exercise(context, operation, runner)
+
+    def test_unconfigured_toolchain_path_is_not_a_general_user_tool_allowance(self):
+        with self.fixture() as (base, _, _, _, _), patch.object(h.m, 'Root') as root:
+            with self.assertRaisesRegex(AssertionError, 'unconfigured toolchain path'):
+                with h.trusted_toolchain(str(base / 'other-tool'), h.Receipt()): pass
+            root.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()
