@@ -148,7 +148,9 @@ final class WebResearchInterfaceTests: XCTestCase {
             var synthesisCalls = 0
             let model = WebResearchModel(store: store, synthesize: { session in synthesisCalls += 1; return Self.answer(session) })
             draft(model); model.start(); await model.flush()
-            XCTAssertFalse(model.canStart); XCTAssertTrue(model.configurationSummary.contains("not configured"))
+            XCTAssertFalse(model.canStart); XCTAssertFalse(model.configured)
+            XCTAssertTrue(model.configurationSummary.contains("Search is not ready"))
+            XCTAssertTrue(model.configurationSummary.contains("Saved research remains available"))
             let empty = try await store.list(); XCTAssertTrue(empty.isEmpty); XCTAssertEqual(synthesisCalls, 0)
             let planned = try await store.create(question: "Saved plan", queries: ["one", "two"])
             model.open(); await model.flush()

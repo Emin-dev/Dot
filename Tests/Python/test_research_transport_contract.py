@@ -212,6 +212,22 @@ class ResearchTransportContractTests(unittest.TestCase):
         for forbidden in ['(allow network', 'DOT_SOURCE_ENDPOINT', 'DOT_MODELS', 'DOT_RUNTIME', 'DOT_STATE', '(subpath "/Users")', '(subpath "/tmp")']:
             self.assertNotIn(forbidden, profile)
 
+    def test_swift_runtime_keeps_posix_paths_for_exact_sandbox_literals(self):
+        # Portable source guard only: real Foundation/Seatbelt behavior is covered by XCTest.
+        swift = (ROOT / 'src/ResearchHTTPTransport.swift').read_text()
+        runtime = swift.split('struct ResearchFetchRuntime: Sendable {', 1)[1].split('enum ResearchBoundedProcess {', 1)[0]
+        self.assertIn('let resolved = realpath(url.path, nil)', runtime)
+        self.assertIn('defer { free(resolved) }', runtime)
+        self.assertIn('let path = String(cString: resolved)', runtime)
+        self.assertIn('lstat(path, &info) == 0', runtime)
+        self.assertIn('info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG)', runtime)
+        self.assertNotIn('resolvingSymlinksInPath', runtime)
+        self.assertNotIn('standardizedFileURL', runtime)
+        self.assertIn('python.hasPrefix(pythonRoot + "/")', runtime)
+        self.assertIn('FileManager.default.isExecutableFile(atPath: python)', runtime)
+        self.assertIn('"DOT_SOURCE_HELPER=" + helper', runtime)
+        self.assertIn('python, "-I", "-S", "-B", helper', runtime)
+
     def test_inherited_socket_checks_peer_port_family_type_and_scope(self):
         for address, family, peer in [('1.1.1.1', socket.AF_INET, ('1.1.1.1', 443)),
                                       ('2606:4700:4700::1111', socket.AF_INET6, ('2606:4700:4700::1111', 443, 0, 0))]:

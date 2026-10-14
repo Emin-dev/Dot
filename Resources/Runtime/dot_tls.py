@@ -2,8 +2,12 @@
 No remote networking, persistent key, system trust changes or backend discovery.
 """
 import hashlib
+import hmac
+import http.client
+import io
 import os
 from pathlib import Path
+import re
 import select
 import socket
 import ssl
@@ -68,7 +72,20 @@ def identity(state):
 
 
 class TLSRelay:
-    def __init__(self, backend, state, listener=None):
+    # Pending clients share no long-lived forwarding slots or backend connections.
+    # A larger local flood can still saturate this finite admission pool/backlog.
+    pending_limit = 8
+    forwarding_limit = 4
+    admission_timeout = 2
+    header_limit = 16384
+    io_timeout = 2
+    connection_lifetime = 180
+    _field_name = re.compile(rb"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+
+    def __init__(self, backend, state, *, api_key, listener=None):
+        if not isinstance(api_key, str) or not re.fullmatch(r'[A-Za-z0-9._~+/-]{1,256}={0,2}', api_key):
+            raise ValueError('invalid_relay_credential')
+        self._authorization = ('Bearer ' + api_key).encode('ascii')
         self.backend = backend  # Kept open by the caller until close() has joined every worker.
         self.context, self.certificate_sha256 = identity(state)
         self.listener = listener if listener is not None else owned_listener()
@@ -76,7 +93,9 @@ class TLSRelay:
         self.port = self.listener.getsockname()[1]
         self.closed = False
         self.stopping = threading.Event(); self.lock = threading.Lock()
-        self.workers = set(); self.connections = set(); self.capacity = threading.BoundedSemaphore(4)
+        self.workers = set(); self.connections = set()
+        self.capacity = threading.BoundedSemaphore(self.forwarding_limit)
+        self.pending_capacity = threading.BoundedSemaphore(self.pending_limit)
         self.thread = threading.Thread(target=self._accept, name='dot-tls-accept')
         self.thread.start()
     def _accept(self):
@@ -84,21 +103,75 @@ class TLSRelay:
             try: connection, _ = self.listener.accept()
             except socket.timeout: continue
             except OSError: break
-            if not self.capacity.acquire(blocking=False): connection.close(); continue
-            worker = threading.Thread(target=self._forward, args=(connection,), name='dot-tls-forward')
+            if not self.pending_capacity.acquire(blocking=False): connection.close(); continue
+            deadline = time.monotonic() + self.admission_timeout
+            worker = threading.Thread(target=self._forward, args=(connection, deadline), name='dot-tls-forward')
             with self.lock: self.workers.add(worker); self.connections.add(connection)
-            worker.start()
-    def _forward(self, raw):
+            try: worker.start()
+            except RuntimeError:
+                with self.lock: self.workers.discard(worker); self.connections.discard(connection)
+                connection.close(); self.pending_capacity.release()
+
+    def _track(self, connection, previous=None):
+        # Stop may race TLS wrapping or backend connect; no newly returned socket
+        # may escape the close() snapshot or retain ownership after Stop.
+        with self.lock:
+            self.connections.discard(previous)
+            if self.stopping.is_set():
+                connection.close(); return False
+            self.connections.add(connection)
+        return True
+
+    def _admit(self, secure, deadline):
+        buffered = bytearray()
+        while not self.stopping.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0: return None
+            secure.settimeout(remaining)
+            data = secure.recv(min(4096, self.header_limit - len(buffered)))
+            if not data: return None
+            buffered.extend(data)
+            end = buffered.find(b'\r\n\r\n')
+            if end >= 0:
+                # Parse only a complete bounded HTTP/1 header block. Reject
+                # ambiguous/folded authorization and malformed field syntax.
+                lines = bytes(buffered[:end]).split(b'\r\n')
+                request = lines[0].split(b' ')
+                if (len(request) != 3 or not self._field_name.fullmatch(request[0])
+                    or not request[1] or any(byte <= 32 or byte == 127 for byte in request[1])
+                    or request[2] not in (b'HTTP/1.0', b'HTTP/1.1')): return None
+                for line in lines[1:]:
+                    name, colon, value = line.partition(b':')
+                    if (not colon or not self._field_name.fullmatch(name)
+                        or any(byte < 32 and byte != 9 or byte == 127 for byte in value)): return None
+                headers = http.client.parse_headers(io.BytesIO(b'\r\n'.join(lines[1:]) + b'\r\n\r\n'))
+                values = headers.get_all('Authorization', [])
+                if (len(values) != 1 or not hmac.compare_digest(
+                    values[0].strip(' \t').encode('latin-1'), self._authorization)): return None
+                if time.monotonic() >= deadline: return None
+                return buffered  # Preserve headers and any already-read body exactly.
+            if len(buffered) >= self.header_limit: return None
+        return None
+
+    def _forward(self, raw, admission_deadline):
         secure = upstream = None
+        pending = True; admitted = False
         try:
-            raw.settimeout(2)
+            raw.settimeout(max(0.001, admission_deadline - time.monotonic()))
             secure = self.context.wrap_socket(raw, server_side=True, do_handshake_on_connect=False)
-            with self.lock: self.connections.discard(raw); self.connections.add(secure)
+            if not self._track(secure, previous=raw): return
             secure.do_handshake()
+            initial = self._admit(secure, admission_deadline)
+            if initial is None or self.stopping.is_set(): return
+            if not self.capacity.acquire(blocking=False): return
+            admitted = True
+            self.pending_capacity.release(); pending = False
             if self.stopping.is_set(): return
-            upstream = socket.create_connection(self.backend.getsockname(), timeout=2)
-            with self.lock: self.connections.add(upstream)
-            deadline = time.monotonic() + 180
+            secure.settimeout(self.io_timeout)
+            upstream = socket.create_connection(self.backend.getsockname(), timeout=self.io_timeout)
+            if not self._track(upstream): return
+            upstream.sendall(initial)
+            deadline = time.monotonic() + self.connection_lifetime
             while not self.stopping.is_set() and time.monotonic() < deadline:
                 readable, _, _ = select.select([secure, upstream], [], [], 0.2)
                 if secure.pending() and secure not in readable: readable.append(secure)
@@ -106,14 +179,15 @@ class TLSRelay:
                     data = source.recv(32768)
                     if not data: return
                     (upstream if source is secure else secure).sendall(data)
-        except (OSError, ssl.SSLError, ValueError): pass
+        except (OSError, ssl.SSLError, ValueError, http.client.HTTPException): pass
         finally:
             for connection in (raw, secure, upstream):
                 if connection is not None:
                     with self.lock: self.connections.discard(connection)
                     connection.close()
             with self.lock: self.workers.discard(threading.current_thread())
-            self.capacity.release()
+            if pending: self.pending_capacity.release()
+            if admitted: self.capacity.release()
     def close(self):
         self.stopping.set(); self.listener.close(); self.thread.join(timeout=3)
         # No acceptor can add workers after it has stopped.

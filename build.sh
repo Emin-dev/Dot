@@ -5,8 +5,8 @@ cd "$(dirname "$0")"
 APP=build/Dot.app
 SOURCE_COMMIT=$(git rev-parse HEAD)
 SOURCE_DIRTY=false
-if [[ -n "$(git status --porcelain --untracked-files=all -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh)" || \
-      -n "$(git ls-files --others -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh)" ]]; then
+if [[ -n "$(git status --porcelain --untracked-files=all -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh icon.png)" || \
+      -n "$(git ls-files --others -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh icon.png)" ]]; then
   SOURCE_DIRTY=true
 fi
 INTENTS_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-intents.XXXXXX")
@@ -39,7 +39,7 @@ python3 -B scripts/package_app_intents.py extract --work-dir "$INTENTS_BUILD" --
   --target "$TARGET" --deployment-target 15.0
 python3 -B - "$APP" "$SOURCE_COMMIT" "$SOURCE_DIRTY" <<'PYCODE'
 import json, pathlib, subprocess, sys
-paths = ['src', 'Resources', 'scripts', 'Tests', 'Dot.xcodeproj', 'Package.swift', 'build.sh']
+paths = ['src', 'Resources', 'scripts', 'Tests', 'Dot.xcodeproj', 'Package.swift', 'build.sh', 'icon.png']
 changed = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all', '--', *paths], text=True)
 untracked = subprocess.check_output(['git', 'ls-files', '--others', '--', *paths], text=True)
 current = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()

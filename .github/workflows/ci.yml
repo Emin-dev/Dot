@@ -11,8 +11,8 @@ concurrency:
 jobs:
   macos:
     # Standard public-repository runner. Test Python is provisioned explicitly.
-    # No neural payloads, app launch, dependency caches, uploaded artifacts,
-    # microphone access, or publishing credentials.
+    # No neural payloads, app launch, dependency caches, microphone access,
+    # or publishing credentials. Upload only the gated development DMG/receipt.
     runs-on: macos-15
     timeout-minutes: 10
     env:
@@ -30,14 +30,14 @@ jobs:
       - name: Test, compile and package with zero warnings
         run: bash scripts/verify_macos.sh
       - name: Record development packaging receipt
-        run: |
-          python3 - <<'PY'
-          import hashlib, json, pathlib
-          p = pathlib.Path('build/Dot.dmg')
-          assert p.is_file() and p.stat().st_size > 0, 'Missing development packaging result'
-          with p.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-          print(json.dumps({'artifact_kind': 'model-free-development-only',
-                            'sha256': digest, 'bytes': p.stat().st_size,
-                            'final_installer': False}, sort_keys=True))
-          PY
+        run: python3 -B scripts/write_candidate_receipt.py
+      - name: Upload model-free development candidate
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2, Node 24
+        with:
+          name: Dot-development-${{ github.sha }}-${{ runner.arch }}-${{ github.run_attempt }}
+          path: |
+            build/Dot.dmg
+            build/Dot-candidate-receipt.json
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

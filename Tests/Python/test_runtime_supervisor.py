@@ -299,7 +299,7 @@ while True:
             context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
             with context.wrap_socket(socket.create_connection(('127.0.0.1', event['port']), timeout=3), server_hostname='dot.local') as secure:
                 self.assertEqual(hashlib.sha256(secure.getpeercert(binary_form=True)).hexdigest(), event['tls_certificate_sha256'])
-                secure.sendall(('Bearer ' + event['api_key']).encode())
+                secure.sendall(('GET /fixture HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ' + event['api_key'] + '\r\n\r\n').encode())
                 self.assertEqual(secure.recv(100), b'fixture authenticated')
             child.stdin.close(); child.stdin = None
             _, errors = child.communicate(timeout=8)

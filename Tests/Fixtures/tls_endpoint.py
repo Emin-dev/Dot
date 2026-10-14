@@ -15,7 +15,7 @@ tls = importlib.util.module_from_spec(spec); spec.loader.exec_module(tls)
 if sys.version_info < (3, 11) or not ssl.OPENSSL_VERSION.startswith('OpenSSL ') or ssl.OPENSSL_VERSION_INFO < (1, 1, 1):
     raise RuntimeError('Native TLS fixture requires an explicitly selected Python3.11+ / supported OpenSSL interpreter')
 state = Path(sys.argv[1]); backend = tls.owned_listener(); backend.settimeout(0.1)
-relay = tls.TLSRelay(backend, state)
+relay = tls.TLSRelay(backend, state, api_key="model-free-test")
 # Test-only diagnostics. Never log a request, bearer, private key or user content.
 (state / 'tls-debug.json').write_text(json.dumps({'python': sys.version[:512], 'executable': sys.executable[:1024], 'ssl': ssl.OPENSSL_VERSION[:256],
     'minimum_version': str(relay.context.minimum_version), 'maximum_version': str(relay.context.maximum_version), 'ciphers': [x['name'] for x in relay.context.get_ciphers()[:64]]}))

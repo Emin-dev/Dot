@@ -251,11 +251,14 @@ struct ResearchFetchRuntime: Sendable {
 
     init(auditedPythonRoot: URL, signedHelper: URL, signedProfile: URL) throws {
         func canonical(_ url: URL, directory: Bool) throws -> String {
-            guard url.isFileURL else { throw ResearchNotebookError.networkFailure }
-            let result = url.resolvingSymlinksInPath().standardizedFileURL
-            let values = try result.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
-            guard (directory ? values.isDirectory == true : values.isRegularFile == true) else { throw ResearchNotebookError.networkFailure }
-            return result.path
+            // Seatbelt needs the kernel path; Foundation can strip /private from /var paths.
+            guard url.isFileURL, let resolved = realpath(url.path, nil) else { throw ResearchNotebookError.networkFailure }
+            defer { free(resolved) }
+            let path = String(cString: resolved)
+            var info = stat()
+            guard path.hasPrefix("/"), lstat(path, &info) == 0,
+                  info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG) else { throw ResearchNotebookError.networkFailure }
+            return path
         }
         pythonRoot = try canonical(auditedPythonRoot, directory: true)
         // Python.org framework bin/python3 is a launcher that execs Python.app.

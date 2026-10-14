@@ -204,12 +204,51 @@ final class ResearchHTTPTransportTests: XCTestCase {
         let helper = root.appendingPathComponent("helper.py"), profile = root.appendingPathComponent("profile.sb")
         try Data().write(to: helper); try Data().write(to: profile)
         let first = try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile)
-        XCTAssertEqual(first.python, framework.resolvingSymlinksInPath().path)
+        XCTAssertEqual(first.python, try Self.kernelPath(framework))
         try FileManager.default.removeItem(at: framework)
         let second = try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile)
-        XCTAssertEqual(second.python, standalone.resolvingSymlinksInPath().path)
+        XCTAssertEqual(second.python, try Self.kernelPath(standalone))
         try FileManager.default.createSymbolicLink(at: framework, withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
         XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile))
+    }
+
+    private static func kernelPath(_ url: URL) throws -> String {
+        let resolved = try XCTUnwrap(realpath(url.path, nil))
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    func testRuntimeUsesKernelPathsForSandboxAndChildThroughSymlink() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let root = directory.appendingPathComponent("runtime", isDirectory: true)
+        let python = root.appendingPathComponent("bin/python3")
+        try FileManager.default.createDirectory(at: python.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fixture executable".utf8).write(to: python)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: python.path)
+        let helper = root.appendingPathComponent("helper.py"), profile = root.appendingPathComponent("profile.sb")
+        try Data().write(to: helper); try Data().write(to: profile)
+        let alias = directory.appendingPathComponent("runtime-alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
+        let runtime = try ResearchFetchRuntime(auditedPythonRoot: alias,
+            signedHelper: alias.appendingPathComponent("helper.py"), signedProfile: alias.appendingPathComponent("profile.sb"))
+        let expectedRoot = try Self.kernelPath(root), expectedPython = try Self.kernelPath(python)
+        let expectedHelper = try Self.kernelPath(helper), expectedProfile = try Self.kernelPath(profile)
+        XCTAssertEqual(runtime.pythonRoot, expectedRoot); XCTAssertEqual(runtime.python, expectedPython)
+        XCTAssertEqual(runtime.helper, expectedHelper); XCTAssertEqual(runtime.profile, expectedProfile)
+        XCTAssertNotEqual(runtime.pythonRoot, alias.path)
+        let arguments = try runtime.arguments(url: URL(string: "https://example.org/")!, address: "1.1.1.1", remaining: 2)
+        XCTAssertEqual(arguments, ["-f", expectedProfile, "-D", "DOT_SOURCE_PYTHON=" + expectedPython,
+            "-D", "DOT_SOURCE_PYTHON_ROOT=" + expectedRoot, "-D", "DOT_SOURCE_HELPER=" + expectedHelper,
+            expectedPython, "-I", "-S", "-B", expectedHelper, "https://example.org/", "1.1.1.1", "2.000"])
+        for invalid in [root, root.appendingPathComponent("missing.py"), URL(string: "https://example.org/helper.py")!] {
+            XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: alias, signedHelper: invalid, signedProfile: profile))
+            XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: alias, signedHelper: helper, signedProfile: invalid))
+        }
+        XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: helper, signedHelper: helper, signedProfile: profile))
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: python.path)
+        XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: alias, signedHelper: helper, signedProfile: profile))
     }
 
     func testOwnedProcessDeadlineCancellationAndOutputLimit() async throws {
@@ -357,6 +396,7 @@ final class ResearchHTTPTransportTests: XCTestCase {
         print('native-socket-ok')
         """.utf8).write(to: helper)
         let runtime = try await sourceRuntime(helper: helper)
+        XCTAssertEqual(runtime.helper, try Self.kernelPath(helper), "The exact sandbox literal must retain /private when required")
         let (inherited, peer, port) = try await inheritedTCPFixture()
         defer { try? inherited.close(); try? peer.close() }
         let arguments = try runtime.arguments(url: URL(string: "http://fixture.invalid:\(port)/")!, address: "1.1.1.1", remaining: 2)

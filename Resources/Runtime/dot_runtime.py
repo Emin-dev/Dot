@@ -227,9 +227,9 @@ def main():
         # Never release/rebind this backend socket. Only the patched Splash child accepts.
         port = listener.getsockname()[1]
         stage = 'tls'
-        relay = tls.TLSRelay(listener, state, listener=endpoint)
-        home = state / 'home'; home.mkdir()
         api_key = secrets.token_hex(32)
+        relay = tls.TLSRelay(listener, state, api_key=api_key, listener=endpoint)
+        home = state / 'home'; home.mkdir()
         environment = {'SPLASH_API_KEY': api_key, 'PATH': '/usr/bin:/bin', 'HOME': str(home), 'TMPDIR': str(state),
                        'HF_HOME': str(state / 'hf'), 'HF_HUB_CACHE': str(state / 'hf/hub'),
                        'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1', 'PYTHONNOUSERSITE': '1',

@@ -117,7 +117,7 @@ class InheritedTLSListenerTests(unittest.TestCase):
     def test_relay_uses_existing_tls_listener_and_keeps_endpoint_owned(self):
         with tempfile.TemporaryDirectory() as folder, tls.owned_listener() as backend:
             endpoint = tls.owned_listener(); descriptor = endpoint.fileno(); address = endpoint.getsockname()
-            relay = tls.TLSRelay(backend, Path(folder), listener=endpoint)
+            relay = tls.TLSRelay(backend, Path(folder), api_key="model-free-test", listener=endpoint)
             try:
                 self.assertEqual(relay.listener.fileno(), descriptor)
                 self.assertEqual(relay.port, address[1])
@@ -130,7 +130,7 @@ class AuthenticatedRelayTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.state = Path(self.temp.name)
         self.backend = tls.owned_listener(); self.backend.settimeout(4)
-        self.relay = tls.TLSRelay(self.backend, self.state)
+        self.relay = tls.TLSRelay(self.backend, self.state, api_key="model-free-test")
     def tearDown(self):
         self.relay.close(); self.backend.close(); self.temp.cleanup()
     def client(self):
@@ -172,16 +172,16 @@ class AuthenticatedRelayTests(unittest.TestCase):
             for _ in range(2):
                 connection, _ = self.backend.accept()
                 with connection:
-                    connection.settimeout(3); received.append(connection.recv(100)); connection.sendall(b'local reply')
+                    connection.settimeout(3); received.append(connection.recv(4096)); connection.sendall(b'local reply')
         thread = threading.Thread(target=backend); thread.start()
         try:
             for _ in range(2):
                 with self.client() as connection:
                     digest = hashlib.sha256(connection.getpeercert(binary_form=True)).hexdigest()
                     self.assertEqual(digest, self.relay.certificate_sha256)
-                    connection.sendall(b'private fixture'); self.assertEqual(connection.recv(100), b'local reply')
+                    connection.sendall(b'GET /fixture HTTP/1.1\r\nAuthorization: Bearer model-free-test\r\n\r\n'); self.assertEqual(connection.recv(100), b'local reply')
             thread.join(timeout=4); self.assertFalse(thread.is_alive())
-            self.assertEqual(received, [b'private fixture', b'private fixture'])
+            self.assertEqual(received, [b'GET /fixture HTTP/1.1\r\nAuthorization: Bearer model-free-test\r\n\r\n'] * 2)
             self.assertFalse((self.state / 'session.key').exists()); self.assertFalse((self.state / 'session.crt').exists())
         finally: thread.join(timeout=4)
     def test_wrong_pin_sends_no_private_application_bytes(self):
@@ -189,9 +189,8 @@ class AuthenticatedRelayTests(unittest.TestCase):
             digest = hashlib.sha256(connection.getpeercert(binary_form=True)).hexdigest()
             self.assertNotEqual(digest, '0' * 64)
             # Client refuses this identity before writing any bearer/prompt/image.
-        upstream, _ = self.backend.accept()
-        with upstream:
-            upstream.settimeout(3); self.assertEqual(upstream.recv(100), b'')
+        self.backend.settimeout(0.1)
+        with self.assertRaises(socket.timeout): self.backend.accept()
     def test_close_stops_workers_before_backend_can_be_rebound(self):
         connection = self.client()
         self.relay.close(); connection.close()
@@ -215,7 +214,7 @@ class NativeFixtureContractTests(unittest.TestCase):
                 context.check_hostname = False; context.verify_mode = ssl.CERT_NONE
                 with context.wrap_socket(socket.create_connection(('127.0.0.1', ready['port']), timeout=2), server_hostname='dot.local') as connection:
                     self.assertEqual(hashlib.sha256(connection.getpeercert(binary_form=True)).hexdigest(), ready['pin'])
-                    connection.sendall(b'GET /fixture HTTP/1.1\r\nHost: localhost\r\n\r\n')
+                    connection.sendall(b'GET /fixture HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer model-free-test\r\n\r\n')
                     self.assertIn(b'200 OK', connection.recv(4096))
                 child.stdin.close(); child.wait(timeout=4)
                 self.assertEqual(child.returncode, 0, child.stderr.read().decode())
