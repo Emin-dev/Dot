@@ -529,7 +529,20 @@ final class ChatModel: ObservableObject {
             return "My codebase has \(files.count) Swift modules including \(topFiles), and more. You can also view the latest updated code on GitHub at https://github.com/Emin-dev/Dot."
         }
 
-        // 11. Read Source Code or Document File
+        // 11. Permission Status Check
+        if clean.contains("screen permission") || clean.contains("permission for screen") || clean.contains("screen access") ||
+           clean == "check permissions" || clean == "do you have permission" || clean == "do you have permissions" ||
+           clean == "do you have screen permission" || clean == "do you have access to screen" ||
+           clean == "check screen permission" || clean == "permission status" {
+            let hasAccess = CGPreflightScreenCaptureAccess()
+            if hasAccess {
+                return "I already have Screen Recording permission granted on this Mac! I can see your screen whenever screen context is enabled, and I never re-prompt for permission."
+            } else {
+                return "Screen Recording permission is not granted yet in macOS System Settings. If you'd like me to see your screen, you can enable Dot in System Settings → Privacy & Security → Screen Recording."
+            }
+        }
+
+        // 12. Read Source Code or Document File
         if clean.hasPrefix("read file ") || clean.hasPrefix("show file ") || clean.hasPrefix("read code ") || clean.hasPrefix("show code ") {
             let prefix = clean.hasPrefix("read file ") ? "read file " : (clean.hasPrefix("show file ") ? "show file " : (clean.hasPrefix("read code ") ? "read code " : "show code "))
             var pathStr = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)

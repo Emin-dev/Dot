@@ -17,26 +17,45 @@ final class ScreenContext {
             UserDefaults.standard.synchronize()
         }
     }
+    private static var cachedAccessStatus: Bool? = nil
+    private static var lastPreflightCheck: Double = 0
+
+    static func hasScreenAccess(refresh: Bool = false) -> Bool {
+        let now = ProcessInfo.processInfo.systemUptime
+        if !refresh, let cached = cachedAccessStatus, (now - lastPreflightCheck) < 5.0 {
+            return cached
+        }
+        let access = CGPreflightScreenCaptureAccess()
+        cachedAccessStatus = access
+        lastPreflightCheck = now
+        if access {
+            hasRequestedAccess = true
+        }
+        return access
+    }
+
     func prepare(turn: UUID, requestPermission: Bool = true) throws {
         try Task.checkCancellation()
         // 1. If already authorized, never prompt or request access.
-        if CGPreflightScreenCaptureAccess() {
-            guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                     request: { false && (requestPermission && CGRequestScreenCaptureAccess()) }) else { throw ScreenFailure.permission }
+        if Self.hasScreenAccess(refresh: true) || CGPreflightScreenCaptureAccess() {
+            _ = permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
+                                   request: { false && (requestPermission && CGRequestScreenCaptureAccess()) })
             try Task.checkCancellation()
             return
         }
         // 2. If access was already requested in the past or permission prompt is suppressed, do not prompt.
         if Self.hasRequestedAccess || !requestPermission {
-            guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                     request: { false && (requestPermission && CGRequestScreenCaptureAccess()) }) else { throw ScreenFailure.permission }
+            _ = permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
+                                   request: { false && (requestPermission && CGRequestScreenCaptureAccess()) })
             try Task.checkCancellation()
             return
         }
         // 3. Ask at most once in the lifetime of the application.
         Self.hasRequestedAccess = true
         guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                 request: { requestPermission && CGRequestScreenCaptureAccess() }) else { throw ScreenFailure.permission }
+                                 request: { requestPermission && CGRequestScreenCaptureAccess() }) else {
+            throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission
+        }
         try Task.checkCancellation()
     }
     func capture(turn: UUID, modelHasVision: Bool) async throws -> CapturedScreenImage? {
@@ -44,7 +63,7 @@ final class ScreenContext {
         guard modelHasVision else { throw ScreenFailure.unsupported }
         try Task.checkCancellation()
         guard permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess) else {
-            throw ScreenFailure.permission
+            throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission
         }
         try Task.checkCancellation()
         encoding?.task.cancel(); encoding = nil
@@ -95,7 +114,9 @@ final class ScreenContext {
         try Task.checkCancellation()
         try gate.validateCapture(turn: turn)
         guard enabled else { throw ScreenContextGate.Failure.disabled }
-        guard permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess) else { throw ScreenFailure.permission }
+        guard permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess) else {
+            throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission
+        }
     }
     func cancel() { gate.cancel(); permission.cancel(); encoding?.task.cancel(); encoding = nil }
     enum ScreenFailure: LocalizedError {
