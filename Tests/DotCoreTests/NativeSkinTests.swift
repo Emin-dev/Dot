@@ -11,14 +11,14 @@ final class NativeSkinTests: XCTestCase {
         try body(defaults)
     }
 
-    @MainActor func testDefaultAndUnknownSelectionKeepOriginalWithoutOverwritingOtherPreferences() {
+    @MainActor func testDefaultAndUnknownSelectionKeepDewWithoutOverwritingOtherPreferences() {
         preferences { defaults in
             defaults.set("keep", forKey: "unrelated-setting")
-            XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .original)
+            XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .dew)
             XCTAssertNil(defaults.object(forKey: SkinPreferences.selectionKey))
             for invalid in ["fold", "prototype-pearl", "future-skin"] {
                 defaults.set(invalid, forKey: SkinPreferences.selectionKey)
-                XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .original)
+                XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .dew)
             }
             XCTAssertEqual(defaults.string(forKey: "unrelated-setting"), "keep")
         }

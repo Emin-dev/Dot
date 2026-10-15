@@ -151,31 +151,27 @@ struct RoamingCore {
     /// Finds a candidate position in `bounds` that does not intersect any protected region
     /// (windows, text boxes, buttons) and maintains distance from the cursor.
     static func findEmptySpace(frame: CGRect, bounds: CGRect, cursor: CGPoint,
-                               regions: [CGRect], preferredNear: CGPoint? = nil) -> CGPoint? {
+                                regions: [CGRect], preferredNear: CGPoint? = nil,
+                                minDistance: CGFloat = 0) -> CGPoint? {
         var candidates: [CGPoint] = []
         let origin = frame.origin
         let overlapping = regions.filter { frame.intersects($0) }
 
         // 1. Gutter positions directly adjacent to overlapping obstacles
         for obs in overlapping {
-            candidates.append(CGPoint(x: obs.minX - frame.width - 1, y: origin.y))
-            candidates.append(CGPoint(x: obs.maxX + 1, y: origin.y))
-            candidates.append(CGPoint(x: origin.x, y: obs.minY - frame.height - 1))
-            candidates.append(CGPoint(x: origin.x, y: obs.maxY + 1))
+            candidates.append(CGPoint(x: obs.minX - frame.width - 24, y: origin.y))
+            candidates.append(CGPoint(x: obs.maxX + 24, y: origin.y))
+            candidates.append(CGPoint(x: origin.x, y: obs.minY - frame.height - 24))
+            candidates.append(CGPoint(x: origin.x, y: obs.maxY + 24))
 
-            candidates.append(CGPoint(x: obs.minX - frame.width - 16, y: origin.y))
-            candidates.append(CGPoint(x: obs.maxX + 16, y: origin.y))
-            candidates.append(CGPoint(x: origin.x, y: obs.minY - frame.height - 16))
-            candidates.append(CGPoint(x: origin.x, y: obs.maxY + 16))
-
-            candidates.append(CGPoint(x: obs.minX - frame.width - 16, y: obs.minY - frame.height - 16))
-            candidates.append(CGPoint(x: obs.maxX + 16, y: obs.maxY + 16))
-            candidates.append(CGPoint(x: obs.maxX + 16, y: obs.minY - frame.height - 16))
-            candidates.append(CGPoint(x: obs.minX - frame.width - 16, y: obs.maxY + 16))
+            candidates.append(CGPoint(x: obs.minX - frame.width - 40, y: obs.minY - frame.height - 40))
+            candidates.append(CGPoint(x: obs.maxX + 40, y: obs.maxY + 40))
+            candidates.append(CGPoint(x: obs.maxX + 40, y: obs.minY - frame.height - 40))
+            candidates.append(CGPoint(x: obs.minX - frame.width - 40, y: obs.maxY + 40))
         }
 
         // 2. Screen corner and margin pockets (typically clear desktop/gutters)
-        let margin: CGFloat = 16
+        let margin: CGFloat = 24
         candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin)) // Top-right
         candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin)) // Top-left
         candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin)) // Bottom-right
@@ -198,7 +194,9 @@ struct RoamingCore {
 
         for candidate in candidates {
             let clamped = clamp(candidate, to: bounds)
-            let testRect = CGRect(origin: clamped, size: frame.size)
+            let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distToOrigin >= minDistance else { continue }
+            let testRect = CGRect(origin: clamped, size: frame.size).insetBy(dx: -12, dy: -12)
             guard clear(testRect, regions: regions) else { continue }
             let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
             guard hypot(cursor.x - center.x, cursor.y - center.y) >= 70 else { continue }
@@ -295,7 +293,7 @@ struct RoamingCore {
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = now + 45.0 + Double(seed % 20)
+                nextWander = now + 40.0 + Double(seed % 20)
             } else {
                 trip = active
             }
@@ -376,14 +374,11 @@ struct RoamingCore {
 
         // If normal directional wander is blocked, find any clear empty space
         if let emptySpace = Self.findEmptySpace(frame: frame, bounds: bounds, cursor: cursor,
-                                                regions: regions, preferredNear: origin) {
-            let distance = hypot(emptySpace.x - origin.x, emptySpace.y - origin.y)
-            if distance >= 20 {
-                trip = Trip(start: origin, target: emptySpace, snapshot: validSnapshot, isEscape: false)
-                isTravelling = true
-                nextWander = now + 45.0 + Double(seed % 20)
-                return origin
-            }
+                                                regions: regions, minDistance: 50.0) {
+            trip = Trip(start: origin, target: emptySpace, snapshot: validSnapshot, isEscape: false)
+            isTravelling = true
+            nextWander = now + 45.0 + Double(seed % 20)
+            return origin
         }
 
         // 3. Fallback Micro-Roam (only into verified clear space)

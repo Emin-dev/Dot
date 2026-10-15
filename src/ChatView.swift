@@ -268,6 +268,7 @@ final class ChatModel: ObservableObject {
             Self.timingLog.notice("DOT_TIMING selected_silence=\(milliseconds)ms")
         }
         screen.enabled = screenEnabled
+        proactiveEvidence.recordUser(turn: UUID(), now: ProcessInfo.processInfo.systemUptime)
         self.runtime.startPreparation()
         stt.onFinal = { [weak self] id, text in
             guard let self, self.gate.accepts(id) else { return }
@@ -340,6 +341,7 @@ final class ChatModel: ObservableObject {
             }
             guard self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
             self.phase = self.generating ? .thinking : .idle
+            if !self.generating { self.followup.playbackFinished(turn: id) }
         }
         proactive.onOpportunity = { [weak self] in self?.suggest($0) }
         proactive.onCancel = { [weak self] opportunity in
@@ -645,6 +647,9 @@ final class ChatModel: ObservableObject {
                 self.generating = false; self.timing("generation_complete")
                 if !self.voiceDeliveryFailed { self.runtime.completeVoice(id) }
                 self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle
+                if !self.voiceDeliveryFailed && !self.runtime.ttsSpeaking() {
+                    self.followup.playbackFinished(turn: id)
+                }
             } catch {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.logFailure(error, stage: stage)
@@ -780,7 +785,7 @@ struct PetView: View {
                     emotion: emotion,
                     phase: model.phase,
                     level: stt.level,
-                    still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
+                    still: reduceMotion || (model.pinned && !model.phase.isActive),
                     skin: skins.selected,
                     playbackLevel: tts.playbackLevel,
                     motionDetail: skins.motionDetail,

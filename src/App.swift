@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openOptions() { showOptions() }
     @objc private func typeMessage() {
         guard let model else { return }
-        model.cancelForInteraction(); typedPanel.show(model: model)
+        model.cancelForInteraction(); typedPanel.show(model: model, anchorFrame: panel?.frame)
     }
     @objc private func runActions() {
         model?.cancelForInteraction(); actionPanel.show()

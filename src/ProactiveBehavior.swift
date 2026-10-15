@@ -151,7 +151,6 @@ struct ProactiveSchedule {
     }
     @discardableResult mutating func clearContext(now: Double) -> UUID? {
         pending = nil
-        if now.isFinite { nextEligibleAt = now + frequency.interval }
         return cancelActive()
     }
     mutating func take(now: Double) -> ProactiveOpportunity? {
