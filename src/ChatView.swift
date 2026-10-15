@@ -742,7 +742,7 @@ final class ChatModel: ObservableObject {
         do {
             try screen.prepare(turn: id, requestPermission: false)
         } catch {
-            cancelTurn(); block(error.localizedDescription, issue: .screenPermission); return false
+            Self.runtimeLog.notice("Screen preparation skipped for typed turn: \(error.localizedDescription, privacy: .public)")
         }
         do { try runtime.startVoice(id) }
         catch { logFailure(error, stage: .voice); continueTypedWithoutVoice(id: id) }
