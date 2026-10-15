@@ -3,6 +3,7 @@ import AppKit
 import OSLog
 import AVFoundation
 import CoreGraphics
+import IOKit.ps
 
 /// Replaceable boundary operations keep coordinator replays model-free. This
 /// carries no turn state; production closures use the existing native managers.
@@ -77,6 +78,11 @@ enum DiagnosticChatLogger {
             combined.append(data)
             try? combined.write(to: url, options: .atomic)
         }
+    }
+
+    static func recordFailure(task: String, reason: String, missingCapability: String, proposedFix: String) {
+        let msg = "TASK: \"\(task)\" | REASON: \(reason) | MISSING: \(missingCapability) | PROPOSED_FIX: \(proposedFix)"
+        record(role: "dot (self-improvement)", text: msg)
     }
 }
 
@@ -303,6 +309,172 @@ final class ChatModel: ObservableObject {
                 if !query.isEmpty { return query }
             }
         }
+        return nil
+    }
+
+    private func detectSystemControlCommand(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count <= 140 else { return nil }
+        var clean = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+
+        // Common conversational prefixes
+        let prefixes = [
+            "can you please ", "could you please ", "can you ", "could you ", "would you ",
+            "please ", "hey dot ", "dot ", "i want you to ", "try to ", "пожалуйста ", "дот "
+        ]
+        for p in prefixes {
+            if clean.hasPrefix(p) {
+                clean = String(clean.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+
+        // 1. User Correction: "You did not move yourself" / "Fix it"
+        if clean.contains("did not move") || clean.contains("didn't move") || (clean.contains("fix it") && (clean.contains("move") || clean.contains("screen"))) {
+            DiagnosticChatLogger.recordFailure(
+                task: text,
+                reason: "User indicated movement was missed or incomplete",
+                missingCapability: "Corrective movement dispatch on feedback",
+                proposedFix: "Execute immediate corrective relocation"
+            )
+            Task { [weak self] in
+                _ = try? await self?.ftsStore.saveMemory(category: .userCorrection, fact: "User instructed: \(text). Always execute movement immediately when asked.", isCorrection: true)
+            }
+            if let reply = self.onMove?(.center) ?? self.onMove?(.random) {
+                return "I apologize! " + reply
+            }
+            return "I apologize! Relocating right now."
+        }
+
+        // 2. Pin / Freeze Control
+        if clean == "pin" || clean == "pin yourself" || clean == "pin in place" || clean == "freeze" || clean == "stay there" || clean == "stop moving" || clean == "don't move" || clean == "закрепись" || clean == "не двигайся" {
+            pinned = true
+            return "I've pinned myself in place. I will stay right here until you unpin me."
+        }
+        if clean == "unpin" || clean == "unpin yourself" || clean == "roam freely" || clean == "you can move" || clean == "start moving" || clean == "открепись" || clean == "можешь двигаться" {
+            pinned = false
+            return "Unpinned! I'll roam around the screen freely."
+        }
+
+        // 3. Sound & Volume Control
+        if clean == "mute" || clean == "mute sound" || clean == "mute volume" || clean == "mute audio" || clean == "тишина" || clean == "выключи звук" {
+            var err: NSDictionary?
+            _ = NSAppleScript(source: "set volume with output muted")?.executeAndReturnError(&err)
+            return "Muted audio output."
+        }
+        if clean == "unmute" || clean == "unmute sound" || clean == "unmute audio" || clean == "включи звук" {
+            var err: NSDictionary?
+            _ = NSAppleScript(source: "set volume without output muted")?.executeAndReturnError(&err)
+            return "Unmuted audio output."
+        }
+        if clean == "volume up" || clean == "louder" || clean == "turn up volume" || clean == "громче" {
+            var err: NSDictionary?
+            _ = NSAppleScript(source: "set volume output volume ((output volume of (get volume settings)) + 12)")?.executeAndReturnError(&err)
+            return "Turned volume up."
+        }
+        if clean == "volume down" || clean == "quieter" || clean == "lower volume" || clean == "turn down volume" || clean == "тише" {
+            var err: NSDictionary?
+            _ = NSAppleScript(source: "set volume output volume ((output volume of (get volume settings)) - 12)")?.executeAndReturnError(&err)
+            return "Turned volume down."
+        }
+        if clean.hasPrefix("set volume to ") || clean.hasPrefix("volume to ") || clean.hasPrefix("volume ") {
+            let digits = clean.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }.first
+            if let digits, let level = Int(digits), (0...100).contains(level) {
+                var err: NSDictionary?
+                _ = NSAppleScript(source: "set volume output volume \(level)")?.executeAndReturnError(&err)
+                return "Set volume to \(level)%."
+            }
+        }
+
+        // 4. Battery Status
+        if clean == "battery" || clean == "battery level" || clean == "check battery" || clean == "battery status" || clean == "how much battery" || clean == "батарея" || clean == "заряд" {
+            if let blob = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+               let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [AnyObject] {
+                for s in sources {
+                    if let desc = IOPSGetPowerSourceDescription(blob, s)?.takeUnretainedValue() as? [String: Any],
+                       let current = desc[kIOPSCurrentCapacityKey] as? Int {
+                        let isCharging = desc[kIOPSIsChargingKey] as? Bool ?? false
+                        return "Battery is at \(current)% (\(isCharging ? "charging" : "on battery"))."
+                    }
+                }
+            }
+            return "Could not read battery information."
+        }
+
+        // 5. Clipboard
+        if clean == "what's on my clipboard" || clean == "what is on my clipboard" || clean == "read clipboard" || clean == "show clipboard" || clean == "clipboard" || clean == "буфер обмена" {
+            if let content = NSPasteboard.general.string(forType: .string), !content.isEmpty {
+                let preview = content.count > 160 ? String(content.prefix(160)) + "…" : content
+                return "Your clipboard contains: \(preview)"
+            }
+            return "Your clipboard is currently empty."
+        }
+        if clean.hasPrefix("copy to clipboard: ") || clean.hasPrefix("copy to clipboard ") || clean.hasPrefix("copy ") {
+            let prefix = clean.hasPrefix("copy to clipboard: ") ? "copy to clipboard: " : (clean.hasPrefix("copy to clipboard ") ? "copy to clipboard " : "copy ")
+            let textToCopy = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !textToCopy.isEmpty {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(textToCopy, forType: .string)
+                return "Copied to clipboard: \"\(textToCopy.prefix(60))\""
+            }
+        }
+
+        // 6. Close / Quit Application
+        if clean.hasPrefix("close ") || clean.hasPrefix("quit ") || clean.hasPrefix("terminate ") || clean.hasPrefix("закрыть ") {
+            let prefix = clean.hasPrefix("close ") ? "close " : (clean.hasPrefix("quit ") ? "quit " : (clean.hasPrefix("terminate ") ? "terminate " : "закрыть "))
+            let appName = String(clean.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !appName.isEmpty && !["the window", "window", "tab", "file"].contains(appName) {
+                let running = NSWorkspace.shared.runningApplications
+                if let target = running.first(where: {
+                    $0.localizedName?.lowercased() == appName ||
+                    $0.bundleIdentifier?.lowercased().hasSuffix("." + appName) == true ||
+                    $0.localizedName?.lowercased().contains(appName) == true
+                }) {
+                    let name = target.localizedName ?? appName
+                    target.terminate()
+                    return "Closed \(name)."
+                }
+                return "Could not find a running app named \(appName.capitalized)."
+            }
+        }
+
+        // 7. Standard Folders in Finder
+        if clean == "open downloads" || clean == "show downloads" || clean == "open downloads folder" || clean == "show downloads folder" {
+            if let url = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+                NSWorkspace.shared.open(url)
+                return "Opened your Downloads folder."
+            }
+        }
+        if clean == "open documents" || clean == "show documents" || clean == "open documents folder" || clean == "show documents folder" {
+            if let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                NSWorkspace.shared.open(url)
+                return "Opened your Documents folder."
+            }
+        }
+        if clean == "open desktop" || clean == "show desktop" || clean == "open desktop folder" {
+            if let url = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
+                NSWorkspace.shared.open(url)
+                return "Opened your Desktop folder."
+            }
+        }
+
+        // 8. Math / Arithmetic Calculator
+        if clean.hasPrefix("calculate ") || clean.hasPrefix("what is ") || clean.hasPrefix("math ") || clean.hasPrefix("посчитай ") {
+            let prefix = clean.hasPrefix("calculate ") ? "calculate " : (clean.hasPrefix("what is ") ? "what is " : (clean.hasPrefix("math ") ? "math " : "посчитай "))
+            let remainder = String(clean.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let sanitized = remainder.replacingOccurrences(of: "x", with: "*")
+                                     .replacingOccurrences(of: "X", with: "*")
+                                     .replacingOccurrences(of: "×", with: "*")
+                                     .replacingOccurrences(of: "÷", with: "/")
+            let mathAllowed = CharacterSet(charactersIn: "0123456789+-*/.() %")
+            if sanitized.unicodeScalars.allSatisfy({ mathAllowed.contains($0) }) && sanitized.contains(where: { "+-*/".contains($0) }) {
+                let exp = NSExpression(format: sanitized)
+                if let val = exp.expressionValue(with: nil, context: nil) as? NSNumber {
+                    return "\(remainder) = \(val)"
+                }
+            }
+        }
+
         return nil
     }
 
@@ -968,6 +1140,11 @@ final class ChatModel: ObservableObject {
             return
         }
 
+        if let systemReply = self.detectSystemControlCommand(text) {
+            respondDirectly(systemReply, id: id)
+            return
+        }
+
         let cleanLower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!."))
         if cleanLower == "what time is it" || cleanLower == "what is the time" || cleanLower == "what's the time" || cleanLower == "current time" || cleanLower == "time" {
             let formatter = DateFormatter()
@@ -1077,6 +1254,20 @@ final class ChatModel: ObservableObject {
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 let finalAnswer = self.answer
                 DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
+                let lowerAns = finalAnswer.lowercased()
+                if lowerAns.contains("i can't") || lowerAns.contains("i cannot") || lowerAns.contains("i don't have") || lowerAns.contains("unable to") {
+                    DiagnosticChatLogger.recordFailure(
+                        task: text,
+                        reason: finalAnswer,
+                        missingCapability: "Model expressed inability to perform task",
+                        proposedFix: "Expose direct native implementation or system control"
+                    )
+                }
+                if (lowerAns.contains("center") || lowerAns.contains("middle")) && (lowerAns.contains("moving") || lowerAns.contains("relocating") || lowerAns.contains("centering")) {
+                    _ = self.onMove?(.center)
+                } else if lowerAns.contains("moving") || lowerAns.contains("relocating") {
+                    _ = self.onMove?(.random)
+                }
                 Task { [weak self] in
                     guard let self else { return }
                     let uRec = ConversationHistoryRecord(id: UUID(), date: Date(), role: .user, text: text, turnID: id, generation: .complete, playback: .notApplicable, generationCompletedAt: nil, playbackStartedAt: nil, playbackCompletedAt: nil, endedAt: nil, failureStage: nil, textTruncated: false)
@@ -1093,6 +1284,12 @@ final class ChatModel: ObservableObject {
             } catch {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.logFailure(error, stage: stage)
+                DiagnosticChatLogger.recordFailure(
+                    task: text,
+                    reason: "\(error)",
+                    missingCapability: "Pipeline stage \(stage) failure",
+                    proposedFix: "Examine stage diagnostic and provide direct fallback"
+                )
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(.generation))
                 let issue: CompanionIssue
                 if let failure = error as? ScreenContext.ScreenFailure {
