@@ -72,9 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        y: PetLayout.petBottom, width: PetLayout.petSize.width,
                                        height: PetLayout.petSize.height)).contains(point)
         }
-        panel.controlHitTest = { point in
-            point.y >= PetLayout.panelSize.height - 38 && (point.x <= 54 || point.x >= PetLayout.panelSize.width - 54)
-        }
+        panel.controlHitTest = { _ in false }
         panel.controlInteraction = { [weak self, weak model] active in
             model?.setControlInteraction(active)
             self?.cancelMovement()

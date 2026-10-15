@@ -720,6 +720,21 @@ struct PetView: View {
     @ObservedObject private var preparation = OfflinePreparation.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    private var emotion: PetEmotion {
+        if case .blocked = model.phase { return .puzzled }
+        if model.issue != nil || preparation.state.isIssue { return .puzzled }
+        if model.taskHalo != .hidden || stt.transcribing || preparation.state == .checking || model.capturingScreen || model.placementCapturing {
+            return .working
+        }
+        switch model.phase {
+        case .idle: return .idle
+        case .listening: return .listening
+        case .thinking: return .thinking
+        case .speaking: return .speaking
+        case .blocked: return .puzzled
+        }
+    }
+
     var body: some View {
         character
             .onHover { model.hovered = $0 }
@@ -727,170 +742,32 @@ struct PetView: View {
             .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
             .onExitCommand { stop() }
     }
+
     private var character: some View {
         Button(action: model.clicked) {
-            ZStack {
-                PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
-                             skin: skins.selected, playbackLevel: tts.playbackLevel, motionDetail: skins.motionDetail, expressionRevision: model.expressionRevision)
-                    .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
-                    .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
-
-                if preparation.state == .checking {
-                    ZStack {
-                        Circle().stroke(Color.accentColor.opacity(0.45), lineWidth: 2)
-                        Circle().trim(from: 0, to: CGFloat(preparation.progress))
-                            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    }
-                    .frame(width: 116, height: 116).rotationEffect(.degrees(-90))
-                    .accessibilityHidden(true)
-                } else if model.taskHalo != .hidden {
-                    LongTaskHaloView(halo: model.taskHalo, stageText: model.taskStage)
-                }
-
-                VStack {
-                    HStack(alignment: .center, spacing: 4) {
-                        topLeftIndicators
-                        Spacer()
-                        topRightIndicators
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.top, 6)
-                    Spacer()
-                }
-                .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
-            }
+            PetCharacter(
+                emotion: emotion,
+                phase: model.phase,
+                level: stt.level,
+                still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
+                skin: skins.selected,
+                playbackLevel: tts.playbackLevel,
+                motionDetail: skins.motionDetail,
+                expressionRevision: model.expressionRevision
+            )
+            .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
+            .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
         }
         .buttonStyle(.plain)
         .contentShape(Ellipse())
         .accessibilityLabel("Dot companion")
-        .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen || model.placementCapturing, screenUsed: model.screenContextUsed))
-        .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click or Shift F10 for options. Escape stops the current action.")
+        .accessibilityValue(emotion.caption)
+        .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click for options. Escape stops.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
     }
 
-    @ViewBuilder
-    private var topLeftIndicators: some View {
-        HStack(spacing: 3) {
-            Button(action: model.clicked) {
-                ZStack {
-                    Circle().fill(.ultraThinMaterial).frame(width: 24, height: 24)
-                    Circle().strokeBorder(stt.recording ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: 1.2)
-                        .frame(width: 24, height: 24)
-                    Image(systemName: stt.recording ? "mic.fill" : "mic.slash")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(stt.recording ? Color.accentColor : Color.secondary)
-                }
-            }
-            .buttonStyle(.plain)
-            .help(stt.recording ? "Microphone active. Click to finish or interrupt." : "Microphone off. Click to talk.")
-
-            if isIssue {
-                Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13))
-                    .foregroundStyle(.orange).help(CompanionStatusText.issue(model.issue))
-            } else if preparation.state == .paused {
-                Image(systemName: "pause.circle.fill").font(.system(size: 13))
-                    .foregroundStyle(.secondary).help("Checking paused")
-            } else if preparation.state == .checking {
-                Image(systemName: "hourglass").font(.system(size: 12))
-                    .foregroundStyle(Color.accentColor).help("Checking files \(Int(preparation.progress * 100))%")
-            } else if stt.transcribing {
-                Image(systemName: "waveform").font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.accentColor).help("Transcribing speech…")
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var topRightIndicators: some View {
-        HStack(spacing: 3) {
-            if model.capturingScreen || model.placementCapturing || model.screenContextUsed {
-                Image(systemName: (model.capturingScreen || model.placementCapturing) ? "eye.fill" : "eye")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(model.screenContextUsed ? Color.accentColor : Color.secondary)
-                    .padding(4)
-                    .background(Circle().fill(.ultraThinMaterial))
-                    .help(model.placementCapturing ? "Checking placement locally" : model.capturingScreen ? "Reading screen locally" : "Screen context used")
-            }
-
-            if model.phase.isActive || model.followupPending || preparation.state == .checking {
-                Button(action: stop) {
-                    ZStack {
-                        Circle().fill(.ultraThinMaterial).frame(width: 24, height: 24)
-                        Image(systemName: "stop.fill").font(.system(size: 10, weight: .bold)).foregroundStyle(.red)
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Stop current action (Escape)")
-                .accessibilityLabel("Stop")
-            } else {
-                Button(action: openOptions) {
-                    ZStack {
-                        Circle().fill(.ultraThinMaterial).frame(width: 24, height: 24)
-                        Image(systemName: "gearshape.fill").font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.secondary.opacity(model.hovered ? 0.95 : 0.55))
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Options (Shift F10 or right-click)")
-                .accessibilityLabel("Options")
-            }
-        }
-    }
     private func openOptions() { model.dismissFirstUseHint(); model.showOptions?() }
     private func stop() { model.stopCurrentTurn(); preparation.pause() }
-    private var canContinueWithoutScreen: Bool {
-        model.screenEnabled && [.screenPermission, .screenCapture, .vision].contains(model.issue)
-    }
-    private var isIssue: Bool { preparation.state.isIssue || { if case .blocked = model.phase { return true }; return false }() }
-    private var detail: String? {
-        if let issue = preparation.state.detail { return issue }
-        if case .blocked(let issue) = model.phase { return issue }
-        return model.voiceDeliveryNotice
-    }
-    private var status: String {
-        if preparation.state == .checking { return "Checking bundled files, \(Int(preparation.progress * 100)) percent" }
-        if !preparation.ready { return preparation.state.caption }
-        if case .blocked = model.phase { return (model.issue?.title ?? CompanionIssue.unknown.title) + " · right-click" }
-        if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
-        if stt.transcribing { return "Transcribing locally…" }
-        if stt.recording, let snapshot = stt.timingSnapshot {
-            switch snapshot.phase {
-            case .invitation: return "Time to begin speaking: \(CompanionStatusText.seconds(snapshot.remainingSeconds)) seconds"
-            case .trailingSilence: return "Waiting for uninterrupted silence: \(CompanionStatusText.seconds(snapshot.remainingSeconds)) seconds"
-            case .speaking, .waitingForSpeech: return "Listening"
-            }
-        }
-        if stt.captureState == .requestingPermission { return "Waiting for microphone permission" }
-        if model.capturingScreen { return "Reading screen locally…" }
-        if model.phase == .listening && !stt.recording { return "Preparing microphone…" }
-        if model.phase == .listening && model.automaticReply { return "Listening for your reply" }
-        if model.voiceDeliveryNotice != nil { return model.phase == .thinking ? "Generating text. Voice unavailable." : "Text-only reply. Voice unavailable." }
-        return model.phase.caption
-    }
-    private var shortStatus: String {
-        if preparation.state == .checking { return "Checking \(Int(preparation.progress * 100))%" }
-        if !preparation.ready { return preparation.state == .paused ? "Paused" : "Check files" }
-        if case .blocked = model.phase { return CompanionStatusText.issue(model.issue) }
-        if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
-        if model.phase == .idle, let stage = model.taskStage { return stage }
-        if stt.transcribing { return "Transcribing" }
-        if stt.recording, let snapshot = stt.timingSnapshot {
-            switch snapshot.phase {
-            case .invitation: return "Reply \(CompanionStatusText.seconds(snapshot.remainingSeconds))s"
-            case .trailingSilence: return "Wait \(CompanionStatusText.seconds(snapshot.remainingSeconds))s"
-            case .speaking, .waitingForSpeech: return "Listening"
-            }
-        }
-        if stt.captureState == .requestingPermission { return "Allow mic" }
-        if model.capturingScreen { return "Reading screen" }
-        switch model.phase {
-        case .idle: return model.voiceDeliveryNotice != nil ? "Text only" : model.followupPending ? "Reply soon" : "Ready"
-        case .listening: return stt.recording ? "Listening" : "Starting mic"
-        case .thinking: return model.voiceDeliveryNotice != nil ? "Thinking · text" : "Thinking"
-        case .speaking: return "Speaking"
-        case .blocked: return "Try again"
-        }
-    }
 }
 
 enum CompanionStatusText {

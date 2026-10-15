@@ -1,6 +1,27 @@
 import SwiftUI
 
+enum PetEmotion: String, CaseIterable, Equatable {
+    case idle
+    case listening
+    case thinking
+    case working
+    case speaking
+    case puzzled
+
+    var caption: String {
+        switch self {
+        case .idle: return "Ready"
+        case .listening: return "Listening"
+        case .thinking: return "Thinking"
+        case .working: return "Working"
+        case .speaking: return "Speaking"
+        case .puzzled: return "Needs attention"
+        }
+    }
+}
+
 struct PetCharacter: View {
+    var emotion: PetEmotion = .idle
     let phase: PetPhase
     let level: Double
     let still: Bool
@@ -9,13 +30,27 @@ struct PetCharacter: View {
     var motionDetail: SkinMotionDetail = .full
     var expressionRevision: UInt64 = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var resolvedEmotion: PetEmotion {
+        if emotion != .idle { return emotion }
+        switch phase {
+        case .idle: return .idle
+        case .listening: return .listening
+        case .thinking: return .thinking
+        case .speaking: return .speaking
+        case .blocked: return .puzzled
+        }
+    }
+
     var body: some View {
         Group {
             if skin == .original {
-                OriginalPetCharacter(phase: phase, level: level, still: still || reduceMotion || motionDetail == .still,
+                OriginalPetCharacter(emotion: resolvedEmotion, phase: phase, level: level,
+                                     still: still || reduceMotion || motionDetail == .still,
                                      motionScale: motionDetail.movementScale, playbackLevel: playbackLevel)
             } else {
-                NativeSkinCharacter(phase: phase, level: level, still: still || reduceMotion,
+                NativeSkinCharacter(emotion: resolvedEmotion, phase: phase, level: level,
+                                    still: still || reduceMotion,
                                     skin: skin, playbackLevel: playbackLevel, motionDetail: motionDetail,
                                     expressionRevision: expressionRevision)
             }
@@ -25,6 +60,7 @@ struct PetCharacter: View {
 
 // The original is kept as the default, retaining the existing shape and appearance.
 private struct OriginalPetCharacter: View {
+    let emotion: PetEmotion
     let phase: PetPhase
     let level: Double
     let still: Bool
@@ -33,12 +69,16 @@ private struct OriginalPetCharacter: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var colorScheme
     private var ink: Color { colorScheme == .dark ? Color(red: 0.08, green: 0.13, blue: 0.17) : Color(red: 0.22, green: 0.36, blue: 0.41) }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still || phase == .listening)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: still)) { context in
             let time = context.date.timeIntervalSinceReferenceDate
-            let bob = still || phase.isActive ? 0.0 : sin(time * 1.4) * 3 * motionScale
+            let (bob, tilt, scaleY) = posture(time: time)
             ZStack {
+                // Ground shadow
                 Ellipse().fill(.black.opacity(0.10)).frame(width: 75, height: 10).blur(radius: 4).offset(y: 62)
+
+                // Main character bubble
                 ZStack {
                     if reduceTransparency {
                         Circle().fill(Color(red: 0.84, green: 0.91, blue: 0.93)).frame(width: 108, height: 108)
@@ -49,39 +89,210 @@ private struct OriginalPetCharacter: View {
                     Circle().strokeBorder(.white.opacity(0.58), lineWidth: 1.5).frame(width: 106, height: 106)
                     Circle().trim(from: 0.08, to: 0.43).stroke(.white.opacity(0.65), lineWidth: 2).rotationEffect(.degrees(90)).frame(width: 94, height: 94)
                     Ellipse().fill(.white.opacity(0.75)).frame(width: 25, height: 11).rotationEffect(.degrees(-35)).blur(radius: 2).offset(x: -26, y: -33)
-                    HStack(spacing: 22) { eye(time: time); eye(time: time) }.offset(y: -4)
-                    if phase == .speaking {
-                        ForEach([-1.0, 1.0], id: \.self) { side in
-                            Ellipse().fill(Color.pink.opacity(still ? 0.15 : 0.25)).frame(width: 14, height: 7).blur(radius: 2)
-                                .offset(x: side * 27, y: 7)
-                        }
-                        OriginalSpeakingMouth(time: time, ink: ink, still: still, playbackLevel: playbackLevel)
-                            .offset(y: 12)
-                    } else {
-                        Smile().stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                            .frame(width: 9, height: 5).offset(y: 12)
+
+                    // Warm cheeks
+                    cheeksView(time: time)
+
+                    // Eyebrows
+                    HStack(spacing: 24) {
+                        browView(side: -1.0, time: time)
+                        browView(side: 1.0, time: time)
                     }
-                    if phase == .listening {
-                        Circle().stroke(Color(red: 0.56, green: 0.68, blue: 0.87).opacity(0.55), lineWidth: 1.5)
-                            .frame(width: 121 + (still ? 0 : min(level, 0.4) * 12), height: 121 + (still ? 0 : min(level, 0.4) * 12))
+                    .offset(y: -15)
+
+                    // Eyes
+                    HStack(spacing: 22) {
+                        eyeView(side: -1.0, time: time)
+                        eyeView(side: 1.0, time: time)
                     }
-                    if phase == .thinking {
-                        HStack(spacing: 4) {
-                            ForEach(0..<3) { index in
-                                Circle().fill(ink).frame(width: 3, height: 3)
-                                    .opacity(still ? 1 : 0.35 + 0.65 * abs(sin(time * 2 + Double(index))))
-                            }
-                        }.offset(y: 34)
-                    }
-                }.offset(y: bob)
+                    .offset(y: -4)
+
+                    // Mouth
+                    mouthView(time: time)
+                        .offset(y: 12)
+                }
+                .scaleEffect(y: scaleY)
+                .rotationEffect(.degrees(tilt))
+                .offset(y: bob)
             }
         }
     }
-    private func eye(time: TimeInterval) -> some View {
-        let closed = !still && time.truncatingRemainder(dividingBy: 5) < 0.16
-        let speakingSquint = !still && phase == .speaking
-        let h: CGFloat = closed ? 2 : (speakingSquint ? 8.5 : 11)
-        return Capsule().fill(ink).frame(width: 6, height: h)
+
+    private func posture(time: TimeInterval) -> (Double, Double, Double) {
+        if still { return (0, 0, 1.0) }
+        switch emotion {
+        case .idle:
+            let bob = sin(time * 1.5) * 2.5 * motionScale
+            let tilt = sin(time * 0.8) * 1.5 * motionScale
+            let scaleY = 1.0 + sin(time * 1.5) * 0.015
+            return (bob, tilt, scaleY)
+        case .listening:
+            let bob = -1.5 + sin(time * 2.8) * 0.8
+            let tilt = 3.2
+            return (bob, tilt, 1.02)
+        case .thinking:
+            let bob = sin(time * 1.2) * 1.8 * motionScale
+            let tilt = -4.5 + sin(time * 0.9) * 1.0
+            return (bob, tilt, 0.99)
+        case .working:
+            let bob = sin(time * 3.5) * 1.0 * motionScale
+            let tilt = 1.0
+            return (bob, tilt, 1.0)
+        case .speaking:
+            let cadence = sin(time * 16.0) * 0.5 + 0.5
+            let bob = (cadence * 2.6 - 1.0) * motionScale
+            let tilt = sin(time * 3.0) * 2.0 * motionScale
+            return (bob, tilt, 1.0 + cadence * 0.02)
+        case .puzzled:
+            let bob = sin(time * 1.0) * 1.2 * motionScale
+            let tilt = -8.5 + sin(time * 1.2) * 1.0
+            return (bob, tilt, 0.98)
+        }
+    }
+
+    private func eyeView(side: Double, time: TimeInterval) -> some View {
+        let isBlinking = !still && emotion == .idle && (time.truncatingRemainder(dividingBy: 4.2) < 0.14)
+        let isSpeaking = emotion == .speaking
+        let isListening = emotion == .listening
+        let isThinking = emotion == .thinking
+        let isWorking = emotion == .working
+        let isPuzzled = emotion == .puzzled
+
+        let gazeX: CGFloat = {
+            if isThinking { return 3.2 }
+            if isWorking { return CGFloat(sin(time * 3.5) * 4.2) }
+            if isPuzzled { return -1.2 }
+            return 0
+        }()
+        let gazeY: CGFloat = {
+            if isThinking { return -3.2 }
+            if isWorking { return -0.6 }
+            if isListening { return -1.0 }
+            if isPuzzled { return 1.8 }
+            return 0
+        }()
+
+        let w: CGFloat = isListening ? 6.8 : (isPuzzled ? 6.5 : (isWorking ? 6.2 : 6.0))
+        let h: CGFloat = {
+            if isBlinking { return 2.0 }
+            if isSpeaking {
+                let cadence = abs(sin(time * 16.0))
+                return max(3.5, 8.5 - CGFloat(cadence * 3.0))
+            }
+            if isListening { return 13.0 + CGFloat(min(level, 0.4) * 6.0) }
+            if isThinking || isWorking { return 10.5 }
+            if isPuzzled { return 11.5 }
+            return 11.0
+        }()
+
+        return ZStack {
+            Capsule()
+                .fill(ink)
+                .frame(width: w, height: h)
+
+            if h > 4.5 {
+                // Primary specular catchlight
+                Circle()
+                    .fill(Color.white.opacity(0.95))
+                    .frame(width: 2.2, height: 2.2)
+                    .offset(x: -1.2, y: -h * 0.26)
+
+                // Secondary soft lower gleam
+                Circle()
+                    .fill(Color.white.opacity(0.60))
+                    .frame(width: 1.3, height: 1.3)
+                    .offset(x: 1.0, y: h * 0.22)
+
+                if isThinking {
+                    Circle()
+                        .fill(Color.cyan.opacity(0.40 + 0.30 * abs(sin(time * 3.0))))
+                        .frame(width: 4, height: 4)
+                        .blur(radius: 1)
+                }
+            }
+        }
+        .offset(x: gazeX, y: gazeY)
+    }
+
+    private func browView(side: Double, time: TimeInterval) -> some View {
+        let rotation: Double = {
+            switch emotion {
+            case .idle: return side * -3.0
+            case .listening: return side * -4.0
+            case .thinking: return side == -1.0 ? 8.0 : -2.0
+            case .working: return side * 7.0
+            case .speaking: return side * -3.0
+            case .puzzled: return side == -1.0 ? -12.0 : -6.0
+            }
+        }()
+        let offsetY: CGFloat = {
+            switch emotion {
+            case .idle: return 0
+            case .listening: return -2.5
+            case .thinking: return side == -1.0 ? -3.5 : 0.5
+            case .working: return -1.0
+            case .speaking: return -1.0 + CGFloat(sin(time * 16.0) * 0.8)
+            case .puzzled: return side == -1.0 ? -3.0 : 0
+            }
+        }()
+
+        return Capsule()
+            .fill(ink.opacity(0.85))
+            .frame(width: 8, height: 1.8)
+            .rotationEffect(.degrees(rotation))
+            .offset(y: offsetY)
+    }
+
+    @ViewBuilder
+    private func mouthView(time: TimeInterval) -> some View {
+        switch emotion {
+        case .speaking:
+            OriginalSpeakingMouth(time: time, ink: ink, still: still, playbackLevel: playbackLevel)
+        case .idle:
+            Smile().stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 10, height: 5)
+        case .listening:
+            ZStack {
+                NativeSmileOpening()
+                    .fill(ink)
+                    .frame(width: 9, height: 4)
+                Smile()
+                    .stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                    .frame(width: 11, height: 3.5)
+            }
+        case .thinking:
+            Capsule()
+                .fill(ink)
+                .frame(width: 5.5, height: 2.8)
+                .offset(x: 1.5)
+        case .working:
+            Smile().stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 8.5, height: 3.5)
+        case .puzzled:
+            Ellipse()
+                .stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                .frame(width: 5.5, height: 5.0)
+                .offset(x: -0.5)
+        }
+    }
+
+    private func cheeksView(time: TimeInterval) -> some View {
+        ForEach([-1.0, 1.0], id: \.self) { side in
+            let blushOpacity: Double = {
+                switch emotion {
+                case .speaking: return still ? 0.20 : 0.35
+                case .listening, .idle: return 0.20
+                case .working: return 0.18
+                case .thinking: return 0.15
+                case .puzzled: return 0.22
+                }
+            }()
+            Ellipse()
+                .fill(Color.pink.opacity(blushOpacity))
+                .frame(width: 14, height: 7)
+                .blur(radius: 2)
+                .offset(x: side * 28, y: 7)
+        }
     }
 }
 
@@ -251,6 +462,7 @@ struct NativeFacePose: Equatable {
 }
 
 private struct NativeSkinCharacter: View {
+    var emotion: PetEmotion = .idle
     let phase: PetPhase
     let level: Double
     let still: Bool
@@ -259,17 +471,24 @@ private struct NativeSkinCharacter: View {
     let motionDetail: SkinMotionDetail
     let expressionRevision: UInt64
     @State private var expressionClock = NativeExpressionClock()
+    private var resolvedState: NativeFaceState {
+        switch emotion {
+        case .idle: return .idle
+        case .listening: return .listening
+        case .thinking, .working: return .thinking
+        case .speaking: return .speaking
+        case .puzzled: return .blocked
+        }
+    }
     private var resetKey: NativeExpressionResetKey {
-        .init(state: NativeFaceState(phase), skin: skin, motion: motionDetail, still: still, revision: expressionRevision)
+        .init(state: resolvedState, skin: skin, motion: motionDetail, still: still, revision: expressionRevision)
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: phase == .speaking || phase == .listening ? 1.0 / 24 : 1.0 / 12,
+        TimelineView(.animation(minimumInterval: phase == .speaking || phase == .listening || emotion == .working ? 1.0 / 24 : 1.0 / 12,
                                 paused: still || motionDetail == .still)) { _ in
-            let context = expressionClock.context(state: NativeFaceState(phase), now: ProcessInfo.processInfo.systemUptime)
-            let pose = NativeFacePose.sample(phase: phase, context: context, inputLevel: level,
-                                            playbackLevel: playbackLevel, still: still, motion: motionDetail)
-            NativeSkinFrame(phase: phase, skin: skin, pose: pose)
+            let context = expressionClock.context(state: resolvedState, now: ProcessInfo.processInfo.systemUptime)
+            NativeSkinFrame(phase: phase, skin: skin, pose: computePose(context: context))
         }
         // One combined key avoids advancing the recipe twice when a turn changes
         // phase and cancellation revision in the same SwiftUI transaction.
@@ -277,7 +496,28 @@ private struct NativeSkinCharacter: View {
         .onAppear { resetExpression() }
         .onDisappear { resetExpression() }
     }
-    private func resetExpression() { expressionClock.restart(state: NativeFaceState(phase), at: ProcessInfo.processInfo.systemUptime) }
+
+    private func computePose(context: NativeExpressionContext) -> NativeFacePose {
+        var pose = NativeFacePose.sample(phase: phase, context: context, inputLevel: level,
+                                        playbackLevel: playbackLevel, still: still, motion: motionDetail)
+        if emotion == .working {
+            let scan = sin(context.elapsed * 3.5) * 0.4
+            pose = NativeFacePose(bob: pose.bob, tilt: 1.0, blink: pose.blink, gazeX: scan, gazeY: -0.1,
+                                  browTilt: pose.browTilt, mouthWidth: pose.mouthWidth, mouthHeight: pose.mouthHeight,
+                                  mouthCurve: pose.mouthCurve, speakingOpening: pose.speakingOpening,
+                                  listeningLevel: pose.listeningLevel, eyes: pose.eyes, browLift: pose.browLift,
+                                  browAsymmetry: 0, squash: pose.squash, bodyAccent: pose.bodyAccent,
+                                  cheeks: pose.cheeks, smileOpening: pose.smileOpening, teeth: pose.teeth, dimples: pose.dimples)
+        } else if emotion == .puzzled {
+            pose = NativeFacePose(bob: pose.bob, tilt: -7.5, blink: pose.blink, gazeX: -0.2, gazeY: 0.2,
+                                  browTilt: pose.browTilt, mouthWidth: pose.mouthWidth * 0.8, mouthHeight: pose.mouthHeight,
+                                  mouthCurve: -0.2, speakingOpening: 0, listeningLevel: 0, eyes: pose.eyes,
+                                  browLift: pose.browLift, browAsymmetry: 0.4, squash: pose.squash, bodyAccent: pose.bodyAccent,
+                                  cheeks: pose.cheeks, smileOpening: 0, teeth: 0, dimples: 0)
+        }
+        return pose
+    }
+    private func resetExpression() { expressionClock.restart(state: resolvedState, at: ProcessInfo.processInfo.systemUptime) }
 }
 
 private struct NativeExpressionResetKey: Equatable {
