@@ -588,7 +588,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startIdleRoaming() {
         idleRoamTimer?.invalidate()
-        let interval = Double.random(in: 35.0...60.0)
+        let interval: Double = 5.0
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.performIdleRoam()
@@ -605,6 +605,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
+
+        if model.screenEnabled {
+            placement.request(screen: screen, eligible: true, immediate: true)
+        }
 
         let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
         let protectedRegions = snap?.protected ?? []
@@ -627,7 +631,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let targetFrame = NSRect(origin: target, size: panel.frame.size)
 
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 1.2
+            context.duration = 0.85
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(targetFrame, display: true)
         }, completionHandler: {

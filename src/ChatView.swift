@@ -459,6 +459,25 @@ final class ChatModel: ObservableObject {
                 return "Opened your Desktop folder."
             }
         }
+        if clean == "open applications" || clean == "show applications" || clean == "open applications folder" || clean == "show applications folder" {
+            if let url = FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask).first {
+                NSWorkspace.shared.open(url)
+                return "Opened your Applications folder."
+            }
+        }
+        if clean == "open trash" || clean == "show trash" {
+            if let url = FileManager.default.urls(for: .trashDirectory, in: .userDomainMask).first {
+                NSWorkspace.shared.open(url)
+                return "Opened the Trash folder."
+            }
+        }
+        if clean == "system info" || clean == "mac info" || clean == "os version" || clean == "about this mac" {
+            let os = ProcessInfo.processInfo.operatingSystemVersionString
+            let host = Host.current().localizedName ?? "Mac"
+            let uptimeHours = Int(ProcessInfo.processInfo.systemUptime / 3600)
+            let uptimeMins = Int((ProcessInfo.processInfo.systemUptime.truncatingRemainder(dividingBy: 3600)) / 60)
+            return "\(host) is running macOS \(os) (uptime: \(uptimeHours)h \(uptimeMins)m)."
+        }
 
         // 8. Math / Arithmetic Calculator
         if clean.hasPrefix("calculate ") || clean.hasPrefix("what is ") || clean.hasPrefix("math ") || clean.hasPrefix("посчитай ") {
@@ -1188,6 +1207,14 @@ final class ChatModel: ObservableObject {
                     replyText = "Action completed."
                 }
                 DiagnosticChatLogger.record(role: "dot", text: replyText)
+                if result?.receipt.status != .succeeded && result?.receipt.status != .handedOff {
+                    DiagnosticChatLogger.recordFailure(
+                        task: text,
+                        reason: replyText,
+                        missingCapability: "Action failed or unconfirmed (\(result?.receipt.detail ?? "unknown"))",
+                        proposedFix: "Verify bundle identifier or target path"
+                    )
+                }
                 self.answer = replyText
                 self.history.append(ChatMessage(role: "assistant", content: replyText))
                 self.textHistory.recordAssistant(turn: id, text: replyText, event: .generated)
