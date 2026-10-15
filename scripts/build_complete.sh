@@ -15,14 +15,15 @@ assert_source_snapshot
 : "${DOT_WHISPER_ARCHIVE:?Set DOT_WHISPER_ARCHIVE to the repository-pinned whisper-v1.7.6-xcframework.zip}"
 python3 -B scripts/audit_runtime_payload.py "$DOT_RUNTIME_PAYLOAD"
 INTENTS_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-intents-complete.XXXXXX")
-trap 'rm -rf "$INTENTS_BUILD"' EXIT
+WHISPER_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-whisper-complete.XXXXXX")
+trap 'rm -rf "$INTENTS_BUILD" "$WHISPER_BUILD"' EXIT
 # Authenticate the archive and derive this framework from those exact bytes.
 # Never link or copy an independently supplied framework directory.
 git ls-files --error-unmatch -- packaging/voice-source-manifest.json scripts/verify_whisper_input.py >/dev/null
 python3 -B scripts/verify_whisper_input.py --archive "$DOT_WHISPER_ARCHIVE" \
-  --output "$INTENTS_BUILD/whisper-input" > "$INTENTS_BUILD/whisper-input.json"
-VERIFIED_WHISPER_FRAMEWORK="$INTENTS_BUILD/whisper-input/whisper.framework"
-FRAMEWORK_PARENT="$INTENTS_BUILD/whisper-input"
+  --output "$WHISPER_BUILD/whisper-input" > "$WHISPER_BUILD/whisper-input.json"
+VERIFIED_WHISPER_FRAMEWORK="$WHISPER_BUILD/whisper-input/whisper.framework"
+FRAMEWORK_PARENT="$WHISPER_BUILD/whisper-input"
 SOURCES=(src/*.swift)
 python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "${SOURCES[@]}"
 APP=build-complete/Dot.app
@@ -60,7 +61,7 @@ python3 -B scripts/package_app_intents.py extract --work-dir "$INTENTS_BUILD" --
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
 codesign --force --sign - "$APP/Contents/Frameworks/whisper.framework"
 assert_source_snapshot
-python3 -B - "$APP" "$SOURCE_COMMIT" "$INTENTS_BUILD/whisper-input.json" <<'PYCODE'
+python3 -B - "$APP" "$SOURCE_COMMIT" "$WHISPER_BUILD/whisper-input.json" <<'PYCODE'
 import hashlib, json, pathlib, sys
 app = pathlib.Path(sys.argv[1]); resources = app / 'Contents/Resources'
 manifest = resources / 'Offline/runtime-manifest.json'
