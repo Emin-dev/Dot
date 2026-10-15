@@ -314,13 +314,15 @@ final class ChatModel: ObservableObject {
 
     private func detectSystemControlCommand(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count <= 140 else { return nil }
+        guard trimmed.count <= 250 else { return nil }
         var clean = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
 
         // Common conversational prefixes
         let prefixes = [
             "can you please ", "could you please ", "can you ", "could you ", "would you ",
-            "please ", "hey dot ", "dot ", "i want you to ", "try to ", "пожалуйста ", "дот "
+            "please ", "hey dot ", "dot ", "i want you to ", "try to ",
+            "yes, ", "yes ", "ok, ", "ok ", "okay, ", "okay ", "sure, ", "sure ",
+            "i mean, ", "i mean ", "пожалуйста ", "дот "
         ]
         for p in prefixes {
             if clean.hasPrefix(p) {
@@ -475,6 +477,54 @@ final class ChatModel: ObservableObject {
             }
         }
 
+        // 9. Inquiries about why Dot is not moving / staying in one spot
+        if clean.contains("why") && (clean.contains("don't move") || clean.contains("dont move") || clean.contains("stay in the same place") || clean.contains("stay in one place") || clean.contains("aren't you moving") || clean.contains("not moving")) {
+            if let reply = self.onMove?(.random) {
+                return "I roam to new spots every 35 to 60 seconds when idle, and immediately relocate every 5 seconds while thinking! " + reply
+            }
+            return "I roam to new spots every 35 to 60 seconds when idle, and immediately relocate every 5 seconds while thinking! Relocating right now."
+        }
+
+        // 10. Codebase & Own Source Code Access
+        if clean.contains("read your own code") || clean.contains("see your own code") || clean.contains("read your code") || clean.contains("see your code") || clean.contains("inspect your code") || clean == "can you see and read your own code" || clean == "can you read your own code" {
+            let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("src").path))?.filter { $0.hasSuffix(".swift") } ?? []
+            return "Yes! I have direct access to read and inspect my source code at /Users/mac/.gemini/antigravity/scratch/Dot. I have \(files.count) Swift files including App.swift, ChatView.swift, RoamingCore.swift, Engine.swift, NativeActions.swift, and more. You can ask me to read or explain any file!"
+        }
+        if clean == "list your files" || clean == "list files" || clean == "show your files" || clean == "show files in code" || clean == "what files do you have" || clean == "show codebase files" {
+            let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
+            let files = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("src").path))?.filter { $0.hasSuffix(".swift") }.sorted() ?? []
+            let topFiles = files.prefix(8).joined(separator: ", ")
+            return "My codebase has \(files.count) Swift modules including \(topFiles), and more. Ask me to read any of them!"
+        }
+
+        // 11. Read Source Code or Document File
+        if clean.hasPrefix("read file ") || clean.hasPrefix("show file ") || clean.hasPrefix("read code ") || clean.hasPrefix("show code ") {
+            let prefix = clean.hasPrefix("read file ") ? "read file " : (clean.hasPrefix("show file ") ? "show file " : (clean.hasPrefix("read code ") ? "read code " : "show code "))
+            var pathStr = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            pathStr = pathStr.trimmingCharacters(in: CharacterSet(charactersIn: "`\"'"))
+            let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
+            var candidates = [
+                root.appendingPathComponent(pathStr),
+                root.appendingPathComponent("src").appendingPathComponent(pathStr),
+                URL(fileURLWithPath: pathStr)
+            ]
+            if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                candidates.append(docs.appendingPathComponent(pathStr))
+            }
+            for candidate in candidates {
+                if FileManager.default.fileExists(atPath: candidate.path), let content = try? String(contentsOf: candidate, encoding: .utf8) {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(content, forType: .string)
+                    let lines = content.components(separatedBy: "\n")
+                    let preview = lines.prefix(15).joined(separator: "\n")
+                    let name = candidate.lastPathComponent
+                    return "Here is \(name) (\(lines.count) lines). I have copied the full file to your clipboard!\n\n\(preview)..."
+                }
+            }
+            return "Could not find file \(pathStr)."
+        }
+
         return nil
     }
 
@@ -487,6 +537,7 @@ final class ChatModel: ObservableObject {
             "can you please ", "could you please ", "can you ", "could you ", "would you ",
             "please ", "hey dot ", "dot ", "i want you to ", "try to ",
             "yes, ", "yes ", "yeah, ", "yeah ", "ok, ", "ok ", "okay, ", "okay ", "sure, ", "sure ",
+            "i mean, ", "i mean ", "well, ", "well ", "now ",
             "пожалуйста ", "дот "
         ]
         for p in prefixes {
@@ -495,6 +546,14 @@ final class ChatModel: ObservableObject {
             }
         }
         clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        clean = clean.replacingOccurrences(of: "yourself, yourself", with: "yourself")
+        clean = clean.replacingOccurrences(of: "to the screen ", with: "to ")
+        clean = clean.replacingOccurrences(of: "to screen ", with: "to ")
+        clean = clean.replacingOccurrences(of: "on the screen", with: "")
+        clean = clean.replacingOccurrences(of: "on screen", with: "")
+        clean = clean.replacingOccurrences(of: "of the screen", with: "")
+        clean = clean.replacingOccurrences(of: "of screen", with: "")
+        clean = clean.replacingOccurrences(of: "to center to screen", with: "to center")
 
         let actionPrefixes = [
             "move yourself to the ", "move yourself to ", "move yourself ",
@@ -572,6 +631,7 @@ final class ChatModel: ObservableObject {
            clean == "change position" || clean == "somewhere" || clean == "somewhere else" ||
            clean == "wander" || clean == "roam" || clean == "random" ||
            clean.contains("move yourself") || clean.contains("move to screen") || clean.contains("move on screen") ||
+           clean.contains("randomly move") || clean.contains("move randomly") ||
            clean == "двигайся" || clean == "подвигайся" || clean == "переместись" || clean == "смени позицию" {
             return .random
         }
@@ -1245,7 +1305,9 @@ final class ChatModel: ObservableObject {
                 if let question {
                     let qTrimmed = question.text.trimmingCharacters(in: .whitespacesAndNewlines)
                     let ansTrimmed = self.answer.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !ansTrimmed.hasSuffix(qTrimmed) && !ansTrimmed.localizedCaseInsensitiveContains(qTrimmed) {
+                    let cleanQ = qTrimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:; "))
+                    let cleanAns = ansTrimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:; "))
+                    if !cleanAns.hasSuffix(cleanQ) && !cleanAns.contains(cleanQ) {
                         self.answer += (self.answer.isEmpty ? "" : " ") + qTrimmed
                         self.enqueueVoice(qTrimmed, id: id)
                     }
@@ -1255,6 +1317,22 @@ final class ChatModel: ObservableObject {
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 let finalAnswer = self.answer
                 DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
+
+                // Auto-copy drafted prompts to clipboard
+                let lowerTask = text.lowercased()
+                if lowerTask.contains("create prompt") || lowerTask.contains("write prompt") || lowerTask.contains("draft prompt") || lowerTask.contains("copy paste that prompt") || lowerTask.contains("copy prompt") {
+                    var promptToCopy = finalAnswer
+                    if let start = finalAnswer.range(of: "```"), let end = finalAnswer.range(of: "```", range: start.upperBound..<finalAnswer.endIndex) {
+                        promptToCopy = String(finalAnswer[start.upperBound..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    } else if let start = finalAnswer.range(of: "\""), let end = finalAnswer.range(of: "\"", range: start.upperBound..<finalAnswer.endIndex), start != end {
+                        promptToCopy = String(finalAnswer[start.upperBound..<end.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                    if !promptToCopy.isEmpty {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(promptToCopy, forType: .string)
+                    }
+                }
+
                 let lowerAns = finalAnswer.lowercased()
                 if lowerAns.contains("i can't") || lowerAns.contains("i cannot") || lowerAns.contains("i don't have") || lowerAns.contains("unable to") {
                     DiagnosticChatLogger.recordFailure(

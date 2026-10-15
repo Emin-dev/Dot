@@ -353,11 +353,6 @@ private struct OriginalSpeakingMouth: View {
                     .frame(width: width * 0.60, height: 1.8)
                     .offset(y: -height * 0.28)
             }
-
-            Smile()
-                .stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                .frame(width: width + 2.5, height: 3.5)
-                .offset(y: -height * 0.32)
         }
     }
 }
