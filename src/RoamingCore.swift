@@ -3,7 +3,7 @@ import CoreGraphics
 #endif
 import Foundation
 
-enum PetStatusLayout { static let controlHeight: CGFloat = 48 }
+enum PetStatusLayout { static let controlHeight: CGFloat = 0 }
 
 enum PetLayout {
     static let petSize = CGSize(width: 140, height: 148)

@@ -42,6 +42,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return try await model.engine.researchSynthesis(session: session)
         }))
         webResearchPanel = webResearch
+        webResearch.model.onTaskProgress = { [weak model] event in
+            model?.handleTaskProgress(event)
+        }
         model.startProactivity()
         webResearch.onVisibility = { [weak self] in self?.utilityVisibility("webResearch", visible: $0) }
         model.onForegroundInteraction = { [weak webResearch] in webResearch?.foregroundPause() }
@@ -70,7 +73,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        height: PetLayout.petSize.height)).contains(point)
         }
         panel.controlHitTest = { point in
-            point.x >= 0 && point.x <= PetLayout.panelSize.width && point.y >= 0 && point.y < PetLayout.petBottom
+            point.y >= PetLayout.panelSize.height - 38 && (point.x <= 54 || point.x >= PetLayout.panelSize.width - 54)
         }
         panel.controlInteraction = { [weak self, weak model] active in
             model?.setControlInteraction(active)

@@ -51,8 +51,12 @@ private struct OriginalPetCharacter: View {
                     Ellipse().fill(.white.opacity(0.75)).frame(width: 25, height: 11).rotationEffect(.degrees(-35)).blur(radius: 2).offset(x: -26, y: -33)
                     HStack(spacing: 22) { eye(time: time); eye(time: time) }.offset(y: -4)
                     if phase == .speaking {
-                        Ellipse().fill(ink)
-                            .frame(width: 8, height: still ? 6 : 2 + 10 * (playbackLevel.map(NativeFacePose.unit) ?? 0.12)).offset(y: 12)
+                        ForEach([-1.0, 1.0], id: \.self) { side in
+                            Ellipse().fill(Color.pink.opacity(still ? 0.15 : 0.25)).frame(width: 14, height: 7).blur(radius: 2)
+                                .offset(x: side * 27, y: 7)
+                        }
+                        OriginalSpeakingMouth(time: time, ink: ink, still: still, playbackLevel: playbackLevel)
+                            .offset(y: 12)
                     } else {
                         Smile().stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
                             .frame(width: 9, height: 5).offset(y: 12)
@@ -75,7 +79,49 @@ private struct OriginalPetCharacter: View {
     }
     private func eye(time: TimeInterval) -> some View {
         let closed = !still && time.truncatingRemainder(dividingBy: 5) < 0.16
-        return Capsule().fill(ink).frame(width: 6, height: closed ? 2 : 11)
+        let speakingSquint = !still && phase == .speaking
+        let h: CGFloat = closed ? 2 : (speakingSquint ? 8.5 : 11)
+        return Capsule().fill(ink).frame(width: 6, height: h)
+    }
+}
+
+private struct OriginalSpeakingMouth: View {
+    let time: TimeInterval
+    let ink: Color
+    let still: Bool
+    let playbackLevel: Double?
+
+    var body: some View {
+        let level = playbackLevel.map(NativeFacePose.unit) ?? 0.20
+        let cadence = still ? 0.5 : (abs(sin(time * 16.0)) * 0.5 + 0.5)
+        let openFraction = still ? 0.35 : max(0.12, level * 0.75 + cadence * (level > 0.05 ? 0.45 : 0.12))
+        let width = still ? 10.0 : 8.0 + openFraction * 8.0
+        let height = still ? 6.0 : 2.5 + openFraction * 13.0
+
+        ZStack {
+            NativeSmileOpening()
+                .fill(ink)
+                .frame(width: width, height: height)
+
+            if height > 5.5 {
+                Ellipse()
+                    .fill(Color(red: 0.94, green: 0.58, blue: 0.65))
+                    .frame(width: width * 0.55, height: max(2.0, height * 0.32))
+                    .offset(y: height * 0.22)
+            }
+
+            if height > 6.5 {
+                Capsule()
+                    .fill(Color.white.opacity(0.90))
+                    .frame(width: width * 0.58, height: 1.8)
+                    .offset(y: -height * 0.26)
+            }
+
+            Smile()
+                .stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                .frame(width: width + 2.5, height: 3.5)
+                .offset(y: -height * 0.32)
+        }
     }
 }
 
@@ -190,7 +236,8 @@ struct NativeFacePose: Equatable {
         let expression = amount == 0 ? NativeExpressionPose.rest : NativeExpressionPose.rest.mixed(toward: selected.recipe.sample(elapsed: selected.elapsed), by: amount)
         let blink = amount > 0 ? selected.recipe.blink(elapsed: selected.elapsed) : 1
         let speaking = state == .speaking
-        let opening = speaking ? (amount == 0 ? 0.12 : playbackLevel.map(unit) ?? 0.12) : 0
+        let cadence = still ? 0.5 : (abs(sin(context.elapsed * 16.0)) * 0.5 + 0.5)
+        let opening = speaking ? (amount == 0 ? 0.12 : max(0.12, (playbackLevel.map(unit) ?? 0.18) * 0.8 + cadence * ((playbackLevel ?? 0) > 0.05 ? 0.45 : 0.12))) : 0
         let listening = state == .listening && amount > 0 ? unit(inputLevel) : 0
         return Self(bob: expression.lift, tilt: expression.tilt * 1.2, blink: blink,
                     gazeX: expression.gazeX * 1.3, gazeY: expression.gazeY * 1.3, browTilt: -4,
@@ -542,3 +589,47 @@ struct NativeBodyShape: Shape {
         return path
     }
 }
+
+/// Slim progress halo for long tasks exceeding two minutes (LP01-LP07).
+struct LongTaskHaloView: View {
+    let halo: LongTaskProgress.Halo
+    let stageText: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            switch halo {
+            case .hidden:
+                EmptyView()
+            case .indeterminate:
+                Circle()
+                    .strokeBorder(Color.accentColor.opacity(0.30), lineWidth: 2)
+                    .frame(width: 116, height: 116)
+                Circle()
+                    .trim(from: 0.0, to: 0.25)
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .frame(width: 116, height: 116)
+                    .rotationEffect(.degrees(reduceMotion ? 0 : 360))
+                    .animation(reduceMotion ? nil : .linear(duration: 2).repeatForever(autoreverses: false), value: reduceMotion)
+            case .determinate(let fraction):
+                Circle()
+                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 2)
+                    .frame(width: 116, height: 116)
+                Circle()
+                    .trim(from: 0.0, to: CGFloat(min(1.0, max(0.0, fraction))))
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .frame(width: 116, height: 116)
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeInOut(duration: 0.3), value: fraction)
+            case .verifiedComplete:
+                Circle()
+                    .strokeBorder(Color.green, lineWidth: 2.5)
+                    .frame(width: 116, height: 116)
+                    .animation(.spring(), value: true)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(stageText ?? "Task progress")
+    }
+}
+

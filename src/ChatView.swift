@@ -82,7 +82,69 @@ final class ChatModel: ObservableObject {
     private var voiceRoute: VoiceAudioRoute?
     @Published private(set) var automaticReply = false
     @Published private(set) var expressionRevision: UInt64 = 0
+    @Published private(set) var taskHalo: LongTaskProgress.Halo = .hidden
+    @Published private(set) var taskStage: String?
+    @Published private(set) var taskStatusText: String?
+    private var taskProgress = ResearchTaskProgress()
+    private var activeSpeechUpdateID: UUID?
+    private var taskProgressTicker: Task<Void, Never>?
     private var shuttingDown = false
+
+    func handleTaskProgress(_ event: ResearchTaskProgress.Event) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let accepted = taskProgress.receive(event, now: now)
+        if accepted {
+            updateTaskProgressUI(now: now)
+            ensureTaskProgressTicker()
+        }
+    }
+
+    func updateTaskProgressUI(now: Double = ProcessInfo.processInfo.systemUptime) {
+        taskHalo = taskProgress.progress.halo
+        taskStage = taskProgress.progress.snapshot?.stage
+        taskStatusText = taskProgress.progress.textStatus
+        pollTaskSpeech(now: now)
+    }
+
+    private func ensureTaskProgressTicker() {
+        guard taskProgressTicker == nil else { return }
+        taskProgressTicker = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled else { break }
+                let now = ProcessInfo.processInfo.systemUptime
+                self.updateTaskProgressUI(now: now)
+                if self.taskHalo == .hidden && self.activeSpeechUpdateID == nil {
+                    break
+                }
+            }
+            self?.taskProgressTicker = nil
+        }
+    }
+
+    private func pollTaskSpeech(now: Double) {
+        var context = LongTaskProgress.SpeechContext()
+        context.ready = runtime.isReady()
+        context.muted = defaults.bool(forKey: "voiceMuted")
+        context.userSpeaking = stt.recording && stt.level > 0.15
+        context.listening = stt.recording || stt.transcribing
+        context.voiceBusy = runtime.ttsSpeaking() && (activeSpeechUpdateID == nil)
+        context.foregroundInterrupted = interactionPaused || hovered || historyPresented
+        context.quiet = false
+        context.callActive = false
+        _ = taskProgress.setSpeechContext(context)
+
+        guard activeSpeechUpdateID == nil else { return }
+        guard let speech = taskProgress.takeSpeech(now: now) else { return }
+        activeSpeechUpdateID = speech.id
+        do {
+            try runtime.startVoice(speech.id)
+            runtime.enqueueVoice(speech.text, speech.id)
+            runtime.completeVoice(speech.id)
+        } catch {
+            activeSpeechUpdateID = nil
+        }
+    }
     var historyPresented = false { didSet { if historyPresented { cancelForInteraction() }; updateProactiveContext() } }
     var visible = true { didSet { if !visible { cancelTurn() }; updateProactiveContext() } }
     var followupPending: Bool { followup.pending }
@@ -254,14 +316,26 @@ final class ChatModel: ObservableObject {
             }
         }
         tts.onFinalPlayback = { [weak self] id in
-            guard let self, self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
+            guard let self else { return }
+            if id == self.activeSpeechUpdateID {
+                self.taskProgress.finishSpeech(id: id)
+                self.activeSpeechUpdateID = nil
+                self.phase = .idle
+                return
+            }
+            guard self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
             self.timing("final_playback_complete")
             self.textHistory.recordAssistant(turn: id, event: .playbackCompleted)
             self.followup.playbackFinished(turn: id)
             self.finishProactiveTurn(id: id)
         }
         tts.onDrained = { [weak self] id in
-            guard let self, self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
+            guard let self else { return }
+            if id == self.activeSpeechUpdateID {
+                self.phase = .idle
+                return
+            }
+            guard self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
             self.phase = self.generating ? .thinking : .idle
         }
         proactive.onOpportunity = { [weak self] in self?.suggest($0) }
@@ -597,6 +671,11 @@ final class ChatModel: ObservableObject {
         work?.cancel(); work = nil; warmup.cancel()
         runtime.stopCapture(); runtime.stopVoice(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
         currentTurnIsTyped = false; voiceDeliveryFailed = false
+        if let speechID = activeSpeechUpdateID {
+            activeSpeechUpdateID = nil
+            runtime.stopVoice()
+            taskProgress.finishSpeech(id: speechID)
+        }
         chunker = SentenceBuffer(); issue = nil; phase = .idle
         return id
     }
@@ -642,50 +721,44 @@ struct PetView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 0) {
-            character
-            statusControls.frame(width: PetLayout.petSize.width, height: PetStatusLayout.controlHeight)
-        }
-        .onHover { model.hovered = $0 }
-        .padding(PetLayout.edgePadding)
-        .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
-        .onExitCommand { stop() }
+        character
+            .onHover { model.hovered = $0 }
+            .padding(PetLayout.edgePadding)
+            .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
+            .onExitCommand { stop() }
     }
     private var character: some View {
         Button(action: model.clicked) {
-            PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
-                         skin: skins.selected, playbackLevel: tts.playbackLevel, motionDetail: skins.motionDetail, expressionRevision: model.expressionRevision)
+            ZStack {
+                PetCharacter(phase: model.phase, level: stt.level, still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
+                             skin: skins.selected, playbackLevel: tts.playbackLevel, motionDetail: skins.motionDetail, expressionRevision: model.expressionRevision)
+                    .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
+                    .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
+
+                if preparation.state == .checking {
+                    ZStack {
+                        Circle().stroke(Color.accentColor.opacity(0.45), lineWidth: 2)
+                        Circle().trim(from: 0, to: CGFloat(preparation.progress))
+                            .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                    }
+                    .frame(width: 116, height: 116).rotationEffect(.degrees(-90))
+                    .accessibilityHidden(true)
+                } else if model.taskHalo != .hidden {
+                    LongTaskHaloView(halo: model.taskHalo, stageText: model.taskStage)
+                }
+
+                VStack {
+                    HStack(alignment: .center, spacing: 4) {
+                        topLeftIndicators
+                        Spacer()
+                        topRightIndicators
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.top, 6)
+                    Spacer()
+                }
                 .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
-                .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
-                .overlay {
-                    if preparation.state == .checking {
-                        ZStack {
-                            Circle().stroke(Color.accentColor.opacity(0.45), lineWidth: 2)
-                            Circle().trim(from: 0, to: CGFloat(preparation.progress))
-                                .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                        }
-                            .frame(width: 116, height: 116).rotationEffect(.degrees(-90))
-                            .accessibilityHidden(true)
-                    }
-                }
-                .overlay(alignment: .topLeading) {
-                    if isIssue {
-                        Image(systemName: "exclamationmark.circle.fill").font(.system(size: 12))
-                            .foregroundStyle(.orange).accessibilityHidden(true)
-                    } else if preparation.state == .paused {
-                        Image(systemName: "pause.circle.fill").font(.system(size: 12))
-                            .foregroundStyle(.secondary).accessibilityHidden(true)
-                    } else if preparation.state == .checking {
-                        Image(systemName: "hourglass").font(.system(size: 12))
-                            .foregroundStyle(Color.accentColor).accessibilityHidden(true)
-                    }
-                }
-                .overlay(alignment: .topTrailing) {
-                    if model.capturingScreen || model.placementCapturing || model.screenContextUsed {
-                        Image(systemName: (model.capturingScreen || model.placementCapturing) ? "eye.fill" : "eye")
-                            .font(.system(size: 12)).accessibilityLabel(model.placementCapturing ? "Checking a clear place locally" : model.capturingScreen ? "Reading screen locally" : "Screen used for this reply")
-                    }
-                }
+            }
         }
         .buttonStyle(.plain)
         .contentShape(Ellipse())
@@ -694,43 +767,74 @@ struct PetView: View {
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click or Shift F10 for options. Escape stops the current action.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
     }
-    private var statusControls: some View {
-        VStack(spacing: 3) {
-            HStack(spacing: 4) {
-                Label(stt.recording ? "Mic on" : "Mic off", systemImage: stt.recording ? "mic.fill" : "mic.slash")
-                    .foregroundStyle(stt.recording ? Color.accentColor : Color.secondary)
-                Text(shortStatus).lineLimit(1).minimumScaleFactor(0.85)
-            }
-            .font(.system(size: 10, weight: .medium)).monospacedDigit()
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel((stt.recording ? "Microphone on. " : "Microphone off. ") + status)
-            .help(detail ?? status)
-            HStack(spacing: 6) {
-                if canContinueWithoutScreen {
-                    Button("Without screen", action: model.continueWithoutScreen)
-                        .accessibilityLabel("Continue without screen")
-                    Button("Retry", action: model.retryLastTurn)
-                } else if model.phase.isActive || model.followupPending || preparation.state == .checking {
-                    Button(action: stop) { Label("Stop", systemImage: "stop.fill") }
-                        .accessibilityHint("Cancel the current action and close the microphone.")
-                    Button("Options", action: openOptions)
-                } else if !preparation.ready {
-                    Button("Retry") { preparation.retry() }
-                    Button("Options", action: openOptions)
-                } else if isIssue {
-                    Button("Retry", action: model.retryLastTurn)
-                    Button("Options", action: openOptions)
-                } else if model.firstUseHint {
-                    Text("Click to talk\nRight-click for options").font(.system(size: 10)).lineLimit(2).multilineTextAlignment(.center)
-                } else {
-                    Button("Talk", action: model.clicked)
-                    Button("Options", action: openOptions)
+
+    @ViewBuilder
+    private var topLeftIndicators: some View {
+        HStack(spacing: 3) {
+            Button(action: model.clicked) {
+                ZStack {
+                    Circle().fill(.ultraThinMaterial).frame(width: 24, height: 24)
+                    Circle().strokeBorder(stt.recording ? Color.accentColor : Color.primary.opacity(0.12), lineWidth: 1.2)
+                        .frame(width: 24, height: 24)
+                    Image(systemName: stt.recording ? "mic.fill" : "mic.slash")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(stt.recording ? Color.accentColor : Color.secondary)
                 }
-            }.buttonStyle(.bordered).controlSize(.mini).font(.system(size: 10))
+            }
+            .buttonStyle(.plain)
+            .help(stt.recording ? "Microphone active. Click to finish or interrupt." : "Microphone off. Click to talk.")
+
+            if isIssue {
+                Image(systemName: "exclamationmark.circle.fill").font(.system(size: 13))
+                    .foregroundStyle(.orange).help(CompanionStatusText.issue(model.issue))
+            } else if preparation.state == .paused {
+                Image(systemName: "pause.circle.fill").font(.system(size: 13))
+                    .foregroundStyle(.secondary).help("Checking paused")
+            } else if preparation.state == .checking {
+                Image(systemName: "hourglass").font(.system(size: 12))
+                    .foregroundStyle(Color.accentColor).help("Checking files \(Int(preparation.progress * 100))%")
+            } else if stt.transcribing {
+                Image(systemName: "waveform").font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.accentColor).help("Transcribing speech…")
+            }
         }
-        .padding(.horizontal, 3)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private var topRightIndicators: some View {
+        HStack(spacing: 3) {
+            if model.capturingScreen || model.placementCapturing || model.screenContextUsed {
+                Image(systemName: (model.capturingScreen || model.placementCapturing) ? "eye.fill" : "eye")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(model.screenContextUsed ? Color.accentColor : Color.secondary)
+                    .padding(4)
+                    .background(Circle().fill(.ultraThinMaterial))
+                    .help(model.placementCapturing ? "Checking placement locally" : model.capturingScreen ? "Reading screen locally" : "Screen context used")
+            }
+
+            if model.phase.isActive || model.followupPending || preparation.state == .checking {
+                Button(action: stop) {
+                    ZStack {
+                        Circle().fill(.ultraThinMaterial).frame(width: 24, height: 24)
+                        Image(systemName: "stop.fill").font(.system(size: 10, weight: .bold)).foregroundStyle(.red)
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Stop current action (Escape)")
+                .accessibilityLabel("Stop")
+            } else {
+                Button(action: openOptions) {
+                    ZStack {
+                        Circle().fill(.ultraThinMaterial).frame(width: 24, height: 24)
+                        Image(systemName: "gearshape.fill").font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.secondary.opacity(model.hovered ? 0.95 : 0.55))
+                    }
+                }
+                .buttonStyle(.plain)
+                .help("Options (Shift F10 or right-click)")
+                .accessibilityLabel("Options")
+            }
+        }
     }
     private func openOptions() { model.dismissFirstUseHint(); model.showOptions?() }
     private func stop() { model.stopCurrentTurn(); preparation.pause() }
@@ -768,6 +872,7 @@ struct PetView: View {
         if !preparation.ready { return preparation.state == .paused ? "Paused" : "Check files" }
         if case .blocked = model.phase { return CompanionStatusText.issue(model.issue) }
         if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
+        if model.phase == .idle, let stage = model.taskStage { return stage }
         if stt.transcribing { return "Transcribing" }
         if stt.recording, let snapshot = stt.timingSnapshot {
             switch snapshot.phase {

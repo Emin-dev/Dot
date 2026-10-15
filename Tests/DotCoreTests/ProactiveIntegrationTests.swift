@@ -183,7 +183,7 @@ final class CompanionStatusIntegrationTests: XCTestCase {
             XCTAssertFalse(label.contains("\n"))
             XCTAssertLessThan((label as NSString).size(withAttributes: [.font: font]).width, 79)
         }
-        XCTAssertEqual(PetStatusLayout.controlHeight, 48)
+        XCTAssertEqual(PetStatusLayout.controlHeight, 0)
         XCTAssertGreaterThanOrEqual(PetLayout.petBottom, PetStatusLayout.controlHeight)
         XCTAssertEqual(PetLayout.panelSize.height, PetLayout.petSize.height + PetStatusLayout.controlHeight + PetLayout.edgePadding * 2)
     }
