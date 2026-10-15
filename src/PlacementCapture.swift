@@ -19,11 +19,20 @@ final class PlacementCapture {
     var onCaptureChanged: ((Bool) -> Void)?
     var onSnapshotUpdated: ((PlacementSnapshot) -> Void)?
     private var acceptedWindows: [CGRect]?
+    private var lastPreflightCheck = 0.0
+    private var cachedPreflight = false
+    private func checkPreflight(now: Double) -> Bool {
+        if now - lastPreflightCheck >= 5.0 {
+            lastPreflightCheck = now
+            cachedPreflight = CGPreflightScreenCaptureAccess()
+        }
+        return cachedPreflight
+    }
     func current(screen: NSScreen) -> PlacementSnapshot? {
         guard let snapshot = gate.snapshot else { return nil }
         let now = ProcessInfo.processInfo.systemUptime
         let reason: PlacementDiagnostic.Reason?
-        if !CGPreflightScreenCaptureAccess() { reason = .permission }
+        if !checkPreflight(now: now) { reason = .permission }
         else if now - snapshot.capturedAt > PlacementSnapshot.lifetime { reason = .expired }
         else if screen.frame != snapshot.displayFrame || screen.visibleFrame != snapshot.visibleFrame { reason = .invalidMap }
         else if (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value != snapshot.displayID { reason = .displayMissing }
@@ -55,10 +64,14 @@ final class PlacementCapture {
     func invalidate() { gate.invalidate(); acceptedWindows = nil; work?.cancel() }
     func request(screen: NSScreen, eligible: Bool, immediate: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
-        guard eligible, CGPreflightScreenCaptureAccess(),
-              let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
-              let primaryTop = NSScreen.screens.first?.frame.maxY,
+        guard eligible,
               let token = gate.begin(now: now, eligible: eligible, immediate: immediate) else { return }
+        guard checkPreflight(now: now),
+              let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+              let primaryTop = NSScreen.screens.first?.frame.maxY else {
+            gate.finish(token: token, result: nil)
+            return
+        }
         let frame = screen.frame, visible = screen.visibleFrame
         onCaptureChanged?(true)
         work = Task { [weak self] in
@@ -93,7 +106,7 @@ final class PlacementCapture {
                 stage = .shareable
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 try Task.checkCancellation()
-                guard CGPreflightScreenCaptureAccess() else { reason = .permission; return }
+                guard checkPreflight(now: ProcessInfo.processInfo.systemUptime) else { reason = .permission; return }
                 guard let display = content.displays.first(where: { $0.displayID == id }),
                       display.width > 0, display.height > 0 else { reason = .displayMissing; return }
                 let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
@@ -119,7 +132,7 @@ final class PlacementCapture {
                 observedAlpha = pixels.firstNonOpaqueAlpha; unknownTiles = pixels.unknownTiles
                 try Task.checkCancellation()
                 stage = .validation
-                guard CGPreflightScreenCaptureAccess() else { reason = .permission; return }
+                guard checkPreflight(now: ProcessInfo.processInfo.systemUptime) else { reason = .permission; return }
                 let after = try Self.windowRegions(primaryTop: primaryTop, display: frame)
                 guard PlacementSnapshot.preservesGeometry(before, in: after) else { reason = .windowsChanged; return }
                 addedWindows = after.count - before.count

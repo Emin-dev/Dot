@@ -12,16 +12,31 @@ final class ScreenContext {
     private var encoding: (turn: UUID, task: Task<Data?, Never>)?
     static var hasRequestedAccess: Bool {
         get { UserDefaults.standard.bool(forKey: "dot.screenAccessRequested") }
-        set { UserDefaults.standard.set(newValue, forKey: "dot.screenAccessRequested") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "dot.screenAccessRequested")
+            UserDefaults.standard.synchronize()
+        }
     }
     func prepare(turn: UUID, requestPermission: Bool = true) throws {
         try Task.checkCancellation()
-        let shouldPrompt = requestPermission && !Self.hasRequestedAccess
-        if shouldPrompt {
-            Self.hasRequestedAccess = true
+        // 1. If already authorized, never prompt or request access.
+        if CGPreflightScreenCaptureAccess() {
+            guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
+                                     request: { false && (requestPermission && CGRequestScreenCaptureAccess()) }) else { throw ScreenFailure.permission }
+            try Task.checkCancellation()
+            return
         }
+        // 2. If access was already requested in the past or permission prompt is suppressed, do not prompt.
+        if Self.hasRequestedAccess || !requestPermission {
+            guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
+                                     request: { false && (requestPermission && CGRequestScreenCaptureAccess()) }) else { throw ScreenFailure.permission }
+            try Task.checkCancellation()
+            return
+        }
+        // 3. Ask at most once in the lifetime of the application.
+        Self.hasRequestedAccess = true
         guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                 request: { shouldPrompt && (requestPermission && CGRequestScreenCaptureAccess()) }) else { throw ScreenFailure.permission }
+                                 request: { requestPermission && CGRequestScreenCaptureAccess() }) else { throw ScreenFailure.permission }
         try Task.checkCancellation()
     }
     func capture(turn: UUID, modelHasVision: Bool) async throws -> CapturedScreenImage? {

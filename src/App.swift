@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        DiagnosticChatLogger.record(role: "system", text: "Dot application started")
         activityAssertion = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
             reason: "Dot desktop pet simulation and responsive voice"
@@ -158,11 +159,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
 
             self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
-            NSAnimationContext.runAnimationGroup { context in
+            let targetFrame = NSRect(origin: target, size: panel.frame.size)
+            NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.65
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                panel.animator().setFrameOrigin(target)
-            }
+                panel.animator().setFrame(targetFrame, display: true)
+            }, completionHandler: {
+                panel.setFrameOrigin(target)
+            })
+            self.scheduleMovement(interval: 0.5)
             return reply
         }
         let panel = surface.present(content: NSHostingView(rootView: PetView(model: model, stt: model.stt, tts: model.tts, skins: model.skinPreferences)), size: PetLayout.panelSize)
@@ -488,8 +493,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let eligible = !paused && model.screenEnabled
         if !eligible { placement.invalidate() }
-        let snapshot = eligible ? (placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)) : nil
-        if eligible && placement.current(screen: screen) == nil { placement.request(screen: screen, eligible: eligible) }
+        let currentSnapshot = eligible ? placement.current(screen: screen) : nil
+        let snapshot = eligible ? (currentSnapshot ?? placement.fastWindowSnapshot(screen: screen)) : nil
+        if eligible && currentSnapshot == nil { placement.request(screen: screen, eligible: eligible) }
         let visible = screen.visibleFrame
         let now = ProcessInfo.processInfo.systemUptime
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: NSEvent.mouseLocation,

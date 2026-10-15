@@ -322,6 +322,30 @@ final class ChatModel: ObservableObject {
         }
         clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
 
+        let actionPrefixes = [
+            "move yourself to the ", "move yourself to ", "move yourself ",
+            "move to the ", "move to ", "move ",
+            "go to the ", "go to ", "go ",
+            "shift to the ", "shift to ", "shift ",
+            "slide to the ", "slide to ", "slide ",
+            "jump to the ", "jump to ", "jump ",
+            "step to the ", "step to ", "step ",
+            "put yourself at the ", "put yourself in the ", "put yourself in ", "put yourself on ", "put yourself ",
+            "переместись в ", "переместись на ", "подвинься в ", "подвинься на ", "иди в ", "встань в "
+        ]
+        for p in actionPrefixes {
+            if clean.hasPrefix(p) {
+                clean = String(clean.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        if clean.hasPrefix("the ") {
+            clean = String(clean.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if clean.hasPrefix("screen ") {
+            clean = String(clean.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
         // Corner / Center checks
         if clean.contains("top left") || clean.contains("top-left") || clean.contains("upper left") ||
            clean == "left top" || clean == "влево вверх" || clean.contains("левый верхний") {
@@ -339,51 +363,40 @@ final class ChatModel: ObservableObject {
            clean == "right bottom" || clean == "вправо вниз" || clean.contains("правый нижний") {
             return .bottomRight
         }
-        if clean == "center" || clean == "middle" || clean.contains("to center") || clean.contains("to the center") ||
-           clean.contains("center yourself") || clean.contains("to middle") || clean.contains("to the middle") ||
-           clean == "в центр" || clean.contains("по центру") || clean.contains("посередине") {
+        if clean == "center" || clean == "middle" || clean.contains("center") || clean.contains("middle") ||
+           clean == "в центр" || clean.contains("по центру") || clean.contains("посередине") || clean.contains("середин") {
             return .center
         }
 
         // Directional checks
         // Left
-        if clean == "move left" || clean == "go left" || clean == "step left" || clean == "slide left" || clean == "shift left" ||
-           clean == "to the left" || clean == "to left" || clean == "left" || clean.hasPrefix("move to the left") || clean.hasPrefix("go to the left") ||
-           clean.hasPrefix("move left") || clean.hasPrefix("go left") || clean.hasPrefix("step left") ||
-           clean == "влево" || clean == "налево" || clean.contains("подвинься влево") {
+        if clean == "left" || clean.contains("left") || clean == "влево" || clean == "налево" || clean.contains("влево") {
             return .left
         }
         // Right
-        if clean == "move right" || clean == "go right" || clean == "step right" || clean == "slide right" || clean == "shift right" ||
-           clean == "to the right" || clean == "to right" || clean == "right" || clean.hasPrefix("move to the right") || clean.hasPrefix("go to the right") ||
-           clean.hasPrefix("move right") || clean.hasPrefix("go right") || clean.hasPrefix("step right") ||
-           clean == "вправо" || clean == "направо" || clean.contains("подвинься вправо") {
+        if clean == "right" || clean.contains("right") || clean == "вправо" || clean == "направо" || clean.contains("вправо") {
             return .right
         }
         // Up
-        if clean == "move up" || clean == "go up" || clean == "step up" || clean == "slide up" || clean == "shift up" ||
-           clean == "higher" || clean == "up" || clean == "upwards" || clean.hasPrefix("move up") || clean.hasPrefix("go up") ||
-           clean == "вверх" || clean == "наверх" || clean.contains("подвинься вверх") {
+        if clean == "up" || clean == "higher" || clean.contains("up") || clean == "вверх" || clean == "наверх" || clean.contains("вверх") {
             return .up
         }
         // Down
-        if clean == "move down" || clean == "go down" || clean == "step down" || clean == "slide down" || clean == "shift down" ||
-           clean == "lower" || clean == "down" || clean == "downwards" || clean.hasPrefix("move down") || clean.hasPrefix("go down") ||
-           clean == "вниз" || clean.contains("подвинься вниз") {
+        if clean == "down" || clean == "lower" || clean.contains("down") || clean == "вниз" || clean.contains("вниз") {
             return .down
         }
 
         // Away / Dodge
-        if clean.contains("move away") || clean.contains("go away") || clean.contains("step aside") ||
-           clean.contains("out of the way") || clean == "dodge" || clean == "evade" || clean.contains("scoot over") ||
+        if clean.contains("away") || clean.contains("aside") || clean.contains("out of the way") ||
+           clean.contains("dodge") || clean.contains("evade") || clean.contains("scoot") ||
            clean == "отойди" || clean == "уйди" || clean.contains("в сторону") {
             return .away
         }
 
         // General move / relocate / random
         if clean == "move" || clean == "move around" || clean == "relocate" || clean == "random move" ||
-           clean == "change position" || clean == "move somewhere" || clean == "move somewhere else" ||
-           clean == "go somewhere else" || clean == "wander" || clean == "move yourself" ||
+           clean == "change position" || clean == "somewhere" || clean == "somewhere else" ||
+           clean == "wander" || clean == "roam" || clean == "random" ||
            clean == "двигайся" || clean == "подвигайся" || clean == "переместись" || clean == "смени позицию" {
             return .random
         }
