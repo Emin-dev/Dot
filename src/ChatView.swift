@@ -90,6 +90,81 @@ final class ChatModel: ObservableObject {
     private var activeSpeechUpdateID: UUID?
     private var taskProgressTicker: Task<Void, Never>?
     private var shuttingDown = false
+    var onExecuteAction: ((NativeAction) async -> NativeActionResult?)?
+    var onRequestResearch: ((String) -> Void)?
+
+    func speakDirect(_ text: String) {
+        guard !shuttingDown, runtime.isReady(), phase == .idle else { return }
+        let id = cancelTurn()
+        answer = text
+        displayedAnswerTurn = id
+        phase = .speaking
+        expressionRevision &+= 1
+        do {
+            try runtime.startVoice(id)
+            runtime.enqueueVoice(text, id)
+            runtime.completeVoice(id)
+        } catch {
+            phase = .idle
+        }
+    }
+
+    private func detectNativeAction(_ text: String) -> NativeAction? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count <= 60 else { return nil }
+        let lower = trimmed.lowercased()
+        if lower.hasPrefix("open http://") || lower.hasPrefix("open https://") {
+            let url = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .openWebURL(url)
+        }
+        if lower.hasPrefix("open ") || lower.hasPrefix("launch ") {
+            let appName = lower.hasPrefix("open ") ? String(lower.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines) : String(lower.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let appMap: [String: String] = [
+                "safari": "com.apple.Safari",
+                "terminal": "com.apple.Terminal",
+                "finder": "com.apple.finder",
+                "notes": "com.apple.Notes",
+                "mail": "com.apple.mail",
+                "calendar": "com.apple.iCal",
+                "messages": "com.apple.MobileSMS",
+                "music": "com.apple.Music",
+                "maps": "com.apple.Maps",
+                "calculator": "com.apple.calculator",
+                "xcode": "com.apple.dt.Xcode",
+                "settings": "com.apple.systempreferences",
+                "system settings": "com.apple.systempreferences",
+                "preferences": "com.apple.systempreferences",
+                "system preferences": "com.apple.systempreferences",
+                "textedit": "com.apple.TextEdit",
+                "preview": "com.apple.Preview",
+                "reminders": "com.apple.reminders",
+                "photos": "com.apple.Photos"
+            ]
+            if let bundleID = appMap[appName] {
+                return .launchApplication(bundleID: bundleID)
+            }
+        }
+        return nil
+    }
+
+    private func detectWebSearchQuery(_ text: String) -> String? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let prefixes = [
+            "search the web for ",
+            "search web for ",
+            "search for ",
+            "research ",
+            "look up "
+        ]
+        for p in prefixes {
+            if lower.hasPrefix(p) {
+                let query = String(trimmed.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !query.isEmpty { return query }
+            }
+        }
+        return nil
+    }
 
     func handleTaskProgress(_ event: ResearchTaskProgress.Event) {
         let now = ProcessInfo.processInfo.systemUptime
@@ -592,6 +667,54 @@ final class ChatModel: ObservableObject {
         textHistory.beginAssistant(turn: id)
         if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
         if history.count > 12 { history.removeFirst(history.count - 12) }
+
+        if let action = self.detectNativeAction(text) {
+            work = Task { [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                let result = await self.onExecuteAction?(action)
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                let replyText: String
+                switch action {
+                case .launchApplication:
+                    replyText = result?.receipt.status == .succeeded ? "Opening application." : "Could not open that application."
+                case .openWebURL(let url):
+                    replyText = result?.receipt.status == .succeeded || result?.receipt.status == .handedOff ? "Opening \(url)." : "Could not open URL."
+                default:
+                    replyText = "Action completed."
+                }
+                self.answer = replyText
+                self.history.append(ChatMessage(role: "assistant", content: replyText))
+                self.textHistory.recordAssistant(turn: id, text: replyText, event: .generated)
+                if !self.voiceDeliveryFailed {
+                    self.enqueueVoice(replyText, id: id)
+                    self.runtime.completeVoice(id)
+                }
+                self.generating = false
+                self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle
+            }
+            return
+        }
+
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lower.hasPrefix("remember that ") || lower.hasPrefix("remember ") || lower.hasPrefix("my name is ") || lower.hasPrefix("i prefer ") || lower.hasPrefix("i like ") {
+            var fact = text
+            if let range = fact.range(of: "(?i)^remember that\\s+", options: .regularExpression) {
+                fact.removeSubrange(range)
+            } else if let range = fact.range(of: "(?i)^remember:?\\s+", options: .regularExpression) {
+                fact.removeSubrange(range)
+            }
+            let factToSave = fact.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !factToSave.isEmpty {
+                Task { [weak self] in
+                    _ = try? await self?.ftsStore.saveMemory(category: .userPreference, fact: factToSave, isCorrection: false)
+                }
+            }
+        }
+
+        if let query = self.detectWebSearchQuery(text) {
+            self.onRequestResearch?(query)
+        }
+
         let snapshot = history
         work = Task { [weak self] in
             guard let self else { return }

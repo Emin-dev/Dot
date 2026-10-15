@@ -532,11 +532,23 @@ private struct NativeSkinCharacter: View {
                 let bob = sin(context.elapsed * 2.2) * 0.6
                 let blinkDist = abs(context.elapsed.truncatingRemainder(dividingBy: 3.6) - 1.8)
                 let organicBlink = blinkDist < 0.075 ? 0.15 + 0.85 * blinkDist / 0.075 : 1.0
+                let glanceCycle = context.elapsed.truncatingRemainder(dividingBy: 11.0)
+                let ambientGazeX: Double
+                if glanceCycle > 7.0 && glanceCycle < 9.0 {
+                    ambientGazeX = 0.22 * sin((glanceCycle - 7.0) / 2.0 * .pi)
+                } else if glanceCycle > 3.0 && glanceCycle < 5.0 {
+                    ambientGazeX = -0.22 * sin((glanceCycle - 3.0) / 2.0 * .pi)
+                } else {
+                    ambientGazeX = 0.0
+                }
+                let clickProgress = min(1.0, context.elapsed / 0.45)
+                let clickBounce = context.elapsed < 0.45 ? sin(clickProgress * .pi) * 4.0 : 0.0
+                let clickSquash = context.elapsed < 0.45 ? -sin(clickProgress * .pi) * 0.12 : 0.0
                 pose = NativeFacePose(
-                    bob: pose.bob + bob,
+                    bob: pose.bob + bob + clickBounce,
                     tilt: pose.tilt,
                     blink: min(pose.blink, organicBlink),
-                    gazeX: pose.gazeX,
+                    gazeX: pose.gazeX + ambientGazeX,
                     gazeY: pose.gazeY,
                     browTilt: pose.browTilt,
                     mouthWidth: pose.mouthWidth,
@@ -547,10 +559,10 @@ private struct NativeSkinCharacter: View {
                     eyes: pose.eyes,
                     browLift: pose.browLift,
                     browAsymmetry: pose.browAsymmetry,
-                    squash: pose.squash * (1.0 + breath),
+                    squash: pose.squash * (1.0 + breath) + clickSquash,
                     bodyAccent: pose.bodyAccent,
                     cheeks: pose.cheeks,
-                    smileOpening: pose.smileOpening,
+                    smileOpening: max(pose.smileOpening, context.elapsed < 0.45 ? 0.4 : 0.0),
                     teeth: pose.teeth,
                     dimples: pose.dimples
                 )

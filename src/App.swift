@@ -32,8 +32,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuTracking = 0
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
-    private let documentWorker = WatchedDocumentWorker()
+    private var documentWorker: WatchedDocumentWorker?
     private var activityAssertion: NSObjectProtocol?
+    private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -42,6 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reason: "Dot desktop pet simulation and responsive voice"
         )
         let model = ChatModel(); self.model = model
+        let docWorker = WatchedDocumentWorker(ftsStore: model.ftsStore)
+        self.documentWorker = docWorker
         let searchProvider = LocalDotSearchProvider()
         let webResearch = WebResearchPanel(model: WebResearchModel(provider: searchProvider, reader: OfflinePayload.sourceReader(), synthesize: { [weak model] session in
             guard let model else { throw CancellationError() }
@@ -50,6 +53,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         webResearchPanel = webResearch
         webResearch.model.onTaskProgress = { [weak model] event in
             model?.handleTaskProgress(event)
+        }
+        model.onExecuteAction = { [weak self] action in
+            guard let self, !self.terminating else { return nil }
+            return await self.actionPanel.model.execute(action)
+        }
+        model.onRequestResearch = { [weak self] query in
+            guard let self, !self.terminating else { return }
+            self.webResearchPanel?.show()
+            self.webResearchPanel?.model.question = query
+            self.webResearchPanel?.model.start()
         }
         model.startProactivity()
         webResearch.onVisibility = { [weak self] in self?.utilityVisibility("webResearch", visible: $0) }
@@ -73,6 +86,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.stopAction = { [weak self] in self?.stopCurrentAction() }
         panel.optionsAction = { [weak self] in self?.showOptions() }
         panel.primaryAction = { [weak model] in model?.clicked() }
+        panel.secondaryAction = { [weak self] in self?.typeMessage() }
+        panel.onFileDropped = { [weak self] url in
+            guard let self, !self.terminating else { return }
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            let docDir = support?.appendingPathComponent("Dot/Documents", isDirectory: true)
+                ?? FileManager.default.temporaryDirectory
+            try? FileManager.default.createDirectory(at: docDir, withIntermediateDirectories: true)
+            let destURL = docDir.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: destURL)
+            do {
+                try FileManager.default.copyItem(at: url, to: destURL)
+                Task { @MainActor in
+                    self.model?.speakDirect("I have indexed \(url.lastPathComponent). Ask me anything about it!")
+                    await self.documentWorker?.scanAndMaintainBrief()
+                }
+            } catch {
+                // Fallback
+            }
+        }
         panel.primaryHitTest = { point in
             NSBezierPath(ovalIn: NSRect(x: (PetLayout.panelSize.width - PetLayout.petSize.width) / 2,
                                        y: PetLayout.petBottom, width: PetLayout.petSize.width,
@@ -177,7 +209,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, !self.terminating else { throw DotIntentError.unavailable }
             self.showPet()
         })
-        documentWorker.start()
+        documentWorker?.start()
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 49 && event.modifierFlags.contains(.option) {
+                self?.typeMessage()
+                return nil
+            }
+            return event
+        }
     }
 
     private func utilityVisibility(_ name: String, visible: Bool) {
@@ -392,13 +431,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        documentWorker.stop()
+        documentWorker?.stop()
         model?.stopProactivity(); voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
             NSWorkspace.shared.notificationCenter.removeObserver(observation)
         }
         observations.removeAll()
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         // No pkill, process-name matching, or shutdown of borrowed services.
     }
 }

@@ -2,10 +2,12 @@ import AppKit
 
 /// The application owns one reusable surface. Menus and OS permission prompts are separate system UI.
 @MainActor
-final class CompanionPanel: NSPanel {
+final class CompanionPanel: NSPanel, NSDraggingDestination {
     var stopAction: (() -> Void)?
     var optionsAction: (() -> Void)?
     var primaryAction: (() -> Void)?
+    var secondaryAction: (() -> Void)?
+    var onFileDropped: ((URL) -> Void)?
     var primaryHitTest: ((NSPoint) -> Bool)?
     var controlHitTest: ((NSPoint) -> Bool)?
     var pointerInteraction: ((Bool) -> Void)?
@@ -17,6 +19,27 @@ final class CompanionPanel: NSPanel {
     private var nativeControlPressed = false
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: style, backing: backingStoreType, defer: flag)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let pboard = sender.draggingPasteboard
+        if let types = pboard.types, types.contains(.fileURL) {
+            return .copy
+        }
+        return []
+    }
+
+    func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let pasteboard = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
+              let firstURL = pasteboard.first else { return false }
+        onFileDropped?(firstURL)
+        return true
+    }
+
     func cancelPointerGesture() {
         let wasPressed = pointer.isPressed, wasControl = nativeControlPressed
         pointer.cancel(); nativeControlPressed = false
@@ -68,7 +91,13 @@ final class CompanionPanel: NSPanel {
             let click = pointer.release(point: convertPoint(toScreen: event.locationInWindow),
                                         inside: primaryHitTest?(event.locationInWindow) == true)
             if wasPressed { pointerInteraction?(false) }
-            if click { primaryAction?() }
+            if click {
+                if event.clickCount == 2 {
+                    secondaryAction?()
+                } else {
+                    primaryAction?()
+                }
+            }
             return
         }
         super.sendEvent(event)

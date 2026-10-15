@@ -21,8 +21,11 @@ final class WatchedDocumentWorker: ObservableObject {
         if let folderURL {
             self.watchedFolderURL = folderURL
         } else {
-            self.watchedFolderURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            let docDir = support?.appendingPathComponent("Dot/Documents", isDirectory: true)
                 ?? FileManager.default.temporaryDirectory
+            try? FileManager.default.createDirectory(at: docDir, withIntermediateDirectories: true)
+            self.watchedFolderURL = docDir
         }
         self.ftsStore = ftsStore ?? ((try? LocalFTSStore()) ?? (try! LocalFTSStore(inMemory: true)))
         self.notebookStore = notebookStore ?? ((try? ResearchNotebookStore()) ?? (try! ResearchNotebookStore(directory: FileManager.default.temporaryDirectory)))
