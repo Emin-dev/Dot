@@ -233,7 +233,7 @@ class WhisperBuildIntegrationTests(unittest.TestCase):
         source = (ROOT / 'scripts/build_complete.sh').read_text()
         self.assertIn('DOT_WHISPER_ARCHIVE', source)
         self.assertNotIn('DOT_WHISPER_FRAMEWORK', source)
-        self.assertIn('FRAMEWORK_PARENT="$INTENTS_BUILD/whisper-input"', source)
+        self.assertIn('FRAMEWORK_PARENT="$WHISPER_BUILD/whisper-input"', source)
         self.assertIn('/usr/bin/ditto "$VERIFIED_WHISPER_FRAMEWORK"', source)
         self.assertLess(source.index('scripts/verify_whisper_input.py --archive'), source.index('xcrun swiftc'))
         self.assertIn('git ls-files --error-unmatch -- packaging/voice-source-manifest.json scripts/verify_whisper_input.py', source)

@@ -36,7 +36,8 @@ def adopt_listener(descriptor, port):
     listener = socket.socket(fileno=descriptor)
     try:
         # Darwin does not implement SO_ACCEPTCONN; inspect TCP state without mutation.
-        listening = (listener.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1) == b'\x01'
+        tcp_conn_info = getattr(socket, 'TCP_CONNECTION_INFO', 0x106)
+        listening = (listener.getsockopt(socket.IPPROTO_TCP, tcp_conn_info, 1) == b'\x01'
                      if sys.platform == 'darwin' else listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1)
         if (listener.family != socket.AF_INET or listener.type != socket.SOCK_STREAM
             or listener.getsockname() != ('127.0.0.1', port)

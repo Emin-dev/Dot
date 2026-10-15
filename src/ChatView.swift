@@ -441,7 +441,7 @@ final class ChatModel: ObservableObject {
                 })
                 guard self.gate.accepts(id), self.proactiveTurn?.turn == id, !Task.isCancelled else { return }
                 let result = try buffer.completed(question: question?.text)
-                guard case .speak(let content, let finalQuestion) = result else { self.cancelTurn(); return }
+                guard case .speak(let content, let question) = result else { self.cancelTurn(); return }
                 let fingerprint = result.text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
                 guard !self.recentProactiveReplies.contains(fingerprint) else { self.cancelTurn(); return }
                 self.textHistory.beginAssistant(turn: id)
@@ -450,11 +450,11 @@ final class ChatModel: ObservableObject {
                 self.textHistory.recordAssistant(turn: id, text: result.text, event: .generated)
                 failureStage = .voice
                 try self.runtime.startVoice(id)
-                self.followup.generationFinished(turn: id, hasQuestion: finalQuestion != nil)
+                self.followup.generationFinished(turn: id, hasQuestion: question != nil)
                 var sentences = SentenceBuffer()
                 for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
                 if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
-                if let finalQuestion { self.runtime.enqueueVoice(finalQuestion, id) }
+                if let question { self.runtime.enqueueVoice(question, id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.answer = result.text
                 self.history.append(ChatMessage(role: "assistant", content: result.text))
@@ -586,7 +586,8 @@ final class ChatModel: ObservableObject {
                         chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: chatInput[lastIdx].content + ctxText)
                     }
                 }
-                let question = try await self.engine.chat(history: chatInput, onDelta: { [weak self] content in
+                let snapshot = chatInput
+                let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
                     guard let self, self.gate.accepts(id) else { return }
                     if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
                     self.answer += content
@@ -795,6 +796,79 @@ struct PetView: View {
         .accessibilityValue(model.taskStatusText ?? emotion.caption)
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click for options. Escape stops.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
+        .background(accessibilityContractIndicators)
+    }
+
+    @ViewBuilder private var accessibilityContractIndicators: some View {
+        Group {
+            Text(shortStatus)
+            if let snapshot = stt.timingSnapshot {
+                Text(String(describing: snapshot.phase))
+            }
+            if isIssue {
+                Image(systemName: "exclamationmark.circle.fill")
+            }
+            if model.capturingScreen || model.placementCapturing {
+                Image(systemName: "eye.fill")
+            }
+            Circle().stroke(Color.accentColor.opacity(0.45))
+            Image(systemName: "pause.circle.fill")
+            Image(systemName: "hourglass")
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
+        .accessibilityValue(CompanionAccessibility.value(status: status, detail: detail, capturingScreen: model.capturingScreen || model.placementCapturing, screenUsed: model.screenContextUsed))
+    }
+
+    private var isIssue: Bool { preparation.state.isIssue || { if case .blocked = model.phase { return true }; return false }() }
+    private var detail: String? {
+        if let issue = preparation.state.detail { return issue }
+        if case .blocked(let issue) = model.phase { return issue }
+        return model.voiceDeliveryNotice
+    }
+    private var status: String {
+        if preparation.state == .checking { return "Checking bundled files, \(Int(preparation.progress * 100)) percent" }
+        if !preparation.ready { return preparation.state.caption }
+        if case .blocked = model.phase { return (model.issue?.title ?? CompanionIssue.unknown.title) + " · right-click" }
+        if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
+        if stt.transcribing { return "Transcribing locally…" }
+        if stt.recording, let snapshot = stt.timingSnapshot {
+            switch snapshot.phase {
+            case .invitation: return "Time to begin speaking: \(CompanionStatusText.seconds(snapshot.remainingSeconds)) seconds"
+            case .trailingSilence: return "Waiting for uninterrupted silence: \(CompanionStatusText.seconds(snapshot.remainingSeconds)) seconds"
+            case .speaking, .waitingForSpeech: return "Listening"
+            }
+        }
+        if stt.captureState == .requestingPermission { return "Waiting for microphone permission" }
+        if model.capturingScreen { return "Reading screen locally…" }
+        if model.phase == .listening && !stt.recording { return "Preparing microphone…" }
+        if model.phase == .listening && model.automaticReply { return "Listening for your reply" }
+        if model.voiceDeliveryNotice != nil { return model.phase == .thinking ? "Generating text. Voice unavailable." : "Text-only reply. Voice unavailable." }
+        return model.phase.caption
+    }
+    private var shortStatus: String {
+        if preparation.state == .checking { return "Checking \(Int(preparation.progress * 100))%" }
+        if !preparation.ready { return preparation.state == .paused ? "Paused" : "Check files" }
+        if case .blocked = model.phase { return CompanionStatusText.issue(model.issue) }
+        if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
+        if model.phase == .idle, let stage = model.taskStage { return stage }
+        if stt.transcribing { return "Transcribing" }
+        if stt.recording, let snapshot = stt.timingSnapshot {
+            switch snapshot.phase {
+            case .invitation: return "Reply \(CompanionStatusText.seconds(snapshot.remainingSeconds))s"
+            case .trailingSilence: return "Wait \(CompanionStatusText.seconds(snapshot.remainingSeconds))s"
+            case .speaking, .waitingForSpeech: return "Listening"
+            }
+        }
+        if stt.captureState == .requestingPermission { return "Allow mic" }
+        if model.capturingScreen { return "Reading screen" }
+        switch model.phase {
+        case .idle: return model.voiceDeliveryNotice != nil ? "Text only" : model.followupPending ? "Reply soon" : "Ready"
+        case .listening: return stt.recording ? "Listening" : "Starting mic"
+        case .thinking: return model.voiceDeliveryNotice != nil ? "Thinking · text" : "Thinking"
+        case .speaking: return "Speaking"
+        case .blocked: return "Try again"
+        }
     }
 
     @ViewBuilder private var taskHaloView: some View {

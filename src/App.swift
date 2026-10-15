@@ -121,11 +121,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.cancelMovement(); self?.moveGently() }
         })
-        observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.placement.invalidate() }
-        })
-        for name in [NSWorkspace.activeSpaceDidChangeNotification,
-                     NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
+        let appEvents = [
+            NSWorkspace.didActivateApplicationNotification,
+            NSWorkspace.didDeactivateApplicationNotification,
+            NSWorkspace.didLaunchApplicationNotification,
+            NSWorkspace.didTerminateApplicationNotification,
+            NSWorkspace.didHideApplicationNotification,
+            NSWorkspace.didUnhideApplicationNotification,
+            NSWorkspace.activeSpaceDidChangeNotification
+        ]
+        for event in appEvents {
+            observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: event, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.handleWindowOrAppChange() }
+            })
+        }
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
             observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.cancelMovement() }
             })
@@ -139,6 +149,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observations.append(NotificationCenter.default.addObserver(forName: NSApplication.didUnhideNotification, object: nil, queue: .main) { [weak model] _ in
             Task { @MainActor in model?.visible = true }
         })
+        placement.onSnapshotUpdated = { [weak self] snapshot in
+            guard let self, let panel = self.panel, let model = self.model,
+                  model.screenEnabled, !model.pinned, model.phase == .idle else { return }
+            guard let screen = panel.screen else { return }
+            let frame = panel.frame
+            if !RoamingCore.clear(frame, regions: snapshot.protected) {
+                let origin = self.roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
+                                                         cursor: NSEvent.mouseLocation,
+                                                         now: ProcessInfo.processInfo.systemUptime,
+                                                         displayID: snapshot.displayID,
+                                                         snapshot: snapshot)
+                if origin != frame.origin {
+                    panel.setFrameOrigin(origin)
+                }
+                self.scheduleMovement(interval: 1.0 / 60)
+            }
+        }
         scheduleMovement(interval: 0.5)
         DotIntentRouter.shared.configure(talk: { [weak self] in
             guard let self, let model = self.model, OfflinePreparation.shared.ready, !self.terminating else { throw DotIntentError.unavailable }
@@ -301,6 +328,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
     }
 
+    private func handleWindowOrAppChange() {
+        guard let panel, let model, model.screenEnabled, !model.pinned, model.phase == .idle else { return }
+        guard let screen = panel.screen else { return }
+
+        placement.invalidate()
+        placement.request(screen: screen, eligible: true, immediate: true)
+
+        let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
+        if let snap, !snap.protected.isEmpty {
+            let frame = panel.frame
+            if !RoamingCore.clear(frame, regions: snap.protected) {
+                let origin = roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
+                                                    cursor: NSEvent.mouseLocation,
+                                                    now: ProcessInfo.processInfo.systemUptime,
+                                                    displayID: snap.displayID,
+                                                    snapshot: snap)
+                if origin != frame.origin {
+                    panel.setFrameOrigin(origin)
+                }
+                scheduleMovement(interval: 1.0 / 60)
+            }
+        }
+    }
+
     private func moveGently() {
         guard let panel, let model else { return }
         let paused = !panel.isVisible || model.hovered || model.interactionPaused
@@ -309,14 +360,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = panel.screen, let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else {
             cancelMovement(); return
         }
-        let eligible = !paused && model.phase == .idle
+        let eligible = !paused && model.screenEnabled
         if !eligible { placement.invalidate() }
-        let snapshot = eligible && model.screenEnabled ? placement.current(screen: screen) : nil
-        if eligible && model.screenEnabled && snapshot == nil { placement.request(screen: screen, eligible: eligible) }
+        let snapshot = eligible ? (placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)) : nil
+        if eligible && placement.current(screen: screen) == nil { placement.request(screen: screen, eligible: eligible) }
         let visible = screen.visibleFrame
         let now = ProcessInfo.processInfo.systemUptime
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: NSEvent.mouseLocation,
-                               paused: !eligible, now: now, displayID: displayID, snapshot: snapshot)
+                               paused: !eligible || model.phase != .idle, now: now, displayID: displayID, snapshot: snapshot)
         let moved = panel.frame.origin != origin
         if moved { panel.setFrameOrigin(origin) }
         let pointerNearby = panel.frame.insetBy(dx: -40, dy: -40).contains(NSEvent.mouseLocation)

@@ -561,7 +561,7 @@ class TLSAdmissionTests(unittest.TestCase):
         for count in range(64):
             connection = socket.socket(); connection.settimeout(0.05)
             try: connection.connect(self.backend.getsockname())
-            except socket.timeout:
+            except (socket.timeout, ConnectionResetError, ConnectionRefusedError):
                 connection.close(); return count
             except BaseException:
                 connection.close(); raise

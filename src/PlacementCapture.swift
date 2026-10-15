@@ -17,6 +17,7 @@ final class PlacementCapture {
     }
     private var work: Task<Void, Never>?
     var onCaptureChanged: ((Bool) -> Void)?
+    var onSnapshotUpdated: ((PlacementSnapshot) -> Void)?
     private var acceptedWindows: [CGRect]?
     func current(screen: NSScreen) -> PlacementSnapshot? {
         guard let snapshot = gate.snapshot else { return nil }
@@ -24,7 +25,6 @@ final class PlacementCapture {
         let reason: PlacementDiagnostic.Reason?
         if !CGPreflightScreenCaptureAccess() { reason = .permission }
         else if now - snapshot.capturedAt > PlacementSnapshot.lifetime { reason = .expired }
-        else if Self.inputIdleSeconds() < now - snapshot.capturedAt { reason = .inputChanged }
         else if screen.frame != snapshot.displayFrame || screen.visibleFrame != snapshot.visibleFrame { reason = .invalidMap }
         else if (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value != snapshot.displayID { reason = .displayMissing }
         else if let top = NSScreen.screens.first?.frame.maxY,
@@ -38,6 +38,14 @@ final class PlacementCapture {
         }
         return snapshot
     }
+    func fastWindowSnapshot(screen: NSScreen) -> PlacementSnapshot? {
+        guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+              let primaryTop = NSScreen.screens.first?.frame.maxY,
+              let windows = try? Self.windowRegions(primaryTop: primaryTop, display: screen.frame) else { return nil }
+        let now = ProcessInfo.processInfo.systemUptime
+        return PlacementSnapshot(displayID: id, displayFrame: screen.frame, visibleFrame: screen.visibleFrame,
+                                 capturedAt: now, protected: windows)
+    }
     static func inputIdleSeconds() -> Double {
         let events: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
          .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
@@ -45,12 +53,12 @@ final class PlacementCapture {
         return ages.allSatisfy { $0.isFinite && $0 >= 0 } ? (ages.min() ?? 0) : 0
     }
     func invalidate() { gate.invalidate(); acceptedWindows = nil; work?.cancel() }
-    func request(screen: NSScreen, eligible: Bool) {
+    func request(screen: NSScreen, eligible: Bool, immediate: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
-        guard eligible, CGPreflightScreenCaptureAccess(), Self.inputIdleSeconds() >= 2,
+        guard eligible, CGPreflightScreenCaptureAccess(),
               let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
               let primaryTop = NSScreen.screens.first?.frame.maxY,
-              let token = gate.begin(now: now, eligible: eligible) else { return }
+              let token = gate.begin(now: now, eligible: eligible, immediate: immediate) else { return }
         let frame = screen.frame, visible = screen.visibleFrame
         onCaptureChanged?(true)
         work = Task { [weak self] in
@@ -70,7 +78,10 @@ final class PlacementCapture {
                 if let started = captureStarted { captureElapsed = ProcessInfo.processInfo.systemUptime - started }
                 if let started = analysisStarted { analysisElapsed = ProcessInfo.processInfo.systemUptime - started }
                 self.gate.finish(token: token, result: result)
-                if self.gate.snapshot != nil { self.acceptedWindows = windows }
+                if let valid = self.gate.snapshot {
+                    self.acceptedWindows = windows
+                    self.onSnapshotUpdated?(valid)
+                }
                 self.work = nil; self.onCaptureChanged?(false)
                 self.report(PlacementDiagnostic(stage: stage, outcome: outcome, reason: reason,
                     elapsed: ProcessInfo.processInfo.systemUptime - now, capture: captureElapsed,
@@ -83,7 +94,6 @@ final class PlacementCapture {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 try Task.checkCancellation()
                 guard CGPreflightScreenCaptureAccess() else { reason = .permission; return }
-                guard Self.inputIdleSeconds() >= 2 else { reason = .inputChanged; return }
                 guard let display = content.displays.first(where: { $0.displayID == id }),
                       display.width > 0, display.height > 0 else { reason = .displayMissing; return }
                 let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
@@ -110,7 +120,6 @@ final class PlacementCapture {
                 try Task.checkCancellation()
                 stage = .validation
                 guard CGPreflightScreenCaptureAccess() else { reason = .permission; return }
-                guard Self.inputIdleSeconds() >= ProcessInfo.processInfo.systemUptime - capturedAt else { reason = .inputChanged; return }
                 let after = try Self.windowRegions(primaryTop: primaryTop, display: frame)
                 guard PlacementSnapshot.preservesGeometry(before, in: after) else { reason = .windowsChanged; return }
                 addedWindows = after.count - before.count

@@ -27,7 +27,8 @@ class ListenerPatchTests(unittest.TestCase):
     def test_platform_socket_state_query_distinguishes_listener_without_mutation(self):
         def check(value, state, label):
             if sys.platform == 'darwin':
-                self.assertEqual(value.getsockopt(socket.IPPROTO_TCP, socket.TCP_CONNECTION_INFO, 1), bytes([state]), label)
+                tcp_conn_info = getattr(socket, 'TCP_CONNECTION_INFO', 0x106)
+                self.assertEqual(value.getsockopt(socket.IPPROTO_TCP, tcp_conn_info, 1), bytes([state]), label)
             else:
                 self.assertEqual(value.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN), int(state == 1), label)
         with socket.socket() as listener:

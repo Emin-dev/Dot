@@ -49,8 +49,15 @@ def candidate_receipt(root, commit, host_arch, macos_version, sdk_version, app_a
     minimum = info.get("LSMinimumSystemVersion")
     if not isinstance(minimum, str) or not re.fullmatch(r"\d+(?:\.\d+){1,2}", minimum):
         raise ValueError("Missing or invalid application deployment target")
-    with dmg.open("rb") as stream:
-        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if hasattr(hashlib, "file_digest"):
+        with dmg.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    else:
+        h = hashlib.sha256()
+        with dmg.open("rb") as stream:
+            while chunk := stream.read(65536):
+                h.update(chunk)
+        digest = h.hexdigest()
     return {
         "schema_version": 1, "artifact_kind": "model-free-development-only",
         "final_installer": False, "commit": commit, "source_dirty": False,

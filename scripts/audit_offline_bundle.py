@@ -25,8 +25,14 @@ def relative(value):
 
 
 def digest(path):
+    if hasattr(hashlib, 'file_digest'):
+        with path.open('rb') as source:
+            return hashlib.file_digest(source, 'sha256').hexdigest()
+    h = hashlib.sha256()
     with path.open('rb') as source:
-        return hashlib.file_digest(source, 'sha256').hexdigest()
+        while chunk := source.read(65536):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def audit(root, manifest):

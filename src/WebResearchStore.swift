@@ -81,8 +81,7 @@ actor WebResearchSessionStore: WebResearchSessionAccess {
 
     func list() throws -> [WebResearchSessionSummary] {
         try transaction { folder in
-            let doc = try read(folder)
-            let projected = doc.sessions.map(recoveryProjection)
+            let projected = try read(folder).sessions.map(recoveryProjection)
             let sortedSessions = projected.sorted {
                 if $0.session.updatedAt == $1.session.updatedAt {
                     return $0.id.uuidString < $1.id.uuidString
