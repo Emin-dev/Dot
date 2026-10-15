@@ -79,6 +79,13 @@ private struct SourceReferenceView: View {
             if let commit = model.commit {
                 Text("Revision " + commit).font(.caption.monospaced()).textSelection(.enabled)
             }
+            HStack(spacing: 8) {
+                Link("View latest code on GitHub ↗", destination: URL(string: "https://github.com/Emin-dev/Dot")!)
+                    .font(.caption.weight(.medium))
+                Text("·").foregroundStyle(.secondary)
+                Link("Latest commits ↗", destination: URL(string: "https://github.com/Emin-dev/Dot/commits/main")!)
+                    .font(.caption)
+            }
             HStack {
                 TextField("Repository path", text: $model.path).onSubmit { model.read() }
                 Button("Read") { model.read() }.disabled(model.busy || model.commit == nil)

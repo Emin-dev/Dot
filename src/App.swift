@@ -366,6 +366,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func readSource() {
         model?.cancelForInteraction(); sourcePanel.show()
     }
+    @objc private func openRepository() {
+        if let url = URL(string: "https://github.com/Emin-dev/Dot") {
+            NSWorkspace.shared.open(url)
+        }
+    }
     @objc private func retryPreparation() { OfflinePreparation.shared.retry() }
     @objc private func togglePin() { model?.pinned.toggle() }
     @objc private func toggleScreen() { model?.screenEnabled.toggle() }
@@ -456,6 +461,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.target = self; toolsMenu.addItem(actions)
         let source = NSMenuItem(title: "Version source…", action: #selector(readSource), keyEquivalent: "")
         source.target = self; toolsMenu.addItem(source)
+        let repoSubItem = NSMenuItem(title: "GitHub repository (latest code)…", action: #selector(openRepository), keyEquivalent: "")
+        repoSubItem.target = self; toolsMenu.addItem(repoSubItem)
         toolsItem.submenu = toolsMenu
         menu.addItem(toolsItem)
 
@@ -466,6 +473,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
+        let repoItem = NSMenuItem(title: "View Dot repository on GitHub…", action: #selector(openRepository), keyEquivalent: "")
+        repoItem.target = self; menu.addItem(repoItem)
+
         let quitItem = NSMenuItem(title: "Quit Dot", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self; menu.addItem(quitItem)
 

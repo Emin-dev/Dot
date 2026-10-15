@@ -499,22 +499,34 @@ final class ChatModel: ObservableObject {
         // 9. Inquiries about why Dot is not moving / staying in one spot
         if clean.contains("why") && (clean.contains("don't move") || clean.contains("dont move") || clean.contains("stay in the same place") || clean.contains("stay in one place") || clean.contains("aren't you moving") || clean.contains("not moving")) {
             if let reply = self.onMove?(.random) {
-                return "I roam to new spots every 35 to 60 seconds when idle, and immediately relocate every 5 seconds while thinking! " + reply
+                return "I roam to new spots every 5 seconds when idle, and immediately relocate every 5 seconds while thinking! " + reply
             }
-            return "I roam to new spots every 35 to 60 seconds when idle, and immediately relocate every 5 seconds while thinking! Relocating right now."
+            return "I roam to new spots every 5 seconds when idle, and immediately relocate every 5 seconds while thinking! Relocating right now."
         }
 
-        // 10. Codebase & Own Source Code Access
+        // 10. Codebase & GitHub Repository Access
+        if clean.contains("open repo") || clean.contains("open repository") || clean.contains("open github") ||
+           clean.contains("show repo") || clean.contains("repo link") || clean.contains("github link") ||
+           clean.contains("latest code") || clean.contains("check for updates") || clean.contains("view github") ||
+           clean == "repo" || clean == "github" || clean.contains("where is your code") {
+            let repoURL = "https://github.com/Emin-dev/Dot"
+            if let url = URL(string: repoURL) {
+                NSWorkspace.shared.open(url)
+            }
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(repoURL, forType: .string)
+            return "Here is my official GitHub repository: \(repoURL). I've opened it in your browser and copied the link to your clipboard so you can always see my latest updated code!"
+        }
         if clean.contains("read your own code") || clean.contains("see your own code") || clean.contains("read your code") || clean.contains("see your code") || clean.contains("inspect your code") || clean == "can you see and read your own code" || clean == "can you read your own code" {
             let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
             let files = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("src").path))?.filter { $0.hasSuffix(".swift") } ?? []
-            return "Yes! I have direct access to read and inspect my source code at /Users/mac/.gemini/antigravity/scratch/Dot. I have \(files.count) Swift files including App.swift, ChatView.swift, RoamingCore.swift, Engine.swift, NativeActions.swift, and more. You can ask me to read or explain any file!"
+            return "Yes! I have direct access to read and inspect my source code at /Users/mac/.gemini/antigravity/scratch/Dot, and my open-source repository is at https://github.com/Emin-dev/Dot. I have \(files.count) Swift files including App.swift, ChatView.swift, RoamingCore.swift, Engine.swift, NativeActions.swift, and more. You can ask me to read or explain any file!"
         }
         if clean == "list your files" || clean == "list files" || clean == "show your files" || clean == "show files in code" || clean == "what files do you have" || clean == "show codebase files" {
             let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
             let files = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("src").path))?.filter { $0.hasSuffix(".swift") }.sorted() ?? []
             let topFiles = files.prefix(8).joined(separator: ", ")
-            return "My codebase has \(files.count) Swift modules including \(topFiles), and more. Ask me to read any of them!"
+            return "My codebase has \(files.count) Swift modules including \(topFiles), and more. You can also view the latest updated code on GitHub at https://github.com/Emin-dev/Dot."
         }
 
         // 11. Read Source Code or Document File
