@@ -2,6 +2,12 @@ import Foundation
 import CryptoKit
 import PDFKit
 import Darwin
+#if canImport(Vision)
+import Vision
+#endif
+#if canImport(AppKit)
+import AppKit
+#endif
 
 enum ResearchNotebookError: Error, LocalizedError, Equatable {
     case invalidInput, unsupportedSource, limitExceeded, unreadableSource, networkFailure, corruptNotebook, notFound
@@ -37,7 +43,23 @@ enum ResearchExtraction {
             for page in 0..<count {
                 try Task.checkCancellation()
                 guard let pdfPage = document.page(at: page) else { throw ResearchNotebookError.unreadableSource }
-                let value = pdfPage.string ?? ""
+                var value = pdfPage.string ?? ""
+                if value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    #if canImport(Vision) && canImport(AppKit)
+                    let thumb = pdfPage.thumbnail(of: CGSize(width: 1200, height: 1600), for: .cropBox)
+                    if let cgImage = thumb.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+                        let request = VNRecognizeTextRequest()
+                        request.recognitionLevel = .accurate
+                        request.usesLanguageCorrection = true
+                        let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                        try? handler.perform([request])
+                        if let observations = request.results {
+                            let recognized = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: "\n")
+                            if !recognized.isEmpty { value = recognized }
+                        }
+                    }
+                    #endif
+                }
                 try Task.checkCancellation()
                 if !text.isEmpty, !value.isEmpty { text += "\n" }
                 let remaining = max(0, maxCharacters - text.count)
