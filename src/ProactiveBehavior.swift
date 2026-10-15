@@ -149,6 +149,9 @@ struct ProactiveSchedule {
               !recentKeys.contains(key), pending?.key != key, active?.contextKey != key else { return false }
         pending = (key, reason); return true
     }
+    mutating func clearPending() {
+        pending = nil
+    }
     @discardableResult mutating func clearContext(now: Double) -> UUID? {
         pending = nil
         return cancelActive()
@@ -225,8 +228,9 @@ final class ProactiveBehavior: ObservableObject {
                         ? .foregroundApplicationChanged : .workspaceChanged
                     Task { @MainActor [weak self] in
                         guard let self, self.running, self.epoch == expected else { return }
-                        // Stale context cannot keep doing work after the foreground changes.
-                        self.clearContext()
+                        // Dropping pending unconsumed suggestion avoids proposing stale ideas from the previous app,
+                        // but active speech and ongoing tasks continue autonomously without interruption.
+                        self.clearPending()
                         self.onContextChange?(.init(reason: reason, applicationIdentifier: identifier))
                     }
                 })
@@ -268,6 +272,7 @@ final class ProactiveBehavior: ObservableObject {
         reschedule(); return accepted
     }
     func clearContext() { notifyCancellation(schedule.clearContext(now: clock())); reschedule() }
+    func clearPending() { schedule.clearPending(); reschedule() }
     func complete(id: UUID) { schedule.complete(id: id); activeOpportunity = schedule.active; reschedule() }
     /// Deterministic tests call poll directly; production invokes it at a monotonic deadline.
     func poll() {

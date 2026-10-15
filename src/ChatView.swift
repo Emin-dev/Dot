@@ -660,6 +660,9 @@ final class ChatModel: ObservableObject {
         proactive.onOpportunity = { [weak self] in self?.suggest($0) }
         proactive.onCancel = { [weak self] opportunity in
             guard let self, self.proactiveTurn?.opportunity == opportunity else { return }
+            if self.runtime.ttsSpeaking() || self.phase == .speaking || self.generating {
+                return
+            }
             self.cancelTurn()
         }
         proactive.onContextChange = { [weak self] change in
@@ -833,6 +836,10 @@ final class ChatModel: ObservableObject {
         }
         guard !shuttingDown, runtime.isReady() else { return }
         dismissFirstUseHint()
+        if phase == .speaking || runtime.ttsSpeaking() || generating {
+            stopCurrentTurn()
+            return
+        }
         beginListening(continuation: nil)
     }
     func dismissFirstUseHint() {
