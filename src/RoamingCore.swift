@@ -228,6 +228,66 @@ struct RoamingCore {
         }
         return bestPoint
     }
+    /// Finds a random safe candidate position in `bounds` that does not intersect any protected region
+    /// (windows, text boxes, buttons) and maintains distance from the cursor and current position.
+    static func findRandomEmptySpace(frame: CGRect, bounds: CGRect, cursor: CGPoint,
+                                     regions: [CGRect], minDistance: CGFloat = 140) -> CGPoint? {
+        var candidates: [CGPoint] = []
+        let margin: CGFloat = 24
+
+        // 1. Screen corner and margin pockets
+        candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin))
+        candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin))
+        candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin))
+        candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.minY + margin))
+        candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.midY))
+        candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.midY))
+        candidates.append(CGPoint(x: bounds.midX, y: bounds.maxY - margin))
+        candidates.append(CGPoint(x: bounds.midX, y: bounds.minY + margin))
+
+        // 2. Grid sampling across visible bounds
+        let stepX: CGFloat = max(80, bounds.width / 12)
+        let stepY: CGFloat = max(80, bounds.height / 10)
+        for y in stride(from: bounds.minY + margin, through: bounds.maxY - margin, by: stepY) {
+            for x in stride(from: bounds.minX + margin, through: bounds.maxX - margin, by: stepX) {
+                candidates.append(CGPoint(x: x, y: y))
+            }
+        }
+
+        let origin = frame.origin
+        var safeCandidates: [CGPoint] = []
+
+        // Pass 1: Strict clearance (10pt padding, 60pt cursor distance, minDistance from origin)
+        for candidate in candidates {
+            let clamped = clamp(candidate, to: bounds)
+            let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distToOrigin >= minDistance else { continue }
+            let testRect = CGRect(origin: clamped, size: frame.size).insetBy(dx: -10, dy: -10)
+            guard clear(testRect, regions: regions) else { continue }
+            let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
+            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 60 else { continue }
+            safeCandidates.append(clamped)
+        }
+
+        if let chosen = safeCandidates.randomElement() {
+            return chosen
+        }
+
+        // Pass 2: Relaxed margin if no candidate found (4pt padding, 30pt cursor distance, minDistance/2)
+        var fallbackCandidates: [CGPoint] = []
+        for candidate in candidates {
+            let clamped = clamp(candidate, to: bounds)
+            let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distToOrigin >= min(80, minDistance / 2) else { continue }
+            let testRect = CGRect(origin: clamped, size: frame.size).insetBy(dx: -4, dy: -4)
+            guard clear(testRect, regions: regions) else { continue }
+            let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
+            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 30 else { continue }
+            fallbackCandidates.append(clamped)
+        }
+
+        return fallbackCandidates.randomElement()
+    }
     mutating func evadeToEmptySpace(frame: CGRect, visible: CGRect, cursor: CGPoint,
                                     now: Double, displayID: UInt32, snapshot: PlacementSnapshot) -> CGPoint {
         guard PlacementSnapshot.validRect(frame), cursor.x.isFinite, cursor.y.isFinite,

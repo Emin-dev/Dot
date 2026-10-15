@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var visibleUtilities = Set<String>()
     private var terminating = false
     private var movement: Timer?
+    private var thinkingRelocationTimer: Timer?
     private var statusItem: NSStatusItem?
     private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 8.0)
     private var menuTracking = 0
@@ -89,6 +90,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         voiceEnvironment.start()
         placement.onCaptureChanged = { [weak model] active in model?.placementCapturing = active }
         model.placementInvalidated = { [weak self] in self?.cancelMovement() }
+        model.onPhaseChanged = { [weak self] newPhase in
+            self?.handlePhaseChanged(newPhase)
+        }
         model.onMove = { [weak self] command in
             guard let self, let panel = self.panel else { return nil }
             guard let screen = panel.screen ?? NSScreen.main else { return nil }
@@ -144,17 +148,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 reply = "Stepping out of the way!"
             case .random:
-                let spots: [CGPoint] = [
-                    CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin),
-                    CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin),
-                    CGPoint(x: bounds.minX + margin, y: bounds.minY + margin),
-                    CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin),
-                    CGPoint(x: bounds.midX, y: bounds.midY),
-                    CGPoint(x: bounds.minX + margin, y: bounds.midY),
-                    CGPoint(x: bounds.maxX - margin, y: bounds.midY)
-                ]
-                let farSpots = spots.filter { hypot($0.x - current.x, $0.y - current.y) >= 160 }
-                target = farSpots.randomElement() ?? spots.max(by: { hypot($0.x - current.x, $0.y - current.y) < hypot($1.x - current.x, $1.y - current.y) }) ?? current
+                let snap = self.placement.current(screen: screen) ?? self.placement.fastWindowSnapshot(screen: screen)
+                let protectedRegions = snap?.protected ?? []
+                let cursor = NSEvent.mouseLocation
+                if let safeSpot = RoamingCore.findRandomEmptySpace(frame: panel.frame, bounds: bounds, cursor: cursor, regions: protectedRegions, minDistance: 160) {
+                    target = safeSpot
+                } else {
+                    let spots: [CGPoint] = [
+                        CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin),
+                        CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin),
+                        CGPoint(x: bounds.minX + margin, y: bounds.minY + margin),
+                        CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin),
+                        CGPoint(x: bounds.midX, y: bounds.midY),
+                        CGPoint(x: bounds.minX + margin, y: bounds.midY),
+                        CGPoint(x: bounds.maxX - margin, y: bounds.midY)
+                    ]
+                    let farSpots = spots.filter { hypot($0.x - current.x, $0.y - current.y) >= 160 }
+                    target = farSpots.randomElement() ?? spots.max(by: { hypot($0.x - current.x, $0.y - current.y) < hypot($1.x - current.x, $1.y - current.y) }) ?? current
+                }
                 reply = "Relocating to a new spot!"
             }
 
@@ -324,10 +335,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func cancelMovement() { placement.invalidate(); roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
 
-    @objc private func showPet() { model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
+    @objc private func showPet() { stopThinkingRelocation(); model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func stopCurrentAction() {
+        stopThinkingRelocation()
         cancelMovement()
         model?.stopCurrentTurn()
         sourcePanel.stop(); researchPanel.cancel(); webResearchPanel?.cancel(); actionPanel.stop()
@@ -509,6 +521,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if interval != movementInterval { scheduleMovement(interval: interval) }
     }
 
+    private func handlePhaseChanged(_ phase: PetPhase) {
+        if phase == .thinking {
+            startThinkingRelocation()
+        } else {
+            stopThinkingRelocation()
+        }
+    }
+
+    private func startThinkingRelocation() {
+        stopThinkingRelocation()
+        relocateDuringThinking()
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.relocateDuringThinking() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        thinkingRelocationTimer = timer
+    }
+
+    private func stopThinkingRelocation() {
+        thinkingRelocationTimer?.invalidate()
+        thinkingRelocationTimer = nil
+    }
+
+    private func relocateDuringThinking() {
+        guard let panel, let model, model.phase == .thinking, !model.pinned, !model.hovered,
+              panel.isVisible, NSEvent.pressedMouseButtons == 0 else { return }
+        guard let screen = panel.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
+
+        if model.screenEnabled {
+            placement.request(screen: screen, eligible: true, immediate: true)
+        }
+
+        let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
+        let protectedRegions = snap?.protected ?? []
+
+        let cursor = NSEvent.mouseLocation
+        let currentOrigin = panel.frame.origin
+        let currentFrame = panel.frame
+
+        guard let target = RoamingCore.findRandomEmptySpace(
+            frame: currentFrame,
+            bounds: bounds,
+            cursor: cursor,
+            regions: protectedRegions,
+            minDistance: 140
+        ) else { return }
+
+        guard target != currentOrigin else { return }
+
+        self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
+        let targetFrame = NSRect(origin: target, size: panel.frame.size)
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.28
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(targetFrame, display: true)
+        }, completionHandler: {
+            panel.setFrameOrigin(target)
+        })
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
         terminating = true; sourcePanel.stop(); researchPanel.closeAdmissions(); webResearchPanel?.closeAdmissions(); actionPanel.closeAdmissions(); DotIntentRouter.shared.clear(); model?.beginShutdown()
@@ -524,6 +599,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         documentWorker?.stop()
+        stopThinkingRelocation()
         model?.stopProactivity(); voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)

@@ -97,7 +97,8 @@ enum DotMovementCommand: String, Sendable {
 @MainActor
 final class ChatModel: ObservableObject {
     var onMove: ((DotMovementCommand) -> String?)?
-    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext() } }
+    var onPhaseChanged: ((PetPhase) -> Void)?
+    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext(); onPhaseChanged?(phase) } }
     @Published private(set) var issue: CompanionIssue?
     @Published private(set) var answer = ""
     /// Identity of the displayed text, retained on Stop so history can describe
@@ -397,6 +398,7 @@ final class ChatModel: ObservableObject {
         if clean == "move" || clean == "move around" || clean == "relocate" || clean == "random move" ||
            clean == "change position" || clean == "somewhere" || clean == "somewhere else" ||
            clean == "wander" || clean == "roam" || clean == "random" ||
+           clean.contains("move yourself") || clean.contains("move to screen") || clean.contains("move on screen") ||
            clean == "двигайся" || clean == "подвигайся" || clean == "переместись" || clean == "смени позицию" {
             return .random
         }
