@@ -1,5 +1,12 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-15 02:42 UTC
+
+- **Autonomous Pet Roaming Unblocked & App Nap Disabled:** Added `<key>NSSupportsAppNap</key><false/>` to `Resources/Info.plist` and held background `ProcessInfo.beginActivity` assertion in `App.swift` so background pet simulation and voice timers run uninterrupted; decoupled `didActivateApplicationNotification` from `cancelMovement()` so switching apps invalidates placement cache without aborting or postponing roam; updated `RoamingCore.cancel()` so ordinary pauses/aborts only wait 3 seconds before next wander rather than 45+ seconds.
+- **Continuous 6-Second Voice Follow-Up Invitation Loop:** After any assistant answer (voice or typed), Dot now consistently waits 0.4s and re-opens the microphone for a 6-second invitation window (`invitationSeconds`), listening for user follow-up questions before closing and returning to idle; compared physical audio device IDs in `followup.environment` to prevent false cancellations when output sample rate shifts on playback completion.
+- **Streamlined Minimal UI & Context Menu:** Cleaned up `showOptions()` to eliminate duplicate items and clutter; preserved pure emotion-first character faces with zero text or indicator badges; added `taskHaloView` in `PetView` for long tasks without visual clutter.
+- **Full Verification & Deployment:** All 614 SwiftPM tests passed (0 failures); Release build succeeded; signed with `"Apple Development: Emin Ismayilov (7M2G5ULAUF)"` runtime signature; installed to `/Users/mac/Applications/Dot.app` and running live (PID 24928); pushed to GitHub `main` (`ad9befa`).
+
 ## Published checkpoint — 2026-10-15 02:18 UTC
 
 - **Autonomous Pet Roaming Simulation Unblocked:** Removed `panel.isKeyWindow` from movement pause check in `moveGently()`, preventing Dot from freezing when key/frontmost; increased sleep detection threshold from 2.0s to 15.0s so App Nap timer coalescing does not perpetually postpone roaming; prioritized inward candidate paths and added micro-roam fallback (12–20pt) so the pet wanders every ~45–60 seconds even with active windows.
