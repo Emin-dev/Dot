@@ -116,10 +116,10 @@ struct RoamingCore {
     /// Overlap escape has its own short retry so content is cleared quickly without
     /// re-running a failed empty-space search on every tick.
     private var escapeRetryAt = 0.0
-    init(seed: UInt64, now: Double) {
+    init(seed: UInt64, now: Double, initialWanderDelay: Double = 45.0) {
         self.seed = seed
-        self.nextDecision = now + 8
-        self.nextWander = now + 45
+        self.nextDecision = now + 6
+        self.nextWander = now + initialWanderDelay
     }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
@@ -129,7 +129,7 @@ struct RoamingCore {
         } else {
             nextWander = max(nextWander, now + 3)
         }
-        nextDecision = max(minimumRestUntil, now + 8)
+        nextDecision = max(minimumRestUntil, now + 6)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
         guard PlacementSnapshot.validRect(visible), window.width.isFinite, window.height.isFinite else { return nil }
@@ -312,7 +312,7 @@ struct RoamingCore {
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = now + 35.0 + Double(seed % 20)
+                nextWander = now + 12.0 + Double(seed % 8)
             } else {
                 trip = active
             }
@@ -360,7 +360,7 @@ struct RoamingCore {
 
         guard now >= nextDecision else { return origin }
 
-        // 2. Periodic Wander (pet simulation wandering every ~45-60 seconds)
+        // 2. Periodic Wander (pet simulation wandering every ~12-22 seconds)
         guard now >= nextWander else { return origin }
         seed = seed &* 6364136223846793005 &+ 1
         let regions = validSnapshot?.protected ?? lastKnownProtected
@@ -389,7 +389,7 @@ struct RoamingCore {
                   Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
             trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
-            nextWander = now + 45.0 + Double(seed % 20)
+            nextWander = now + 14.0 + Double(seed % 8)
             return origin
         }
 
@@ -398,7 +398,7 @@ struct RoamingCore {
                                                 regions: regions, minDistance: 50.0) {
             trip = Trip(start: origin, target: emptySpace, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
-            nextWander = now + 45.0 + Double(seed % 20)
+            nextWander = now + 14.0 + Double(seed % 8)
             return origin
         }
 
@@ -419,10 +419,10 @@ struct RoamingCore {
             guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 70 else { continue }
             trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
-            nextWander = now + 45.0 + Double(seed % 15)
+            nextWander = now + 14.0 + Double(seed % 8)
             return origin
         }
-        nextWander = now + 15.0
+        nextWander = now + 5.0
         return origin
     }
 }

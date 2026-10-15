@@ -80,8 +80,23 @@ enum DiagnosticChatLogger {
     }
 }
 
+enum DotMovementCommand: String, Sendable {
+    case left
+    case right
+    case up
+    case down
+    case topLeft
+    case topRight
+    case bottomLeft
+    case bottomRight
+    case center
+    case away
+    case random
+}
+
 @MainActor
 final class ChatModel: ObservableObject {
+    var onMove: ((DotMovementCommand) -> String?)?
     @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext() } }
     @Published private(set) var issue: CompanionIssue?
     @Published private(set) var answer = ""
@@ -287,6 +302,92 @@ final class ChatModel: ObservableObject {
                 if !query.isEmpty { return query }
             }
         }
+        return nil
+    }
+
+    func detectMovementCommand(_ text: String) -> DotMovementCommand? {
+        var clean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        guard clean.count <= 100 else { return nil }
+
+        let prefixes = [
+            "can you please ", "could you please ", "can you ", "could you ", "would you ",
+            "please ", "hey dot ", "dot ", "i want you to ", "try to ",
+            "пожалуйста ", "дот "
+        ]
+        for p in prefixes {
+            if clean.hasPrefix(p) {
+                clean = String(clean.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+
+        // Corner / Center checks
+        if clean.contains("top left") || clean.contains("top-left") || clean.contains("upper left") ||
+           clean == "left top" || clean == "влево вверх" || clean.contains("левый верхний") {
+            return .topLeft
+        }
+        if clean.contains("top right") || clean.contains("top-right") || clean.contains("upper right") ||
+           clean == "right top" || clean == "вправо вверх" || clean.contains("правый верхний") {
+            return .topRight
+        }
+        if clean.contains("bottom left") || clean.contains("bottom-left") || clean.contains("lower left") ||
+           clean == "left bottom" || clean == "влево вниз" || clean.contains("левый нижний") {
+            return .bottomLeft
+        }
+        if clean.contains("bottom right") || clean.contains("bottom-right") || clean.contains("lower right") ||
+           clean == "right bottom" || clean == "вправо вниз" || clean.contains("правый нижний") {
+            return .bottomRight
+        }
+        if clean == "center" || clean == "middle" || clean.contains("to center") || clean.contains("to the center") ||
+           clean.contains("center yourself") || clean.contains("to middle") || clean.contains("to the middle") ||
+           clean == "в центр" || clean.contains("по центру") || clean.contains("посередине") {
+            return .center
+        }
+
+        // Directional checks
+        // Left
+        if clean == "move left" || clean == "go left" || clean == "step left" || clean == "slide left" || clean == "shift left" ||
+           clean == "to the left" || clean == "to left" || clean == "left" || clean.hasPrefix("move to the left") || clean.hasPrefix("go to the left") ||
+           clean.hasPrefix("move left") || clean.hasPrefix("go left") || clean.hasPrefix("step left") ||
+           clean == "влево" || clean == "налево" || clean.contains("подвинься влево") {
+            return .left
+        }
+        // Right
+        if clean == "move right" || clean == "go right" || clean == "step right" || clean == "slide right" || clean == "shift right" ||
+           clean == "to the right" || clean == "to right" || clean == "right" || clean.hasPrefix("move to the right") || clean.hasPrefix("go to the right") ||
+           clean.hasPrefix("move right") || clean.hasPrefix("go right") || clean.hasPrefix("step right") ||
+           clean == "вправо" || clean == "направо" || clean.contains("подвинься вправо") {
+            return .right
+        }
+        // Up
+        if clean == "move up" || clean == "go up" || clean == "step up" || clean == "slide up" || clean == "shift up" ||
+           clean == "higher" || clean == "up" || clean == "upwards" || clean.hasPrefix("move up") || clean.hasPrefix("go up") ||
+           clean == "вверх" || clean == "наверх" || clean.contains("подвинься вверх") {
+            return .up
+        }
+        // Down
+        if clean == "move down" || clean == "go down" || clean == "step down" || clean == "slide down" || clean == "shift down" ||
+           clean == "lower" || clean == "down" || clean == "downwards" || clean.hasPrefix("move down") || clean.hasPrefix("go down") ||
+           clean == "вниз" || clean.contains("подвинься вниз") {
+            return .down
+        }
+
+        // Away / Dodge
+        if clean.contains("move away") || clean.contains("go away") || clean.contains("step aside") ||
+           clean.contains("out of the way") || clean == "dodge" || clean == "evade" || clean.contains("scoot over") ||
+           clean == "отойди" || clean == "уйди" || clean.contains("в сторону") {
+            return .away
+        }
+
+        // General move / relocate / random
+        if clean == "move" || clean == "move around" || clean == "relocate" || clean == "random move" ||
+           clean == "change position" || clean == "move somewhere" || clean == "move somewhere else" ||
+           clean == "go somewhere else" || clean == "wander" || clean == "move yourself" ||
+           clean == "двигайся" || clean == "подвигайся" || clean == "переместись" || clean == "смени позицию" {
+            return .random
+        }
+
         return nil
     }
 
@@ -801,6 +902,11 @@ final class ChatModel: ObservableObject {
         textHistory.beginAssistant(turn: id)
         if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
         if history.count > 12 { history.removeFirst(history.count - 12) }
+
+        if let moveCmd = self.detectMovementCommand(text), let replyText = self.onMove?(moveCmd) {
+            respondDirectly(replyText, id: id)
+            return
+        }
 
         if let action = self.detectNativeAction(text) {
             work = Task { [weak self] in

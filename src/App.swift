@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import QuartzCore
 
 @main
 struct DotApp {
@@ -28,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminating = false
     private var movement: Timer?
     private var statusItem: NSStatusItem?
-    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime)
+    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 8.0)
     private var menuTracking = 0
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
@@ -87,6 +88,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         voiceEnvironment.start()
         placement.onCaptureChanged = { [weak model] active in model?.placementCapturing = active }
         model.placementInvalidated = { [weak self] in self?.cancelMovement() }
+        model.onMove = { [weak self] command in
+            guard let self, let panel = self.panel else { return nil }
+            guard let screen = panel.screen ?? NSScreen.main else { return nil }
+            let visible = screen.visibleFrame
+            guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return nil }
+            let current = panel.frame.origin
+            let margin: CGFloat = 20
+            let stepDistance: CGFloat = 260
+
+            let target: CGPoint
+            let reply: String
+
+            switch command {
+            case .left:
+                target = RoamingCore.clamp(CGPoint(x: current.x - stepDistance, y: current.y), to: bounds)
+                reply = "Moving to the left."
+            case .right:
+                target = RoamingCore.clamp(CGPoint(x: current.x + stepDistance, y: current.y), to: bounds)
+                reply = "Moving to the right."
+            case .up:
+                target = RoamingCore.clamp(CGPoint(x: current.x, y: current.y + stepDistance), to: bounds)
+                reply = "Moving up."
+            case .down:
+                target = RoamingCore.clamp(CGPoint(x: current.x, y: current.y - stepDistance), to: bounds)
+                reply = "Moving down."
+            case .topLeft:
+                target = CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin)
+                reply = "Moving to the top left."
+            case .topRight:
+                target = CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin)
+                reply = "Moving to the top right."
+            case .bottomLeft:
+                target = CGPoint(x: bounds.minX + margin, y: bounds.minY + margin)
+                reply = "Moving to the bottom left."
+            case .bottomRight:
+                target = CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin)
+                reply = "Moving to the bottom right."
+            case .center:
+                target = CGPoint(x: bounds.midX, y: bounds.midY)
+                reply = "Centering myself on the screen."
+            case .away:
+                let cursor = NSEvent.mouseLocation
+                let center = CGPoint(x: current.x + panel.frame.width / 2, y: current.y + panel.frame.height / 2)
+                let dx = center.x - cursor.x
+                let dy = center.y - cursor.y
+                let dist = hypot(dx, dy)
+                if dist > 1 {
+                    let moveX = (dx / dist) * 320
+                    let moveY = (dy / dist) * 320
+                    target = RoamingCore.clamp(CGPoint(x: current.x + moveX, y: current.y + moveY), to: bounds)
+                } else {
+                    target = CGPoint(x: current.x > bounds.midX ? bounds.minX + margin : bounds.maxX - margin, y: current.y)
+                }
+                reply = "Stepping out of the way!"
+            case .random:
+                let spots: [CGPoint] = [
+                    CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin),
+                    CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin),
+                    CGPoint(x: bounds.minX + margin, y: bounds.minY + margin),
+                    CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin),
+                    CGPoint(x: bounds.midX, y: bounds.midY),
+                    CGPoint(x: bounds.minX + margin, y: bounds.midY),
+                    CGPoint(x: bounds.maxX - margin, y: bounds.midY)
+                ]
+                let farSpots = spots.filter { hypot($0.x - current.x, $0.y - current.y) >= 160 }
+                target = farSpots.randomElement() ?? spots.max(by: { hypot($0.x - current.x, $0.y - current.y) < hypot($1.x - current.x, $1.y - current.y) }) ?? current
+                reply = "Relocating to a new spot!"
+            }
+
+            self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.65
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                panel.animator().setFrameOrigin(target)
+            }
+            return reply
+        }
         let panel = surface.present(content: NSHostingView(rootView: PetView(model: model, stt: model.stt, tts: model.tts, skins: model.skinPreferences)), size: PetLayout.panelSize)
         panel.visibilityChanged = { [weak model, weak webResearch] visible in
             if !visible { webResearch?.foregroundPause() }; model?.visible = visible
@@ -126,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.pointerInteraction = { [weak self, weak model] active in
             model?.interactionPaused = active
             self?.placement.invalidate()
-            self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: !active)
+            self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
         }
         panel.constrainDrag = { [weak panel] origin, cursor in
             guard let panel else { return origin }
