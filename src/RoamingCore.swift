@@ -103,6 +103,7 @@ struct RoamingCore {
         let target: CGPoint
         let snapshot: PlacementSnapshot?
         var elapsed = 0.0
+        let isEscape: Bool
     }
     private var nextDecision: Double
     private var nextWander: Double
@@ -183,10 +184,18 @@ struct RoamingCore {
         let validSnapshot = (snapshot?.valid(displayID: displayID, visible: visible, now: now) == true) ? snapshot : nil
         let origin = frame.origin
         if var active = trip {
-            let regions = active.snapshot?.protected ?? []
-            guard (active.snapshot == nil || (validSnapshot != nil && active.snapshot == validSnapshot)),
-                  (active.snapshot == nil || Self.safePath(from: frame, to: active.target, regions: regions)),
-                  Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY),
+            if active.isEscape {
+                guard let snap = validSnapshot,
+                      PlacementSnapshot.sameGeometry(active.snapshot?.protected ?? [], snap.protected),
+                      Self.safePath(from: frame, to: active.target, regions: snap.protected) else {
+                    cancel(now: now); return origin
+                }
+            } else if let snap = validSnapshot {
+                guard Self.clear(CGRect(origin: active.target, size: frame.size), regions: snap.protected) else {
+                    cancel(now: now); return origin
+                }
+            }
+            guard Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY),
                     CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + frame.height / 2)) >= 50 else {
                 cancel(now: now); return origin
             }
@@ -222,7 +231,7 @@ struct RoamingCore {
                     let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + frame.height / 2)
                     guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 90,
                           Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
-                    trip = Trip(start: origin, target: target, snapshot: snap); isTravelling = true; return origin
+                    trip = Trip(start: origin, target: target, snapshot: snap, isEscape: true); isTravelling = true; return origin
                 }
                 nextDecision = now + 10
                 return origin
@@ -254,7 +263,7 @@ struct RoamingCore {
             let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
             guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 90,
                   Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
-            trip = Trip(start: origin, target: clamped, snapshot: validSnapshot)
+            trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
             nextWander = now + 45.0 + Double(seed % 20)
             return origin
@@ -274,7 +283,7 @@ struct RoamingCore {
             guard distance >= 10 else { continue }
             let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
             guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 70 else { continue }
-            trip = Trip(start: origin, target: clamped, snapshot: nil)
+            trip = Trip(start: origin, target: clamped, snapshot: nil, isEscape: false)
             isTravelling = true
             nextWander = now + 45.0 + Double(seed % 15)
             return origin

@@ -1,5 +1,13 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-15 03:00 UTC
+
+- **Autonomous Pet Roaming Across Active Windows Fixed:**
+  - Identified and resolved root cause of pet roaming freeze: `RoamingCore` was cancelling active wander trips on the second frame because `active.snapshot == validSnapshot` compared the whole struct including `capturedAt` timestamp, causing any fresh snapshot or 1.5s expiration to abort the 0.6s movement step and snap Dot back to origin.
+  - Added explicit `isEscape` property to `Trip` to separate window collision escape from periodic wandering: wandering trips verify that destination bounds remain clear of protected windows without aborting due to snapshot timestamp jitter or age expiration.
+  - Verified in automated simulation and new unit test `testPetWandersSmoothlyAcrossSnapshotRefreshesAndObstacles` that Dot autonomously wanders every ~45–60 seconds even with open active windows.
+  - Compiled Xcode Release scheme (**BUILD SUCCEEDED**), signed with `"Apple Development: Emin Ismayilov (7M2G5ULAUF)"` runtime signature, deployed to `/Users/mac/Applications/Dot.app`, verified running live (PID 25555).
+
 ## Published checkpoint — 2026-10-15 02:42 UTC
 
 - **Autonomous Pet Roaming Unblocked & App Nap Disabled:** Added `<key>NSSupportsAppNap</key><false/>` to `Resources/Info.plist` and held background `ProcessInfo.beginActivity` assertion in `App.swift` so background pet simulation and voice timers run uninterrupted; decoupled `didActivateApplicationNotification` from `cancelMovement()` so switching apps invalidates placement cache without aborting or postponing roam; updated `RoamingCore.cancel()` so ordinary pauses/aborts only wait 3 seconds before next wander rather than 45+ seconds.

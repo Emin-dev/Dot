@@ -237,6 +237,22 @@ final class RoamingTests: XCTestCase {
         _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 45.0, displayID: 7, snapshot: map([], at: 45.0))
         XCTAssertTrue(planner.isTravelling)
     }
+    func testPetWandersSmoothlyAcrossSnapshotRefreshesAndObstacles() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        var currentFrame = frame
+        let nonOverlappingObstacle = CGRect(x: 100, y: 100, width: 200, height: 200)
+        var moved = false
+        for t in stride(from: 0.0, through: 50.0, by: 0.5) {
+            let snap = map([nonOverlappingObstacle], at: t)
+            let nextOrigin = planner.step(frame: currentFrame, visible: visible, cursor: cursor, paused: false, now: t, displayID: 7, snapshot: snap)
+            if nextOrigin != currentFrame.origin {
+                moved = true
+                currentFrame.origin = nextOrigin
+            }
+        }
+        XCTAssertTrue(moved)
+        XCTAssertNotEqual(currentFrame.origin, frame.origin)
+    }
 }
 
 final class PlacementScanTests: XCTestCase {
