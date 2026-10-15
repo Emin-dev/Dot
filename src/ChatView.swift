@@ -380,6 +380,13 @@ final class ChatModel: ObservableObject {
                 || (controlInteraction && proactiveTurn == nil),
             engineBusy: generating || work != nil || runtime.ttsSpeaking() || followupPending || controlInteraction)
         proactive.updateContext(context)
+        if proactiveContextChange == nil {
+            if let frontApp = NSWorkspace.shared.frontmostApplication,
+               frontApp.bundleIdentifier != Bundle.main.bundleIdentifier {
+                proactiveContextChange = .init(reason: .foregroundApplicationChanged, applicationIdentifier: frontApp.bundleIdentifier)
+                proactiveContextChangedAfterUser = true
+            }
+        }
         if context.permitsBackgroundWork, !context.engineBusy, proactiveContextChangedAfterUser,
            let change = proactiveContextChange,
            let key = proactiveEvidence.key(change: change, now: now, ownIdentifier: Bundle.main.bundleIdentifier) {
@@ -443,9 +450,17 @@ final class ChatModel: ObservableObject {
                 })
                 guard self.gate.accepts(id), self.proactiveTurn?.turn == id, !Task.isCancelled else { return }
                 let result = try buffer.completed(question: question?.text)
-                guard case .speak(let content, let question) = result else { self.cancelTurn(); return }
+                guard case .speak(let content, let question) = result else {
+                    self.finishProactiveTurn(id: id)
+                    self.cancelTurn()
+                    return
+                }
                 let fingerprint = result.text.lowercased().split(whereSeparator: \.isWhitespace).joined(separator: " ")
-                guard !self.recentProactiveReplies.contains(fingerprint) else { self.cancelTurn(); return }
+                guard !self.recentProactiveReplies.contains(fingerprint) else {
+                    self.finishProactiveTurn(id: id)
+                    self.cancelTurn()
+                    return
+                }
                 self.textHistory.beginAssistant(turn: id)
                 self.displayedAnswerTurn = id
                 self.answer = result.text
@@ -456,7 +471,7 @@ final class ChatModel: ObservableObject {
                 var sentences = SentenceBuffer()
                 for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
                 if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
-                if let question { self.runtime.enqueueVoice(question, id) }
+                if let question, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.answer = result.text
                 self.history.append(ChatMessage(role: "assistant", content: result.text))
@@ -471,6 +486,7 @@ final class ChatModel: ObservableObject {
                 self.logFailure(error, stage: failureStage == .voice ? .voice : .response)
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(failureStage))
                 // An optional suggestion failure stays silent and cannot open a mic.
+                self.finishProactiveTurn(id: id)
                 self.cancelTurn()
             }
             if self.gate.accepts(id) { self.work = nil; self.updateProactiveContext() }
@@ -486,6 +502,13 @@ final class ChatModel: ObservableObject {
 
     /// Manual clicks interrupt; automatic capture requires the same-turn final-question gate.
     func clicked() {
+        if !OfflinePreparation.shared.ready {
+            if OfflinePreparation.shared.state == .paused {
+                OfflinePreparation.shared.retry()
+            }
+            expressionRevision &+= 1
+            return
+        }
         guard !shuttingDown, runtime.isReady() else { return }
         dismissFirstUseHint()
         beginListening(continuation: nil)
@@ -630,8 +653,12 @@ final class ChatModel: ObservableObject {
                 let shouldFollowup = !self.voiceDeliveryFailed
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
-                    self.answer += (self.answer.isEmpty ? "" : " ") + question.text
-                    self.enqueueVoice(question.text, id: id)
+                    let qTrimmed = question.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let ansTrimmed = self.answer.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !ansTrimmed.hasSuffix(qTrimmed) && !ansTrimmed.localizedCaseInsensitiveContains(qTrimmed) {
+                        self.answer += (self.answer.isEmpty ? "" : " ") + qTrimmed
+                        self.enqueueVoice(qTrimmed, id: id)
+                    }
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))

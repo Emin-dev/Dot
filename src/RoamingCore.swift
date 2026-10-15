@@ -113,6 +113,9 @@ struct RoamingCore {
     private var seed: UInt64
     private(set) var isTravelling = false
     private var lastKnownProtected: [CGRect] = []
+    /// Overlap escape has its own short retry so content is cleared quickly without
+    /// re-running a failed empty-space search on every tick.
+    private var escapeRetryAt = 0.0
     init(seed: UInt64, now: Double) {
         self.seed = seed
         self.nextDecision = now + 8
@@ -293,7 +296,7 @@ struct RoamingCore {
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = now + 40.0 + Double(seed % 20)
+                nextWander = now + 35.0 + Double(seed % 20)
             } else {
                 trip = active
             }
@@ -301,9 +304,9 @@ struct RoamingCore {
         }
 
         // 1. Collision Escape (if overlapping a protected window, text, or button)
-        guard now >= nextDecision else { return origin }
         let checkRegions = validSnapshot?.protected ?? lastKnownProtected
-        if !checkRegions.isEmpty && !Self.clear(frame, regions: checkRegions) {
+        if now >= escapeRetryAt, now >= minimumRestUntil,
+           !checkRegions.isEmpty && !Self.clear(frame, regions: checkRegions) {
             let overlapping = checkRegions.filter { frame.intersects($0) }
             if !overlapping.isEmpty {
                 var immediateCandidates = [
@@ -319,8 +322,8 @@ struct RoamingCore {
                     guard distance > 0, distance <= 96, Self.clamp(target, to: bounds) == target,
                           Self.safePath(from: frame, to: target, regions: checkRegions) else { continue }
                     let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + frame.height / 2)
-                    guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 90,
-                          Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
+                    guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 70,
+                          Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 50 else { continue }
                     chosenTarget = target
                     break
                 }
@@ -334,10 +337,12 @@ struct RoamingCore {
                     nextDecision = now + 4.0
                     return origin
                 }
-                nextDecision = now + 6.0
+                escapeRetryAt = now + 1.5
                 return origin
             }
         }
+
+        guard now >= nextDecision else { return origin }
 
         // 2. Periodic Wander (pet simulation wandering every ~45-60 seconds)
         guard now >= nextWander else { return origin }
@@ -420,7 +425,6 @@ struct PlacementScanGate {
         } else {
             nextAllowed = now + 10
         }
-        snapshot = nil
         return generation
     }
     mutating func invalidate() { generation = UUID(); snapshot = nil }

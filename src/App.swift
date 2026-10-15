@@ -350,6 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 scheduleMovement(interval: 1.0 / 60)
             }
         }
+        model.updateProactiveContext()
     }
 
     private func moveGently() {

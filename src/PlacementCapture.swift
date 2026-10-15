@@ -153,6 +153,7 @@ final class PlacementCapture {
             guard let values = window[kCGWindowBounds as String] as? [String: Any],
                   let rect = CGRect(dictionaryRepresentation: values as CFDictionary),
                   let mapped = PlacementSnapshot.quartzRect(rect, primaryTop: primaryTop) else { throw PlacementFailure.windowMetadata }
+            if mapped.width >= display.width - 2 && mapped.height >= display.height - 2 { continue }
             if mapped.intersects(display) { regions.append(mapped.insetBy(dx: -12, dy: -12)) }
         }
         return regions
@@ -232,7 +233,7 @@ final class PlacementCapture {
                 }
                 // Transparency is unknown occupancy, never evidence of an empty background.
                 if unknown { unknownTiles += 1 }
-                if unknown || (0..<3).contains(where: { high[$0] - low[$0] > 8 }) {
+                if unknown || (0..<3).contains(where: { high[$0] - low[$0] > 28 }) {
                     let box = CGRect(x: x, y: y, width: min(32, width - x), height: min(32, height - y))
                     guard let mapped = PlacementSnapshot.rasterRect(box, width: width, height: height, display: display) else { throw PlacementFailure.pixelAnalysis }
                     regions.append(mapped.insetBy(dx: -12, dy: -12))

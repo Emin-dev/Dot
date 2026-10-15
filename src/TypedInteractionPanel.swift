@@ -71,11 +71,18 @@ final class TypedInteractionPanel: NSObject, NSWindowDelegate {
             panel.isReleasedWhenClosed = false; panel.delegate = self
             self.panel = panel
         }
-        if replacedModel {
+        if replacedModel || panel?.contentView == nil {
             input = TypedInteractionState()
-            panel?.contentView = NSHostingView(rootView: TypedInteractionView(model: model, input: input))
+            panel?.contentView = NSHostingView(rootView: TypedInteractionView(model: model, input: input, onDismiss: { [weak panel = self.panel, weak self] in
+                panel?.orderOut(nil)
+                self?.onVisibility?(false)
+            }))
         }
-        panel?.stop = { [weak model] in model?.stopCurrentTurn() }
+        panel?.stop = { [weak model, weak panel = self.panel, weak self] in
+            model?.stopCurrentTurn()
+            panel?.orderOut(nil)
+            self?.onVisibility?(false)
+        }
         panel?.send = { [weak model, weak input, weak panel = self.panel, weak self] in
             guard let model, let input else { return }
             if input.submit(model: model) {
@@ -139,9 +146,10 @@ struct TypedInteractionView: View {
     @ObservedObject private var preparation = OfflinePreparation.shared
     @ObservedObject private var history: ConversationHistoryModel
     @FocusState private var focused: Bool
+    var onDismiss: (() -> Void)? = nil
 
-    init(model: ChatModel, input: TypedInteractionState) {
-        self.model = model; self.input = input; history = model.textHistory
+    init(model: ChatModel, input: TypedInteractionState, onDismiss: (() -> Void)? = nil) {
+        self.model = model; self.input = input; history = model.textHistory; self.onDismiss = onDismiss
     }
     private var canSend: Bool { model.canSubmitTyped && input.inputProblem == nil && !input.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
@@ -158,7 +166,9 @@ struct TypedInteractionView: View {
                 .focused($focused)
                 .onSubmit {
                     if canSend {
-                        _ = input.submit(model: model)
+                        if input.submit(model: model) {
+                            onDismiss?()
+                        }
                     }
                 }
                 .accessibilityLabel("Message to dot")
@@ -166,7 +176,9 @@ struct TypedInteractionView: View {
 
             Button(action: {
                 if canSend {
-                    _ = input.submit(model: model)
+                    if input.submit(model: model) {
+                        onDismiss?()
+                    }
                 }
             }) {
                 Image(systemName: "arrow.up.circle.fill")

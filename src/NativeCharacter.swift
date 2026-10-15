@@ -25,7 +25,7 @@ struct PetCharacter: View {
     let phase: PetPhase
     let level: Double
     let still: Bool
-    var skin: DotSkin = .original
+    var skin: DotSkin = .dew
     var playbackLevel: Double? = nil
     var motionDetail: SkinMotionDetail = .full
     var expressionRevision: UInt64 = 0
@@ -511,7 +511,7 @@ private struct NativeSkinCharacter: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: phase == .speaking || phase == .listening || emotion == .working ? 1.0 / 24 : 1.0 / 12,
+        TimelineView(.animation(minimumInterval: phase == .speaking || phase == .listening || emotion == .working ? 1.0 / 30 : 1.0 / 24,
                                 paused: still || motionDetail == .still)) { _ in
             let context = expressionClock.context(state: resolvedState, now: ProcessInfo.processInfo.systemUptime)
             NativeSkinFrame(phase: phase, skin: skin, pose: computePose(context: context))
@@ -526,6 +526,36 @@ private struct NativeSkinCharacter: View {
     private func computePose(context: NativeExpressionContext) -> NativeFacePose {
         var pose = NativeFacePose.sample(phase: phase, context: context, inputLevel: level,
                                         playbackLevel: playbackLevel, still: still, motion: motionDetail)
+        if !still && motionDetail != .still {
+            if emotion == .idle && phase == .idle {
+                let breath = sin(context.elapsed * 2.2) * 0.014
+                let bob = sin(context.elapsed * 2.2) * 0.6
+                let blinkDist = abs(context.elapsed.truncatingRemainder(dividingBy: 3.6) - 1.8)
+                let organicBlink = blinkDist < 0.075 ? 0.15 + 0.85 * blinkDist / 0.075 : 1.0
+                pose = NativeFacePose(
+                    bob: pose.bob + bob,
+                    tilt: pose.tilt,
+                    blink: min(pose.blink, organicBlink),
+                    gazeX: pose.gazeX,
+                    gazeY: pose.gazeY,
+                    browTilt: pose.browTilt,
+                    mouthWidth: pose.mouthWidth,
+                    mouthHeight: pose.mouthHeight,
+                    mouthCurve: pose.mouthCurve,
+                    speakingOpening: pose.speakingOpening,
+                    listeningLevel: pose.listeningLevel,
+                    eyes: pose.eyes,
+                    browLift: pose.browLift,
+                    browAsymmetry: pose.browAsymmetry,
+                    squash: pose.squash * (1.0 + breath),
+                    bodyAccent: pose.bodyAccent,
+                    cheeks: pose.cheeks,
+                    smileOpening: pose.smileOpening,
+                    teeth: pose.teeth,
+                    dimples: pose.dimples
+                )
+            }
+        }
         if emotion == .working {
             let scan = sin(context.elapsed * 3.5) * 0.4
             pose = NativeFacePose(bob: pose.bob, tilt: 1.0, blink: pose.blink, gazeX: scan, gazeY: -0.1,
