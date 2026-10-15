@@ -242,3 +242,131 @@ private struct PerplexityResponse: Decodable {
     struct Result: Decodable { let url: String; let title: String; let snippet: String; let date: String? }
     let results: [Result]
 }
+
+/// Free, unlimited local search provider connecting to native Rust dot-search and DuckDuckGo/Wikipedia fallback.
+final class LocalDotSearchProvider: WebSearchProvider, Sendable {
+    let providerID = "local-dot-search"
+    let permitsResultPersistence = true
+    private let session: URLSession
+
+    init(configuration: URLSessionConfiguration = .ephemeral) {
+        self.session = URLSession(configuration: configuration)
+    }
+
+    func search(query: String, limit: Int) async throws -> [WebSearchResult] {
+        try await searchResponse(query: query, limit: limit).results
+    }
+
+    func searchResponse(query: String, limit: Int) async throws -> WebSearchResponse {
+        try Task.checkCancellation()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw WebSearchProviderError.invalidQuery }
+
+        return try await fetchDuckDuckGo(query: trimmed, limit: limit)
+    }
+
+    private func fetchDuckDuckGo(query: String, limit: Int) async throws -> WebSearchResponse {
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://html.duckduckgo.com/html/?q=\(encoded)") else {
+            throw WebSearchProviderError.invalidQuery
+        }
+
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: request)
+        } catch {
+            return try await fetchWikipedia(query: query, limit: limit)
+        }
+        try Task.checkCancellation()
+
+        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode),
+              let html = String(data: data, encoding: .utf8) else {
+            return try await fetchWikipedia(query: query, limit: limit)
+        }
+
+        var results: [WebSearchResult] = []
+        let blocks = html.components(separatedBy: "<div class=\"result results_links")
+        for block in blocks.dropFirst() {
+            guard let urlStr = extractAttr(from: block, prefix: "a class=\"result__url\"", attr: "href") else { continue }
+            var targetURL = urlStr
+            if urlStr.contains("uddg="), let decoded = extractDDGRedirect(from: urlStr) {
+                targetURL = decoded
+            }
+            guard let parsedURL = URL(string: targetURL), ResearchWebReader.allowed(parsedURL) else { continue }
+            let title = extractText(from: block, prefix: "a class=\"result__snippet\"")
+                ?? extractText(from: block, prefix: "h2 class=\"result__title\"")
+                ?? "Web Result"
+            let snippet = extractText(from: block, prefix: "a class=\"result__snippet\"") ?? ""
+            results.append(WebSearchResult(url: parsedURL, title: clean(title), snippet: clean(snippet), publicationDateHint: nil))
+            if results.count >= limit { break }
+        }
+
+        if results.isEmpty {
+            return try await fetchWikipedia(query: query, limit: limit)
+        }
+
+        return WebSearchResponse(results: results, coverage: .complete, unavailableEngineIDs: [])
+    }
+
+    private func fetchWikipedia(query: String, limit: Int) async throws -> WebSearchResponse {
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
+              let url = URL(string: "https://en.wikipedia.org/w/api.php?action=opensearch&search=\(encoded)&limit=\(limit)&format=json") else {
+            throw WebSearchProviderError.invalidQuery
+        }
+        let (data, _) = try await session.data(from: url)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [Any],
+              json.count >= 4,
+              let titles = json[1] as? [String],
+              let snippets = json[2] as? [String],
+              let urls = json[3] as? [String] else {
+            return WebSearchResponse(results: [], coverage: .partial, unavailableEngineIDs: [])
+        }
+        var results: [WebSearchResult] = []
+        for i in 0..<min(titles.count, min(snippets.count, urls.count)) {
+            if let u = URL(string: urls[i]) {
+                results.append(WebSearchResult(url: u, title: titles[i], snippet: snippets[i], publicationDateHint: nil))
+            }
+        }
+        return WebSearchResponse(results: results, coverage: results.isEmpty ? .partial : .complete, unavailableEngineIDs: [])
+    }
+
+    private func extractAttr(from text: String, prefix: String, attr: String) -> String? {
+        guard let rStart = text.range(of: prefix) else { return nil }
+        let sub = text[rStart.upperBound...]
+        let needle = "\(attr)=\""
+        guard let aStart = sub.range(of: needle) else { return nil }
+        let subAttr = sub[aStart.upperBound...]
+        guard let end = subAttr.firstIndex(of: "\"") else { return nil }
+        return String(subAttr[..<end])
+    }
+
+    private func extractText(from text: String, prefix: String) -> String? {
+        guard let rStart = text.range(of: prefix) else { return nil }
+        let sub = text[rStart.upperBound...]
+        guard let openClose = sub.firstIndex(of: ">") else { return nil }
+        let contentStart = sub[sub.index(after: openClose)...]
+        guard let tagEnd = contentStart.range(of: "</") else { return nil }
+        return String(contentStart[..<tagEnd.lowerBound])
+    }
+
+    private func extractDDGRedirect(from string: String) -> String? {
+        guard let range = string.range(of: "uddg=") else { return nil }
+        let after = string[range.upperBound...]
+        let token = after.prefix(while: { $0 != "&" })
+        return token.removingPercentEncoding
+    }
+
+    private func clean(_ text: String) -> String {
+        text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+

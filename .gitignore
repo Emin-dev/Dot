@@ -12,3 +12,4 @@ Resources/Icon.icns
 
 __pycache__/
 *.pyc
+target/

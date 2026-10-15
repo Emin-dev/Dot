@@ -1,0 +1,20 @@
+[package]
+name = "dot-research"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dot-search"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "socks"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+url = "2.5"
+urlencoding = "2.1"
+form_urlencoded = "1.2"
+httparse = "1.10"
+base64 = "0.22"
+getrandom = "0.2"

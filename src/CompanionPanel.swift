@@ -179,3 +179,25 @@ enum AppearanceOptionsMenu {
         detail.submenu = choices; menu.addItem(detail); root.submenu = menu; return root
     }
 }
+
+@MainActor
+enum ProactivityOptionsMenu {
+    static func make(proactive: ProactiveBehavior, target: AnyObject, action: Selector, pauseAction: Selector) -> NSMenuItem {
+        let root = NSMenuItem(title: "Proactivity", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        let pauseItem = NSMenuItem(title: "Pause suggestions", action: pauseAction, keyEquivalent: "")
+        pauseItem.target = target
+        pauseItem.state = proactive.paused ? .on : .off
+        menu.addItem(pauseItem)
+        menu.addItem(.separator())
+        for freq in ProactiveFrequency.allCases {
+            let item = NSMenuItem(title: freq.displayName, action: action, keyEquivalent: "")
+            item.target = target
+            item.representedObject = freq.rawValue
+            item.state = (!proactive.paused && proactive.frequency == freq) ? .on : .off
+            menu.addItem(item)
+        }
+        root.submenu = menu
+        return root
+    }
+}

@@ -36,11 +36,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         let model = ChatModel(); self.model = model
-        let webResearch = WebResearchPanel(model: WebResearchModel(reader: OfflinePayload.sourceReader(), synthesize: { [weak model] session in
+        let searchProvider = LocalDotSearchProvider()
+        let webResearch = WebResearchPanel(model: WebResearchModel(provider: searchProvider, reader: OfflinePayload.sourceReader(), synthesize: { [weak model] session in
             guard let model else { throw CancellationError() }
             return try await model.engine.researchSynthesis(session: session)
         }))
         webResearchPanel = webResearch
+        model.startProactivity()
         webResearch.onVisibility = { [weak self] in self?.utilityVisibility("webResearch", visible: $0) }
         model.onForegroundInteraction = { [weak webResearch] in webResearch?.foregroundPause() }
         historyPanel.onVisibility = { [weak self] in self?.utilityVisibility("history", visible: $0) }
@@ -209,6 +211,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let value = sender.representedObject as? String, let detail = SkinMotionDetail(rawValue: value) else { return }
         model?.skinPreferences.motionDetail = detail
     }
+    @objc private func setProactivityFrequency(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, let freq = ProactiveFrequency(rawValue: raw) else { return }
+        model?.proactive.setFrequency(freq)
+        model?.proactive.setPaused(false)
+    }
+    @objc private func toggleProactivityPause() {
+        guard let model else { return }
+        model.proactive.setPaused(!model.proactive.paused)
+    }
     private func showOptions() {
         guard let panel, let view = panel.contentView, let model else { return }
         model.dismissFirstUseHint(); model.cancelForInteraction(); panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
@@ -256,6 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             silence: #selector(setSilence(_:)), invitation: #selector(setInvitation(_:))))
         menu.addItem(AppearanceOptionsMenu.make(settings: model.skinPreferences, target: self,
             skin: #selector(selectSkin(_:)), motion: #selector(selectMotion(_:))))
+        menu.addItem(ProactivityOptionsMenu.make(proactive: model.proactive, target: self,
+            action: #selector(setProactivityFrequency(_:)), pauseAction: #selector(toggleProactivityPause)))
         menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
     }
 
@@ -293,7 +306,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
+        model?.stopProactivity(); voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
             NSWorkspace.shared.notificationCenter.removeObserver(observation)
