@@ -793,8 +793,6 @@ private struct NativeFace: View {
                                 .offset(y: -pose.mouthHeight / 2 + 2)
                         }
                     }.offset(y: 12)
-                NativeFacialShape(shape: NativeMouth(curve: pose.mouthCurve * 0.7), ink: ink, edge: edge, strokeWidth: 1.5)
-                    .frame(width: pose.mouthWidth + 3, height: 4).offset(y: 11)
             } else if pose.smileOpening > 0.1 {
                 NativeFacialShape(shape: NativeSmileOpening(), ink: ink, edge: edge).frame(width: pose.mouthWidth, height: pose.smileOpening + 2)
                     .overlay(alignment: .top) {
