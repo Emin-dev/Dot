@@ -24,8 +24,8 @@ final class WatchedDocumentWorker: ObservableObject {
             self.watchedFolderURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
                 ?? FileManager.default.temporaryDirectory
         }
-        self.ftsStore = ftsStore ?? (try! LocalFTSStore())
-        self.notebookStore = notebookStore ?? (try! ResearchNotebookStore())
+        self.ftsStore = ftsStore ?? ((try? LocalFTSStore()) ?? (try! LocalFTSStore(inMemory: true)))
+        self.notebookStore = notebookStore ?? ((try? ResearchNotebookStore()) ?? (try! ResearchNotebookStore(directory: FileManager.default.temporaryDirectory)))
     }
 
     func start() {

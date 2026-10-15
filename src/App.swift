@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuTracking = 0
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
+    private let documentWorker = WatchedDocumentWorker()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -141,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, !self.terminating else { throw DotIntentError.unavailable }
             self.showPet()
         })
+        documentWorker.start()
     }
 
     private func utilityVisibility(_ name: String, visible: Bool) {
@@ -252,24 +254,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
         }
         menu.addItem(.separator())
-        let history = NSMenuItem(title: "Read local history…", action: #selector(readHistory), keyEquivalent: "")
-        history.target = self; menu.addItem(history)
         let typed = NSMenuItem(title: "Type to Dot…", action: #selector(typeMessage), keyEquivalent: "t")
         typed.target = self; menu.addItem(typed)
-        let source = NSMenuItem(title: "Read this version's source…", action: #selector(readSource), keyEquivalent: "")
-        source.target = self; menu.addItem(source)
-        let research = NSMenuItem(title: "Read sources and notebooks…", action: #selector(readResearch), keyEquivalent: "")
-        research.target = self; menu.addItem(research)
-        let webResearch = NSMenuItem(title: "Web research…", action: #selector(runWebResearch), keyEquivalent: "")
-        webResearch.target = self; menu.addItem(webResearch)
-        let actions = NSMenuItem(title: "Mac actions and receipts…", action: #selector(runActions), keyEquivalent: "")
-        actions.target = self; menu.addItem(actions)
+
+        menu.addItem(.separator())
         menu.addItem(VoiceOptionsMenu.make(settings: model.voiceTiming, target: self,
             silence: #selector(setSilence(_:)), invitation: #selector(setInvitation(_:))))
         menu.addItem(AppearanceOptionsMenu.make(settings: model.skinPreferences, target: self,
             skin: #selector(selectSkin(_:)), motion: #selector(selectMotion(_:))))
         menu.addItem(ProactivityOptionsMenu.make(proactive: model.proactive, target: self,
             action: #selector(setProactivityFrequency(_:)), pauseAction: #selector(toggleProactivityPause)))
+
+        let toolsItem = NSMenuItem(title: "Tools & History", action: nil, keyEquivalent: "")
+        let toolsMenu = NSMenu()
+        let history = NSMenuItem(title: "Read local history…", action: #selector(readHistory), keyEquivalent: "")
+        history.target = self; toolsMenu.addItem(history)
+        let research = NSMenuItem(title: "Notebooks & research…", action: #selector(readResearch), keyEquivalent: "")
+        research.target = self; toolsMenu.addItem(research)
+        let webResearch = NSMenuItem(title: "Web research…", action: #selector(runWebResearch), keyEquivalent: "")
+        webResearch.target = self; toolsMenu.addItem(webResearch)
+        let actions = NSMenuItem(title: "Mac actions & receipts…", action: #selector(runActions), keyEquivalent: "")
+        actions.target = self; toolsMenu.addItem(actions)
+        let source = NSMenuItem(title: "Version source…", action: #selector(readSource), keyEquivalent: "")
+        source.target = self; toolsMenu.addItem(source)
+        toolsItem.submenu = toolsMenu
+        menu.addItem(toolsItem)
         menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
     }
 
@@ -281,14 +290,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let screen = panel.screen, let displayID = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value else {
             cancelMovement(); return
         }
-        let eligible = !paused && model.screenEnabled && model.phase == .idle && OfflinePreparation.shared.ready
+        let eligible = !paused && model.phase == .idle
         if !eligible { placement.invalidate() }
-        let snapshot = eligible ? placement.current(screen: screen) : nil
-        if eligible && snapshot == nil { placement.request(screen: screen, eligible: eligible) }
+        let snapshot = eligible && model.screenEnabled ? placement.current(screen: screen) : nil
+        if eligible && model.screenEnabled && snapshot == nil { placement.request(screen: screen, eligible: eligible) }
         let visible = screen.visibleFrame
+        let now = ProcessInfo.processInfo.systemUptime
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: NSEvent.mouseLocation,
-                               paused: !eligible, now: ProcessInfo.processInfo.systemUptime, displayID: displayID, snapshot: snapshot)
-        if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
+                               paused: !eligible, now: now, displayID: displayID, snapshot: snapshot)
+        let moved = panel.frame.origin != origin
+        if moved { panel.setFrameOrigin(origin) }
+        let pointerNearby = panel.frame.insetBy(dx: -40, dy: -40).contains(NSEvent.mouseLocation)
+        _ = model.updateIdleMotion(now: now, externallyPaused: paused, pointerNearby: pointerNearby,
+                                   reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, moved: moved)
         let interval = roam.isTravelling ? 1.0 / 60 : 0.5
         if interval != movementInterval { scheduleMovement(interval: interval) }
     }
@@ -307,6 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        documentWorker.stop()
         model?.stopProactivity(); voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)

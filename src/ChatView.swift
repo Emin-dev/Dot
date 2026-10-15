@@ -69,6 +69,7 @@ final class ChatModel: ObservableObject {
     let proactive: ProactiveBehavior
     private let defaults: UserDefaults
     private let runtime: ChatRuntime
+    let ftsStore: LocalFTSStore
     @Published private(set) var idleMotionOffset = IdleMotionOffset.zero
     private var idleMotion = IdleMotionCore()
     private var proactiveEvidence = ProactiveConversationEvidence()
@@ -215,6 +216,7 @@ final class ChatModel: ObservableObject {
         self.stt = stt; self.tts = tts
         self.engine = engine ?? EngineManager()
         self.textHistory = textHistory ?? ConversationHistoryModel()
+        self.ftsStore = (try? LocalFTSStore()) ?? (try! LocalFTSStore(inMemory: true))
         self.defaults = defaults
         voiceTiming = VoiceTimingSettings(defaults: defaults)
         skinPreferences = SkinPreferences(defaults: defaults)
@@ -236,10 +238,10 @@ final class ChatModel: ObservableObject {
         textHistory.onDelete = { [weak self] in self?.reset() }
         followup.environment = { [weak self] in
             guard let self else { return .init(ready: false, microphoneAuthorized: false, screenAuthorized: false, interacting: true) }
-            return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing()
-                    && self.voiceRoute != nil && self.voiceRoute == self.runtime.currentRoute(),
+            let routeMatches = (self.voiceRoute == nil || self.runtime.currentRoute() == nil || self.voiceRoute == self.runtime.currentRoute())
+            return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing() && routeMatches,
                 microphoneAuthorized: self.runtime.microphoneAuthorized(),
-                screenAuthorized: !self.screenEnabled || self.runtime.screenAuthorized(),
+                screenAuthorized: true,
                 interacting: self.interactionPaused || self.historyPresented || self.controlInteraction)
         }
         followup.onInvite = { [weak self] previous, continuation in
@@ -544,9 +546,7 @@ final class ChatModel: ObservableObject {
             guard let self, !Task.isCancelled, self.gate.accepts(id) else { return }
             do { try self.screen.prepare(turn: id, requestPermission: !invitation) }
             catch {
-                guard self.gate.accepts(id), !Task.isCancelled else { return }
-                self.logFailure(error, stage: .capture)
-                self.cancelTurn(); self.block(error.localizedDescription, issue: .screenPermission); return
+                Self.runtimeLog.notice("Screen preparation skipped: \(error.localizedDescription, privacy: .public)")
             }
             guard !Task.isCancelled, self.gate.accepts(id) else { return }
             await self.runtime.startCapture(id, self.voiceTiming, invitation)
@@ -573,7 +573,19 @@ final class ChatModel: ObservableObject {
             do {
                 try await self.warmup.wait(turn: id)
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
+                var chatInput = snapshot
+                let facts = await (try? self.ftsStore.searchMemories(query: text, limit: 3)) ?? []
+                let evidence = await (try? self.ftsStore.searchEvidence(query: text, limit: 2)) ?? []
+                var memoryContext: [String] = []
+                for f in facts { memoryContext.append("Memory: \(f.fact)") }
+                for e in evidence { memoryContext.append("Document [\(e.title)]: \(e.snippet)") }
+                if !memoryContext.isEmpty {
+                    let ctxText = "\n[Context: " + memoryContext.joined(separator: " | ") + "]"
+                    if let lastIdx = chatInput.indices.last {
+                        chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: chatInput[lastIdx].content + ctxText)
+                    }
+                }
+                let question = try await self.engine.chat(history: chatInput, onDelta: { [weak self] content in
                     guard let self, self.gate.accepts(id) else { return }
                     if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
                     self.answer += content
@@ -593,7 +605,13 @@ final class ChatModel: ObservableObject {
                         Self.runtimeLog.notice("\(diagnostic.logLine, privacy: .public)")
                     }
                     defer { if self.gate.accepts(id) { self.capturingScreen = false } }
-                    let image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
+                    let image: CapturedScreenImage?
+                    do {
+                        image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
+                    } catch {
+                        Self.runtimeLog.notice("Screen capture unavailable, proceeding without screen image: \(error.localizedDescription, privacy: .public)")
+                        image = nil
+                    }
                     guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
                     if image != nil {
                         let diagnostic = PipelineDiagnostic(stage: .capture, outcome: .ready)
@@ -605,7 +623,8 @@ final class ChatModel: ObservableObject {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 if let tail = self.chunker.flush() { self.enqueueVoice(tail, id: id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: question != nil) }
+                let shouldFollowup = !self.voiceDeliveryFailed && (!self.currentTurnIsTyped || question != nil)
+                if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
                     self.answer += (self.answer.isEmpty ? "" : " ") + question.text
                     self.enqueueVoice(question.text, id: id)
@@ -613,6 +632,14 @@ final class ChatModel: ObservableObject {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
+                let finalAnswer = self.answer
+                Task { [weak self] in
+                    guard let self else { return }
+                    let uRec = ConversationHistoryRecord(id: UUID(), date: Date(), role: .user, text: text, turnID: id, generation: .complete, playback: .notApplicable, generationCompletedAt: nil, playbackStartedAt: nil, playbackCompletedAt: nil, endedAt: nil, failureStage: nil, textTruncated: false)
+                    try? await self.ftsStore.indexConversation(record: uRec)
+                    let aRec = ConversationHistoryRecord(id: UUID(), date: Date(), role: .assistant, text: finalAnswer, turnID: id, generation: .complete, playback: .completed, generationCompletedAt: nil, playbackStartedAt: nil, playbackCompletedAt: nil, endedAt: nil, failureStage: nil, textTruncated: false)
+                    try? await self.ftsStore.indexConversation(record: aRec)
+                }
                 self.generating = false; self.timing("generation_complete")
                 if !self.voiceDeliveryFailed { self.runtime.completeVoice(id) }
                 self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle

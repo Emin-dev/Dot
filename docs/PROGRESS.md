@@ -1,5 +1,15 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-15 01:56 UTC
+
+- **6-Second Microphone Reopening (Follow-up Loop):** After the AI speaks its answer, it now re-opens the microphone to listen for 6 seconds (`invitationSeconds`), allowing continuous back-and-forth voice conversation. If no speech starts within 6 seconds, the microphone turns off and returns to idle.
+- **Graceful Screen Capture Degradation:** When ScreenCaptureKit permission is pending or fails, visual context is dropped cleanly without blocking the voice/text conversation pipeline.
+- **Simplified UI & Menus:** Promoted `Type to Dot…` (Cmd+T), kept primary actions clean, and grouped developer/utility panels into a clean `Tools & History` submenu.
+- **Local SQLite FTS5 Memory & Watched Document Worker:** Wired `LocalFTSStore` with automatic query augmentation of relevant memories/evidence and post-turn indexing, and integrated `WatchedDocumentWorker` watching `~/Downloads` and `~/Desktop`.
+- **Real Life Pet Simulation Wandering:** Implemented periodic roaming every ~45–60 seconds across the screen in `RoamingCore` with safe-path analysis, obstacle avoidance, and smooth trip animation; wired `updateIdleMotion` into the main display loop for subtle breathing and living movements.
+- **Native Rust Crates & Full Test Suite:** Built `dot-voice` and `dot-research` in `--release` with non-blocking CLI detection; all **614 Swift tests passed with 0 failures**; Xcode Release build passed (**BUILD SUCCEEDED**).
+- **Installed & Verified Live:** Deployed and code-signed with `"Apple Development: Emin Ismayilov (7M2G5ULAUF)"` to `/Users/mac/Applications/Dot.app`, running live and responsive.
+
 ## Published checkpoint — 2026-10-14 22:25 UTC
 
 Published main is [`20d9eeb`](https://github.com/Emin-dev/Dot/commit/20d9eeb41cee21246343c66362b36310c5cc9cf5), tree `ad4c81ef1e357543c33cb54acd7e3ba654084e67`; all 272 file identities and modes were verified. The canonical ledger remains **4/97 current requirements complete, 93 open**, plus five historical milestones. No acceptance changes in this checkpoint. Earlier dated receipts remain historical.

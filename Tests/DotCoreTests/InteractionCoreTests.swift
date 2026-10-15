@@ -227,6 +227,16 @@ final class RoamingTests: XCTestCase {
         XCTAssertFalse(map(Array(repeating: obstacle, count: 8193)).valid(displayID: 7, visible: visible, now: 9))
         XCTAssertNil(PlacementSnapshot.visionRect(CGRect(x: -0.1, y: 0, width: 0.5, height: 0.5), display: visible))
     }
+    func testPetWandersAfterQuietMinute() {
+        var planner = RoamingCore(seed: 42, now: 0)
+        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map([], at: 9)), frame.origin)
+        XCTAssertFalse(planner.isTravelling)
+        for t in stride(from: 10.0, to: 45.0, by: 1.0) {
+            _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: t, displayID: 7, snapshot: map([], at: t))
+        }
+        _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 45.0, displayID: 7, snapshot: map([], at: 45.0))
+        XCTAssertTrue(planner.isTravelling)
+    }
 }
 
 final class PlacementScanTests: XCTestCase {

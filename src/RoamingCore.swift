@@ -101,19 +101,26 @@ struct RoamingCore {
     private struct Trip {
         let start: CGPoint
         let target: CGPoint
-        let snapshot: PlacementSnapshot
+        let snapshot: PlacementSnapshot?
         var elapsed = 0.0
     }
     private var nextDecision: Double
+    private var nextWander: Double
     private var minimumRestUntil = 0.0
     private var lastTick: Double?
     private var trip: Trip?
+    private var seed: UInt64
     private(set) var isTravelling = false
-    init(seed: UInt64, now: Double) { nextDecision = now + 8 }
+    init(seed: UInt64, now: Double) {
+        self.seed = seed
+        self.nextDecision = now + 8
+        self.nextWander = now + 45
+    }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
         if longRest { minimumRestUntil = now + 45 }
         nextDecision = max(minimumRestUntil, now + 8)
+        nextWander = max(nextWander, now + 45)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
         guard PlacementSnapshot.validRect(visible), window.width.isFinite, window.height.isFinite else { return nil }
@@ -153,19 +160,24 @@ struct RoamingCore {
     }
     mutating func step(frame: CGRect, visible: CGRect, cursor: CGPoint, paused: Bool, now: Double,
                        displayID: UInt32 = 0, snapshot: PlacementSnapshot? = nil) -> CGPoint {
+        if let last = lastTick, now - last > 2.0 {
+            cancel(now: now)
+            nextWander = now + 45
+        }
         let dt = min(0.08, max(0, now - (lastTick ?? now))); lastTick = now
         guard !paused, PlacementSnapshot.validRect(frame), cursor.x.isFinite, cursor.y.isFinite,
-              let snapshot, snapshot.valid(displayID: displayID, visible: visible, now: now),
               let bounds = Self.originBounds(window: frame.size, visible: visible),
               Self.clamp(frame.origin, to: bounds) == frame.origin,
               !frame.insetBy(dx: -32, dy: -32).contains(cursor) else {
             if trip != nil { cancel(now: now) }
             return frame.origin // Permission/pause/staleness never causes an unsensed clamp.
         }
+        let validSnapshot = (snapshot?.valid(displayID: displayID, visible: visible, now: now) == true) ? snapshot : nil
         let origin = frame.origin
         if var active = trip {
-            guard active.snapshot == snapshot,
-                  Self.safePath(from: frame, to: active.target, regions: snapshot.protected),
+            let regions = active.snapshot?.protected ?? []
+            guard (active.snapshot == nil || (validSnapshot != nil && active.snapshot == validSnapshot)),
+                  Self.safePath(from: frame, to: active.target, regions: regions),
                   Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY),
                     CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + frame.height / 2)) >= 120 else {
                 cancel(now: now); return origin
@@ -174,30 +186,66 @@ struct RoamingCore {
             let t = min(1, active.elapsed / 0.6), eased = t * t * (3 - 2 * t)
             let result = CGPoint(x: active.start.x + (active.target.x - active.start.x) * eased,
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
-            if t >= 1 { cancel(now: now) } else { trip = active }
+            if t >= 1 {
+                cancel(now: now)
+                nextWander = now + 45.0 + Double(seed % 20)
+            } else {
+                trip = active
+            }
             return result
         }
-        guard now >= nextDecision, now - snapshot.capturedAt <= PlacementSnapshot.lifetime - 0.7,
-              !Self.clear(frame, regions: snapshot.protected) else { return origin }
-        let overlapping = snapshot.protected.filter { frame.intersects($0) }
-        guard !overlapping.isEmpty else { return origin }
-        var candidates = [
-            CGPoint(x: overlapping.map { $0.minX - frame.width - 1 }.min()!, y: origin.y),
-            CGPoint(x: overlapping.map { $0.maxX + 1 }.max()!, y: origin.y),
-            CGPoint(x: origin.x, y: overlapping.map { $0.minY - frame.height - 1 }.min()!),
-            CGPoint(x: origin.x, y: overlapping.map { $0.maxY + 1 }.max()!)
+
+        // 1. Collision Escape (if overlapping a protected window)
+        if let snap = validSnapshot, now >= nextDecision, now - snap.capturedAt <= PlacementSnapshot.lifetime - 0.7,
+           !Self.clear(frame, regions: snap.protected) {
+            let overlapping = snap.protected.filter { frame.intersects($0) }
+            if !overlapping.isEmpty {
+                var candidates = [
+                    CGPoint(x: overlapping.map { $0.minX - frame.width - 1 }.min()!, y: origin.y),
+                    CGPoint(x: overlapping.map { $0.maxX + 1 }.max()!, y: origin.y),
+                    CGPoint(x: origin.x, y: overlapping.map { $0.minY - frame.height - 1 }.min()!),
+                    CGPoint(x: origin.x, y: overlapping.map { $0.maxY + 1 }.max()!)
+                ]
+                candidates.sort { hypot($0.x - origin.x, $0.y - origin.y) < hypot($1.x - origin.x, $1.y - origin.y) }
+                for target in candidates {
+                    let distance = hypot(target.x - origin.x, target.y - origin.y)
+                    guard distance > 0, distance <= 96, Self.clamp(target, to: bounds) == target,
+                          Self.safePath(from: frame, to: target, regions: snap.protected) else { continue }
+                    let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + frame.height / 2)
+                    guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 180,
+                          Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 120 else { continue }
+                    trip = Trip(start: origin, target: target, snapshot: snap); isTravelling = true; return origin
+                }
+                nextDecision = now + 10
+                return origin
+            }
+        }
+
+        // 2. Periodic Wander (pet simulation wandering every ~45-60 seconds)
+        guard now >= nextWander else { return origin }
+        seed = seed &* 6364136223846793005 &+ 1
+        let regions = validSnapshot?.protected ?? []
+        let dist = 60.0 + Double((seed >> 8) % 80) // 60 to 140 pt moves
+        var wanderCandidates: [CGPoint] = [
+            CGPoint(x: origin.x + dist, y: origin.y),
+            CGPoint(x: origin.x - dist, y: origin.y),
+            CGPoint(x: origin.x, y: origin.y + dist),
+            CGPoint(x: origin.x, y: origin.y - dist)
         ]
-        candidates.sort { hypot($0.x - origin.x, $0.y - origin.y) < hypot($1.x - origin.x, $1.y - origin.y) }
-        for target in candidates {
-            let distance = hypot(target.x - origin.x, target.y - origin.y)
-            guard distance > 0, distance <= 96, Self.clamp(target, to: bounds) == target,
-                  Self.safePath(from: frame, to: target, regions: snapshot.protected) else { continue }
-            let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + frame.height / 2)
+        if (seed & 1) == 1 { wanderCandidates.reverse() }
+        for target in wanderCandidates {
+            let clamped = Self.clamp(target, to: bounds)
+            let distance = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distance >= 40, Self.safePath(from: frame, to: clamped, regions: regions) else { continue }
+            let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
             guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 180,
                   Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 120 else { continue }
-            trip = Trip(start: origin, target: target, snapshot: snapshot); isTravelling = true; return origin
+            trip = Trip(start: origin, target: clamped, snapshot: validSnapshot)
+            isTravelling = true
+            nextWander = now + 45.0 + Double(seed % 20)
+            return origin
         }
-        nextDecision = now + 10
+        nextWander = now + 15.0
         return origin
     }
 }

@@ -80,6 +80,12 @@ fn emit_json<T: Serialize>(val: &T) {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("dot-voice: native Kokoro TTS engine for Dot");
+        println!("Usage: dot-voice --root <model_dir> --output <wav_dir>");
+        return Ok(());
+    }
+
     let mut root_dir: Option<PathBuf> = None;
     let mut output_dir: Option<PathBuf> = None;
 

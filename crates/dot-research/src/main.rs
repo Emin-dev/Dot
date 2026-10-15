@@ -62,6 +62,12 @@ struct SearchState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!("dot-search: native web search daemon for Dot");
+        println!("Usage: dot-search [--egress-port <port>]");
+        return Ok(());
+    }
+
     let mut egress_port_arg: Option<u16> = None;
     let mut i = 1;
     while i < args.len() {
@@ -73,25 +79,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Try reading one JSON command line from stdin if available
+    // Try reading one JSON command line from stdin if piped (non-terminal)
     let mut generation = String::new();
     let mut egress_port = egress_port_arg;
     let mut proxy_auth: Option<String> = None;
 
     let stdin = std::io::stdin();
-    let mut stdin_lock = stdin.lock();
-    let mut line = String::new();
-
-    // Check if stdin has immediate input or non-blocking
-    if stdin_lock.read_line(&mut line).is_ok() && !line.trim().is_empty() {
-        if let Ok(cmd) = serde_json::from_str::<StartCommand>(&line) {
-            if let Some(gen) = cmd.generation {
-                generation = gen;
+    use std::io::IsTerminal;
+    if !stdin.is_terminal() {
+        let mut stdin_lock = stdin.lock();
+        let mut line = String::new();
+        if stdin_lock.read_line(&mut line).is_ok() && !line.trim().is_empty() {
+            if let Ok(cmd) = serde_json::from_str::<StartCommand>(&line) {
+                if let Some(gen) = cmd.generation {
+                    generation = gen;
+                }
+                if cmd.egress_port.is_some() && cmd.egress_port.unwrap() > 0 {
+                    egress_port = cmd.egress_port;
+                }
+                proxy_auth = cmd.proxy_authorization;
             }
-            if cmd.egress_port.is_some() && cmd.egress_port.unwrap() > 0 {
-                egress_port = cmd.egress_port;
-            }
-            proxy_auth = cmd.proxy_authorization;
         }
     }
 
