@@ -481,11 +481,12 @@ final class ChatModel: ObservableObject {
     func detectMovementCommand(_ text: String) -> DotMovementCommand? {
         var clean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
-        guard clean.count <= 100 else { return nil }
+        guard clean.count <= 250 else { return nil }
 
         let prefixes = [
             "can you please ", "could you please ", "can you ", "could you ", "would you ",
             "please ", "hey dot ", "dot ", "i want you to ", "try to ",
+            "yes, ", "yes ", "yeah, ", "yeah ", "ok, ", "ok ", "okay, ", "okay ", "sure, ", "sure ",
             "пожалуйста ", "дот "
         ]
         for p in prefixes {

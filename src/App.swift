@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminating = false
     private var movement: Timer?
     private var thinkingRelocationTimer: Timer?
+    private var idleRoamTimer: Timer?
     private var statusItem: NSStatusItem?
     private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 8.0)
     private var menuTracking = 0
@@ -319,6 +320,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return event
         }
+        startIdleRoaming()
     }
 
     private func utilityVisibility(_ name: String, visible: Bool) {
@@ -584,6 +586,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
     }
 
+    private func startIdleRoaming() {
+        idleRoamTimer?.invalidate()
+        let interval = Double.random(in: 35.0...60.0)
+        let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.performIdleRoam()
+                self?.startIdleRoaming()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        idleRoamTimer = timer
+    }
+
+    private func performIdleRoam() {
+        guard let panel, let model, model.phase == .idle, !model.pinned, !model.hovered,
+              !model.interactionPaused, panel.isVisible, NSEvent.pressedMouseButtons == 0 else { return }
+        guard let screen = panel.screen ?? NSScreen.main else { return }
+        let visible = screen.visibleFrame
+        guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
+
+        let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
+        let protectedRegions = snap?.protected ?? []
+
+        let cursor = NSEvent.mouseLocation
+        let currentOrigin = panel.frame.origin
+        let currentFrame = panel.frame
+
+        guard let target = RoamingCore.findRandomEmptySpace(
+            frame: currentFrame,
+            bounds: bounds,
+            cursor: cursor,
+            regions: protectedRegions,
+            minDistance: 120
+        ) else { return }
+
+        guard target != currentOrigin else { return }
+
+        self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
+        let targetFrame = NSRect(origin: target, size: panel.frame.size)
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 1.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            panel.animator().setFrame(targetFrame, display: true)
+        }, completionHandler: {
+            panel.setFrameOrigin(target)
+        })
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
         terminating = true; sourcePanel.stop(); researchPanel.closeAdmissions(); webResearchPanel?.closeAdmissions(); actionPanel.closeAdmissions(); DotIntentRouter.shared.clear(); model?.beginShutdown()
@@ -600,6 +651,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         documentWorker?.stop()
         stopThinkingRelocation()
+        idleRoamTimer?.invalidate()
         model?.stopProactivity(); voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
