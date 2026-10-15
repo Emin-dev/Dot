@@ -210,6 +210,22 @@ struct RoamingCore {
                 bestPoint = clamped
             }
         }
+        if bestPoint == nil {
+            for candidate in candidates {
+                let clamped = clamp(candidate, to: bounds)
+                let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
+                guard distToOrigin >= minDistance else { continue }
+                let testRect = CGRect(origin: clamped, size: frame.size).insetBy(dx: -6, dy: -6)
+                guard clear(testRect, regions: regions) else { continue }
+                let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
+                guard hypot(cursor.x - center.x, cursor.y - center.y) >= 30 else { continue }
+                let dist = hypot(clamped.x - reference.x, clamped.y - reference.y)
+                if dist < bestScore {
+                    bestScore = dist
+                    bestPoint = clamped
+                }
+            }
+        }
         return bestPoint
     }
     mutating func evadeToEmptySpace(frame: CGRect, visible: CGRect, cursor: CGPoint,
