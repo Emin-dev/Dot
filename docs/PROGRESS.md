@@ -1,5 +1,15 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 03:25 UTC
+
+- **Screen Recording Permission Loop Permanently Fixed:**
+  - Added `isPermanentlyConfigured` and `markPermanentlyConfigured()` in `src/ScreenContext.swift`, honoring marker file `~/Library/Application Support/Dot/.screen_permission_configured` and `UserDefaults`.
+  - Suppressed `CGRequestScreenCaptureAccess()` whenever permission is already configured, completely stopping the macOS System Settings alert dialog loop.
+  - Guarded `SCShareableContent.excludingDesktopWindows` in `src/PlacementCapture.swift` with `checkPreflight(now:)` to ensure ScreenCaptureKit never triggers un-preflighted system prompts.
+  - Rebuilt Release binary, codesigned with Apple Development identity, and confirmed zero alerts on live process.
+- **Added Capabilities 8–15 to Canonical Product Checklist:**
+  - Hold `Fn` Push-to-Talk, Active Window & Selection Context, On-Screen Visual Guidance / Laser Pointer, In-Place App Typing, Action Approval Cards, Proactive Idle & Stuck Detection, Focus & Meeting Mode Awareness, and Contextual App Workflows.
+
 ## Published checkpoint — 2026-10-16 03:07 UTC
 
 - **Hardware Minimum Specification & Launch Gate Enforced:**

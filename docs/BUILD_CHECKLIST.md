@@ -132,6 +132,24 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 - [ ] **7. Audio Route Hot-Swapping & Background Ducking:**
   - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
   - Automatic system audio ducking while Dot is audibly speaking.
+- [ ] **8. Hold `Fn` / Dedicated Key Push-to-Talk (Hold-to-Talk):**
+  - Instant press-and-hold voice activation anywhere on macOS without needing to click the window.
+  - Releasing `Fn` immediately finalizes audio capture and submits the turn without waiting for trailing silence.
+- [ ] **9. Active Window & Selection Context Awareness:**
+  - Automatic extraction of selected/highlighted text and active application title (`kAXSelectedTextAttribute`, `kAXTitleAttribute`).
+  - Enables instant voice queries like "explain this", "rewrite this", or "fix this error" without manual copy-pasting.
+- [ ] **10. On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
+  - Transparent, non-activating, click-through overlay window rendering smooth visual callouts, pulsing highlight rings, and animated arrows to visually point out items on screen.
+- [ ] **11. In-Place App Typing & Ghost Text (Type-into-App):**
+  - Direct text dictation and insertion into the currently focused application's text field (Mail, VS Code, Slack, Notes) via macOS Accessibility and synthesized keyboard events.
+- [ ] **12. Action Approval Cards & Non-Destructive Guard:**
+  - Interactive confirmation cards for destructive or external actions (file deletion, terminal commands, external communications) with clear parameter previews and 1-click Approve / Deny.
+- [ ] **13. Proactive Idle & Stuck Detection:**
+  - Intelligently recognizes when the user has encountered a persistent error or has been idle on a task for >3 minutes, offering helpful guidance.
+- [ ] **14. Focus & Meeting Mode Awareness:**
+  - Automatically suppresses proactive spoken interruptions when meeting or recording apps (Zoom, Google Meet, FaceTime) are actively using camera or microphone.
+- [ ] **15. Contextual App Workflows & Automations:**
+  - Contextual awareness of active developer/creative tools (Xcode, Safari, Terminal, Figma) providing app-specific quick assists and automations.
 
 These short-list and roadmap boxes describe the full target capability. The candidate ledger below may mark narrower source/check milestones without claiming installation or full product completion.
 
