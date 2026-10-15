@@ -56,6 +56,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.onExecuteAction = { [weak self] action in
             guard let self, !self.terminating else { return nil }
+            if self.actionPanel.model.documentRoot == nil {
+                let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                let docDir = support?.appendingPathComponent("Dot/Documents", isDirectory: true)
+                if let docDir {
+                    try? FileManager.default.createDirectory(at: docDir, withIntermediateDirectories: true)
+                    _ = await self.actionPanel.model.selectFolder(docDir)
+                }
+            }
             return await self.actionPanel.model.execute(action)
         }
         model.onRequestResearch = { [weak self] query in

@@ -40,6 +40,46 @@ enum TypedMessageValidation {
     }
 }
 
+/// Temporary diagnostic chat logger saving all messages to Downloads folder.
+/// Will be removed in final production release per user request.
+enum DiagnosticChatLogger {
+    private static let lock = NSLock()
+    private static let logURL: URL? = {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("dot_chat_log.txt")
+    }()
+    private static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    static func record(role: String, text: String) {
+        guard let url = logURL else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let timestamp = formatter.string(from: Date())
+        let line = "[\(timestamp)] [\(role.uppercased())] \(trimmed)\n"
+        guard let data = line.data(using: .utf8) else { return }
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            }
+        } else {
+            let header = "# Dot Conversation Diagnostic Log (Temporary)\n# Created: \(timestamp)\n# Records all user prompts and assistant actions/responses for debugging.\n\n"
+            var combined = header.data(using: .utf8) ?? Data()
+            combined.append(data)
+            try? combined.write(to: url, options: .atomic)
+        }
+    }
+}
+
 @MainActor
 final class ChatModel: ObservableObject {
     @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext() } }
@@ -95,6 +135,7 @@ final class ChatModel: ObservableObject {
 
     func speakDirect(_ text: String) {
         guard !shuttingDown, runtime.isReady(), phase == .idle else { return }
+        DiagnosticChatLogger.record(role: "dot", text: text)
         let id = cancelTurn()
         answer = text
         displayedAnswerTurn = id
@@ -121,6 +162,21 @@ final class ChatModel: ObservableObject {
         }
         if lower.hasPrefix("open ") {
             let target = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let siteMap: [String: String] = [
+                "google": "https://www.google.com",
+                "youtube": "https://www.youtube.com",
+                "github": "https://www.github.com",
+                "twitter": "https://x.com",
+                "x": "https://x.com",
+                "reddit": "https://www.reddit.com",
+                "wikipedia": "https://www.wikipedia.org",
+                "amazon": "https://www.amazon.com",
+                "netflix": "https://www.netflix.com",
+                "chatgpt": "https://chatgpt.com"
+            ]
+            if let siteURL = siteMap[target.lowercased()] {
+                return .openWebURL(siteURL)
+            }
             let domains = [".com", ".org", ".net", ".io", ".dev", ".app", ".ai", ".co", ".me", ".info", ".edu", ".gov"]
             if !target.contains(" ") && domains.contains(where: { target.lowercased().contains($0) }) {
                 let validURL = target.hasPrefix("http://") || target.hasPrefix("https://") ? target : "https://" + target
@@ -147,7 +203,16 @@ final class ChatModel: ObservableObject {
             }
         }
 
-        // 4. Applications
+        // 4. File Reading
+        if lower.hasPrefix("read file ") || lower.hasPrefix("show file ") {
+            let prefix = lower.hasPrefix("read file ") ? "read file " : "show file "
+            let filename = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !filename.isEmpty && !filename.contains("/") {
+                return .readText(path: filename)
+            }
+        }
+
+        // 5. Applications
         if lower.hasPrefix("open ") || lower.hasPrefix("launch ") {
             let appName = lower.hasPrefix("open ") ? String(lower.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines) : String(lower.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
             let appMap: [String: String] = [
@@ -272,6 +337,7 @@ final class ChatModel: ObservableObject {
         guard activeSpeechUpdateID == nil else { return }
         guard let speech = taskProgress.takeSpeech(now: now) else { return }
         activeSpeechUpdateID = speech.id
+        DiagnosticChatLogger.record(role: "dot (task)", text: speech.text)
         do {
             try runtime.startVoice(speech.id)
             runtime.enqueueVoice(speech.text, speech.id)
@@ -606,6 +672,7 @@ final class ChatModel: ObservableObject {
                 self.displayedAnswerTurn = id
                 self.answer = result.text
                 self.textHistory.recordAssistant(turn: id, text: result.text, event: .generated)
+                DiagnosticChatLogger.record(role: "dot (proactive)", text: result.text)
                 failureStage = .voice
                 try self.runtime.startVoice(id)
                 self.followup.generationFinished(turn: id, hasQuestion: question != nil)
@@ -722,6 +789,7 @@ final class ChatModel: ObservableObject {
 
     private func submit(_ text: String, id: UUID, typed: Bool = false) {
         guard gate.accepts(id) else { return }
+        DiagnosticChatLogger.record(role: "user", text: text)
         timing(typed ? "text_submitted" : "final_transcript")
         lastAttemptedText = text
         proactiveEvidence.recordUser(turn: id, now: ProcessInfo.processInfo.systemUptime)
@@ -749,9 +817,16 @@ final class ChatModel: ObservableObject {
                     replyText = result?.receipt.status == .succeeded ? "Created folder \(path)." : "Could not create folder \(path)."
                 case .createText(let path, _):
                     replyText = result?.receipt.status == .succeeded ? "Created file \(path)." : "Could not create file \(path)."
+                case .readText(let path):
+                    if let content = result?.text {
+                        replyText = "File \(path): \(content)"
+                    } else {
+                        replyText = "Could not read file \(path)."
+                    }
                 default:
                     replyText = "Action completed."
                 }
+                DiagnosticChatLogger.record(role: "dot", text: replyText)
                 self.answer = replyText
                 self.history.append(ChatMessage(role: "assistant", content: replyText))
                 self.textHistory.recordAssistant(turn: id, text: replyText, event: .generated)
@@ -762,6 +837,22 @@ final class ChatModel: ObservableObject {
                 self.generating = false
                 self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle
             }
+            return
+        }
+
+        let cleanLower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!."))
+        if cleanLower == "what time is it" || cleanLower == "what is the time" || cleanLower == "what's the time" || cleanLower == "current time" || cleanLower == "time" {
+            let formatter = DateFormatter()
+            formatter.timeStyle = .short
+            let replyText = "It is \(formatter.string(from: Date()))."
+            respondDirectly(replyText, id: id)
+            return
+        }
+        if cleanLower == "what day is it" || cleanLower == "what's today" || cleanLower == "what is today" || cleanLower == "what's the date" || cleanLower == "what is the date" || cleanLower == "what is the date today" || cleanLower == "today's date" {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .full
+            let replyText = "Today is \(formatter.string(from: Date()))."
+            respondDirectly(replyText, id: id)
             return
         }
 
@@ -857,6 +948,7 @@ final class ChatModel: ObservableObject {
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 let finalAnswer = self.answer
+                DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
                 Task { [weak self] in
                     guard let self else { return }
                     let uRec = ConversationHistoryRecord(id: UUID(), date: Date(), role: .user, text: text, turnID: id, generation: .complete, playback: .notApplicable, generationCompletedAt: nil, playbackStartedAt: nil, playbackCompletedAt: nil, endedAt: nil, failureStage: nil, textTruncated: false)
@@ -889,7 +981,21 @@ final class ChatModel: ObservableObject {
         }
     }
 
+    private func respondDirectly(_ replyText: String, id: UUID) {
+        DiagnosticChatLogger.record(role: "dot", text: replyText)
+        self.answer = replyText
+        self.history.append(ChatMessage(role: "assistant", content: replyText))
+        self.textHistory.recordAssistant(turn: id, text: replyText, event: .generated)
+        if !self.voiceDeliveryFailed {
+            self.enqueueVoice(replyText, id: id)
+            self.runtime.completeVoice(id)
+        }
+        self.generating = false
+        self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle
+    }
+
     private func block(_ message: String, issue: CompanionIssue) {
+        DiagnosticChatLogger.record(role: "dot (error)", text: "\(message) [\(issue)]")
         self.issue = issue; phase = .blocked(message)
     }
 
