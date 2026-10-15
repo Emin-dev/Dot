@@ -111,12 +111,43 @@ final class ChatModel: ObservableObject {
 
     private func detectNativeAction(_ text: String) -> NativeAction? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count <= 60 else { return nil }
+        guard trimmed.count <= 120 else { return nil }
         let lower = trimmed.lowercased()
+
+        // 1. Direct Web URLs
         if lower.hasPrefix("open http://") || lower.hasPrefix("open https://") {
             let url = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
             return .openWebURL(url)
         }
+        if lower.hasPrefix("open ") {
+            let target = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            let domains = [".com", ".org", ".net", ".io", ".dev", ".app", ".ai", ".co", ".me", ".info", ".edu", ".gov"]
+            if !target.contains(" ") && domains.contains(where: { target.lowercased().contains($0) }) {
+                let validURL = target.hasPrefix("http://") || target.hasPrefix("https://") ? target : "https://" + target
+                return .openWebURL(validURL)
+            }
+        }
+
+        // 2. Folder Creation
+        if lower.hasPrefix("create folder ") || lower.hasPrefix("make folder ") || lower.hasPrefix("new folder ") {
+            let folderName = trimmed.components(separatedBy: " ").dropFirst(2).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !folderName.isEmpty && !folderName.contains("/") {
+                return .createFolder(path: folderName)
+            }
+        }
+
+        // 3. File Creation
+        if lower.hasPrefix("create file ") || lower.hasPrefix("new file ") {
+            let remainder = trimmed.components(separatedBy: " ").dropFirst(2).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            let parts = remainder.components(separatedBy: " with content ")
+            let filename = parts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let content = parts.count > 1 ? parts[1] : ""
+            if !filename.isEmpty && !filename.contains("/") {
+                return .createText(path: filename, text: content)
+            }
+        }
+
+        // 4. Applications
         if lower.hasPrefix("open ") || lower.hasPrefix("launch ") {
             let appName = lower.hasPrefix("open ") ? String(lower.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines) : String(lower.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
             let appMap: [String: String] = [
@@ -138,10 +169,38 @@ final class ChatModel: ObservableObject {
                 "textedit": "com.apple.TextEdit",
                 "preview": "com.apple.Preview",
                 "reminders": "com.apple.reminders",
-                "photos": "com.apple.Photos"
+                "photos": "com.apple.Photos",
+                "chrome": "com.google.Chrome",
+                "google chrome": "com.google.Chrome",
+                "code": "com.microsoft.VSCode",
+                "vs code": "com.microsoft.VSCode",
+                "vscode": "com.microsoft.VSCode",
+                "visual studio code": "com.microsoft.VSCode",
+                "spotify": "com.spotify.client",
+                "slack": "com.tinyspeck.slackmacgap",
+                "discord": "com.hnc.Discord",
+                "notion": "notion.id",
+                "telegram": "ru.keepcoder.Telegram",
+                "whatsapp": "net.whatsapp.WhatsApp",
+                "docker": "com.docker.docker",
+                "activity monitor": "com.apple.ActivityMonitor",
+                "weather": "com.apple.weather",
+                "podcasts": "com.apple.podcasts",
+                "app store": "com.apple.AppStore",
+                "keynote": "com.apple.iWork.Keynote",
+                "pages": "com.apple.iWork.Pages",
+                "numbers": "com.apple.iWork.Numbers"
             ]
             if let bundleID = appMap[appName] {
                 return .launchApplication(bundleID: bundleID)
+            }
+            for base in ["/Applications", "/System/Applications", "/System/Applications/Utilities", NSHomeDirectory() + "/Applications"] {
+                for name in [appName.capitalized, appName.uppercased(), appName] {
+                    let candidate = base + "/" + name + ".app"
+                    if let bundle = Bundle(path: candidate), let id = bundle.bundleIdentifier {
+                        return .launchApplication(bundleID: id)
+                    }
+                }
             }
         }
         return nil
@@ -448,8 +507,8 @@ final class ChatModel: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         let userBusy = proactiveTurn == nil && (phase.isActive || runtime.recording() || runtime.transcribing() || followupPending)
         let context = ProactiveContext(
-            ready: !shuttingDown && runtime.isReady() && issue == nil && screenEnabled
-                && runtime.screenAuthorized() && proactiveEvidence.isRecent(now: now),
+            ready: !shuttingDown && runtime.isReady() && issue == nil
+                && (!screenEnabled || runtime.screenAuthorized()) && proactiveEvidence.isRecent(now: now),
             visible: visible, foregroundBusy: userBusy,
             interactionBusy: interactionPaused || historyPresented || hovered || self.externalInteractionBusy
                 || (controlInteraction && proactiveTurn == nil),
@@ -489,7 +548,7 @@ final class ChatModel: ObservableObject {
         let now = ProcessInfo.processInfo.systemUptime
         guard !shuttingDown, visible, phase == .idle, !followupPending,
               !interactionPaused, !historyPresented, !hovered, !externalInteractionBusy, !controlInteraction,
-              runtime.isReady(), screenEnabled, runtime.screenAuthorized(),
+              runtime.isReady(),
               proactiveEvidence.isRecent(now: now), proactive.activeOpportunity?.id == opportunity.id else {
             proactive.complete(id: opportunity.id); return
         }
@@ -504,23 +563,30 @@ final class ChatModel: ObservableObject {
         speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""; displayedAnswerTurn = nil; automaticReply = false
         currentTurnIsTyped = false; voiceDeliveryFailed = false; voiceDeliveryNotice = nil
         screenContextUsed = false; generating = true; phase = .thinking
-        let snapshot = Array(history.suffix(10)) + [ChatMessage(role: "user", content: ProactiveReplyBuffer.prompt)]
+        var promptText = ProactiveReplyBuffer.prompt
+        if let frontApp = NSWorkspace.shared.frontmostApplication?.localizedName {
+            promptText += "\n[Active Application: \(frontApp)]"
+        }
+        let snapshot = Array(history.suffix(10)) + [ChatMessage(role: "user", content: promptText)]
         work = Task(priority: .utility) { [weak self] in
             guard let self, self.gate.accepts(id), !Task.isCancelled else { return }
             var buffer = ProactiveReplyBuffer()
             var failureStage = ConversationHistoryFailureStage.generation
             do {
-                try self.screen.prepare(turn: id, requestPermission: false)
+                if self.screenEnabled && self.runtime.screenAuthorized() {
+                    try? self.screen.prepare(turn: id, requestPermission: false)
+                }
                 let question = try await self.engine.chat(history: snapshot, purpose: .background, onDelta: { [weak self] delta in
                     guard let self, self.gate.accepts(id), self.proactiveTurn?.turn == id else { return }
                     buffer.append(delta)
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    guard self.screenEnabled && self.runtime.screenAuthorized() else { return nil }
                     self.capturingScreen = true
                     defer { if self.gate.accepts(id) { self.capturingScreen = false } }
-                    let image = try await self.screen.capture(turn: id, modelHasVision: hasVision)
-                    guard image != nil, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
-                    self.screenContextUsed = true
+                    let image = try? await self.screen.capture(turn: id, modelHasVision: hasVision)
+                    guard self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    self.screenContextUsed = image != nil
                     return image
                 })
                 guard self.gate.accepts(id), self.proactiveTurn?.turn == id, !Task.isCancelled else { return }
@@ -679,6 +745,10 @@ final class ChatModel: ObservableObject {
                     replyText = result?.receipt.status == .succeeded ? "Opening application." : "Could not open that application."
                 case .openWebURL(let url):
                     replyText = result?.receipt.status == .succeeded || result?.receipt.status == .handedOff ? "Opening \(url)." : "Could not open URL."
+                case .createFolder(let path):
+                    replyText = result?.receipt.status == .succeeded ? "Created folder \(path)." : "Could not create folder \(path)."
+                case .createText(let path, _):
+                    replyText = result?.receipt.status == .succeeded ? "Created file \(path)." : "Could not create file \(path)."
                 default:
                     replyText = "Action completed."
                 }
