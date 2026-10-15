@@ -1060,3 +1060,102 @@ final class FinalPlaybackBarrierTests: XCTestCase {
         XCTAssertEqual(barrier.playbackFinished(turn: turn, request: request, successfully: true), turn)
     }
 }
+
+final class HardwareCompatibilityTests: XCTestCase {
+    func testHardwareCompatibilityMeetsSpecification() {
+        let m5Pro = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 1, isAppleSilicon: true)
+        XCTAssertTrue(m5Pro.meetsChipSpec)
+        XCTAssertTrue(m5Pro.meetsRAMSpec)
+        XCTAssertTrue(m5Pro.meetsOSSpec)
+        XCTAssertTrue(m5Pro.meetsAllSpecs)
+        XCTAssertNil(m5Pro.technicalImpossibilityReason)
+        XCTAssertEqual(HardwareCompatibility.evaluate(info: m5Pro), .compatible(m5Pro))
+
+        let m4Max = HardwareCompatibility.SystemInfo(chip: "Apple M4 Max", ramGB: 64, osMajor: 27, osMinor: 1, osPatch: 0, isAppleSilicon: true)
+        XCTAssertTrue(m4Max.meetsAllSpecs)
+        XCTAssertEqual(HardwareCompatibility.evaluate(info: m4Max), .compatible(m4Max))
+
+        let m4Pro = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
+        XCTAssertTrue(m4Pro.meetsAllSpecs)
+        XCTAssertEqual(HardwareCompatibility.evaluate(info: m4Pro), .compatible(m4Pro))
+    }
+
+    func testHardwareCompatibilityBelowSpecification() {
+        // Base M4 (not Pro/Max/Ultra)
+        let m4Base = HardwareCompatibility.SystemInfo(chip: "Apple M4", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
+        XCTAssertFalse(m4Base.meetsChipSpec)
+        XCTAssertTrue(m4Base.meetsRAMSpec)
+        XCTAssertNil(m4Base.technicalImpossibilityReason)
+        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: m4Base) {
+            XCTAssertTrue(reasons.contains(where: { $0.contains("below recommended M4 Pro") }))
+        } else {
+            XCTFail("Expected belowMinimum for base M4")
+        }
+
+        // M4 Pro with 32 GB RAM (< 48 GB)
+        let m4Pro32 = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 32, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
+        XCTAssertTrue(m4Pro32.meetsChipSpec)
+        XCTAssertFalse(m4Pro32.meetsRAMSpec)
+        XCTAssertNil(m4Pro32.technicalImpossibilityReason)
+        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: m4Pro32) {
+            XCTAssertTrue(reasons.contains(where: { $0.contains("Unified Memory") }))
+        } else {
+            XCTFail("Expected belowMinimum for 32 GB RAM")
+        }
+
+        // M5 Pro with macOS 26 (< 27)
+        let m5ProOlderOS = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 26, osMinor: 0, osPatch: 0, isAppleSilicon: true)
+        XCTAssertFalse(m5ProOlderOS.meetsOSSpec)
+        XCTAssertNil(m5ProOlderOS.technicalImpossibilityReason)
+        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: m5ProOlderOS) {
+            XCTAssertTrue(reasons.contains(where: { $0.contains("macOS 27") }))
+        } else {
+            XCTFail("Expected belowMinimum for older OS")
+        }
+
+        // Older M3 Max
+        let m3Max = HardwareCompatibility.SystemInfo(chip: "Apple M3 Max", ramGB: 64, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
+        XCTAssertFalse(m3Max.meetsChipSpec)
+        if case .belowMinimum = HardwareCompatibility.evaluate(info: m3Max) {
+            // Success
+        } else {
+            XCTFail("Expected belowMinimum for M3 Max")
+        }
+    }
+
+    func testHardwareCompatibilityTechnicallyImpossible() {
+        // Intel Mac
+        let intel = HardwareCompatibility.SystemInfo(chip: "Intel Core i9", ramGB: 64, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: false)
+        XCTAssertNotNil(intel.technicalImpossibilityReason)
+        if case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: intel) {
+            XCTAssertTrue(reason.contains("Intel"))
+        } else {
+            XCTFail("Expected technicallyImpossible for Intel Mac")
+        }
+
+        // Apple Silicon with < 24 GB RAM (8 GB or 16 GB)
+        let m1LowRAM = HardwareCompatibility.SystemInfo(chip: "Apple M1", ramGB: 16, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
+        XCTAssertNotNil(m1LowRAM.technicalImpossibilityReason)
+        if case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: m1LowRAM) {
+            XCTAssertTrue(reason.contains("24 GB"))
+        } else {
+            XCTFail("Expected technicallyImpossible for 16 GB RAM")
+        }
+
+        // macOS < 15
+        let oldOS = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 48, osMajor: 14, osMinor: 5, osPatch: 0, isAppleSilicon: true)
+        XCTAssertNotNil(oldOS.technicalImpossibilityReason)
+        if case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: oldOS) {
+            XCTAssertTrue(reason.contains("macOS 15"))
+        } else {
+            XCTFail("Expected technicallyImpossible for macOS < 15")
+        }
+    }
+
+    func testHardwareCompatibilityStatusSummary() {
+        let current = HardwareCompatibility.queryCurrent()
+        let summary = HardwareCompatibility.statusSummary(info: current)
+        XCTAssertFalse(summary.isEmpty)
+        XCTAssertTrue(summary.contains(current.chip))
+    }
+}

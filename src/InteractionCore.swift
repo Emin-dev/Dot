@@ -1,5 +1,8 @@
 import Foundation
 import CoreFoundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Pure, deterministic rules shared by the app and its XCTest target.
 struct TurnGate {
@@ -653,4 +656,244 @@ struct FinalPlaybackBarrier {
     mutating func cancel() {
         turn = nil; outstanding.removeAll(); enqueued.removeAll(); sealed = false; emitted = false
     }
+}
+
+/// Hardware requirements verification and production launch gate.
+/// Target Minimum Specification: Apple Silicon M4 Pro, M5, or newer, 48 GB Unified Memory, macOS 27.
+public struct HardwareCompatibility: Sendable {
+    public struct SystemInfo: Equatable, Sendable {
+        public let chip: String
+        public let ramGB: Int
+        public let osMajor: Int
+        public let osMinor: Int
+        public let osPatch: Int
+        public let isAppleSilicon: Bool
+
+        public init(chip: String, ramGB: Int, osMajor: Int, osMinor: Int = 0, osPatch: Int = 0, isAppleSilicon: Bool = true) {
+            self.chip = chip
+            self.ramGB = ramGB
+            self.osMajor = osMajor
+            self.osMinor = osMinor
+            self.osPatch = osPatch
+            self.isAppleSilicon = isAppleSilicon
+        }
+
+        public var osString: String {
+            "\(osMajor).\(osMinor).\(osPatch)"
+        }
+
+        public var meetsChipSpec: Bool {
+            guard isAppleSilicon else { return false }
+            if let match = chip.range(of: #"M(\d+)"#, options: .regularExpression) {
+                let numStr = chip[match].dropFirst()
+                if let gen = Int(numStr) {
+                    if gen >= 5 { return true }
+                    if gen == 4 {
+                        let upper = chip.uppercased()
+                        return upper.contains("PRO") || upper.contains("MAX") || upper.contains("ULTRA")
+                    }
+                }
+            }
+            return false
+        }
+
+        public var meetsRAMSpec: Bool {
+            ramGB >= 48
+        }
+
+        public var meetsOSSpec: Bool {
+            osMajor >= 27
+        }
+
+        public var meetsAllSpecs: Bool {
+            meetsChipSpec && meetsRAMSpec && meetsOSSpec
+        }
+
+        public var technicalImpossibilityReason: String? {
+            if !isAppleSilicon {
+                return "Intel processors are not supported. Dot requires Apple Silicon architecture."
+            }
+            if ramGB < 24 {
+                return "This Mac has \(ramGB) GB of Unified Memory. Dot runs a 27B model (Qwen 3.8 27B 4-bit) requiring a minimum of 24 GB Unified Memory to load."
+            }
+            if osMajor < 15 {
+                return "macOS \(osMajor) is unsupported. Dot requires macOS 15 or newer (macOS 27 recommended)."
+            }
+            return nil
+        }
+
+        public var belowSpecReasons: [String] {
+            var reasons: [String] = []
+            if !meetsChipSpec {
+                reasons.append("Processor (\(chip)) is below recommended M4 Pro, M5 or newer.")
+            }
+            if !meetsRAMSpec {
+                reasons.append("Unified Memory (\(ramGB) GB) is below recommended 48 GB.")
+            }
+            if !meetsOSSpec {
+                reasons.append("Operating System (macOS \(osString)) is below recommended macOS 27.")
+            }
+            return reasons
+        }
+    }
+
+    public enum Status: Equatable, Sendable {
+        case compatible(SystemInfo)
+        case belowMinimum(SystemInfo, reasons: [String])
+        case technicallyImpossible(SystemInfo, reason: String)
+    }
+
+    public static func queryCurrent() -> SystemInfo {
+        var size: size_t = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        var name = [CChar](repeating: 0, count: max(1, size))
+        sysctlbyname("machdep.cpu.brand_string", &name, &size, nil, 0)
+        let chipName = String(cString: name).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let mem = ProcessInfo.processInfo.physicalMemory
+        let ramGB = Int(round(Double(mem) / (1024.0 * 1024.0 * 1024.0)))
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+
+        #if arch(arm64)
+        let defaultChip = "Apple Silicon"
+        let isArm = true
+        #else
+        let defaultChip = "Intel"
+        let isArm = false
+        #endif
+
+        return SystemInfo(
+            chip: chipName.isEmpty ? defaultChip : chipName,
+            ramGB: ramGB,
+            osMajor: os.majorVersion,
+            osMinor: os.minorVersion,
+            osPatch: os.patchVersion,
+            isAppleSilicon: isArm
+        )
+    }
+
+    public static func evaluate(info: SystemInfo = queryCurrent()) -> Status {
+        if let impossible = info.technicalImpossibilityReason {
+            return .technicallyImpossible(info, reason: impossible)
+        }
+        let reasons = info.belowSpecReasons
+        if !reasons.isEmpty {
+            return .belowMinimum(info, reasons: reasons)
+        }
+        return .compatible(info)
+    }
+
+    public static func statusSummary(info: SystemInfo = queryCurrent()) -> String {
+        switch evaluate(info: info) {
+        case .compatible(let current):
+            return "Hardware fully compatible! Your Mac (\(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString)) meets all target minimum specifications (Apple Silicon M4 Pro or M5+, 48 GB RAM, macOS 27+)."
+        case .belowMinimum(let current, let reasons):
+            let details = reasons.joined(separator: " ")
+            return "Hardware below target minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). \(details) Target minimum is Apple Silicon M4 Pro or M5+, 48 GB Unified Memory, and macOS 27."
+        case .technicallyImpossible(let current, let reason):
+            return "Hardware incompatible: \(current.chip), \(current.ramGB) GB RAM, macOS \(current.osString). Reason: \(reason)"
+        }
+    }
+
+    #if canImport(AppKit)
+    @MainActor
+    public static func verifyOnLaunch() -> Bool {
+        let status = evaluate()
+        switch status {
+        case .compatible:
+            return true
+
+        case .belowMinimum(let info, let reasons):
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Hardware Below Target Specification"
+            let items = reasons.map { "• " + $0 }.joined(separator: "\n")
+            alert.informativeText = "Running Dot on this hardware is not recommended. You may experience slow responses or heavy memory pressure.\n\n" +
+                "Target Minimum Specification:\n" +
+                "• Apple Silicon M4 Pro, M5, or newer\n" +
+                "• 48 GB Unified Memory\n" +
+                "• macOS 27 or newer\n\n" +
+                "Detected on this Mac:\n" +
+                "• Processor: \(info.chip)\n" +
+                "• Memory: \(info.ramGB) GB Unified Memory\n" +
+                "• Operating System: macOS \(info.osString)\n\n" +
+                "Items below specification:\n" +
+                items + "\n\n" +
+                "Would you like to stop or run anyway?"
+            let stopButton = alert.addButton(withTitle: "Stop")
+            stopButton.keyEquivalent = "\r"
+            alert.addButton(withTitle: "Run Anyway")
+
+            let response = alert.runModal()
+            if response == .alertFirstButtonReturn {
+                NSApplication.shared.terminate(nil)
+                return false
+            }
+            return true
+
+        case .technicallyImpossible(let info, let reason):
+            NSApp.activate(ignoringOtherApps: true)
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "Hardware Incompatible with Dot"
+            alert.informativeText = "Dot cannot run on this machine.\n\n" +
+                "Detected:\n" +
+                "• Processor: \(info.chip)\n" +
+                "• Memory: \(info.ramGB) GB Unified Memory\n" +
+                "• Operating System: macOS \(info.osString)\n\n" +
+                "Reason:\n\(reason)\n\n" +
+                "Target Minimum Specification:\n" +
+                "• Apple Silicon M4 Pro, M5, or newer\n" +
+                "• 48 GB Unified Memory\n" +
+                "• macOS 27 or newer"
+            alert.addButton(withTitle: "Quit")
+            alert.runModal()
+            NSApplication.shared.terminate(nil)
+            return false
+        }
+    }
+
+    @MainActor
+    public static func showStatusAlert() {
+        let status = evaluate()
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        switch status {
+        case .compatible(let info):
+            alert.alertStyle = .informational
+            alert.messageText = "Hardware Fully Compatible"
+            alert.informativeText = "Your Mac meets or exceeds all target minimum specifications for Dot.\n\n" +
+                "• Processor: \(info.chip) (M4 Pro, M5 or newer)\n" +
+                "• Memory: \(info.ramGB) GB Unified Memory (48 GB minimum)\n" +
+                "• Operating System: macOS \(info.osString) (macOS 27+)\n\n" +
+                "Dot runs the local Qwen 3.8 27B 4-bit model at optimal performance."
+            alert.addButton(withTitle: "OK")
+
+        case .belowMinimum(let info, let reasons):
+            alert.alertStyle = .warning
+            alert.messageText = "Hardware Below Target Specification"
+            let items = reasons.map { "• " + $0 }.joined(separator: "\n")
+            alert.informativeText = "Target Minimum: Apple Silicon M4 Pro/M5+, 48 GB Unified Memory, macOS 27+\n\n" +
+                "Detected on this Mac:\n" +
+                "• Processor: \(info.chip)\n" +
+                "• Memory: \(info.ramGB) GB Unified Memory\n" +
+                "• Operating System: macOS \(info.osString)\n\n" +
+                "Notes:\n\(items)\n\n" +
+                "(Running under user override)"
+            alert.addButton(withTitle: "OK")
+
+        case .technicallyImpossible(let info, let reason):
+            alert.alertStyle = .critical
+            alert.messageText = "Hardware Incompatible"
+            alert.informativeText = "Reason: \(reason)\n\n" +
+                "Detected:\n" +
+                "• Processor: \(info.chip)\n" +
+                "• Memory: \(info.ramGB) GB\n" +
+                "• macOS: \(info.osString)"
+            alert.addButton(withTitle: "OK")
+        }
+        alert.runModal()
+    }
+    #endif
 }

@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard HardwareCompatibility.verifyOnLaunch() else { return }
         NSApp.setActivationPolicy(.accessory)
         DiagnosticChatLogger.record(role: "system", text: "Dot application started")
         activityAssertion = ProcessInfo.processInfo.beginActivity(
@@ -371,6 +372,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSWorkspace.shared.open(url)
         }
     }
+    @objc private func checkHardware() {
+        HardwareCompatibility.showStatusAlert()
+    }
     @objc private func retryPreparation() { OfflinePreparation.shared.retry() }
     @objc private func togglePin() { model?.pinned.toggle() }
     @objc private func toggleScreen() { model?.screenEnabled.toggle() }
@@ -461,6 +465,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actions.target = self; toolsMenu.addItem(actions)
         let source = NSMenuItem(title: "Version source…", action: #selector(readSource), keyEquivalent: "")
         source.target = self; toolsMenu.addItem(source)
+        let hardwareCheck = NSMenuItem(title: "Hardware compatibility check…", action: #selector(checkHardware), keyEquivalent: "")
+        hardwareCheck.target = self; toolsMenu.addItem(hardwareCheck)
         let repoSubItem = NSMenuItem(title: "GitHub repository (latest code)…", action: #selector(openRepository), keyEquivalent: "")
         repoSubItem.target = self; toolsMenu.addItem(repoSubItem)
         toolsItem.submenu = toolsMenu

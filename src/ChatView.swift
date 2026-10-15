@@ -569,6 +569,14 @@ final class ChatModel: ObservableObject {
             return "Could not find file \(pathStr)."
         }
 
+        // 13. Hardware Requirements & System Specifications Check
+        if clean.contains("hardware check") || clean.contains("check hardware") || clean.contains("specs") ||
+           clean.contains("system specs") || clean.contains("hardware requirements") || clean.contains("minimum specs") ||
+           clean.contains("can my mac run dot") || clean == "hardware" || clean == "system requirements" ||
+           clean.contains("what are your minimum specs") || clean.contains("minimum specification") {
+            return HardwareCompatibility.statusSummary()
+        }
+
         return nil
     }
 
