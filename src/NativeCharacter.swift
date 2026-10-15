@@ -595,11 +595,6 @@ struct NativeSkinArtwork: View {
                     Circle().stroke(Color.accentColor.opacity(0.6), lineWidth: 1.5)
                         .frame(width: 123 + pose.listeningLevel * 4, height: 123 + pose.listeningLevel * 4)
                 }
-                if phase == .thinking {
-                    HStack(spacing: 4) {
-                        ForEach(0..<3) { _ in Circle().fill(Color.primary).frame(width: 3, height: 3) }
-                    }.padding(4).background(.regularMaterial, in: Capsule()).offset(y: 44)
-                }
             }.frame(width: 132, height: 138)
     }
 }

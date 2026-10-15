@@ -160,26 +160,31 @@ struct RoamingCore {
     }
     mutating func step(frame: CGRect, visible: CGRect, cursor: CGPoint, paused: Bool, now: Double,
                        displayID: UInt32 = 0, snapshot: PlacementSnapshot? = nil) -> CGPoint {
-        if let last = lastTick, now - last > 2.0 {
+        if let last = lastTick, now - last > 15.0 {
             cancel(now: now)
             nextWander = now + 45
         }
         let dt = min(0.08, max(0, now - (lastTick ?? now))); lastTick = now
         guard !paused, PlacementSnapshot.validRect(frame), cursor.x.isFinite, cursor.y.isFinite,
               let bounds = Self.originBounds(window: frame.size, visible: visible),
-              Self.clamp(frame.origin, to: bounds) == frame.origin,
+              visible.intersects(frame),
               !frame.insetBy(dx: -32, dy: -32).contains(cursor) else {
             if trip != nil { cancel(now: now) }
             return frame.origin // Permission/pause/staleness never causes an unsensed clamp.
+        }
+        let clampedOrigin = Self.clamp(frame.origin, to: bounds)
+        guard hypot(clampedOrigin.x - frame.origin.x, clampedOrigin.y - frame.origin.y) <= 48.0 else {
+            if trip != nil { cancel(now: now) }
+            return frame.origin
         }
         let validSnapshot = (snapshot?.valid(displayID: displayID, visible: visible, now: now) == true) ? snapshot : nil
         let origin = frame.origin
         if var active = trip {
             let regions = active.snapshot?.protected ?? []
             guard (active.snapshot == nil || (validSnapshot != nil && active.snapshot == validSnapshot)),
-                  Self.safePath(from: frame, to: active.target, regions: regions),
+                  (active.snapshot == nil || Self.safePath(from: frame, to: active.target, regions: regions)),
                   Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY),
-                    CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + frame.height / 2)) >= 120 else {
+                    CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + frame.height / 2)) >= 50 else {
                 cancel(now: now); return origin
             }
             active.elapsed += dt
@@ -212,8 +217,8 @@ struct RoamingCore {
                     guard distance > 0, distance <= 96, Self.clamp(target, to: bounds) == target,
                           Self.safePath(from: frame, to: target, regions: snap.protected) else { continue }
                     let endCenter = CGPoint(x: target.x + frame.width / 2, y: target.y + frame.height / 2)
-                    guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 180,
-                          Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 120 else { continue }
+                    guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 90,
+                          Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
                     trip = Trip(start: origin, target: target, snapshot: snap); isTravelling = true; return origin
                 }
                 nextDecision = now + 10
@@ -226,23 +231,49 @@ struct RoamingCore {
         seed = seed &* 6364136223846793005 &+ 1
         let regions = validSnapshot?.protected ?? []
         let dist = 60.0 + Double((seed >> 8) % 80) // 60 to 140 pt moves
+        let toCenterX: CGFloat = bounds.midX > origin.x ? 1.0 : -1.0
+        let toCenterY: CGFloat = bounds.midY > origin.y ? 1.0 : -1.0
         var wanderCandidates: [CGPoint] = [
-            CGPoint(x: origin.x + dist, y: origin.y),
-            CGPoint(x: origin.x - dist, y: origin.y),
-            CGPoint(x: origin.x, y: origin.y + dist),
-            CGPoint(x: origin.x, y: origin.y - dist)
+            CGPoint(x: origin.x + toCenterX * dist, y: origin.y),
+            CGPoint(x: origin.x, y: origin.y + toCenterY * dist),
+            CGPoint(x: origin.x - toCenterX * dist, y: origin.y),
+            CGPoint(x: origin.x, y: origin.y - toCenterY * dist),
+            CGPoint(x: origin.x + toCenterX * (dist * 0.6), y: origin.y),
+            CGPoint(x: origin.x, y: origin.y + toCenterY * (dist * 0.6)),
+            CGPoint(x: origin.x + toCenterX * (dist * 1.3), y: origin.y),
+            CGPoint(x: origin.x, y: origin.y + toCenterY * (dist * 1.3))
         ]
         if (seed & 1) == 1 { wanderCandidates.reverse() }
         for target in wanderCandidates {
             let clamped = Self.clamp(target, to: bounds)
             let distance = hypot(clamped.x - origin.x, clamped.y - origin.y)
-            guard distance >= 40, Self.safePath(from: frame, to: clamped, regions: regions) else { continue }
+            guard distance >= 30, Self.safePath(from: frame, to: clamped, regions: regions) else { continue }
             let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
-            guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 180,
-                  Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 120 else { continue }
+            guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 90,
+                  Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
             trip = Trip(start: origin, target: clamped, snapshot: validSnapshot)
             isTravelling = true
             nextWander = now + 45.0 + Double(seed % 20)
+            return origin
+        }
+
+        // 3. Fallback Micro-Roam (when normal routes constrained by open windows)
+        let microDist: CGFloat = 16.0
+        let microCandidates: [CGPoint] = [
+            CGPoint(x: origin.x + toCenterX * microDist, y: origin.y),
+            CGPoint(x: origin.x, y: origin.y + toCenterY * microDist),
+            CGPoint(x: origin.x - toCenterX * microDist, y: origin.y),
+            CGPoint(x: origin.x, y: origin.y - toCenterY * microDist)
+        ]
+        for target in microCandidates {
+            let clamped = Self.clamp(target, to: bounds)
+            let distance = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distance >= 10 else { continue }
+            let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
+            guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 70 else { continue }
+            trip = Trip(start: origin, target: clamped, snapshot: nil)
+            isTravelling = true
+            nextWander = now + 45.0 + Double(seed % 15)
             return origin
         }
         nextWander = now + 15.0

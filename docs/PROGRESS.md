@@ -1,5 +1,11 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-15 02:18 UTC
+
+- **Autonomous Pet Roaming Simulation Unblocked:** Removed `panel.isKeyWindow` from movement pause check in `moveGently()`, preventing Dot from freezing when key/frontmost; increased sleep detection threshold from 2.0s to 15.0s so App Nap timer coalescing does not perpetually postpone roaming; prioritized inward candidate paths and added micro-roam fallback (12–20pt) so the pet wanders every ~45–60 seconds even with active windows.
+- **Pure Emotion-Driven Skin UI:** Removed the remaining 3-dot thinking bubble capsule from `NativeSkinArtwork`. All 11 skins now convey thinking, loading, and working states strictly through facial tilt, eye gaze, and mouth articulation with zero floating text or indicator widgets.
+- **Full Verification & Deployment:** All 614 SwiftPM tests passed (0 failures); Release build succeeded; re-signed with `"Apple Development: Emin Ismayilov (7M2G5ULAUF)"`; deployed to `/Users/mac/Applications/Dot.app` and verified running live (PID 24016).
+
 ## Published checkpoint — 2026-10-15 01:56 UTC
 
 - **6-Second Microphone Reopening (Follow-up Loop):** After the AI speaks its answer, it now re-opens the microphone to listen for 6 seconds (`invitationSeconds`), allowing continuous back-and-forth voice conversation. If no speech starts within 6 seconds, the microphone turns off and returns to idle.
