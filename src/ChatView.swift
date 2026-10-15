@@ -238,7 +238,8 @@ final class ChatModel: ObservableObject {
         textHistory.onDelete = { [weak self] in self?.reset() }
         followup.environment = { [weak self] in
             guard let self else { return .init(ready: false, microphoneAuthorized: false, screenAuthorized: false, interacting: true) }
-            let routeMatches = (self.voiceRoute == nil || self.runtime.currentRoute() == nil || self.voiceRoute == self.runtime.currentRoute())
+            let current = self.runtime.currentRoute()
+            let routeMatches = (self.voiceRoute == nil || current == nil || (self.voiceRoute?.input == current?.input && self.voiceRoute?.output == current?.output))
             return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing() && routeMatches,
                 microphoneAuthorized: self.runtime.microphoneAuthorized(),
                 screenAuthorized: true,
@@ -623,7 +624,7 @@ final class ChatModel: ObservableObject {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 if let tail = self.chunker.flush() { self.enqueueVoice(tail, id: id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                let shouldFollowup = !self.voiceDeliveryFailed && (!self.currentTurnIsTyped || question != nil)
+                let shouldFollowup = !self.voiceDeliveryFailed
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
                     self.answer += (self.answer.isEmpty ? "" : " ") + question.text
@@ -772,25 +773,54 @@ struct PetView: View {
 
     private var character: some View {
         Button(action: model.clicked) {
-            PetCharacter(
-                emotion: emotion,
-                phase: model.phase,
-                level: stt.level,
-                still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
-                skin: skins.selected,
-                playbackLevel: tts.playbackLevel,
-                motionDetail: skins.motionDetail,
-                expressionRevision: model.expressionRevision
-            )
-            .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
-            .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
+            ZStack {
+                taskHaloView
+                PetCharacter(
+                    emotion: emotion,
+                    phase: model.phase,
+                    level: stt.level,
+                    still: reduceMotion || ((model.hovered || model.pinned) && !model.phase.isActive),
+                    skin: skins.selected,
+                    playbackLevel: tts.playbackLevel,
+                    motionDetail: skins.motionDetail,
+                    expressionRevision: model.expressionRevision
+                )
+                .frame(width: PetLayout.petSize.width, height: PetLayout.petSize.height)
+                .offset(x: model.idleMotionOffset.x, y: model.idleMotionOffset.y)
+            }
         }
         .buttonStyle(.plain)
         .contentShape(Ellipse())
         .accessibilityLabel("Dot companion")
-        .accessibilityValue(emotion.caption)
+        .accessibilityValue(model.taskStatusText ?? emotion.caption)
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click for options. Escape stops.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
+    }
+
+    @ViewBuilder private var taskHaloView: some View {
+        switch model.taskHalo {
+        case .hidden:
+            EmptyView()
+        case .indeterminate:
+            Circle()
+                .trim(from: 0.1, to: 0.45)
+                .stroke(Color.accentColor.opacity(0.75), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                .frame(width: 116, height: 116)
+        case .determinate(let fraction):
+            ZStack {
+                Circle()
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 2)
+                Circle()
+                    .trim(from: 0, to: min(1, max(0.04, fraction)))
+                    .stroke(Color.accentColor.opacity(0.85), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            .frame(width: 116, height: 116)
+        case .verifiedComplete:
+            Circle()
+                .stroke(Color.green.opacity(0.88), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
+                .frame(width: 116, height: 116)
+        }
     }
 
     private func openOptions() { model.dismissFirstUseHint(); model.showOptions?() }

@@ -118,9 +118,13 @@ struct RoamingCore {
     }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
-        if longRest { minimumRestUntil = now + 45 }
+        if longRest {
+            minimumRestUntil = now + 45
+            nextWander = max(nextWander, now + 45)
+        } else {
+            nextWander = max(nextWander, now + 3)
+        }
         nextDecision = max(minimumRestUntil, now + 8)
-        nextWander = max(nextWander, now + 45)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
         guard PlacementSnapshot.validRect(visible), window.width.isFinite, window.height.isFinite else { return nil }
@@ -162,7 +166,6 @@ struct RoamingCore {
                        displayID: UInt32 = 0, snapshot: PlacementSnapshot? = nil) -> CGPoint {
         if let last = lastTick, now - last > 15.0 {
             cancel(now: now)
-            nextWander = now + 45
         }
         let dt = min(0.08, max(0, now - (lastTick ?? now))); lastTick = now
         guard !paused, PlacementSnapshot.validRect(frame), cursor.x.isFinite, cursor.y.isFinite,

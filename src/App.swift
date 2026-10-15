@@ -33,9 +33,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
     private let documentWorker = WatchedDocumentWorker()
+    private var activityAssertion: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        activityAssertion = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep, .latencyCritical],
+            reason: "Dot desktop pet simulation and responsive voice"
+        )
         let model = ChatModel(); self.model = model
         let searchProvider = LocalDotSearchProvider()
         let webResearch = WebResearchPanel(model: WebResearchModel(provider: searchProvider, reader: OfflinePayload.sourceReader(), synthesize: { [weak model] session in
@@ -54,7 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourcePanel.onVisibility = { [weak self] in self?.utilityVisibility("source", visible: $0) }
         researchPanel.onVisibility = { [weak self] in self?.utilityVisibility("research", visible: $0) }
         actionPanel.onVisibility = { [weak self] in self?.utilityVisibility("actions", visible: $0) }
-        voiceEnvironment.isActive = { [weak model] in model?.phase.isActive == true || model?.followupPending == true }
+        voiceEnvironment.isActive = { [weak model] in model?.phase.isActive == true }
         voiceEnvironment.onChange = { [weak model, weak webResearch] reason in
             webResearch?.foregroundPause(); model?.cancelForEnvironment(reason: reason)
         }
@@ -116,7 +121,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.cancelMovement(); self?.moveGently() }
         })
-        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification,
+        observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.placement.invalidate() }
+        })
+        for name in [NSWorkspace.activeSpaceDidChangeNotification,
                      NSWorkspace.willSleepNotification, NSWorkspace.didWakeNotification] {
             observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.cancelMovement() }
@@ -234,34 +242,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let item = NSMenuItem(title: header, action: nil, keyEquivalent: "")
             item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
         }
-        for action in CompanionMenuAction.available(readiness: readiness, busy: model.phase.isActive, hasDetails: hasDetails) {
-            let title = action.title(busy: model.phase.isActive, pinned: model.pinned, issue: model.issue)
-            let selector: Selector
-            switch action {
-            case .talk: selector = #selector(talk)
-            case .stop: selector = #selector(stopCurrentAction)
-            case .pause: selector = #selector(stopCurrentAction)
-            case .retry: selector = #selector(retryPreparation)
-            case .pin: selector = #selector(togglePin)
-            case .screen: selector = #selector(toggleScreen)
-            case .clear: selector = #selector(clearConversation)
-            case .copyDetails: selector = #selector(copyDetails)
-            case .quit: selector = #selector(quit)
-            }
-            let item = NSMenuItem(title: title, action: selector, keyEquivalent: action == .quit ? "q" : "")
-            item.target = self
-            if action == .screen { item.state = model.screenEnabled ? .on : .off }
-            menu.addItem(item)
+
+        let talkItem = NSMenuItem(title: model.phase.isActive ? "Interrupt and listen" : "Talk", action: #selector(talk), keyEquivalent: "")
+        talkItem.target = self; menu.addItem(talkItem)
+
+        if model.phase.isActive {
+            let stopItem = NSMenuItem(title: "Stop", action: #selector(stopCurrentAction), keyEquivalent: ".")
+            stopItem.target = self; menu.addItem(stopItem)
         }
-        menu.addItem(.separator())
+
         let typed = NSMenuItem(title: "Type to Dot…", action: #selector(typeMessage), keyEquivalent: "t")
         typed.target = self; menu.addItem(typed)
 
         menu.addItem(.separator())
-        menu.addItem(VoiceOptionsMenu.make(settings: model.voiceTiming, target: self,
-            silence: #selector(setSilence(_:)), invitation: #selector(setInvitation(_:))))
+
+        let pinItem = NSMenuItem(title: model.pinned ? "Roam freely" : "Pin in place", action: #selector(togglePin), keyEquivalent: "p")
+        pinItem.target = self; menu.addItem(pinItem)
+
+        let screenItem = NSMenuItem(title: "Screen awareness", action: #selector(toggleScreen), keyEquivalent: "")
+        screenItem.target = self; screenItem.state = model.screenEnabled ? .on : .off; menu.addItem(screenItem)
+
+        let clearItem = NSMenuItem(title: "Clear conversation", action: #selector(clearConversation), keyEquivalent: "k")
+        clearItem.target = self; menu.addItem(clearItem)
+
+        menu.addItem(.separator())
         menu.addItem(AppearanceOptionsMenu.make(settings: model.skinPreferences, target: self,
             skin: #selector(selectSkin(_:)), motion: #selector(selectMotion(_:))))
+        menu.addItem(VoiceOptionsMenu.make(settings: model.voiceTiming, target: self,
+            silence: #selector(setSilence(_:)), invitation: #selector(setInvitation(_:))))
         menu.addItem(ProactivityOptionsMenu.make(proactive: model.proactive, target: self,
             action: #selector(setProactivityFrequency(_:)), pauseAction: #selector(toggleProactivityPause)))
 
@@ -279,6 +287,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         source.target = self; toolsMenu.addItem(source)
         toolsItem.submenu = toolsMenu
         menu.addItem(toolsItem)
+
+        if hasDetails {
+            menu.addItem(.separator())
+            let copyItem = NSMenuItem(title: "Copy diagnostics", action: #selector(copyDetails), keyEquivalent: "")
+            copyItem.target = self; menu.addItem(copyItem)
+        }
+
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(title: "Quit Dot", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self; menu.addItem(quitItem)
+
         menu.popUp(positioning: nil, at: NSPoint(x: view.bounds.midX, y: view.bounds.midY), in: view)
     }
 

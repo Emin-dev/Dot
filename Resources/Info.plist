@@ -35,5 +35,7 @@
 	</dict>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSSupportsAppNap</key>
+	<false/>
 </dict>
 </plist>
