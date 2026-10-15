@@ -38,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var documentWorker: WatchedDocumentWorker?
     private var activityAssertion: NSObjectProtocol?
     private var keyMonitor: Any?
+    private var flagsMonitorGlobal: Any?
+    private var flagsMonitorLocal: Any?
+    private var fnKeyDown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard HardwareCompatibility.verifyOnLaunch() else { return }
@@ -322,6 +325,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return event
         }
         startIdleRoaming()
+        setupPushToTalk()
+    }
+
+    private func setupPushToTalk() {
+        flagsMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleFlagsChanged(event)
+        }
+        flagsMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleFlagsChanged(event)
+            return event
+        }
+    }
+
+    private func handleFlagsChanged(_ event: NSEvent) {
+        guard UserDefaults.standard.bool(forKey: "dot.pushToTalkDisabled") != true else { return }
+        let isFn = event.modifierFlags.contains(.function)
+        if isFn && !fnKeyDown {
+            fnKeyDown = true
+            model?.beginPushToTalk()
+        } else if !isFn && fnKeyDown {
+            fnKeyDown = false
+            model?.finishPushToTalk()
+        }
     }
 
     private func utilityVisibility(_ name: String, visible: Bool) {
@@ -679,6 +705,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         observations.removeAll()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let flagsMonitorGlobal { NSEvent.removeMonitor(flagsMonitorGlobal) }
+        if let flagsMonitorLocal { NSEvent.removeMonitor(flagsMonitorLocal) }
         // No pkill, process-name matching, or shutdown of borrowed services.
     }
 }

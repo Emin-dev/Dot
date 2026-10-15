@@ -196,6 +196,11 @@ final class STTManager: ObservableObject {
             endCapture(id, reason: observation.endReason ?? .invalidAudio)
         }
     }
+    func forceFinishCapture() {
+        if let id = capture, recording {
+            finishCapture(id)
+        }
+    }
     private func finishCapture(_ id: UUID) {
         guard capture == id, let pcm, let modelURL else { return }
         stopAudio(); let samples = pcm.take(); self.pcm = nil

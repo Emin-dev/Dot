@@ -897,3 +897,205 @@ public struct HardwareCompatibility: Sendable {
     }
     #endif
 }
+
+// MARK: - Active Desktop Context
+
+/// Captures active user desktop context (frontmost app, window title, and highlighted selection).
+public struct ActiveDesktopContext: Equatable {
+    public let appName: String?
+    public let windowTitle: String?
+    public let selectedText: String?
+
+    public init(appName: String?, windowTitle: String?, selectedText: String?) {
+        self.appName = appName
+        self.windowTitle = windowTitle
+        self.selectedText = selectedText
+    }
+
+    public var promptContextSnippet: String? {
+        var parts: [String] = []
+        if let app = appName, !app.isEmpty {
+            if let win = windowTitle, !win.isEmpty {
+                parts.append("Active App: \(app) (\"\(win)\")")
+            } else {
+                parts.append("Active App: \(app)")
+            }
+        }
+        if let sel = selectedText, !sel.isEmpty {
+            let truncated = sel.count > 1500 ? String(sel.prefix(1500)) + "…" : sel
+            parts.append("User highlighted selection: \"\(truncated)\"")
+        }
+        guard !parts.isEmpty else { return nil }
+        return "[" + parts.joined(separator: " | ") + "]"
+    }
+
+    #if canImport(AppKit)
+    @MainActor
+    public static func current() -> ActiveDesktopContext {
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let isOwnApp = frontApp?.bundleIdentifier == Bundle.main.bundleIdentifier
+        let appName = !isOwnApp ? frontApp?.localizedName : nil
+        var windowTitle: String? = nil
+        var selectedText: String? = nil
+
+        if let frontApp = frontApp, !isOwnApp {
+            let pid = frontApp.processIdentifier
+            #if canImport(CoreGraphics)
+            let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+            let frontWindows = list.filter { ($0[kCGWindowOwnerPID as String] as? Int32) == pid }
+            for w in frontWindows {
+                if let name = w[kCGWindowName as String] as? String, !name.isEmpty {
+                    windowTitle = name
+                    break
+                }
+            }
+            #endif
+
+            #if canImport(ApplicationServices)
+            let appRef = AXUIElementCreateApplication(pid)
+            var focused: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appRef, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
+               let focused = focused {
+                var selected: CFTypeRef?
+                if AXUIElementCopyAttributeValue(focused as! AXUIElement, kAXSelectedTextAttribute as CFString, &selected) == .success,
+                   let text = selected as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    selectedText = String(text.prefix(2000))
+                }
+            }
+            #endif
+        }
+        return ActiveDesktopContext(appName: appName, windowTitle: windowTitle, selectedText: selectedText)
+    }
+    #endif
+}
+
+// MARK: - Smart Timers & Reminders
+
+public struct ScheduledTimer: Identifiable, Equatable {
+    public let id: UUID
+    public let label: String
+    public let durationSeconds: Double
+    public let fireDate: Date
+    public var remainingSeconds: Double { max(0, fireDate.timeIntervalSinceNow) }
+
+    public init(id: UUID = UUID(), label: String, durationSeconds: Double, fireDate: Date) {
+        self.id = id
+        self.label = label
+        self.durationSeconds = durationSeconds
+        self.fireDate = fireDate
+    }
+}
+
+public enum TimerCommand: Equatable {
+    case create(seconds: Double, label: String)
+    case cancel(label: String?)
+    case list
+    case none
+}
+
+public enum SmartTimerParser {
+    public static func parse(_ text: String) -> TimerCommand {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "cancel timer" || lower == "stop timer" || lower == "clear timer" || lower == "cancel timers" {
+            return .cancel(label: nil)
+        }
+        if lower == "timers" || lower == "show timers" || lower == "list timers" || lower == "check timer" || lower == "my timers" {
+            return .list
+        }
+
+        let pattern = #"(?:set\s+(?:a\s+)?timer\s+(?:for\s+)?|timer\s+(?:for\s+)?|remind\s+me\s+in\s+)(\d+(?:\.\d+)?)\s*(seconds?|sec|s|minutes?|min|m|hours?|hr|h)\b(?:\s+(?:to|for)\s+(.+))?"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else { return .none }
+        let nsString = lower as NSString
+        guard let match = regex.firstMatch(in: lower, options: [], range: NSRange(location: 0, length: nsString.length)) else {
+            return .none
+        }
+
+        let numberStr = nsString.substring(with: match.range(at: 1))
+        let unitStr = nsString.substring(with: match.range(at: 2)).lowercased()
+        guard let value = Double(numberStr), value > 0 else { return .none }
+
+        let seconds: Double
+        if unitStr.hasPrefix("s") {
+            seconds = value
+        } else if unitStr.hasPrefix("m") {
+            seconds = value * 60.0
+        } else if unitStr.hasPrefix("h") {
+            seconds = value * 3600.0
+        } else {
+            return .none
+        }
+
+        var label = "Timer"
+        if match.numberOfRanges > 3, match.range(at: 3).location != NSNotFound {
+            let userLabel = nsString.substring(with: match.range(at: 3)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !userLabel.isEmpty {
+                label = userLabel
+            }
+        }
+        return .create(seconds: seconds, label: label)
+    }
+}
+
+public final class SmartTimerScheduler: @unchecked Sendable {
+    public static let shared = SmartTimerScheduler()
+    private let lock = NSLock()
+    private var timers: [UUID: (timer: ScheduledTimer, task: Task<Void, Never>)] = [:]
+
+    private init() {}
+
+    public func schedule(seconds: Double, label: String, onFire: @escaping @Sendable (ScheduledTimer) -> Void = { _ in }) -> ScheduledTimer {
+        let fireDate = Date().addingTimeInterval(seconds)
+        let scheduled = ScheduledTimer(label: label, durationSeconds: seconds, fireDate: fireDate)
+        let id = scheduled.id
+
+        let task = Task {
+            let ms = UInt64(max(0.1, seconds) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: ms)
+            guard !Task.isCancelled else { return }
+            self.remove(id)
+            onFire(scheduled)
+        }
+
+        lock.lock()
+        timers[id] = (scheduled, task)
+        lock.unlock()
+        return scheduled
+    }
+
+    public func cancelAll() -> Int {
+        lock.lock()
+        let count = timers.count
+        for (_, entry) in timers {
+            entry.task.cancel()
+        }
+        timers.removeAll()
+        lock.unlock()
+        return count
+    }
+
+    public func activeTimers() -> [ScheduledTimer] {
+        lock.lock()
+        defer { lock.unlock() }
+        return timers.values.map { $0.timer }.sorted { $0.fireDate < $1.fireDate }
+    }
+
+    private func remove(_ id: UUID) {
+        lock.lock()
+        timers.removeValue(forKey: id)
+        lock.unlock()
+    }
+
+    public static func formatDuration(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 {
+            return "\(hours)h \(minutes)m"
+        } else if minutes > 0 {
+            return secs > 0 ? "\(minutes)m \(secs)s" : "\(minutes) minute\(minutes > 1 ? "s" : "")"
+        } else {
+            return "\(secs) second\(secs != 1 ? "s" : "")"
+        }
+    }
+}

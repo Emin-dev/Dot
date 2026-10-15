@@ -23,6 +23,7 @@ struct ChatRuntime {
     var stopCapture: () -> Void
     var recording: () -> Bool
     var transcribing: () -> Bool
+    var forceFinishCapture: () -> Void = {}
 }
 
 /// The native editor and coordinator share the same bounded input contract.
@@ -834,7 +835,8 @@ final class ChatModel: ObservableObject {
             startVoice: { try tts.start(id: $0) }, enqueueVoice: { tts.enqueue($0, id: $1) },
             completeVoice: { tts.markGenerationComplete(id: $0) }, stopVoice: { tts.stop() },
             ttsSpeaking: { tts.speaking }, startCapture: { await stt.start(id: $0, settings: $1, invitation: $2) },
-            stopCapture: { stt.cancel() }, recording: { stt.recording }, transcribing: { stt.transcribing })
+            stopCapture: { stt.cancel() }, recording: { stt.recording }, transcribing: { stt.transcribing },
+            forceFinishCapture: { stt.forceFinishCapture() })
         let followup = self.followup, textHistory = self.textHistory, proactive = self.proactive
         textHistory.onDelete = { [weak self] in self?.reset() }
         followup.environment = { [weak self] in
@@ -1129,6 +1131,42 @@ final class ChatModel: ObservableObject {
         }
         beginListening(continuation: nil)
     }
+
+    private var pushToTalkActive = false
+    private var pushToTalkStart: Double = 0
+
+    func beginPushToTalk() {
+        guard !shuttingDown, runtime.isReady() else { return }
+        pushToTalkActive = true
+        pushToTalkStart = ProcessInfo.processInfo.systemUptime
+        dismissFirstUseHint()
+        if phase == .speaking || runtime.ttsSpeaking() || generating {
+            stopCurrentTurn()
+        }
+        beginListening(continuation: nil)
+    }
+
+    func finishPushToTalk() {
+        guard pushToTalkActive else { return }
+        pushToTalkActive = false
+        let elapsed = ProcessInfo.processInfo.systemUptime - pushToTalkStart
+        if elapsed < 0.25 {
+            stopCurrentTurn()
+            return
+        }
+        runtime.forceFinishCapture()
+    }
+
+    func handleTimerFired(_ timer: ScheduledTimer) {
+        #if canImport(AppKit)
+        NSSound(named: "Glass")?.play()
+        #endif
+        DiagnosticChatLogger.record(role: "system", text: "Timer fired: \(timer.label)")
+        let alertText = "Timer is up for: \(timer.label)!"
+        let id = cancelTurn()
+        respondDirectly(alertText, id: id)
+    }
+
     func dismissFirstUseHint() {
         guard firstUseHint else { return }
         firstUseHint = false; defaults.set(true, forKey: "dot.interactionHintDismissed.v1")
@@ -1213,6 +1251,38 @@ final class ChatModel: ObservableObject {
         if let moveCmd = self.detectMovementCommand(text), let replyText = self.onMove?(moveCmd) {
             respondDirectly(replyText, id: id)
             return
+        }
+
+        let timerCmd = SmartTimerParser.parse(text)
+        switch timerCmd {
+        case .create(let seconds, let label):
+            _ = SmartTimerScheduler.shared.schedule(seconds: seconds, label: label) { [weak self] firedTimer in
+                Task { @MainActor in
+                    self?.handleTimerFired(firedTimer)
+                }
+            }
+            let durationText = SmartTimerScheduler.formatDuration(seconds)
+            let reply = "Timer set for \(durationText)\(label != "Timer" ? " (\(label))" : "")."
+            respondDirectly(reply, id: id)
+            return
+        case .cancel:
+            let count = SmartTimerScheduler.shared.cancelAll()
+            let reply = count > 0 ? "Cancelled \(count) active timer\(count > 1 ? "s" : "")." : "No active timers to cancel."
+            respondDirectly(reply, id: id)
+            return
+        case .list:
+            let active = SmartTimerScheduler.shared.activeTimers()
+            let reply: String
+            if active.isEmpty {
+                reply = "No active timers."
+            } else {
+                let desc = active.map { "\($0.label): \(SmartTimerScheduler.formatDuration($0.remainingSeconds)) remaining" }.joined(separator: ", ")
+                reply = "Active timers: \(desc)."
+            }
+            respondDirectly(reply, id: id)
+            return
+        case .none:
+            break
         }
 
         if let action = self.detectNativeAction(text) {
@@ -1315,6 +1385,10 @@ final class ChatModel: ObservableObject {
                 var memoryContext: [String] = []
                 for f in facts { memoryContext.append("Memory: \(f.fact)") }
                 for e in evidence { memoryContext.append("Document [\(e.title)]: \(e.snippet)") }
+                let desktop = await MainActor.run { ActiveDesktopContext.current() }
+                if let snippet = desktop.promptContextSnippet {
+                    memoryContext.append(snippet)
+                }
                 if !memoryContext.isEmpty {
                     let ctxText = "\n[Context: " + memoryContext.joined(separator: " | ") + "]"
                     if let lastIdx = chatInput.indices.last {

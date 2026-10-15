@@ -110,45 +110,45 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - *Technically Impossible* (Intel, RAM < 24 GB, or macOS < 15): Informative critical alert with single "Quit" button.
   - *Below Minimum* (24–47 GB RAM, base M4 / M1–M3, macOS < 27): Warning alert with "Stop" (default) or "Run Anyway" buttons.
   - *Meets Specification* (M4 Pro / M5+, 48 GB RAM, macOS 27+): Direct launch without interruption.
+- [x] **Smart Local Timers & Reminders with macOS Notifications:**
+  - Natural language timer parsing ("set a timer for 10 minutes", "timer 5 min", "remind me in 30 seconds to stretch", "cancel timer", "show timers") via `SmartTimerScheduler` and `SmartTimerParser`.
+  - Asynchronous local scheduling with `UNUserNotificationCenter` macOS banner, audio chime, and voice completion alert.
+- [x] **Hold `Fn` / Dedicated Key Push-to-Talk (Hold-to-Talk):**
+  - Instant press-and-hold voice activation anywhere on macOS via global/local `NSEvent` flags monitoring without clicking Dot's window.
+  - Releasing `Fn` immediately cuts audio and runs Whisper transcription without waiting for trailing silence.
+- [x] **Active Window & Selection Context Awareness:**
+  - `ActiveDesktopContext` automatically extracts frontmost application name, window title, and highlighted selection (`kAXSelectedTextAttribute`).
+  - Seamlessly augments conversational prompts ("explain this", "summarize this", "fix this error") with live desktop context.
 
 ### Upcoming & Next-to-Add Capabilities (Roadmap)
 - [ ] **1. Native Screen OCR & Vision Understanding:**
   - Local text recognition via Apple's `Vision.framework` (`VNRecognizeTextRequest`) on screen snapshots.
   - Conversational visual queries ("read what's on my screen", "copy text from the active window", "what button is highlighted?").
   - Zero cloud latency and full privacy preservation.
-- [ ] **2. Smart Local Timers & Reminders with macOS Notifications:**
-  - Natural language timer and reminder parsing ("set a timer for 10 minutes", "remind me in 1 hour to check logs").
-  - Integration with `UserNotifications.framework` (`UNUserNotificationCenter`) to display native macOS banners and play chime.
-- [ ] **3. Advanced Clipboard Intelligence & Actions:**
+- [ ] **2. Advanced Clipboard Intelligence & Actions:**
   - Automatic clipboard transformation: "summarize clipboard", "translate clipboard to Spanish", "explain code on clipboard", "format clipboard as JSON/markdown".
   - One-click or conversational copy-back to clipboard.
-- [ ] **4. Comprehensive System & Desktop Control Suite:**
+- [ ] **3. Comprehensive System & Desktop Control Suite:**
   - Voice/typed commands for Dark Mode toggle, screen brightness adjustments, Wi-Fi status, Do Not Disturb / Focus Mode.
   - File finding with Spotlight `mdfind` ("find file project_plan.pdf on my Mac").
-- [ ] **5. Window Layout & Workspace Management:**
+- [ ] **4. Window Layout & Workspace Management:**
   - Window snapping via macOS Accessibility API ("snap window to left half", "tile windows", "show desktop", "minimize background apps").
-- [ ] **6. Real-Time Neural Diagnostics & Metrics Inspector:**
+- [ ] **5. Real-Time Neural Diagnostics & Metrics Inspector:**
   - Live HUD / status panel showing RAM consumption, active model tokens/second generation speed, KV-cache pressure, active audio route, and SQLite FTS5 database count.
-- [ ] **7. Audio Route Hot-Swapping & Background Ducking:**
+- [ ] **6. Audio Route Hot-Swapping & Background Ducking:**
   - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
   - Automatic system audio ducking while Dot is audibly speaking.
-- [ ] **8. Hold `Fn` / Dedicated Key Push-to-Talk (Hold-to-Talk):**
-  - Instant press-and-hold voice activation anywhere on macOS without needing to click the window.
-  - Releasing `Fn` immediately finalizes audio capture and submits the turn without waiting for trailing silence.
-- [ ] **9. Active Window & Selection Context Awareness:**
-  - Automatic extraction of selected/highlighted text and active application title (`kAXSelectedTextAttribute`, `kAXTitleAttribute`).
-  - Enables instant voice queries like "explain this", "rewrite this", or "fix this error" without manual copy-pasting.
-- [ ] **10. On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
+- [ ] **7. On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
   - Transparent, non-activating, click-through overlay window rendering smooth visual callouts, pulsing highlight rings, and animated arrows to visually point out items on screen.
-- [ ] **11. In-Place App Typing & Ghost Text (Type-into-App):**
+- [ ] **8. In-Place App Typing & Ghost Text (Type-into-App):**
   - Direct text dictation and insertion into the currently focused application's text field (Mail, VS Code, Slack, Notes) via macOS Accessibility and synthesized keyboard events.
-- [ ] **12. Action Approval Cards & Non-Destructive Guard:**
+- [ ] **9. Action Approval Cards & Non-Destructive Guard:**
   - Interactive confirmation cards for destructive or external actions (file deletion, terminal commands, external communications) with clear parameter previews and 1-click Approve / Deny.
-- [ ] **13. Proactive Idle & Stuck Detection:**
+- [ ] **10. Proactive Idle & Stuck Detection:**
   - Intelligently recognizes when the user has encountered a persistent error or has been idle on a task for >3 minutes, offering helpful guidance.
-- [ ] **14. Focus & Meeting Mode Awareness:**
+- [ ] **11. Focus & Meeting Mode Awareness:**
   - Automatically suppresses proactive spoken interruptions when meeting or recording apps (Zoom, Google Meet, FaceTime) are actively using camera or microphone.
-- [ ] **15. Contextual App Workflows & Automations:**
+- [ ] **12. Contextual App Workflows & Automations:**
   - Contextual awareness of active developer/creative tools (Xcode, Safari, Terminal, Figma) providing app-specific quick assists and automations.
 
 These short-list and roadmap boxes describe the full target capability. The candidate ledger below may mark narrower source/check milestones without claiming installation or full product completion.

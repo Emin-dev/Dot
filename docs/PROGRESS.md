@@ -1,5 +1,25 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 03:35 UTC
+
+- **Hold `Fn` Push-to-Talk (Hold-to-Talk):**
+  - Integrated global and local `NSEvent` flags monitoring in `src/App.swift` listening for the `Fn` modifier key.
+  - Press-and-hold opens microphone capture immediately across macOS without needing to click the window.
+  - Releasing `Fn` invokes `forceFinishCapture()`, immediately cutting audio and feeding PCM samples to Whisper without waiting for trailing silence.
+- **Active Window & Selection Context Awareness:**
+  - Implemented `ActiveDesktopContext` in `src/InteractionCore.swift`, extracting the frontmost application name, window title, and highlighted selection (`kAXSelectedTextAttribute`).
+  - Automatically augments user turns in `src/ChatView.swift` with live desktop context, enabling instant natural queries like "explain this", "summarize this", or "fix this error".
+  - Passed all unit tests in `ActiveDesktopContextTests`.
+- **Smart Local Timers & Reminders with macOS Notifications:**
+  - Built `SmartTimerScheduler` and `SmartTimerParser` in `src/InteractionCore.swift`.
+  - Supports conversational timer commands ("set a timer for 10 minutes", "timer 5 min", "remind me in 30 seconds to stretch", "cancel timer", "show timers") with async scheduling, native chime, macOS user notifications, and voice completion announcements.
+  - Passed all unit tests in `SmartTimerTests`.
+- **Release Build, Verification & Deployment:**
+  - 52/52 static guardrails passed (`python3 scripts/check_contracts.py`).
+  - Unit tests passed (0 failures).
+  - Xcode universal Release build succeeded (`** BUILD SUCCEEDED **`).
+  - Signed with `"Apple Development: Emin Ismayilov (7M2G5ULAUF)"` runtime signature and deployed to `/Users/mac/Applications/Dot.app`, running live (PID 88030).
+
 ## Published checkpoint — 2026-10-16 03:25 UTC
 
 - **Screen Recording Permission Loop Permanently Fixed:**

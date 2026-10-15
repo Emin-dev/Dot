@@ -1159,3 +1159,69 @@ final class HardwareCompatibilityTests: XCTestCase {
         XCTAssertTrue(summary.contains(current.chip))
     }
 }
+
+final class ActiveDesktopContextTests: XCTestCase {
+    func testPromptContextSnippetFormatting() {
+        let empty = ActiveDesktopContext(appName: nil, windowTitle: nil, selectedText: nil)
+        XCTAssertNil(empty.promptContextSnippet)
+
+        let appOnly = ActiveDesktopContext(appName: "Safari", windowTitle: nil, selectedText: nil)
+        XCTAssertEqual(appOnly.promptContextSnippet, "[Active App: Safari]")
+
+        let appAndWin = ActiveDesktopContext(appName: "Xcode", windowTitle: "ScreenContext.swift", selectedText: nil)
+        XCTAssertEqual(appAndWin.promptContextSnippet, "[Active App: Xcode (\"ScreenContext.swift\")]")
+
+        let full = ActiveDesktopContext(appName: "Notes", windowTitle: "Ideas", selectedText: "Meeting at 3 PM")
+        XCTAssertEqual(full.promptContextSnippet, "[Active App: Notes (\"Ideas\") | User highlighted selection: \"Meeting at 3 PM\"]")
+
+        let longText = String(repeating: "A", count: 2000)
+        let truncated = ActiveDesktopContext(appName: "Xcode", windowTitle: nil, selectedText: longText)
+        XCTAssertTrue(truncated.promptContextSnippet!.contains("…\""))
+        XCTAssertTrue(truncated.promptContextSnippet!.count < 1600)
+    }
+}
+
+final class SmartTimerTests: XCTestCase {
+    func testSmartTimerParser() {
+        XCTAssertEqual(SmartTimerParser.parse("set a timer for 10 minutes"), .create(seconds: 600, label: "Timer"))
+        XCTAssertEqual(SmartTimerParser.parse("timer 5 min"), .create(seconds: 300, label: "Timer"))
+        XCTAssertEqual(SmartTimerParser.parse("remind me in 30 seconds to stretch"), .create(seconds: 30, label: "stretch"))
+        XCTAssertEqual(SmartTimerParser.parse("timer for 1.5 hours to finish report"), .create(seconds: 5400, label: "finish report"))
+        XCTAssertEqual(SmartTimerParser.parse("cancel timer"), .cancel(label: nil))
+        XCTAssertEqual(SmartTimerParser.parse("stop timer"), .cancel(label: nil))
+        XCTAssertEqual(SmartTimerParser.parse("show timers"), .list)
+        XCTAssertEqual(SmartTimerParser.parse("list timers"), .list)
+        XCTAssertEqual(SmartTimerParser.parse("what is the capital of France"), .none)
+    }
+
+    func testSmartTimerScheduler() async {
+        final class FiredBox: @unchecked Sendable { var fired = false }
+        let box = FiredBox()
+        let scheduler = SmartTimerScheduler.shared
+        _ = scheduler.cancelAll()
+        XCTAssertEqual(scheduler.activeTimers().count, 0)
+
+        let timer = scheduler.schedule(seconds: 0.1, label: "Quick Test") { _ in
+            box.fired = true
+        }
+        XCTAssertEqual(timer.label, "Quick Test")
+        XCTAssertEqual(scheduler.activeTimers().count, 1)
+
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(box.fired)
+        XCTAssertEqual(scheduler.activeTimers().count, 0)
+
+        _ = scheduler.schedule(seconds: 100, label: "Long Timer")
+        XCTAssertEqual(scheduler.activeTimers().count, 1)
+        let cancelled = scheduler.cancelAll()
+        XCTAssertEqual(cancelled, 1)
+        XCTAssertEqual(scheduler.activeTimers().count, 0)
+    }
+
+    func testDurationFormatting() {
+        XCTAssertEqual(SmartTimerScheduler.formatDuration(30), "30 seconds")
+        XCTAssertEqual(SmartTimerScheduler.formatDuration(60), "1 minute")
+        XCTAssertEqual(SmartTimerScheduler.formatDuration(300), "5 minutes")
+        XCTAssertEqual(SmartTimerScheduler.formatDuration(3665), "1h 1m")
+    }
+}
