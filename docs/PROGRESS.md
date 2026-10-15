@@ -1,5 +1,26 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 03:07 UTC
+
+- **Hardware Minimum Specification & Launch Gate Enforced:**
+  - Implemented `HardwareCompatibility` in `src/InteractionCore.swift` with exact `sysctl` hardware discovery:
+    - Target minimum specification: Apple Silicon M4 Pro, M5 or newer, 48 GB Unified Memory, macOS 27+.
+    - **Technically Impossible** (Intel, RAM < 24 GB, or macOS < 15): Critical `NSAlert` modal with single button: "Quit".
+    - **Below Minimum Specification** (24–47 GB RAM, base M4 / M1–M3, macOS < 27): Warning `NSAlert` modal explaining risks with "Stop" (default) and "Run Anyway" buttons.
+    - **Meets Specification** (e.g. Apple M5 Pro, 48 GB RAM, macOS 27.0.1): App opens directly without warning.
+  - Added native menu item `"Hardware compatibility check…"` under `Tools & History` and conversational system command parsing (`"specs"`, `"hardware check"`, `"minimum specs"`).
+  - Added unit test suite `HardwareCompatibilityTests` in `Tests/DotCoreTests/InteractionCoreTests.swift` (100% passing).
+- **Zero-Loop Screen Recording Permission Caching:**
+  - Added cached authorization in `ScreenContext.swift` using `CGPreflightScreenCaptureAccess()` and `CGRequestScreenCaptureAccess()`. Dot asks at most once on fresh installs and never re-prompts in a loop when permission is already granted.
+- **Full Autonomous Background Operation:**
+  - Dot continues executing active turns and voice/reasoning streams when user switches or clicks other apps. Turns only terminate if user explicitly clicks Stop in Dot's window or says "stop".
+- **Safe-Zone 5-Second Random Movement During Thinking:**
+  - While thinking, Dot periodically checks for empty screen space using `PlacementCapture` and `RoamingCore` and relocates every 5 seconds without covering any buttons, text, or interactive windows.
+- **Autonomous Self-Improvement & Failure Logging:**
+  - Integrated `DiagnosticChatLogger.recordFailure(...)` on missed commands or incomplete tasks, storing missing capabilities and proposed fixes, and indexing corrective feedback in the local SQLite FTS5 store.
+- **GitHub Repository & Source Transparency:**
+  - Added direct repository links to `https://github.com/Emin-dev/Dot` in native menus and chat commands (`"open repo"`, `"read file <path>"`).
+
 ## Published checkpoint — 2026-10-15 03:00 UTC
 
 - **Autonomous Pet Roaming Across Active Windows Fixed:**

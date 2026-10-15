@@ -98,6 +98,41 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 - [ ] **Make the UI actionable:** old design plus ten new looks, expressive speech, clear activity states, source chips, task results and keyboard access.
 - [ ] **Build less custom infrastructure:** Apple frameworks first, thin adapters, one shared model, one local store and measured staged Rust migration.
 
+## 2026-10-16 Autonomous Desktop Companion & New Capabilities Checklist
+
+### Completed Capabilities (Verified & Deployed)
+- [x] **Permission Preflight & Once-Only Caching:** Screen Recording permission checked before requesting, asked at most once, and cached persistently without prompt loops.
+- [x] **Full Background Autonomy:** Dot keeps working when clicking into other applications; turns are only interrupted if user explicitly clicks Stop in Dot's window or says "stop".
+- [x] **Safe-Zone 5-Second Random Movement:** While thinking, Dot relocates every 5 seconds to a safe empty zone detected via `PlacementCapture` and `RoamingCore`, never covering buttons, text, or interactive windows.
+- [x] **Self-Improvement & Failure Logging:** Automatically logs task failure reason, missing capability, and proposed fix via `DiagnosticChatLogger.recordFailure` and indexes corrections in local FTS5 store.
+- [x] **Live GitHub Repository Integration:** Built-in menu items and conversational inquiries to inspect, copy, and open Dot's repository (`https://github.com/Emin-dev/Dot`) and read local source code directly.
+- [x] **Hardware Specification Launch Gate:** Production App Store ready launch gate enforcing Apple Silicon M4 Pro, M5 or newer, 48 GB Unified Memory, and macOS 27+:
+  - *Technically Impossible* (Intel, RAM < 24 GB, or macOS < 15): Informative critical alert with single "Quit" button.
+  - *Below Minimum* (24–47 GB RAM, base M4 / M1–M3, macOS < 27): Warning alert with "Stop" (default) or "Run Anyway" buttons.
+  - *Meets Specification* (M4 Pro / M5+, 48 GB RAM, macOS 27+): Direct launch without interruption.
+
+### Upcoming & Next-to-Add Capabilities (Roadmap)
+- [ ] **1. Native Screen OCR & Vision Understanding:**
+  - Local text recognition via Apple's `Vision.framework` (`VNRecognizeTextRequest`) on screen snapshots.
+  - Conversational visual queries ("read what's on my screen", "copy text from the active window", "what button is highlighted?").
+  - Zero cloud latency and full privacy preservation.
+- [ ] **2. Smart Local Timers & Reminders with macOS Notifications:**
+  - Natural language timer and reminder parsing ("set a timer for 10 minutes", "remind me in 1 hour to check logs").
+  - Integration with `UserNotifications.framework` (`UNUserNotificationCenter`) to display native macOS banners and play chime.
+- [ ] **3. Advanced Clipboard Intelligence & Actions:**
+  - Automatic clipboard transformation: "summarize clipboard", "translate clipboard to Spanish", "explain code on clipboard", "format clipboard as JSON/markdown".
+  - One-click or conversational copy-back to clipboard.
+- [ ] **4. Comprehensive System & Desktop Control Suite:**
+  - Voice/typed commands for Dark Mode toggle, screen brightness adjustments, Wi-Fi status, Do Not Disturb / Focus Mode.
+  - File finding with Spotlight `mdfind` ("find file project_plan.pdf on my Mac").
+- [ ] **5. Window Layout & Workspace Management:**
+  - Window snapping via macOS Accessibility API ("snap window to left half", "tile windows", "show desktop", "minimize background apps").
+- [ ] **6. Real-Time Neural Diagnostics & Metrics Inspector:**
+  - Live HUD / status panel showing RAM consumption, active model tokens/second generation speed, KV-cache pressure, active audio route, and SQLite FTS5 database count.
+- [ ] **7. Audio Route Hot-Swapping & Background Ducking:**
+  - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
+  - Automatic system audio ducking while Dot is audibly speaking.
+
 These short-list and roadmap boxes describe the full target capability. The candidate ledger below may mark narrower source/check milestones without claiming installation or full product completion.
 
 ## At a glance
