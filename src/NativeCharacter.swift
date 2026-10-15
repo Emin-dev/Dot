@@ -131,17 +131,19 @@ private struct OriginalPetCharacter: View {
             let tilt = 3.2
             return (bob, tilt, 1.02)
         case .thinking:
-            let bob = sin(time * 1.2) * 1.8 * motionScale
-            let tilt = -4.5 + sin(time * 0.9) * 1.0
+            let bob = sin(time * 1.2) * 1.6 * motionScale
+            let tilt = -5.0 + sin(time * 1.2) * 1.2 * motionScale
             return (bob, tilt, 0.99)
         case .working:
-            let bob = sin(time * 3.5) * 1.0 * motionScale
-            let tilt = 1.0
+            let bob = sin(time * 3.5) * 0.9 * motionScale
+            let tilt = 1.2
             return (bob, tilt, 1.0)
         case .speaking:
-            let cadence = sin(time * 16.0) * 0.5 + 0.5
-            let bob = (cadence * 2.6 - 1.0) * motionScale
-            let tilt = sin(time * 3.0) * 2.0 * motionScale
+            let wave1 = abs(sin(time * 13.0))
+            let wave2 = abs(sin(time * 21.0 + 1.1))
+            let cadence = (wave1 * 0.65 + wave2 * 0.35)
+            let bob = (cadence * 2.2 - 0.8) * motionScale
+            let tilt = sin(time * 3.5) * 1.8 * motionScale
             return (bob, tilt, 1.0 + cadence * 0.02)
         case .puzzled:
             let bob = sin(time * 1.0) * 1.2 * motionScale
@@ -159,16 +161,22 @@ private struct OriginalPetCharacter: View {
         let isPuzzled = emotion == .puzzled
 
         let gazeX: CGFloat = {
-            if isThinking { return 3.2 }
-            if isWorking { return CGFloat(sin(time * 3.5) * 4.2) }
-            if isPuzzled { return -1.2 }
+            if isThinking {
+                return still ? 3.0 : CGFloat(2.5 + sin(time * 1.5) * 1.5)
+            }
+            if isWorking {
+                return still ? 0 : CGFloat(sin(time * 4.5) * 4.0)
+            }
+            if isPuzzled { return -1.5 }
             return 0
         }()
         let gazeY: CGFloat = {
-            if isThinking { return -3.2 }
-            if isWorking { return -0.6 }
-            if isListening { return -1.0 }
-            if isPuzzled { return 1.8 }
+            if isThinking {
+                return still ? -3.0 : CGFloat(-3.2 + cos(time * 1.5) * 0.8)
+            }
+            if isWorking { return -0.8 }
+            if isListening { return -1.2 }
+            if isPuzzled { return 1.5 }
             return 0
         }()
 
@@ -176,8 +184,10 @@ private struct OriginalPetCharacter: View {
         let h: CGFloat = {
             if isBlinking { return 2.0 }
             if isSpeaking {
-                let cadence = abs(sin(time * 16.0))
-                return max(3.5, 8.5 - CGFloat(cadence * 3.0))
+                let wave1 = abs(sin(time * 13.0))
+                let wave2 = abs(sin(time * 21.0 + 1.1))
+                let cadence = (wave1 * 0.65 + wave2 * 0.35)
+                return max(4.0, 9.0 - CGFloat(cadence * 2.5))
             }
             if isListening { return 13.0 + CGFloat(min(level, 0.4) * 6.0) }
             if isThinking || isWorking { return 10.5 }
@@ -261,18 +271,30 @@ private struct OriginalPetCharacter: View {
                     .frame(width: 11, height: 3.5)
             }
         case .thinking:
-            Capsule()
-                .fill(ink)
-                .frame(width: 5.5, height: 2.8)
-                .offset(x: 1.5)
+            let pulse = still ? 0.0 : sin(time * 3.0) * 0.5
+            ZStack {
+                Capsule()
+                    .fill(ink)
+                    .frame(width: 5.5 + CGFloat(pulse), height: 3.0 + CGFloat(pulse * 0.5))
+                Smile()
+                    .stroke(ink, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                    .frame(width: 7.0, height: 2.5)
+                    .offset(y: -1.0)
+            }
+            .offset(x: 1.5)
         case .working:
-            Smile().stroke(ink, style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                .frame(width: 8.5, height: 3.5)
+            Smile().stroke(ink, style: StrokeStyle(lineWidth: 2.0, lineCap: .round))
+                .frame(width: 9.0, height: 3.8)
         case .puzzled:
-            Ellipse()
-                .stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
-                .frame(width: 5.5, height: 5.0)
-                .offset(x: -0.5)
+            ZStack {
+                Ellipse()
+                    .stroke(ink, style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+                    .frame(width: 5.5, height: 5.5)
+                NativeSmileOpening()
+                    .fill(ink.opacity(0.25))
+                    .frame(width: 4.0, height: 3.5)
+            }
+            .offset(x: -0.5)
         }
     }
 
@@ -280,11 +302,12 @@ private struct OriginalPetCharacter: View {
         ForEach([-1.0, 1.0], id: \.self) { side in
             let blushOpacity: Double = {
                 switch emotion {
-                case .speaking: return still ? 0.20 : 0.35
-                case .listening, .idle: return 0.20
-                case .working: return 0.18
-                case .thinking: return 0.15
-                case .puzzled: return 0.22
+                case .speaking: return still ? 0.25 : 0.35 + 0.08 * sin(time * 4.0)
+                case .listening: return 0.28
+                case .idle: return 0.20
+                case .working: return 0.24
+                case .thinking: return 0.22
+                case .puzzled: return 0.16
                 }
             }()
             Ellipse()
@@ -304,28 +327,31 @@ private struct OriginalSpeakingMouth: View {
 
     var body: some View {
         let level = playbackLevel.map(NativeFacePose.unit) ?? 0.20
-        let cadence = still ? 0.5 : (abs(sin(time * 16.0)) * 0.5 + 0.5)
-        let openFraction = still ? 0.35 : max(0.12, level * 0.75 + cadence * (level > 0.05 ? 0.45 : 0.12))
-        let width = still ? 10.0 : 8.0 + openFraction * 8.0
-        let height = still ? 6.0 : 2.5 + openFraction * 13.0
+        let wave1 = abs(sin(time * 13.0))
+        let wave2 = abs(sin(time * 21.0 + 1.1))
+        let syllable = (wave1 * 0.65 + wave2 * 0.35)
+        let cadence = still ? 0.45 : syllable
+        let openFraction = still ? 0.35 : max(0.12, level * 0.70 + cadence * (level > 0.05 ? 0.50 : 0.25))
+        let width = still ? 11.0 : (8.5 + openFraction * 8.5 - abs(sin(time * 10.0)) * 1.5)
+        let height = still ? 6.0 : (2.5 + openFraction * 13.5)
 
         ZStack {
             NativeSmileOpening()
                 .fill(ink)
                 .frame(width: width, height: height)
 
-            if height > 5.5 {
+            if height > 5.0 {
                 Ellipse()
-                    .fill(Color(red: 0.94, green: 0.58, blue: 0.65))
-                    .frame(width: width * 0.55, height: max(2.0, height * 0.32))
-                    .offset(y: height * 0.22)
+                    .fill(Color(red: 0.95, green: 0.55, blue: 0.62))
+                    .frame(width: width * 0.58, height: max(2.0, height * 0.34))
+                    .offset(y: height * 0.24)
             }
 
-            if height > 6.5 {
+            if height > 6.2 {
                 Capsule()
-                    .fill(Color.white.opacity(0.90))
-                    .frame(width: width * 0.58, height: 1.8)
-                    .offset(y: -height * 0.26)
+                    .fill(Color.white.opacity(0.92))
+                    .frame(width: width * 0.60, height: 1.8)
+                    .offset(y: -height * 0.28)
             }
 
             Smile()
