@@ -58,8 +58,20 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Icon.icns"
 python3 -B scripts/package_app_intents.py extract --work-dir "$INTENTS_BUILD" --app "$APP" \
   --target arm64-apple-macosx26.4 --deployment-target 26.4
+SIGN_IDENTITY=$(security find-identity -p codesigning -v | grep -o 'Apple Development: [^"]*' | head -n 1 || true)
+if [ -z "$SIGN_IDENTITY" ]; then
+  SIGN_IDENTITY="-"
+fi
+if [[ -f target/release/dot-search ]]; then
+  cp target/release/dot-search "$APP/Contents/MacOS/dot-search"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/dot-search"
+fi
+if [[ -f target/release/dot-voice ]]; then
+  cp target/release/dot-voice "$APP/Contents/MacOS/dot-voice"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/dot-voice"
+fi
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
-codesign --force --sign - "$APP/Contents/Frameworks/whisper.framework"
+codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/whisper.framework"
 assert_source_snapshot
 python3 -B - "$APP" "$SOURCE_COMMIT" "$WHISPER_BUILD/whisper-input.json" <<'PYCODE'
 import hashlib, json, pathlib, sys
@@ -87,7 +99,7 @@ record.update({'whisper_input_archive_sha256': whisper['archive_sha256'],
                'whisper_source_manifest_sha256': whisper['source_manifest_sha256']})
 (resources / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
 PYCODE
-codesign --force --sign - "$APP"
+codesign --force --sign "$SIGN_IDENTITY" "$APP"
 codesign --verify --deep --strict "$APP"
 python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"
 printf 'Bundled app staged for native offline acceptance: %s. No installer released.\n' "$APP"

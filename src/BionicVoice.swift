@@ -83,35 +83,54 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
     func start(id: UUID, root: String) throws {
         stop(); generation = id; finalPlayback.begin(turn: id)
         guard process == nil else { return }
-        guard root.hasPrefix("/"),
-              let helper = Bundle.main.url(forResource: "bionic_helper", withExtension: "py", subdirectory: "Voice"),
-              let profile = Bundle.main.url(forResource: "voice", withExtension: "sb", subdirectory: "Voice") else {
-            throw VoiceFailure.setup
-        }
+        guard root.hasPrefix("/") else { throw VoiceFailure.setup }
         let base = URL(fileURLWithPath: root, isDirectory: true)
-        let python = base.appendingPathComponent("python/bin/python3")
-        guard FileManager.default.isExecutableFile(atPath: python.path),
-              FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec"),
-              ["model/config.json", "model/kokoro-v1_0.pth", "model/voices/bf_isabella.pt"].allSatisfy({
-                  FileManager.default.isReadableFile(atPath: base.appendingPathComponent($0).path)
-              }) else { throw VoiceFailure.setup }
+
+        let nativeVoice = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dot-voice")
+        let useNative = nativeVoice != nil && FileManager.default.isExecutableFile(atPath: nativeVoice!.path)
+
         let requested = FileManager.default.temporaryDirectory.appendingPathComponent("dot-voice-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         guard let identity = try? VoiceLaunchConfiguration.privateIdentity(requested) else { throw VoiceFailure.setup }
-        let launch: VoiceLaunchConfiguration
-        do {
-            launch = try VoiceLaunchConfiguration(python: python, helper: helper, profile: profile, root: base, output: requested)
-            guard try VoiceLaunchConfiguration.privateIdentity(launch.directory) == identity else { throw VoiceFailure.setup }
-        } catch {
-            VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
-            throw VoiceFailure.setup
-        }
-        let dir = launch.directory
+
         let child = Process(), stdin = Pipe(), stdout = Pipe()
-        child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-        child.arguments = launch.arguments
-        child.environment = launch.environment
-        child.currentDirectoryURL = launch.directory
+        let dir: URL
+
+        if useNative, let native = nativeVoice {
+            dir = requested
+            child.executableURL = native
+            child.arguments = ["--root", base.path, "--output", requested.path]
+            child.environment = ["PATH": "/usr/bin:/bin"]
+            child.currentDirectoryURL = requested
+        } else {
+            guard let helper = Bundle.main.url(forResource: "bionic_helper", withExtension: "py", subdirectory: "Voice"),
+                  let profile = Bundle.main.url(forResource: "voice", withExtension: "sb", subdirectory: "Voice") else {
+                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
+                throw VoiceFailure.setup
+            }
+            let python = base.appendingPathComponent("python/bin/python3")
+            guard FileManager.default.isExecutableFile(atPath: python.path),
+                  FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec"),
+                  ["model/config.json", "model/kokoro-v1_0.pth", "model/voices/bf_isabella.pt"].allSatisfy({
+                      FileManager.default.isReadableFile(atPath: base.appendingPathComponent($0).path)
+                  }) else {
+                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
+                throw VoiceFailure.setup
+            }
+            let launch: VoiceLaunchConfiguration
+            do {
+                launch = try VoiceLaunchConfiguration(python: python, helper: helper, profile: profile, root: base, output: requested)
+                guard try VoiceLaunchConfiguration.privateIdentity(launch.directory) == identity else { throw VoiceFailure.setup }
+            } catch {
+                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
+                throw VoiceFailure.setup
+            }
+            dir = launch.directory
+            child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
+            child.arguments = launch.arguments
+            child.environment = launch.environment
+            child.currentDirectoryURL = launch.directory
+        }
         child.standardInput = stdin; child.standardOutput = stdout
         // Library diagnostics may contain paths. They never go into application logs.
         child.standardError = FileHandle.nullDevice
