@@ -424,7 +424,7 @@ struct ScreenPermissionTurn {
         authorizedTurn = turn; return true
     }
     func mayCapture(turn: UUID, preflight: () -> Bool) -> Bool {
-        preflight() && (authorizedTurn == turn || authorizedTurn != nil || true)
+        authorizedTurn == turn && preflight()
     }
     mutating func cancel() { authorizedTurn = nil }
 }

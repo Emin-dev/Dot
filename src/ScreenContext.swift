@@ -20,6 +20,31 @@ final class ScreenContext {
     private static var cachedAccessStatus: Bool? = nil
     private static var lastPreflightCheck: Double = 0
 
+    static var isPermanentlyConfigured: Bool {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        let marker = support?.appendingPathComponent("Dot/.screen_permission_configured")
+        if let marker, FileManager.default.fileExists(atPath: marker.path) { return true }
+        if UserDefaults.standard.bool(forKey: "dot.screenAccessRequested") ||
+           UserDefaults.standard.bool(forKey: "dot.screenAccessGrantedInSettings") {
+            return true
+        }
+        return false
+    }
+
+    static func markPermanentlyConfigured() {
+        hasRequestedAccess = true
+        UserDefaults.standard.set(true, forKey: "dot.screenAccessGrantedInSettings")
+        UserDefaults.standard.synchronize()
+        if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let dotDir = support.appendingPathComponent("Dot")
+            try? FileManager.default.createDirectory(at: dotDir, withIntermediateDirectories: true)
+            let marker = dotDir.appendingPathComponent(".screen_permission_configured")
+            if !FileManager.default.fileExists(atPath: marker.path) {
+                try? Data().write(to: marker)
+            }
+        }
+    }
+
     static func hasScreenAccess(refresh: Bool = false) -> Bool {
         let now = ProcessInfo.processInfo.systemUptime
         if !refresh, let cached = cachedAccessStatus, (now - lastPreflightCheck) < 5.0 {
@@ -29,15 +54,16 @@ final class ScreenContext {
         cachedAccessStatus = access
         lastPreflightCheck = now
         if access {
-            hasRequestedAccess = true
+            markPermanentlyConfigured()
         }
         return access
     }
 
     func prepare(turn: UUID, requestPermission: Bool = true) throws {
         try Task.checkCancellation()
-        // 1. If already authorized, never prompt or request access.
-        if Self.hasScreenAccess(refresh: true) || CGPreflightScreenCaptureAccess() {
+        // 1. If already authorized or permanently configured, never prompt or request access.
+        if Self.isPermanentlyConfigured || Self.hasScreenAccess(refresh: true) || CGPreflightScreenCaptureAccess() {
+            Self.markPermanentlyConfigured()
             _ = permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
                                    request: { false && (requestPermission && CGRequestScreenCaptureAccess()) })
             try Task.checkCancellation()
@@ -51,7 +77,7 @@ final class ScreenContext {
             return
         }
         // 3. Ask at most once in the lifetime of the application.
-        Self.hasRequestedAccess = true
+        Self.markPermanentlyConfigured()
         guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
                                  request: { requestPermission && CGRequestScreenCaptureAccess() }) else {
             throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission

@@ -104,6 +104,7 @@ final class PlacementCapture {
                 try Task.checkCancellation()
                 let before = try Self.windowRegions(primaryTop: primaryTop, display: frame)
                 stage = .shareable
+                guard checkPreflight(now: ProcessInfo.processInfo.systemUptime) else { reason = .permission; return }
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
                 try Task.checkCancellation()
                 guard checkPreflight(now: ProcessInfo.processInfo.systemUptime) else { reason = .permission; return }
