@@ -159,20 +159,25 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - Context auto-compaction under memory pressure without deleting facts or conversation notes.
   - Soul archive directory (`~/Library/Application Support/Dot/Soul/`).
   - One-click `exportSoul()` creating a portable `.dotsoul` bundle in `~/Downloads/` and `importSoul(from:)`.
+- [x] **Native Screen Scroll Tool (`scroll_screen`):**
+  - Exposed `scroll_screen` LLM function schema and fast-paths for scrolling `up`, `down`, `left`, `right`, `top`, `bottom` via CoreGraphics `CGEvent`.
+- [x] **Window Layout & Workspace Management (`snap_window`):**
+  - Accessible window snapping and tiling (`leftHalf`, `rightHalf`, `topHalf`, `bottomHalf`, `maximize`, `center`) via `WindowLayoutManager` and `snap_window` LLM tool.
+  - Desktop & background window controls: "show desktop", "hide other apps", "minimize background apps".
+- [x] **Background Media & Audio Ducking (`SystemAudioDucker`):**
+  - Automatically ducks/pauses active Apple Music or Spotify playback when Dot starts speaking.
+  - Seamlessly restores media playback when Dot finishes speaking or is cancelled/stopped.
 
 ### Upcoming & Next-to-Add Capabilities (Roadmap)
-- [ ] **1. Window Layout & Workspace Management:**
-  - Window snapping via macOS Accessibility API ("snap window to left half", "tile windows", "show desktop", "minimize background apps").
-- [ ] **2. Real-Time Neural Diagnostics & Metrics Inspector:**
+- [ ] **1. Real-Time Neural Diagnostics & Metrics Inspector HUD:**
   - Live HUD / status panel showing RAM consumption, active model tokens/second generation speed, KV-cache pressure, active audio route, and SQLite FTS5 database count.
-- [ ] **3. Audio Route Hot-Swapping & Background Ducking:**
+- [ ] **2. Audio Route Hot-Swapping:**
   - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
-  - Automatic system audio ducking while Dot is audibly speaking.
-- [ ] **4. Action Approval Cards & Non-Destructive Guard:**
+- [ ] **3. Action Approval Cards & Non-Destructive Guard:**
   - Interactive confirmation cards for destructive or external actions (file deletion, terminal commands, external communications) with clear parameter previews and 1-click Approve / Deny.
-- [ ] **5. Proactive Idle & Stuck Detection:**
+- [ ] **4. Proactive Idle & Stuck Detection:**
   - Intelligently recognizes when the user has encountered a persistent error or has been idle on a task for >3 minutes, offering helpful guidance.
-- [ ] **6. Contextual App Workflows & Automations:**
+- [ ] **5. Contextual App Workflows & Automations:**
   - Contextual awareness of active developer/creative tools (Xcode, Safari, Terminal, Figma) providing app-specific quick assists and automations.
 
 These short-list and roadmap boxes describe the full target capability. The candidate ledger below may mark narrower source/check milestones without claiming installation or full product completion.

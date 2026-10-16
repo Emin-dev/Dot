@@ -1523,6 +1523,11 @@ final class ChatModel: ObservableObject {
             return
         }
 
+        if let workspaceReply = WindowLayoutManager.executeWorkspaceAction(text) {
+            respondDirectly(workspaceReply, id: id)
+            return
+        }
+
         let simCmd = SimulatorControlSuite.parseCommand(text)
         if simCmd != .none, let simReply = SimulatorControlSuite.execute(simCmd) {
             respondDirectly(simReply, id: id)
@@ -1918,6 +1923,15 @@ final class ChatModel: ObservableObject {
                         let ok = ScrollControlEngine.scroll(direction: dir, amount: amount)
                         executedToolConfirmation = ok ? "Scrolled \(direction)." : "Could not scroll \(direction)."
                         DiagnosticChatLogger.recordTool(name: "scroll_screen", target: direction, outcome: executedToolConfirmation ?? "", succeeded: ok)
+                    case .snapWindow(let layout):
+                        if let snapLayout = WindowSnapLayout(rawValue: layout) {
+                            let outcome = WindowLayoutManager.applyLayout(snapLayout)
+                            executedToolConfirmation = outcome
+                            DiagnosticChatLogger.recordTool(name: "snap_window", target: layout, outcome: outcome, succeeded: true)
+                        } else {
+                            executedToolConfirmation = "Unknown layout '\(layout)'."
+                            DiagnosticChatLogger.recordTool(name: "snap_window", target: layout, outcome: executedToolConfirmation ?? "", succeeded: false)
+                        }
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }

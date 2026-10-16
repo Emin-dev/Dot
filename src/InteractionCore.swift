@@ -546,13 +546,14 @@ struct QuestionIntentStream {
         case clickElement(description: String)
         case pointOnScreen(x: Double, y: Double, label: String?)
         case scrollScreen(direction: String, amount: Int)
+        case snapWindow(layout: String)
     }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.
     private static let questionObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"question"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
     private static let allowedToolNames: Set<String> = [
-        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen"
+        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen", "snap_window"
     ]
     private var callID: String?
     private var functionName: String?
@@ -684,6 +685,9 @@ struct QuestionIntentStream {
             let dir = (object["direction"] as? String) ?? "down"
             let amt = (object["amount"] as? NSNumber)?.intValue ?? 6
             return .scrollScreen(direction: dir, amount: amt)
+        case "snap_window":
+            guard let layout = object["layout"] as? String, !layout.isEmpty else { throw Failure.invalid }
+            return .snapWindow(layout: layout)
         default:
             return nil
         }
@@ -2153,6 +2157,20 @@ public enum WindowLayoutManager {
             _ = AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeVal)
         }
         return "Snapped \(appName) window to \(layout.rawValue)."
+    }
+
+    @MainActor
+    public static func executeWorkspaceAction(_ text: String) -> String? {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "show desktop" || lower == "desktop" {
+            _ = InPlaceAppTyping.sendKey("Cmd+F3")
+            return "Showing your desktop."
+        }
+        if lower == "hide others" || lower == "hide other apps" || lower == "hide background apps" || lower == "minimize background apps" || lower == "clean workspace" {
+            _ = InPlaceAppTyping.sendKey("Cmd+Option+H")
+            return "Hidden other background applications."
+        }
+        return nil
     }
     #endif
 }
@@ -3838,6 +3856,64 @@ public enum SystemAudioState {
         let newVol = max(0, min(100, current + delta))
         _ = setVolume(newVol)
         return newVol
+    }
+}
+
+// MARK: - Background Media & Audio Ducking
+
+public final class SystemAudioDucker: @unchecked Sendable {
+    public static let shared = SystemAudioDucker()
+    private var pausedMusic = false
+    private var pausedSpotify = false
+    private let lock = NSLock()
+
+    private init() {}
+
+    public func duckIfPlaying() {
+        lock.lock()
+        defer { lock.unlock() }
+        #if canImport(AppKit)
+        let apps = NSWorkspace.shared.runningApplications
+        if apps.contains(where: { $0.bundleIdentifier == "com.apple.Music" }) {
+            var error: NSDictionary?
+            if let script = NSAppleScript(source: "tell application \"Music\" to if player state is playing then pause") {
+                script.executeAndReturnError(&error)
+                if error == nil {
+                    pausedMusic = true
+                }
+            }
+        }
+        if apps.contains(where: { $0.bundleIdentifier == "com.spotify.client" }) {
+            var error: NSDictionary?
+            if let script = NSAppleScript(source: "tell application \"Spotify\" to if player state is playing then pause") {
+                script.executeAndReturnError(&error)
+                if error == nil {
+                    pausedSpotify = true
+                }
+            }
+        }
+        #endif
+    }
+
+    public func restoreIfDucked() {
+        lock.lock()
+        defer { lock.unlock() }
+        #if canImport(AppKit)
+        if pausedMusic {
+            var error: NSDictionary?
+            if let script = NSAppleScript(source: "tell application \"Music\" to play") {
+                script.executeAndReturnError(&error)
+            }
+            pausedMusic = false
+        }
+        if pausedSpotify {
+            var error: NSDictionary?
+            if let script = NSAppleScript(source: "tell application \"Spotify\" to play") {
+                script.executeAndReturnError(&error)
+            }
+            pausedSpotify = false
+        }
+        #endif
     }
 }
 

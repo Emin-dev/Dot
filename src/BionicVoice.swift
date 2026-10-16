@@ -272,7 +272,11 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
     private func playNext() {
         guard player == nil, let id = generation else { return }
         if audio.isEmpty {
-            if pending.isEmpty && audioOrder.isEmpty && speaking { speaking = false; onDrained?(id) }
+            if pending.isEmpty && audioOrder.isEmpty && speaking {
+                speaking = false
+                SystemAudioDucker.shared.restoreIfDucked()
+                onDrained?(id)
+            }
             return
         }
         do {
@@ -284,6 +288,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
             next.delegate = self; player = next; playerRequest = request
             playerDeadline = clock() + next.duration + 2
             guard next.play() else { throw VoiceFailure.audio }
+            SystemAudioDucker.shared.duckIfPlaying()
             onStarted?(id)
         } catch { fail("Bionic audio playback failed.") }
     }
@@ -309,6 +314,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         if let completed, generation == completed { onFinalPlayback?(completed) }
     }
     func stop() {
+        SystemAudioDucker.shared.restoreIfDucked()
         if let id = generation { onPlaybackLevel?(id, 0) }
         finalPlayback.cancel()
         generation = nil; pending.removeAll(); unsent.removeAll(); audio.removeAll()
@@ -319,6 +325,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         if ready { write(["protocol": 1, "type": "cancel"]) }
     }
     private func fail(_ message: String) {
+        SystemAudioDucker.shared.restoreIfDucked()
         let id = generation
         shutdown()
         if let id { onError?(id, message) }
