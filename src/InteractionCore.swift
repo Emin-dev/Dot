@@ -3908,3 +3908,100 @@ public final class ScreenScribbleTracker: @unchecked Sendable {
         }
     }
 }
+
+// MARK: - Step-by-Step Interactive Walkthrough Tracker
+
+public struct WalkthroughStep: Codable, Sendable {
+    public let description: String
+    public let targetElementText: String
+    public init(description: String, targetElementText: String) {
+        self.description = description
+        self.targetElementText = targetElementText
+    }
+}
+
+@MainActor
+public final class InteractiveWalkthroughManager {
+    public static let shared = InteractiveWalkthroughManager()
+    private var steps: [WalkthroughStep] = []
+    private var currentStepIndex = 0
+    private var activeTargetRect: CGRect?
+    private var mouseMonitor: Any?
+    private var onStepCompleted: ((Int, WalkthroughStep) -> Void)?
+    private var onWalkthroughFinished: (() -> Void)?
+
+    public func startWalkthrough(
+        steps: [WalkthroughStep],
+        onStepCompleted: @escaping (Int, WalkthroughStep) -> Void,
+        onFinished: @escaping () -> Void
+    ) {
+        stopWalkthrough()
+        guard !steps.isEmpty else { return }
+        self.steps = steps
+        self.currentStepIndex = 0
+        self.onStepCompleted = onStepCompleted
+        self.onWalkthroughFinished = onFinished
+        advanceToCurrentStep()
+        startClickMonitor()
+    }
+
+    public func stopWalkthrough() {
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        self.mouseMonitor = nil
+        steps.removeAll()
+        currentStepIndex = 0
+        activeTargetRect = nil
+        ScreenGuideLaserOverlay.shared.dismiss()
+    }
+
+    private func startClickMonitor() {
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            guard let self, let target = self.activeTargetRect else { return }
+            let clickLoc = NSEvent.mouseLocation
+            let expanded = target.insetBy(dx: -30, dy: -30)
+            if expanded.contains(clickLoc) {
+                Task { @MainActor in
+                    self.stepCompleted()
+                }
+            }
+        }
+    }
+
+    private func stepCompleted() {
+        guard currentStepIndex < steps.count else { return }
+        let completed = steps[currentStepIndex]
+        currentStepIndex += 1
+        onStepCompleted?(currentStepIndex, completed)
+        if currentStepIndex >= steps.count {
+            stopWalkthrough()
+            onWalkthroughFinished?()
+        } else {
+            advanceToCurrentStep()
+        }
+    }
+
+    private func advanceToCurrentStep() {
+        guard currentStepIndex < steps.count else { return }
+        let step = steps[currentStepIndex]
+        Task { @MainActor in
+            do {
+                let screenContext = ScreenContext()
+                let lines = try await screenContext.extractVisibleScreenText()
+                let target = step.targetElementText.lowercased()
+                if let matched = lines.first(where: { $0.text.lowercased().contains(target) }) {
+                    let screen = NSScreen.main ?? NSScreen.screens.first
+                    let screenWidth = Double(screen?.frame.width ?? 1440)
+                    let screenHeight = Double(screen?.frame.height ?? 900)
+                    let boxX = matched.boundingBox.origin.x * screenWidth
+                    let boxY = (1.0 - (matched.boundingBox.origin.y + matched.boundingBox.height)) * screenHeight
+                    let boxW = matched.boundingBox.width * screenWidth
+                    let boxH = matched.boundingBox.height * screenHeight
+                    let rect = CGRect(x: boxX, y: boxY, width: max(30, boxW), height: max(20, boxH))
+                    self.activeTargetRect = rect
+                    ScreenGuideLaserOverlay.shared.highlightRect(rect, duration: 60.0)
+                }
+            } catch {}
+        }
+    }
+}
+
