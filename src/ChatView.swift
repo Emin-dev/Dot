@@ -1504,6 +1504,23 @@ final class ChatModel: ObservableObject {
             }
         }
 
+        // "copy" means "copy what you just said", not "press Cmd+C in whatever app
+        // happens to be focused". The owner asked for Dot's own text repeatedly and
+        // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
+        let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if pendingApproval == nil,
+           ["copy", "copy that", "copy this", "copy it", "copy your answer", "copy the answer",
+            "copy your reply", "copy your last answer"].contains(copyPhrase) {
+            let said = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+            if said.isEmpty {
+                respondDirectly("I have not said anything to copy yet.", id: id)
+            } else {
+                ClipboardIntelligence.write(said)
+                respondDirectly("Copied my last answer to the clipboard.", id: id)
+            }
+            return
+        }
+
         DiagnosticChatLogger.record(role: "user", text: text)
         timing(typed ? "text_submitted" : "final_transcript")
         lastAttemptedText = text
