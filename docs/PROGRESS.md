@@ -1,5 +1,34 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 04:05 UTC
+
+- **Native Screen OCR & Vision Understanding:**
+  - Implemented `NativeScreenOCR` in `src/InteractionCore.swift` leveraging Apple's `VNRecognizeTextRequest` on Apple Silicon Neural Engine.
+  - Added `extractVisibleScreenText()` in `src/ScreenContext.swift` and conversational query dispatch in `src/ChatView.swift` for "copy screen text", "extract screen text", and "read screen text".
+- **Advanced Clipboard Intelligence & Transformations:**
+  - Added `ClipboardIntelligence` supporting conversational clipboard reading, clearing, copying, and transformations ("summarize clipboard", "explain clipboard", "translate clipboard to <language>").
+  - Seamless prompt injection feeding clipboard text directly into local Qwen 27B model while preserving conversational query in chat history.
+  - Added unit test suite `ClipboardIntelligenceTests`.
+- **Comprehensive System & Desktop Control Suite:**
+  - Built `SystemControlSuite` for native macOS system operations: Dark Mode toggle / set, volume mute/unmute, display sleep, and Spotlight `mdfind` file searching.
+  - Added unit test suite `SystemControlSuiteTests`.
+- **On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
+  - Built `ScreenGuideLaserOverlay` non-activating, click-through floating panel overlay rendering glowing circular laser rings and highlighted bounding rectangles.
+  - Added `LaserPointerParser` supporting "point", "laser pointer", "highlight window", and coordinate targeting.
+  - Added unit test suite `LaserPointerParserTests`.
+- **In-Place App Typing & Ghost Text (Type-into-App):**
+  - Built `InPlaceAppTyping` synthesizing native Unicode keyboard events via `CGEvent` to type or dictate text directly into any focused macOS app without accessibility value permission limits.
+  - Added unit test suite `InPlaceAppTypingTests`.
+- **Focus & Meeting Mode Awareness:**
+  - Built `MeetingFocusAwareness` detecting active video/audio conferencing applications (Zoom, Teams, Meet, Webex, FaceTime, Slack, OBS).
+  - Automatically suppresses proactive spoken suggestions when meeting or recording apps are actively in focus.
+  - Added unit test suite `MeetingFocusAwarenessTests`.
+- **Release Build, Verification & Live Deployment:**
+  - 52/52 static guardrails passed (`python3 scripts/check_contracts.py`).
+  - All test suites in `DotCoreTests` passed (0 failures).
+  - Built universal Release binary with `xcodebuild`.
+  - Codesigned with `"Apple Development: Emin Ismayilov (7M2G5ULAUF)"` and deployed to `/Users/mac/Applications/Dot.app` (Running PID 89485).
+
 ## Published checkpoint — 2026-10-16 03:35 UTC
 
 - **Hold `Fn` Push-to-Talk (Hold-to-Talk):**

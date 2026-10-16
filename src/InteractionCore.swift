@@ -1099,3 +1099,470 @@ public final class SmartTimerScheduler: @unchecked Sendable {
         }
     }
 }
+
+// MARK: - Native Screen OCR
+
+#if canImport(Vision)
+import Vision
+
+public struct ScreenOCRLine: Equatable, Sendable {
+    public let text: String
+    public let confidence: Float
+    public let boundingBox: CGRect
+
+    public init(text: String, confidence: Float = 1.0, boundingBox: CGRect = .zero) {
+        self.text = text
+        self.confidence = confidence
+        self.boundingBox = boundingBox
+    }
+}
+
+public enum NativeScreenOCR {
+    public static func recognizeText(in image: CGImage, level: VNRequestTextRecognitionLevel = .accurate) async -> [ScreenOCRLine] {
+        await withCheckedContinuation { continuation in
+            let request = VNRecognizeTextRequest { request, error in
+                guard error == nil, let observations = request.results as? [VNRecognizedTextObservation] else {
+                    continuation.resume(returning: [])
+                    return
+                }
+                var lines: [ScreenOCRLine] = []
+                for obs in observations {
+                    if let candidate = obs.topCandidates(1).first {
+                        lines.append(ScreenOCRLine(
+                            text: candidate.string,
+                            confidence: candidate.confidence,
+                            boundingBox: obs.boundingBox
+                        ))
+                    }
+                }
+                continuation.resume(returning: lines)
+            }
+            request.recognitionLevel = level
+            request.usesLanguageCorrection = true
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            do {
+                try handler.perform([request])
+            } catch {
+                continuation.resume(returning: [])
+            }
+        }
+    }
+}
+#endif
+
+// MARK: - Clipboard Intelligence
+
+public enum ClipboardCommand: Equatable {
+    case read
+    case clear
+    case copy(text: String)
+    case summarize
+    case explain
+    case translate(language: String)
+    case none
+}
+
+public enum ClipboardIntelligence {
+    public static func parseCommand(_ text: String) -> ClipboardCommand {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "clipboard" || lower == "read clipboard" || lower == "what is on my clipboard" || lower == "show clipboard" || lower == "check clipboard" {
+            return .read
+        }
+        if lower == "clear clipboard" || lower == "empty clipboard" {
+            return .clear
+        }
+        if lower.hasPrefix("copy to clipboard ") {
+            let content = String(text.dropFirst("copy to clipboard ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .copy(text: content)
+        }
+        if lower == "summarize clipboard" || lower == "summarize my clipboard" {
+            return .summarize
+        }
+        if lower == "explain clipboard" || lower == "explain my clipboard" || lower == "explain code on clipboard" {
+            return .explain
+        }
+        if lower.hasPrefix("translate clipboard to ") {
+            let lang = String(lower.dropFirst("translate clipboard to ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return .translate(language: lang)
+        }
+        return .none
+    }
+
+    public static func read() -> String? {
+        #if canImport(AppKit)
+        return NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        #else
+        return nil
+        #endif
+    }
+
+    @discardableResult
+    public static func write(_ text: String) -> Bool {
+        #if canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(text, forType: .string)
+        #else
+        return false
+        #endif
+    }
+
+    public static func clear() {
+        #if canImport(AppKit)
+        NSPasteboard.general.clearContents()
+        #endif
+    }
+}
+
+// MARK: - System Control Suite
+
+public enum SystemControlCommand: Equatable {
+    case toggleDarkMode
+    case setDarkMode(enabled: Bool)
+    case muteVolume
+    case unmuteVolume
+    case lockScreen
+    case findFile(name: String)
+    case none
+}
+
+public enum SystemControlSuite {
+    public static func parseCommand(_ text: String) -> SystemControlCommand {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "toggle dark mode" || lower == "switch dark mode" {
+            return .toggleDarkMode
+        }
+        if lower == "dark mode on" || lower == "enable dark mode" || lower == "turn on dark mode" {
+            return .setDarkMode(enabled: true)
+        }
+        if lower == "dark mode off" || lower == "disable dark mode" || lower == "turn off dark mode" || lower == "light mode" {
+            return .setDarkMode(enabled: false)
+        }
+        if lower == "mute" || lower == "mute volume" || lower == "mute audio" || lower == "silence audio" {
+            return .muteVolume
+        }
+        if lower == "unmute" || lower == "unmute volume" || lower == "unmute audio" {
+            return .unmuteVolume
+        }
+        if lower == "lock screen" || lower == "lock mac" || lower == "lock my mac" {
+            return .lockScreen
+        }
+        if lower.hasPrefix("find file ") || lower.hasPrefix("locate file ") || lower.hasPrefix("search file ") {
+            let prefix = lower.hasPrefix("find file ") ? "find file " : (lower.hasPrefix("locate file ") ? "locate file " : "search file ")
+            let name = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !name.isEmpty {
+                return .findFile(name: name)
+            }
+        }
+        return .none
+    }
+
+    #if canImport(AppKit)
+    @MainActor
+    public static func execute(_ command: SystemControlCommand) -> String? {
+        switch command {
+        case .toggleDarkMode:
+            let script = "tell application \"System Events\" to tell appearance preferences to set dark mode to not dark mode"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+            return error == nil ? "Toggled Dark Mode." : "Could not toggle Dark Mode."
+
+        case .setDarkMode(let enabled):
+            let script = "tell application \"System Events\" to tell appearance preferences to set dark mode to \(enabled)"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+            return error == nil ? (enabled ? "Dark Mode enabled." : "Light Mode enabled.") : "Could not change appearance."
+
+        case .muteVolume:
+            let script = "set volume output muted true"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+            return error == nil ? "Audio muted." : "Could not mute audio."
+
+        case .unmuteVolume:
+            let script = "set volume output muted false"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+            return error == nil ? "Audio unmuted." : "Could not unmute audio."
+
+        case .lockScreen:
+            let script = "tell application \"System Events\" to sleep"
+            var error: NSDictionary?
+            NSAppleScript(source: script)?.executeAndReturnError(&error)
+            return error == nil ? "Putting display to sleep." : "Could not lock screen."
+
+        case .findFile(let name):
+            let results = findFilesSpotlight(named: name, limit: 5)
+            if results.isEmpty {
+                return "No files found matching \"\(name)\"."
+            } else {
+                let items = results.map { "• " + $0 }.joined(separator: "\n")
+                return "Found \(results.count) matching file\(results.count > 1 ? "s" : ""):\n\(items)"
+            }
+
+        case .none:
+            return nil
+        }
+    }
+
+    public static func findFilesSpotlight(named: String, limit: Int = 5) -> [String] {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
+        process.arguments = ["-name", named]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(decoding: data, as: UTF8.self)
+            let lines = output.components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && FileManager.default.fileExists(atPath: $0) }
+            return Array(lines.prefix(limit))
+        } catch {
+            return []
+        }
+    }
+    #endif
+}
+
+// MARK: - In-Place App Typing
+
+public enum InPlaceTypingCommand: Equatable {
+    case type(text: String)
+    case none
+}
+
+public enum InPlaceAppTyping {
+    public static func parseCommand(_ text: String) -> InPlaceTypingCommand {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased()
+        let prefixes = ["type this: ", "type this ", "type into app: ", "type into app ", "dictate: ", "write into app: "]
+        for prefix in prefixes {
+            if lower.hasPrefix(prefix) {
+                let content = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !content.isEmpty {
+                    return .type(text: content)
+                }
+            }
+        }
+        return .none
+    }
+
+    #if canImport(CoreGraphics)
+    @discardableResult
+    public static func type(text: String) -> Bool {
+        guard !text.isEmpty else { return false }
+        let source = CGEventSource(stateID: .hidSystemState)
+        for char in text.utf16 {
+            var c = char
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) else { return false }
+            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
+            down.post(tap: .cghidEventTap)
+
+            guard let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return false }
+            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
+            up.post(tap: .cghidEventTap)
+        }
+        return true
+    }
+    #else
+    public static func type(text: String) -> Bool { false }
+    #endif
+}
+
+// MARK: - Meeting & Focus Mode Awareness
+
+public enum MeetingFocusAwareness {
+    public static let knownMeetingAppSignatures: [String] = [
+        "zoom.us",
+        "us.zoom.xos",
+        "microsoft teams",
+        "com.microsoft.teams",
+        "com.microsoft.teams2",
+        "webex",
+        "cisco webex meetings",
+        "google meet",
+        "facetime",
+        "com.apple.facetime",
+        "slack",
+        "discord",
+        "obs",
+        "com.obsproject.obs-studio"
+    ]
+
+    public static func isMeetingApp(bundleIdentifier: String?, appName: String?) -> Bool {
+        let idLower = (bundleIdentifier ?? "").lowercased()
+        let nameLower = (appName ?? "").lowercased()
+        for sig in knownMeetingAppSignatures {
+            if idLower.contains(sig) || nameLower.contains(sig) {
+                return true
+            }
+        }
+        return false
+    }
+
+    #if canImport(AppKit)
+    public static func activeMeetingApp() -> String? {
+        let front = NSWorkspace.shared.frontmostApplication
+        if isMeetingApp(bundleIdentifier: front?.bundleIdentifier, appName: front?.localizedName) {
+            return front?.localizedName ?? "Meeting"
+        }
+        for app in NSWorkspace.shared.runningApplications {
+            if app.isActive && isMeetingApp(bundleIdentifier: app.bundleIdentifier, appName: app.localizedName) {
+                return app.localizedName ?? "Meeting"
+            }
+        }
+        return nil
+    }
+
+    public static func isMeetingActive() -> Bool {
+        activeMeetingApp() != nil
+    }
+    #else
+    public static func activeMeetingApp() -> String? { nil }
+    public static func isMeetingActive() -> Bool { false }
+    #endif
+}
+
+// MARK: - On-Screen Visual Guidance & Laser Pointer Overlay
+
+public enum LaserPointerCommand: Equatable {
+    case pointToCenter
+    case pointAt(x: CGFloat, y: CGFloat)
+    case highlightActiveWindow
+    case none
+}
+
+public enum LaserPointerParser {
+    public static func parse(_ text: String) -> LaserPointerCommand {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "point" || lower == "laser pointer" || lower == "show pointer" || lower == "where are you looking" || lower == "point here" {
+            return .pointToCenter
+        }
+        if lower == "highlight window" || lower == "highlight active window" || lower == "outline window" {
+            return .highlightActiveWindow
+        }
+        return .none
+    }
+}
+
+#if canImport(AppKit)
+@MainActor
+public final class ScreenGuideLaserOverlay {
+    public static let shared = ScreenGuideLaserOverlay()
+    private var window: NSPanel?
+
+    private init() {}
+
+    public func showPointer(at point: CGPoint, duration: TimeInterval = 2.5) {
+        dismiss()
+        let size: CGFloat = 80
+        let frame = NSRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
+        let panel = NSPanel(
+            contentRect: frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient]
+
+        let ringView = LaserRingView(frame: NSRect(origin: .zero, size: frame.size))
+        panel.contentView = ringView
+        panel.orderFrontRegardless()
+        self.window = panel
+
+        Task { @MainActor [weak self, weak panel] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            if self?.window === panel {
+                self?.dismiss()
+            }
+        }
+    }
+
+    public func highlightRect(_ rect: CGRect, duration: TimeInterval = 3.0) {
+        dismiss()
+        let inset = rect.insetBy(dx: -8, dy: -8)
+        let panel = NSPanel(
+            contentRect: inset,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.level = .floating
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient]
+
+        let rectView = LaserBoxView(frame: NSRect(origin: .zero, size: inset.size))
+        panel.contentView = rectView
+        panel.orderFrontRegardless()
+        self.window = panel
+
+        Task { @MainActor [weak self, weak panel] in
+            try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+            if self?.window === panel {
+                self?.dismiss()
+            }
+        }
+    }
+
+    public func dismiss() {
+        window?.orderOut(nil)
+        window = nil
+    }
+}
+
+private final class LaserRingView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let radius = bounds.width / 2 - 6
+
+        ctx.saveGState()
+        // Outer glowing pulse
+        ctx.setStrokeColor(NSColor.systemRed.withAlphaComponent(0.4).cgColor)
+        ctx.setLineWidth(6.0)
+        ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        ctx.strokePath()
+
+        // Core bright ring
+        ctx.setStrokeColor(NSColor.systemRed.cgColor)
+        ctx.setLineWidth(2.5)
+        ctx.addArc(center: center, radius: radius, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        ctx.strokePath()
+
+        // Center dot
+        ctx.setFillColor(NSColor.systemRed.cgColor)
+        ctx.addArc(center: center, radius: 4, startAngle: 0, endAngle: .pi * 2, clockwise: false)
+        ctx.fillPath()
+        ctx.restoreGState()
+    }
+}
+
+private final class LaserBoxView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 4), xRadius: 8, yRadius: 8)
+
+        NSGraphicsContext.current?.saveGraphicsState()
+        NSColor.systemOrange.withAlphaComponent(0.4).setStroke()
+        path.lineWidth = 5.0
+        path.stroke()
+
+        NSColor.systemOrange.setStroke()
+        path.lineWidth = 2.0
+        path.stroke()
+        NSGraphicsContext.current?.restoreGraphicsState()
+    }
+}
+#endif
+

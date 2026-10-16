@@ -1225,3 +1225,71 @@ final class SmartTimerTests: XCTestCase {
         XCTAssertEqual(SmartTimerScheduler.formatDuration(3665), "1h 1m")
     }
 }
+
+final class InPlaceAppTypingTests: XCTestCase {
+    func testParseCommand() {
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type this: Hello World"), .type(text: "Hello World"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type this draft response"), .type(text: "draft response"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type into app: func main()"), .type(text: "func main()"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("dictate: Dear team,"), .type(text: "Dear team,"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("write into app: notes"), .type(text: "notes"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("hello world"), .none)
+    }
+}
+
+final class MeetingFocusAwarenessTests: XCTestCase {
+    func testMeetingAppSignatures() {
+        XCTAssertTrue(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "us.zoom.xos", appName: "zoom.us"))
+        XCTAssertTrue(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.microsoft.teams2", appName: "Microsoft Teams"))
+        XCTAssertTrue(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.apple.FaceTime", appName: "FaceTime"))
+        XCTAssertTrue(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.google.Chrome", appName: "Google Meet - Sync"))
+        XCTAssertTrue(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.tinyspeck.slackmacgap", appName: "Slack"))
+        XCTAssertFalse(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.apple.dt.Xcode", appName: "Xcode"))
+        XCTAssertFalse(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.apple.Safari", appName: "Safari"))
+        XCTAssertFalse(MeetingFocusAwareness.isMeetingApp(bundleIdentifier: "com.apple.finder", appName: "Finder"))
+    }
+}
+
+final class LaserPointerParserTests: XCTestCase {
+    func testLaserCommands() {
+        XCTAssertEqual(LaserPointerParser.parse("point"), .pointToCenter)
+        XCTAssertEqual(LaserPointerParser.parse("laser pointer"), .pointToCenter)
+        XCTAssertEqual(LaserPointerParser.parse("show pointer"), .pointToCenter)
+        XCTAssertEqual(LaserPointerParser.parse("where are you looking"), .pointToCenter)
+        XCTAssertEqual(LaserPointerParser.parse("highlight window"), .highlightActiveWindow)
+        XCTAssertEqual(LaserPointerParser.parse("outline window"), .highlightActiveWindow)
+        XCTAssertEqual(LaserPointerParser.parse("what is this"), .none)
+    }
+}
+
+final class ClipboardIntelligenceTests: XCTestCase {
+    func testClipboardCommands() {
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("read clipboard"), .read)
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("what is on my clipboard"), .read)
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("clear clipboard"), .clear)
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("empty clipboard"), .clear)
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("copy to clipboard Swift rocks"), .copy(text: "Swift rocks"))
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("summarize clipboard"), .summarize)
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("explain clipboard"), .explain)
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("translate clipboard to French"), .translate(language: "french"))
+        XCTAssertEqual(ClipboardIntelligence.parseCommand("unrelated query"), .none)
+    }
+}
+
+final class SystemControlSuiteTests: XCTestCase {
+    func testSystemControlCommands() {
+        XCTAssertEqual(SystemControlSuite.parseCommand("toggle dark mode"), .toggleDarkMode)
+        XCTAssertEqual(SystemControlSuite.parseCommand("dark mode on"), .setDarkMode(enabled: true))
+        XCTAssertEqual(SystemControlSuite.parseCommand("turn off dark mode"), .setDarkMode(enabled: false))
+        XCTAssertEqual(SystemControlSuite.parseCommand("light mode"), .setDarkMode(enabled: false))
+        XCTAssertEqual(SystemControlSuite.parseCommand("mute volume"), .muteVolume)
+        XCTAssertEqual(SystemControlSuite.parseCommand("silence audio"), .muteVolume)
+        XCTAssertEqual(SystemControlSuite.parseCommand("unmute volume"), .unmuteVolume)
+        XCTAssertEqual(SystemControlSuite.parseCommand("lock screen"), .lockScreen)
+        XCTAssertEqual(SystemControlSuite.parseCommand("lock my mac"), .lockScreen)
+        XCTAssertEqual(SystemControlSuite.parseCommand("find file notes.txt"), .findFile(name: "notes.txt"))
+        XCTAssertEqual(SystemControlSuite.parseCommand("locate file main.swift"), .findFile(name: "main.swift"))
+        XCTAssertEqual(SystemControlSuite.parseCommand("what time is it"), .none)
+    }
+}
+

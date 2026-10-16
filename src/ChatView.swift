@@ -332,6 +332,13 @@ final class ChatModel: ObservableObject {
         }
         clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
 
+        let suiteCmd = SystemControlSuite.parseCommand(clean)
+        if suiteCmd != .none {
+            if let result = SystemControlSuite.execute(suiteCmd) {
+                return result
+            }
+        }
+
         // 1. User Correction: "You did not move yourself" / "Fix it"
         if clean.contains("did not move") || clean.contains("didn't move") || (clean.contains("fix it") && (clean.contains("move") || clean.contains("screen"))) {
             DiagnosticChatLogger.recordFailure(
@@ -1021,6 +1028,7 @@ final class ChatModel: ObservableObject {
         guard !shuttingDown, visible, phase == .idle, !followupPending,
               !interactionPaused, !historyPresented, !hovered, !externalInteractionBusy, !controlInteraction,
               runtime.isReady(),
+              !MeetingFocusAwareness.isMeetingActive(),
               proactiveEvidence.isRecent(now: now), proactive.activeOpportunity?.id == opportunity.id else {
             proactive.complete(id: opportunity.id); return
         }
@@ -1336,6 +1344,124 @@ final class ChatModel: ObservableObject {
             return
         }
 
+        // In-Place App Typing
+        let typingCmd = InPlaceAppTyping.parseCommand(text)
+        if case .type(let content) = typingCmd {
+            InPlaceAppTyping.type(text: content)
+            respondDirectly("Typed into the active application.", id: id)
+            return
+        }
+
+        // On-Screen Laser Pointer & Guidance
+        let laserCmd = LaserPointerParser.parse(text)
+        switch laserCmd {
+        case .pointToCenter:
+            let center = NSScreen.main.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) } ?? CGPoint(x: 500, y: 500)
+            ScreenGuideLaserOverlay.shared.showPointer(at: center)
+            respondDirectly("Showing laser pointer guide.", id: id)
+            return
+        case .highlightActiveWindow:
+            if let screen = NSScreen.main {
+                let centerBox = CGRect(x: screen.frame.midX - 300, y: screen.frame.midY - 200, width: 600, height: 400)
+                ScreenGuideLaserOverlay.shared.highlightRect(centerBox)
+                let desktop = ActiveDesktopContext.current()
+                let name = desktop.appName ?? "active window"
+                respondDirectly("Highlighting \(name).", id: id)
+                return
+            }
+        case .pointAt(let x, let y):
+            ScreenGuideLaserOverlay.shared.showPointer(at: CGPoint(x: x, y: y))
+            respondDirectly("Pointing to coordinates (\(Int(x)), \(Int(y))).", id: id)
+            return
+        case .none:
+            break
+        }
+
+        // Native Screen OCR
+        let lowerScreen = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lowerScreen == "copy screen text" || lowerScreen == "copy text from screen" || lowerScreen == "ocr screen" || lowerScreen == "extract screen text" || lowerScreen == "extract text from screen" {
+            work = Task { [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                do {
+                    let lines = try await self.screen.extractVisibleScreenText()
+                    guard self.gate.accepts(id), !Task.isCancelled else { return }
+                    if lines.isEmpty {
+                        self.respondDirectly("No text detected on screen.", id: id)
+                    } else {
+                        let joined = lines.map(\.text).joined(separator: "\n")
+                        ClipboardIntelligence.write(joined)
+                        self.respondDirectly("Extracted \(lines.count) lines of text from your screen and copied to clipboard.", id: id)
+                    }
+                } catch {
+                    self.respondDirectly("Could not extract screen text: \(error.localizedDescription)", id: id)
+                }
+            }
+            return
+        }
+        if lowerScreen == "read screen text" || lowerScreen == "read text on screen" || lowerScreen == "what text is on my screen" || lowerScreen == "what's the text on my screen" {
+            work = Task { [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                do {
+                    let lines = try await self.screen.extractVisibleScreenText()
+                    guard self.gate.accepts(id), !Task.isCancelled else { return }
+                    if lines.isEmpty {
+                        self.respondDirectly("No text detected on screen.", id: id)
+                    } else {
+                        let textSample = lines.prefix(10).map(\.text).joined(separator: "\n")
+                        self.respondDirectly("I found \(lines.count) lines of text on screen:\n\n\(textSample)", id: id)
+                    }
+                } catch {
+                    self.respondDirectly("Could not read screen text: \(error.localizedDescription)", id: id)
+                }
+            }
+            return
+        }
+
+        // Advanced Clipboard Intelligence
+        var effectivePromptOverride: String? = nil
+        let clipboardCmd = ClipboardIntelligence.parseCommand(text)
+        switch clipboardCmd {
+        case .read:
+            if let content = ClipboardIntelligence.read(), !content.isEmpty {
+                let preview = content.count > 300 ? String(content.prefix(300)) + "…" : content
+                respondDirectly("Clipboard content: \(preview)", id: id)
+            } else {
+                respondDirectly("Clipboard is empty.", id: id)
+            }
+            return
+        case .clear:
+            ClipboardIntelligence.clear()
+            respondDirectly("Clipboard cleared.", id: id)
+            return
+        case .copy(let textToCopy):
+            ClipboardIntelligence.write(textToCopy)
+            respondDirectly("Copied to clipboard.", id: id)
+            return
+        case .summarize:
+            if let content = ClipboardIntelligence.read(), !content.isEmpty {
+                effectivePromptOverride = "Please summarize the following clipboard text concisely:\n\n\(content)"
+            } else {
+                respondDirectly("Clipboard is empty, nothing to summarize.", id: id)
+                return
+            }
+        case .explain:
+            if let content = ClipboardIntelligence.read(), !content.isEmpty {
+                effectivePromptOverride = "Please explain the following clipboard content concisely:\n\n\(content)"
+            } else {
+                respondDirectly("Clipboard is empty, nothing to explain.", id: id)
+                return
+            }
+        case .translate(let language):
+            if let content = ClipboardIntelligence.read(), !content.isEmpty {
+                effectivePromptOverride = "Please translate the following clipboard text into \(language):\n\n\(content)"
+            } else {
+                respondDirectly("Clipboard is empty, nothing to translate.", id: id)
+                return
+            }
+        case .none:
+            break
+        }
+
         let cleanLower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!."))
         if cleanLower == "what time is it" || cleanLower == "what is the time" || cleanLower == "what's the time" || cleanLower == "current time" || cleanLower == "time" {
             let formatter = DateFormatter()
@@ -1380,6 +1506,9 @@ final class ChatModel: ObservableObject {
                 try await self.warmup.wait(turn: id)
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 var chatInput = snapshot
+                if let effectivePromptOverride, let lastIdx = chatInput.indices.last {
+                    chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: effectivePromptOverride)
+                }
                 let facts = await (try? self.ftsStore.searchMemories(query: text, limit: 3)) ?? []
                 let evidence = await (try? self.ftsStore.searchEvidence(query: text, limit: 2)) ?? []
                 var memoryContext: [String] = []

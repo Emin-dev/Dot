@@ -120,35 +120,38 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - `ActiveDesktopContext` automatically extracts frontmost application name, window title, and highlighted selection (`kAXSelectedTextAttribute`).
   - Seamlessly augments conversational prompts ("explain this", "summarize this", "fix this error") with live desktop context.
 
-### Upcoming & Next-to-Add Capabilities (Roadmap)
-- [ ] **1. Native Screen OCR & Vision Understanding:**
+- [x] **Native Screen OCR & Vision Understanding:**
   - Local text recognition via Apple's `Vision.framework` (`VNRecognizeTextRequest`) on screen snapshots.
-  - Conversational visual queries ("read what's on my screen", "copy text from the active window", "what button is highlighted?").
+  - Conversational visual queries ("read what's on my screen", "copy screen text", "extract screen text").
   - Zero cloud latency and full privacy preservation.
-- [ ] **2. Advanced Clipboard Intelligence & Actions:**
-  - Automatic clipboard transformation: "summarize clipboard", "translate clipboard to Spanish", "explain code on clipboard", "format clipboard as JSON/markdown".
-  - One-click or conversational copy-back to clipboard.
-- [ ] **3. Comprehensive System & Desktop Control Suite:**
-  - Voice/typed commands for Dark Mode toggle, screen brightness adjustments, Wi-Fi status, Do Not Disturb / Focus Mode.
-  - File finding with Spotlight `mdfind` ("find file project_plan.pdf on my Mac").
-- [ ] **4. Window Layout & Workspace Management:**
+- [x] **Advanced Clipboard Intelligence & Transformations:**
+  - Automatic clipboard transformation: "summarize clipboard", "translate clipboard to <language>", "explain clipboard", "copy to clipboard <text>".
+  - One-click and conversational copy-back to clipboard with immediate feedback.
+- [x] **Comprehensive System & Desktop Control Suite:**
+  - Voice/typed commands for Dark Mode toggle/settings, volume mute/unmute, sleep display/lock screen.
+  - Local file finding with Spotlight `mdfind` ("find file <name>", "locate file <name>").
+- [x] **On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
+  - Transparent, non-activating, click-through overlay window rendering smooth glowing rings and callout boxes (`ScreenGuideLaserOverlay`).
+  - Conversational triggering via "point", "laser pointer", "highlight active window", or coordinate targets.
+- [x] **In-Place App Typing & Ghost Text (Type-into-App):**
+  - Direct text dictation and insertion into the currently focused application's text field via macOS CoreGraphics synthesized Unicode keyboard events (`InPlaceAppTyping.type`).
+  - Conversational commands: "type this: <text>", "type into app: <text>", "dictate: <text>".
+- [x] **Focus & Meeting Mode Awareness:**
+  - Automatically suppresses proactive spoken interruptions and suggestions when meeting or recording apps (Zoom, Teams, Meet, Webex, FaceTime, Slack, OBS) are active.
+
+### Upcoming & Next-to-Add Capabilities (Roadmap)
+- [ ] **1. Window Layout & Workspace Management:**
   - Window snapping via macOS Accessibility API ("snap window to left half", "tile windows", "show desktop", "minimize background apps").
-- [ ] **5. Real-Time Neural Diagnostics & Metrics Inspector:**
+- [ ] **2. Real-Time Neural Diagnostics & Metrics Inspector:**
   - Live HUD / status panel showing RAM consumption, active model tokens/second generation speed, KV-cache pressure, active audio route, and SQLite FTS5 database count.
-- [ ] **6. Audio Route Hot-Swapping & Background Ducking:**
+- [ ] **3. Audio Route Hot-Swapping & Background Ducking:**
   - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
   - Automatic system audio ducking while Dot is audibly speaking.
-- [ ] **7. On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
-  - Transparent, non-activating, click-through overlay window rendering smooth visual callouts, pulsing highlight rings, and animated arrows to visually point out items on screen.
-- [ ] **8. In-Place App Typing & Ghost Text (Type-into-App):**
-  - Direct text dictation and insertion into the currently focused application's text field (Mail, VS Code, Slack, Notes) via macOS Accessibility and synthesized keyboard events.
-- [ ] **9. Action Approval Cards & Non-Destructive Guard:**
+- [ ] **4. Action Approval Cards & Non-Destructive Guard:**
   - Interactive confirmation cards for destructive or external actions (file deletion, terminal commands, external communications) with clear parameter previews and 1-click Approve / Deny.
-- [ ] **10. Proactive Idle & Stuck Detection:**
+- [ ] **5. Proactive Idle & Stuck Detection:**
   - Intelligently recognizes when the user has encountered a persistent error or has been idle on a task for >3 minutes, offering helpful guidance.
-- [ ] **11. Focus & Meeting Mode Awareness:**
-  - Automatically suppresses proactive spoken interruptions when meeting or recording apps (Zoom, Google Meet, FaceTime) are actively using camera or microphone.
-- [ ] **12. Contextual App Workflows & Automations:**
+- [ ] **6. Contextual App Workflows & Automations:**
   - Contextual awareness of active developer/creative tools (Xcode, Safari, Terminal, Figma) providing app-specific quick assists and automations.
 
 These short-list and roadmap boxes describe the full target capability. The candidate ledger below may mark narrower source/check milestones without claiming installation or full product completion.

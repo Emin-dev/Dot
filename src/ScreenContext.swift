@@ -144,6 +144,26 @@ final class ScreenContext {
             throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission
         }
     }
+    func extractVisibleScreenText() async throws -> [ScreenOCRLine] {
+        guard Self.hasScreenAccess() else { throw ScreenFailure.permission }
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        let displayID = (selected?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+        guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { throw ScreenFailure.unavailable }
+        let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+        let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+        let configuration = SCStreamConfiguration()
+        configuration.width = display.width
+        configuration.height = display.height
+        configuration.showsCursor = false
+        configuration.capturesAudio = false
+        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        #if canImport(Vision) && canImport(CoreGraphics)
+        return await NativeScreenOCR.recognizeText(in: image)
+        #else
+        return []
+        #endif
+    }
     func cancel() { gate.cancel(); permission.cancel(); encoding?.task.cancel(); encoding = nil }
     enum ScreenFailure: LocalizedError {
         case permission, unavailable, unsupported
