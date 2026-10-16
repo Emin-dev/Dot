@@ -1258,7 +1258,9 @@ final class ChatModel: ObservableObject {
                 failureStage = .voice
                 do {
                     try self.runtime.startVoice(id)
-                    let effectiveQuestion = question ?? (result.text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?") ? "" : nil)
+                    // Same rule as an ordinary turn: punctuation never stands in for a
+                    // validated question intent.
+                    let effectiveQuestion = question
                     do {
                         let question = effectiveQuestion
                         self.followup.generationFinished(turn: id, hasQuestion: question != nil)
@@ -2177,7 +2179,9 @@ final class ChatModel: ObservableObject {
                     self.enqueueVoice(confirmation, id: id)
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                let hasQ = question != nil || self.answer.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+                // Only a validated question intent may arm the microphone. A reply that
+                // merely ends in a question mark is ordinary punctuation, not consent to listen.
+                let hasQ = question != nil
                 let shouldFollowup = !self.voiceDeliveryFailed && hasQ
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
