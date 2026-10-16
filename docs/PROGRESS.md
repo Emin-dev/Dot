@@ -1,5 +1,21 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 04:45 UTC
+
+- **Direct Unicode `type_text` & `press_key` Actions + LLM Tool Exposure:**
+  - Upgraded `InPlaceAppTyping` in `src/InteractionCore.swift` to type any Unicode string character-by-character (`keyboardSetUnicodeString` per character grapheme) into whichever external app window has focus (automatically restoring focus to the last active external app if Dot's own input panel was briefly key).
+  - Implemented `press_key` (`InPlaceAppTyping.parseKeySpec` & `performPressKey`) supporting special keys (`Enter`/`Return`, `Tab`, `Escape`, `Backspace`/`Delete`, `ForwardDelete`, `Space`, arrow keys `Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`, `PageDown`, `F1–F12`) and modifier combinations (`Cmd+C`, `Cmd+V`, `Cmd+A`, `Cmd+X`, `Cmd+Z`, `Cmd+S`, `Shift+Enter`, `Cmd+Shift+Z`, etc.).
+  - Exposed `type_text` and `press_key` as strict function tools in `EngineManager.performChat` (`src/Engine.swift`) and `QuestionIntentStream` (`src/InteractionCore.swift`), wired via `onToolAction` in `src/ChatView.swift`.
+  - Added macOS Accessibility permission verification (`AXIsProcessTrusted()`) before executing typing/key-press actions, with a friendly prompt guiding the user to **System Settings > Privacy & Security > Accessibility**.
+  - Added post-action confirmation naming what was typed/pressed and into which focused app (e.g., `"Typed 'Continue' into Antigravity (the focused app)."`).
+- **10-Minute Proactive Self-Reflection & Antigravity Auto-Suggestion Loop:**
+  - Built `IdleSelfReflectionEngine` in `src/InteractionCore.swift` and wired a background ticker in `src/ChatView.swift`.
+  - Every 10 minutes of user inactivity, Dot reads its conversation logs (`dot_chat_log.txt`), detects past errors or improvement opportunities, and automatically writes a concrete improvement suggestion into Antigravity's input (and clipboard).
+- **Proactive Duplicate Question Deduplication & Audit Enhancements:**
+  - Fixed duplicate question repetition in `ProactiveReplyBuffer.Result.text` (`src/ProactiveBehavior.swift`).
+  - Added `WindowLayoutManager`, `SimulatorControlSuite`, `SelfCodebaseReader`, and `NeuralMetricsInspector`.
+  - Passed 52/52 static guardrails and 59/59 unit tests in `DotTests.xctest`.
+
 ## Published checkpoint — 2026-10-16 04:05 UTC
 
 - **Native Screen OCR & Vision Understanding:**

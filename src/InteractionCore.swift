@@ -537,10 +537,17 @@ struct QuestionReplyGate {
 /// The controller still needs same-turn success plus the final question's actual playback completion.
 struct QuestionIntentStream {
     struct Question: Equatable, Sendable { let text: String }
+    enum ToolAction: Equatable, Sendable {
+        case typeText(String)
+        case pressKey(String)
+    }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.
     private static let questionObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"question"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
+    private static let textObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"text"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
+    private static let keyObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"key"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
+    private static let allowedToolNames: Set<String> = ["ask_user", "type_text", "press_key"]
     private var callID: String?
     private var functionName: String?
     private var arguments = ""
@@ -591,8 +598,9 @@ struct QuestionIntentStream {
             if let type = call["type"] { guard type as? String == "function" else { throw Failure.invalid } }
             guard let function = call["function"] as? [String: Any] else { throw Failure.invalid }
             if let name = function["name"] {
-                guard name as? String == "ask_user", functionName == nil || functionName == "ask_user" else { throw Failure.invalid }
-                functionName = "ask_user"
+                guard let nameStr = name as? String, Self.allowedToolNames.contains(nameStr),
+                      functionName == nil || functionName == nameStr else { throw Failure.invalid }
+                functionName = nameStr
             }
             if let fragment = function["arguments"] {
                 guard let fragment = fragment as? String, arguments.utf8.count + fragment.utf8.count <= 2048 else { throw Failure.invalid }
@@ -610,7 +618,12 @@ struct QuestionIntentStream {
             guard terminal == "stop" else { throw Failure.invalid }
             return nil
         }
-        guard terminal == "tool_calls", callID != nil, functionName == "ask_user",
+        guard terminal == "tool_calls", callID != nil, let functionName else { throw Failure.invalid }
+        if functionName == "type_text" || functionName == "press_key" {
+            _ = try completedToolAction()
+            return nil
+        }
+        guard functionName == "ask_user",
               arguments.range(of: Self.questionObjectPattern, options: .regularExpression) != nil,
               let data = arguments.data(using: .utf8), let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["question"], let text = object["question"] as? String,
@@ -618,6 +631,33 @@ struct QuestionIntentStream {
               text.count <= 400, text.utf8.count <= 1600,
               text.unicodeScalars.allSatisfy({ $0.value >= 32 && $0.value != 127 }) else { throw Failure.invalid }
         return Question(text: text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    func completedToolAction() throws -> ToolAction? {
+        guard !invalid, done, sawCall else { return nil }
+        guard terminal == "tool_calls", callID != nil, let functionName else { throw Failure.invalid }
+        switch functionName {
+        case "type_text":
+            guard arguments.range(of: Self.textObjectPattern, options: .regularExpression) != nil,
+                  let data = arguments.data(using: .utf8),
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(object.keys) == ["text"],
+                  let text = object["text"] as? String,
+                  !text.isEmpty,
+                  text.count <= 1500,
+                  text.utf8.count <= 2048 else { throw Failure.invalid }
+            return .typeText(text)
+        case "press_key":
+            guard arguments.range(of: Self.keyObjectPattern, options: .regularExpression) != nil,
+                  let data = arguments.data(using: .utf8),
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(object.keys) == ["key"],
+                  let key = object["key"] as? String else { throw Failure.invalid }
+            let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedKey.isEmpty, trimmedKey.count <= 100 else { throw Failure.invalid }
+            return .pressKey(trimmedKey)
+        default:
+            return nil
+        }
     }
     private static func zero(_ value: Any) -> Bool {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return false }
@@ -1326,26 +1366,350 @@ public enum SystemControlSuite {
     #endif
 }
 
-// MARK: - In-Place App Typing
+// MARK: - In-Place App Typing & Key-Press Actions
 
-public enum InPlaceTypingCommand: Equatable {
+#if canImport(ApplicationServices)
+import ApplicationServices
+#endif
+
+public enum InPlaceTypingCommand: Equatable, Sendable {
     case type(text: String)
+    case pressKey(key: String)
+    case typeAndSubmit(text: String)
     case none
 }
 
 public enum InPlaceAppTyping {
+    public struct KeySpec: Equatable, Sendable {
+        public let keyCode: UInt16
+        public let flags: UInt64
+        public let displayName: String
+
+        public init(keyCode: UInt16, flags: UInt64 = 0, displayName: String) {
+            self.keyCode = keyCode
+            self.flags = flags
+            self.displayName = displayName
+        }
+    }
+
+    public static let accessibilityPermissionPromptMessage =
+        "I need Accessibility permission to type or press keys into other apps. Please grant Dot access in System Settings > Privacy & Security > Accessibility."
+
+    private static let lock = NSLock()
+    private static var lastExternalAppPID: pid_t?
+    private static var lastExternalAppName: String?
+
+    public static func noteExternalApplication(pid: pid_t, name: String?) {
+        lock.lock()
+        lastExternalAppPID = pid
+        if let name, !name.isEmpty {
+            lastExternalAppName = name
+        }
+        lock.unlock()
+    }
+
+    public static func isAccessibilityTrusted(promptIfNeeded: Bool = false) -> Bool {
+        #if canImport(ApplicationServices)
+        if AXIsProcessTrusted() {
+            return true
+        }
+        if promptIfNeeded {
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+            #if canImport(AppKit)
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
+            #endif
+        }
+        return AXIsProcessTrusted()
+        #else
+        return false
+        #endif
+    }
+
+    #if canImport(AppKit)
+    @MainActor
+    public static func prepareFocusedTargetApp() -> String? {
+        let ownBundleID = Bundle.main.bundleIdentifier
+        if let front = NSWorkspace.shared.frontmostApplication,
+           front.bundleIdentifier != ownBundleID {
+            noteExternalApplication(pid: front.processIdentifier, name: front.localizedName)
+            return front.localizedName
+        }
+
+        // Dot's own panel is currently frontmost; restore focus to the previous external app.
+        lock.lock()
+        let savedPID = lastExternalAppPID
+        let savedName = lastExternalAppName
+        lock.unlock()
+
+        if let savedPID,
+           let app = NSRunningApplication(processIdentifier: savedPID),
+           !app.isTerminated,
+           app.bundleIdentifier != ownBundleID {
+            app.activate()
+            usleep(75_000)
+            return app.localizedName ?? savedName
+        }
+
+        #if canImport(CoreGraphics)
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for entry in list {
+            guard let layer = entry[kCGWindowLayer as String] as? Int, layer == 0,
+                  let pid = entry[kCGWindowOwnerPID as String] as? pid_t, pid != ownPID,
+                  let app = NSRunningApplication(processIdentifier: pid),
+                  app.activationPolicy == .regular else { continue }
+            noteExternalApplication(pid: pid, name: app.localizedName)
+            app.activate()
+            usleep(75_000)
+            return app.localizedName
+        }
+        #endif
+
+        return savedName
+    }
+    #endif
+
+    public static func parseKeySpec(_ raw: String) -> KeySpec? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        // Split modifier combinations like "Cmd+C", "Command + Shift + Z", "Ctrl-C", "Shift+Enter"
+        let normalized = trimmed
+            .replacingOccurrences(of: " + ", with: "+")
+            .replacingOccurrences(of: "+", with: " ")
+        let rawTokens = normalized.split(whereSeparator: \.isWhitespace).map { String($0) }
+        let tokens: [String]
+        if rawTokens.count == 1 && trimmed.contains("-") && trimmed.count > 1 {
+            tokens = trimmed.split(separator: "-").map { String($0).trimmingCharacters(in: .whitespaces) }
+        } else {
+            tokens = rawTokens
+        }
+        guard !tokens.isEmpty else { return nil }
+
+        let cmdMask: UInt64 = 0x100000     // CGEventFlags.maskCommand
+        let shiftMask: UInt64 = 0x020000   // CGEventFlags.maskShift
+        let altMask: UInt64 = 0x080000     // CGEventFlags.maskAlternate
+        let ctrlMask: UInt64 = 0x040000    // CGEventFlags.maskControl
+
+        var flags: UInt64 = 0
+        var modNames: [String] = []
+        var baseToken: String?
+
+        for (index, token) in tokens.enumerated() {
+            let lower = token.lowercased()
+            let isLast = (index == tokens.count - 1)
+            if !isLast {
+                switch lower {
+                case "cmd", "command", "⌘", "meta", "super":
+                    if (flags & cmdMask) == 0 { flags |= cmdMask; modNames.append("Cmd") }
+                    continue
+                case "shift", "⇧":
+                    if (flags & shiftMask) == 0 { flags |= shiftMask; modNames.append("Shift") }
+                    continue
+                case "opt", "option", "alt", "⌥":
+                    if (flags & altMask) == 0 { flags |= altMask; modNames.append("Option") }
+                    continue
+                case "ctrl", "control", "⌃":
+                    if (flags & ctrlMask) == 0 { flags |= ctrlMask; modNames.append("Ctrl") }
+                    continue
+                default:
+                    break
+                }
+            }
+            if baseToken == nil {
+                baseToken = token
+            } else {
+                baseToken = (baseToken ?? "") + "_" + token
+            }
+        }
+
+        guard let keyStr = baseToken?.lowercased() else { return nil }
+
+        let specialKeys: [String: (code: UInt16, label: String)] = [
+            "enter": (36, "Enter"),
+            "return": (36, "Enter"),
+            "ret": (36, "Enter"),
+            "⏎": (36, "Enter"),
+            "↩": (36, "Enter"),
+            "kp_enter": (76, "Enter"),
+            "numpad_enter": (76, "Enter"),
+            "tab": (48, "Tab"),
+            "⇥": (48, "Tab"),
+            "space": (49, "Space"),
+            "spacebar": (49, "Space"),
+            "space_bar": (49, "Space"),
+            "␣": (49, "Space"),
+            "backspace": (51, "Backspace"),
+            "delete": (51, "Backspace"),
+            "del": (51, "Backspace"),
+            "bksp": (51, "Backspace"),
+            "⌫": (51, "Backspace"),
+            "forwarddelete": (117, "Forward Delete"),
+            "forward_delete": (117, "Forward Delete"),
+            "fwddel": (117, "Forward Delete"),
+            "⌦": (117, "Forward Delete"),
+            "escape": (53, "Escape"),
+            "esc": (53, "Escape"),
+            "⎋": (53, "Escape"),
+            "up": (126, "Up Arrow"),
+            "uparrow": (126, "Up Arrow"),
+            "up_arrow": (126, "Up Arrow"),
+            "arrowup": (126, "Up Arrow"),
+            "arrow_up": (126, "Up Arrow"),
+            "↑": (126, "Up Arrow"),
+            "down": (125, "Down Arrow"),
+            "downarrow": (125, "Down Arrow"),
+            "down_arrow": (125, "Down Arrow"),
+            "arrowdown": (125, "Down Arrow"),
+            "arrow_down": (125, "Down Arrow"),
+            "↓": (125, "Down Arrow"),
+            "left": (123, "Left Arrow"),
+            "leftarrow": (123, "Left Arrow"),
+            "left_arrow": (123, "Left Arrow"),
+            "arrowleft": (123, "Left Arrow"),
+            "arrow_left": (123, "Left Arrow"),
+            "←": (123, "Left Arrow"),
+            "right": (124, "Right Arrow"),
+            "rightarrow": (124, "Right Arrow"),
+            "right_arrow": (124, "Right Arrow"),
+            "arrowright": (124, "Right Arrow"),
+            "arrow_right": (124, "Right Arrow"),
+            "→": (124, "Right Arrow"),
+            "home": (115, "Home"),
+            "end": (119, "End"),
+            "pageup": (116, "Page Up"),
+            "page_up": (116, "Page Up"),
+            "pgup": (116, "Page Up"),
+            "pagedown": (121, "Page Down"),
+            "page_down": (121, "Page Down"),
+            "pgdn": (121, "Page Down"),
+            "f1": (122, "F1"),
+            "f2": (120, "F2"),
+            "f3": (99, "F3"),
+            "f4": (118, "F4"),
+            "f5": (96, "F5"),
+            "f6": (97, "F6"),
+            "f7": (98, "F7"),
+            "f8": (100, "F8"),
+            "f9": (101, "F9"),
+            "f10": (109, "F10"),
+            "f11": (103, "F11"),
+            "f12": (111, "F12")
+        ]
+
+        if let special = specialKeys[keyStr] {
+            let label = modNames.isEmpty ? special.label : (modNames + [special.label]).joined(separator: "+")
+            return KeySpec(keyCode: special.code, flags: flags, displayName: label)
+        }
+
+        let characterKeyCodes: [String: UInt16] = [
+            "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9,
+            "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
+            "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25, "7": 26,
+            "-": 27, "8": 28, "0": 29, "]": 30, "o": 31, "u": 32, "[": 33, "i": 34, "p": 35,
+            "l": 37, "j": 38, "'": 39, "k": 40, ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45,
+            "m": 46, ".": 47, "`": 50
+        ]
+
+        if let code = characterKeyCodes[keyStr] {
+            let keyLabel = keyStr.uppercased()
+            let label = modNames.isEmpty ? keyLabel : (modNames + [keyLabel]).joined(separator: "+")
+            return KeySpec(keyCode: code, flags: flags, displayName: label)
+        }
+
+        return nil
+    }
+
     public static func parseCommand(_ text: String) -> InPlaceTypingCommand {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lower = trimmed.lowercased()
-        let prefixes = ["type this: ", "type this ", "type into app: ", "type into app ", "dictate: ", "write into app: "]
-        for prefix in prefixes {
+        guard !trimmed.isEmpty, trimmed.count <= 2000 else { return .none }
+
+        var working = trimmed
+        let politePrefixes = [
+            "can you please ", "could you please ", "can you ", "could you ", "would you ",
+            "please ", "hey dot, ", "hey dot ", "dot, ", "dot ", "just "
+        ]
+        for prefix in politePrefixes {
+            if working.lowercased().hasPrefix(prefix) {
+                working = String(working.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        let lower = working.lowercased()
+
+        // 1. Check for "press <key>" / "hit <key>" / "send <key>"
+        let keyVerbs = ["press ", "hit ", "tap ", "send key "]
+        for verb in keyVerbs {
+            if lower.hasPrefix(verb) {
+                var candidate = String(working.dropFirst(verb.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                candidate = candidate.trimmingCharacters(in: CharacterSet(charactersIn: ".!?\"'"))
+                if candidate.lowercased().hasPrefix("the ") {
+                    candidate = String(candidate.dropFirst(4)).trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                for suffix in [" in that input", " into that input", " in the focused app", " into the focused app", " key"] {
+                    if candidate.lowercased().hasSuffix(suffix) {
+                        candidate = String(candidate.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    }
+                }
+                candidate = candidate.trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                if let spec = parseKeySpec(candidate) {
+                    return .pressKey(key: spec.displayName)
+                }
+            }
+        }
+
+        // 2. Explicit prefixes: "type this: ...", "type into app: ...", "dictate: ...", "write into app: ..."
+        let explicitPrefixes = ["type this: ", "type this ", "type into app: ", "type into app ", "dictate: ", "write into app: "]
+        for prefix in explicitPrefixes {
             if lower.hasPrefix(prefix) {
-                let content = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                let content = String(working.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
                 if !content.isEmpty {
                     return .type(text: content)
                 }
             }
         }
+
+        // 3. Natural "type 'hello' in that input" / "type \"Continue\" and press enter" / "type Continue"
+        if lower.hasPrefix("type ") && !lower.hasPrefix("type of ") && !lower.hasPrefix("type in ") {
+            var remainder = String(working.dropFirst(5)).trimmingCharacters(in: .whitespacesAndNewlines)
+            var shouldPressEnter = false
+            let enterSuffixes = [" and press enter", " and hit enter", " then press enter", " then hit enter", " and submit"]
+            for suffix in enterSuffixes {
+                if remainder.lowercased().hasSuffix(suffix) {
+                    shouldPressEnter = true
+                    remainder = String(remainder.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    break
+                }
+            }
+
+            let locationSuffixes = [
+                " in that input", " into that input", " in the input", " into the input",
+                " in that field", " into that field", " in the field", " into the field",
+                " in the focused app", " into the focused app", " in focused app", " into focused app",
+                " in that box", " into that box", " here", " there"
+            ]
+            for suffix in locationSuffixes {
+                if remainder.lowercased().hasSuffix(suffix) {
+                    remainder = String(remainder.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                    break
+                }
+            }
+
+            // Strip matching outer single or double quotes if present
+            if (remainder.hasPrefix("'") && remainder.hasSuffix("'") && remainder.count >= 2) ||
+               (remainder.hasPrefix("\"") && remainder.hasSuffix("\"") && remainder.count >= 2) ||
+               (remainder.hasPrefix("“") && remainder.hasSuffix("”") && remainder.count >= 2) {
+                remainder = String(remainder.dropFirst().dropLast())
+            }
+
+            if !remainder.isEmpty {
+                return shouldPressEnter ? .typeAndSubmit(text: remainder) : .type(text: remainder)
+            }
+        }
+
         return .none
     }
 
@@ -1354,21 +1718,454 @@ public enum InPlaceAppTyping {
     public static func type(text: String) -> Bool {
         guard !text.isEmpty else { return false }
         let source = CGEventSource(stateID: .hidSystemState)
-        for char in text.utf16 {
-            var c = char
-            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true) else { return false }
-            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
+        // Type character by character so every Unicode grapheme (ASCII, accented, Cyrillic, CJK, emoji)
+        // is delivered intact via keyboardSetUnicodeString.
+        for character in text {
+            var utf16Units = Array(String(character).utf16)
+            guard !utf16Units.isEmpty else { continue }
+            guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else {
+                return false
+            }
+            down.keyboardSetUnicodeString(stringLength: utf16Units.count, unicodeString: &utf16Units)
             down.post(tap: .cghidEventTap)
-
-            guard let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false) else { return false }
-            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &c)
+            up.keyboardSetUnicodeString(stringLength: utf16Units.count, unicodeString: &utf16Units)
             up.post(tap: .cghidEventTap)
+            usleep(1_500)
         }
+        return true
+    }
+
+    @discardableResult
+    public static func sendKey(_ keyCombo: String) -> Bool {
+        guard let spec = parseKeySpec(keyCombo) else { return false }
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(spec.keyCode), keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(spec.keyCode), keyDown: false) else {
+            return false
+        }
+        down.flags = CGEventFlags(rawValue: spec.flags)
+        up.flags = CGEventFlags(rawValue: spec.flags)
+        down.post(tap: .cghidEventTap)
+        up.post(tap: .cghidEventTap)
         return true
     }
     #else
     public static func type(text: String) -> Bool { false }
+    public static func sendKey(_ keyCombo: String) -> Bool { false }
     #endif
+
+    @MainActor
+    public static func performTypeText(_ text: String, checkPermission: Bool = true) -> (succeeded: Bool, confirmation: String) {
+        guard !text.isEmpty else {
+            return (false, "No text provided to type.")
+        }
+        if checkPermission && !isAccessibilityTrusted(promptIfNeeded: true) {
+            return (false, accessibilityPermissionPromptMessage)
+        }
+        #if canImport(AppKit)
+        let appName = prepareFocusedTargetApp()
+        #else
+        let appName: String? = nil
+        #endif
+        let ok = type(text: text)
+        guard ok else {
+            return (false, "Could not type text into the focused app.")
+        }
+        if let appName, !appName.isEmpty {
+            return (true, "Typed '\(text)' into \(appName) (the focused app).")
+        }
+        return (true, "Typed '\(text)' into the focused app.")
+    }
+
+    @MainActor
+    public static func performPressKey(_ keyCombo: String, checkPermission: Bool = true) -> (succeeded: Bool, confirmation: String) {
+        guard let spec = parseKeySpec(keyCombo) else {
+            return (false, "Unsupported key '\(keyCombo)'.")
+        }
+        if checkPermission && !isAccessibilityTrusted(promptIfNeeded: true) {
+            return (false, accessibilityPermissionPromptMessage)
+        }
+        #if canImport(AppKit)
+        let appName = prepareFocusedTargetApp()
+        #else
+        let appName: String? = nil
+        #endif
+        let ok = sendKey(keyCombo)
+        guard ok else {
+            return (false, "Could not press \(spec.displayName) in the focused app.")
+        }
+        if let appName, !appName.isEmpty {
+            return (true, "Pressed \(spec.displayName) in \(appName) (the focused app).")
+        }
+        return (true, "Pressed \(spec.displayName) in the focused app.")
+    }
+}
+
+// MARK: - 10-Minute Idle Self-Reflection & Antigravity Auto-Suggestion Loop
+
+public final class IdleSelfReflectionEngine: @unchecked Sendable {
+    public static let shared = IdleSelfReflectionEngine()
+    public static let idleThresholdSeconds: Double = 600.0 // 10 minutes
+
+    private let lock = NSLock()
+    private var lastUserActivityAt: Double = ProcessInfo.processInfo.systemUptime
+    private var lastReflectionAt: Double = ProcessInfo.processInfo.systemUptime
+    private var emittedSuggestions: [String] = []
+
+    public init() {}
+
+    public func recordUserActivity(now: Double = ProcessInfo.processInfo.systemUptime) {
+        lock.lock()
+        lastUserActivityAt = now
+        lock.unlock()
+    }
+
+    public func shouldTriggerReflection(now: Double = ProcessInfo.processInfo.systemUptime) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard now.isFinite,
+              now - lastUserActivityAt >= Self.idleThresholdSeconds,
+              now - lastReflectionAt >= Self.idleThresholdSeconds else {
+            return false
+        }
+        return true
+    }
+
+    public func markReflected(now: Double = ProcessInfo.processInfo.systemUptime) {
+        lock.lock()
+        lastReflectionAt = now
+        lock.unlock()
+    }
+
+    public func analyzeConversationLog(logContent: String) -> String {
+        let lines = logContent.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let recentLines = Array(lines.suffix(120))
+
+        // 1. Check for recorded self-improvement failures or errors
+        let failureLines = recentLines.filter { $0.contains("[DOT (SELF-IMPROVEMENT)]") || $0.contains("[DOT (ERROR)]") }
+        if let latestFailure = failureLines.last {
+            let cleaned = latestFailure.replacingOccurrences(of: #"^\[[^\]]+\]\s*\[[^\]]+\]\s*"#, with: "", options: .regularExpression)
+            let suggestion = "Dot 10-min self-reflection: I noticed an issue in my recent conversation log (\(cleaned.prefix(180))). Please help improve my handling for this case."
+            if recordSuggestionIfNew(suggestion) {
+                return suggestion
+            }
+        }
+
+        // 2. Check for user corrections or repeated commands
+        let userLines = recentLines.filter { $0.contains("[USER]") }
+        if let lastUser = userLines.last {
+            let cleanedUser = lastUser.replacingOccurrences(of: #"^\[[^\]]+\]\s*\[USER\]\s*"#, with: "", options: .regularExpression)
+            let candidate = "Dot 10-min self-reflection: Based on our recent conversation about \"\(cleanedUser.prefix(100))\", we could add a dedicated fast-path action, richer visual feedback, and expanded unit tests for this workflow."
+            if recordSuggestionIfNew(candidate) {
+                return candidate
+            }
+        }
+
+        // 3. Fallback rotating architectural improvement suggestions
+        let fallbacks = [
+            "Dot 10-min self-reflection: Let's review my recent conversation logs and add more natural-language aliases for app control, window snapping, and keyboard shortcuts.",
+            "Dot 10-min self-reflection: We can improve my proactive screen context awareness by combining OCR text highlights with contextual quick-actions for the active app.",
+            "Dot 10-min self-reflection: Let's benchmark my end-to-end voice turn latency and add automated regression checks for multi-turn follow-up questions."
+        ]
+        lock.lock()
+        let index = emittedSuggestions.count % fallbacks.count
+        let chosen = fallbacks[index]
+        emittedSuggestions.append(chosen)
+        lock.unlock()
+        return chosen
+    }
+
+    private func recordSuggestionIfNew(_ suggestion: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if emittedSuggestions.contains(suggestion) {
+            return false
+        }
+        emittedSuggestions.append(suggestion)
+        if emittedSuggestions.count > 32 {
+            emittedSuggestions.removeFirst()
+        }
+        return true
+    }
+
+    @MainActor
+    public func performReflectionAndWriteToAntigravity(logURL: URL? = nil) -> String {
+        markReflected()
+        let url = logURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
+        let content = (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+        let suggestion = analyzeConversationLog(logContent: content)
+
+        // Always copy to clipboard so it is immediately available
+        ClipboardIntelligence.write(suggestion)
+
+        #if canImport(AppKit)
+        // If Accessibility is trusted, focus Antigravity (or active editor) and type the suggestion into the input
+        if InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: false) {
+            let running = NSWorkspace.shared.runningApplications
+            if let antigravityApp = running.first(where: {
+                let name = ($0.localizedName ?? "").lowercased()
+                let bundle = ($0.bundleIdentifier ?? "").lowercased()
+                return name.contains("antigravity") || bundle.contains("antigravity")
+            }) {
+                antigravityApp.activate()
+                usleep(100_000)
+                _ = InPlaceAppTyping.type(text: suggestion)
+                return "Typed self-improvement suggestion into Antigravity: \"\(suggestion)\""
+            } else {
+                _ = InPlaceAppTyping.performTypeText(suggestion, checkPermission: false)
+                return "Typed self-improvement suggestion into the focused app: \"\(suggestion)\""
+            }
+        }
+        #endif
+        return "Prepared self-improvement suggestion (copied to clipboard): \"\(suggestion)\""
+    }
+}
+
+// MARK: - Self-Codebase Indexing & Live Source Reader
+
+public enum SelfCodebaseReader {
+    public static let defaultRootPath = "/Users/mac/.gemini/antigravity/scratch/Dot"
+
+    public static func listSwiftFiles(rootPath: String = defaultRootPath) -> [String] {
+        let srcPath = (rootPath as NSString).appendingPathComponent("src")
+        guard let items = try? FileManager.default.contentsOfDirectory(atPath: srcPath) else { return [] }
+        return items.filter { $0.hasSuffix(".swift") }.sorted()
+    }
+
+    public static func searchCodebase(query: String, rootPath: String = defaultRootPath, maxMatches: Int = 5) -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return [] }
+        let srcPath = (rootPath as NSString).appendingPathComponent("src")
+        let files = listSwiftFiles(rootPath: rootPath)
+        var results: [String] = []
+
+        for file in files {
+            let fullPath = (srcPath as NSString).appendingPathComponent(file)
+            guard let content = try? String(contentsOfFile: fullPath, encoding: .utf8) else { continue }
+            let lines = content.components(separatedBy: "\n")
+            for (idx, line) in lines.enumerated() {
+                if line.localizedCaseInsensitiveContains(trimmed) {
+                    let snippet = line.trimmingCharacters(in: .whitespaces)
+                    results.append("\(file):\(idx + 1): \(snippet.prefix(120))")
+                    if results.count >= maxMatches {
+                        return results
+                    }
+                }
+            }
+        }
+        return results
+    }
+}
+
+// MARK: - Native Window Layout & Snapping
+
+public enum WindowSnapLayout: String, Equatable, Sendable {
+    case leftHalf
+    case rightHalf
+    case topHalf
+    case bottomHalf
+    case maximize
+    case center
+}
+
+public enum WindowLayoutManager {
+    public static func parseCommand(_ text: String) -> WindowSnapLayout? {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "snap window left" || lower == "snap left" || lower == "window left half" || lower == "tile window left" {
+            return .leftHalf
+        }
+        if lower == "snap window right" || lower == "snap right" || lower == "window right half" || lower == "tile window right" {
+            return .rightHalf
+        }
+        if lower == "snap window top" || lower == "window top half" {
+            return .topHalf
+        }
+        if lower == "snap window bottom" || lower == "window bottom half" {
+            return .bottomHalf
+        }
+        if lower == "maximize window" || lower == "fullscreen window" || lower == "expand window" {
+            return .maximize
+        }
+        if lower == "center window" || lower == "center active window" {
+            return .center
+        }
+        return nil
+    }
+
+    public static func targetFrame(for layout: WindowSnapLayout, in visibleFrame: CGRect) -> CGRect {
+        switch layout {
+        case .leftHalf:
+            return CGRect(x: visibleFrame.minX, y: visibleFrame.minY, width: floor(visibleFrame.width / 2), height: visibleFrame.height)
+        case .rightHalf:
+            let half = floor(visibleFrame.width / 2)
+            return CGRect(x: visibleFrame.minX + half, y: visibleFrame.minY, width: visibleFrame.width - half, height: visibleFrame.height)
+        case .topHalf:
+            let half = floor(visibleFrame.height / 2)
+            return CGRect(x: visibleFrame.minX, y: visibleFrame.minY, width: visibleFrame.width, height: half)
+        case .bottomHalf:
+            let half = floor(visibleFrame.height / 2)
+            return CGRect(x: visibleFrame.minX, y: visibleFrame.minY + half, width: visibleFrame.width, height: visibleFrame.height - half)
+        case .maximize:
+            return visibleFrame
+        case .center:
+            let w = floor(visibleFrame.width * 0.75)
+            let h = floor(visibleFrame.height * 0.75)
+            return CGRect(x: visibleFrame.minX + floor((visibleFrame.width - w) / 2),
+                          y: visibleFrame.minY + floor((visibleFrame.height - h) / 2),
+                          width: w, height: h)
+        }
+    }
+
+    #if canImport(AppKit) && canImport(ApplicationServices)
+    @MainActor
+    public static func applyLayout(_ layout: WindowSnapLayout) -> String {
+        guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+            return InPlaceAppTyping.accessibilityPermissionPromptMessage
+        }
+        guard let screen = NSScreen.main else {
+            return "Could not determine main display bounds."
+        }
+        let appName = InPlaceAppTyping.prepareFocusedTargetApp() ?? "the focused app"
+        guard let front = NSWorkspace.shared.frontmostApplication else {
+            return "No active application window found."
+        }
+        let appElement = AXUIElementCreateApplication(front.processIdentifier)
+        var focusedWindow: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow) == .success,
+              let windowObj = focusedWindow else {
+            return "Could not access focused window of \(appName)."
+        }
+        let axWindow = windowObj as! AXUIElement
+        // Convert AppKit visibleFrame (bottom-left origin) to CG/AX screen coordinates (top-left origin)
+        let fullHeight = screen.frame.height
+        let vf = screen.visibleFrame
+        let axVisible = CGRect(
+            x: vf.minX,
+            y: fullHeight - vf.maxY,
+            width: vf.width,
+            height: vf.height
+        )
+        let rect = targetFrame(for: layout, in: axVisible)
+        var pos = CGPoint(x: rect.origin.x, y: rect.origin.y)
+        var size = CGSize(width: rect.size.width, height: rect.size.height)
+        if let posVal = AXValueCreate(.cgPoint, &pos) {
+            _ = AXUIElementSetAttributeValue(axWindow, kAXPositionAttribute as CFString, posVal)
+        }
+        if let sizeVal = AXValueCreate(.cgSize, &size) {
+            _ = AXUIElementSetAttributeValue(axWindow, kAXSizeAttribute as CFString, sizeVal)
+        }
+        return "Snapped \(appName) window to \(layout.rawValue)."
+    }
+    #endif
+}
+
+// MARK: - iOS Simulator & Developer Workflow Control
+
+public enum SimulatorCommand: Equatable, Sendable {
+    case listBooted
+    case openSimulatorApp
+    case screenshot
+    case none
+}
+
+public enum SimulatorControlSuite {
+    public static func parseCommand(_ text: String) -> SimulatorCommand {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower == "list simulators" || lower == "booted simulators" || lower == "check simulator" || lower == "simulator status" {
+            return .listBooted
+        }
+        if lower == "open simulator" || lower == "launch simulator" || lower == "start simulator" {
+            return .openSimulatorApp
+        }
+        if lower == "simulator screenshot" || lower == "take simulator screenshot" {
+            return .screenshot
+        }
+        return .none
+    }
+
+    #if canImport(AppKit)
+    @MainActor
+    public static func execute(_ command: SimulatorCommand) -> String? {
+        switch command {
+        case .listBooted:
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            process.arguments = ["simctl", "list", "devices", "booted"]
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            do {
+                try process.run()
+                process.waitUntilExit()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let output = String(decoding: data, as: UTF8.self)
+                let booted = output.components(separatedBy: "\n")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { $0.contains("(Booted)") }
+                if booted.isEmpty {
+                    return "No iOS Simulators are currently booted."
+                }
+                return "Booted Simulators: " + booted.joined(separator: ", ")
+            } catch {
+                return "Could not query iOS Simulators."
+            }
+        case .openSimulatorApp:
+            let url = URL(fileURLWithPath: "/Applications/Xcode.app/Contents/Developer/Applications/Simulator.app")
+            if FileManager.default.fileExists(atPath: url.path) {
+                NSWorkspace.shared.open(url)
+                return "Opened iOS Simulator."
+            }
+            return "Xcode Simulator.app was not found in /Applications/Xcode.app."
+        case .screenshot:
+            guard let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else {
+                return "Could not resolve Desktop directory."
+            }
+            let outURL = desktop.appendingPathComponent("simulator_screenshot_\(Int(Date().timeIntervalSince1970)).png")
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+            process.arguments = ["simctl", "io", "booted", "screenshot", outURL.path]
+            do {
+                try process.run()
+                process.waitUntilExit()
+                if process.terminationStatus == 0 {
+                    return "Saved iOS Simulator screenshot to Desktop (\(outURL.lastPathComponent))."
+                }
+                return "No booted iOS Simulator found to capture screenshot."
+            } catch {
+                return "Failed to capture iOS Simulator screenshot."
+            }
+        case .none:
+            return nil
+        }
+    }
+    #endif
+}
+
+// MARK: - Real-Time Neural Diagnostics & Metrics Inspector
+
+public enum NeuralMetricsInspector {
+    public static func isMetricsQuery(_ text: String) -> Bool {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        return lower == "neural metrics" || lower == "engine metrics" || lower == "memory usage" ||
+               lower == "diagnostics" || lower == "performance stats" || lower == "dot diagnostics"
+    }
+
+    public static func currentReport(engineReady: Bool, activeTimersCount: Int) -> String {
+        let hw = HardwareCompatibility.queryCurrent()
+        var residentMB = 0
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        if kerr == KERN_SUCCESS {
+            residentMB = Int(info.resident_size / (1024 * 1024))
+        }
+        let axTrusted = InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: false)
+        return "Neural Diagnostics: Model Qwen 3.8 27B 4-bit (Splash) \(engineReady ? "Ready" : "Warming") | Voice Kokoro bf_isabella | App RAM: \(residentMB) MB on \(hw.chip) (\(hw.ramGB) GB Unified) | Accessibility: \(axTrusted ? "Granted" : "Not Granted") | Active Timers: \(activeTimersCount)."
+    }
 }
 
 // MARK: - Meeting & Focus Mode Awareness

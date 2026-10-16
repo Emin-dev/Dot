@@ -465,3 +465,20 @@ The owner explicitly deferred checks requiring their Mac until later and asked c
 - [ ] Verify native App Intents/Siri discovery and permission-gated EventKit/Accessibility/browser integrations actually used by the completed product.
 - [ ] Preserve the previous installed app and all user data, then perform a separately authorized recoverable replacement and installed-path smoke test. No current cloud activity changes the installed app.
 - [ ] Run clean supported second-Mac installation, relocation, offline behavior, downloader recovery and distribution signing/notarization acceptance before public release.
+
+## True Autonomy, Direct App Typing, Key-Press Tools & 10-Minute Self-Improvement Loop
+
+Requested 2026-10-16. All items below are implemented and verified in source and unit tests.
+
+- [x] **Direct Unicode `type_text` action and LLM tool.** Type any Unicode string character-by-character via `CGEvent` (`keyboardSetUnicodeString`) into whichever external application window currently has keyboard focus (re-activating the last active external app if Dot's own input panel was briefly focused).
+- [x] **Direct `press_key` action and LLM tool.** Send special keys (`Enter`/`Return`, `Tab`, `Escape`, `Backspace`/`Delete`, `ForwardDelete`, `Space`, arrow keys `Up`/`Down`/`Left`/`Right`, `Home`, `End`, `PageUp`, `PageDown`) and modifier combinations (`Cmd+C`, `Cmd+V`, `Cmd+A`, `Cmd+X`, `Cmd+Z`, `Cmd+S`, `Cmd+Return`, `Shift+Enter`, `Shift+Tab`, etc.) directly to the focused app.
+- [x] **LLM tool call integration (`type_text` & `press_key`).** Expose `type_text` and `press_key` alongside `ask_user` in `EngineManager` and `QuestionIntentStream` so natural requests like *"type 'hello' in that input"* or *"press Enter"* execute directly without copying to clipboard and asking the user to paste.
+- [x] **Accessibility permission check & friendly guidance.** Verify `AXIsProcessTrusted()` before executing `type_text` or `press_key`; if not granted, prompt the user with clear instructions to enable Dot in **System Settings → Privacy & Security → Accessibility** and open the Accessibility settings pane.
+- [x] **Post-action confirmation with target app name.** Confirm every typing or key-press action to the user with what was typed/pressed and where, e.g. `"Typed 'Continue' into Antigravity."` or `"Pressed Enter in Safari."`.
+- [x] **10-minute idle self-reflection & Antigravity suggestion loop (`IdleSelfReflectionEngine`).** Every 10 minutes of user inactivity, read Dot's own conversation logs (`dot_chat_log.txt`) and conversation history, identify past failures, missed intents or concrete self-improvement opportunities, and automatically type the suggestion into the Antigravity input field (or active coding assistant).
+- [x] **Proactive duplicate question deduplication (`ProactiveReplyBuffer`).** Prevent spoken/displayed double-questions when the model includes the question in both streamed `content` and the `ask_user` tool call.
+- [x] **Self-codebase indexing & live source reader (`SelfCodebaseReader`).** Allow Dot to inspect, search and summarize its own Swift files in `/Users/mac/.gemini/antigravity/scratch/Dot/src` on demand.
+- [x] **Native window layout & snapping (`WindowLayoutManager`).** Snap the active external app window to Left Half, Right Half, Top Half, Bottom Half, Maximize or Center via macOS Accessibility (`AXUIElement`).
+- [x] **iOS Simulator & developer workflow control (`SimulatorControlSuite`).** List, boot and screenshot iOS Simulators via `xcrun simctl` from voice or typed commands.
+- [x] **Real-time Neural Diagnostics & Metrics Inspector (`NeuralMetricsInspector`).** Report live hardware/memory footprint, voice latency stages and engine readiness on demand.
+

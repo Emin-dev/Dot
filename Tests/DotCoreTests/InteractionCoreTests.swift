@@ -1233,7 +1233,112 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertEqual(InPlaceAppTyping.parseCommand("type into app: func main()"), .type(text: "func main()"))
         XCTAssertEqual(InPlaceAppTyping.parseCommand("dictate: Dear team,"), .type(text: "Dear team,"))
         XCTAssertEqual(InPlaceAppTyping.parseCommand("write into app: notes"), .type(text: "notes"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type 'hello' in that input"), .type(text: "hello"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type \"Continue\" into the focused app"), .type(text: "Continue"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type 'Привет мир 🚀' in that input"), .type(text: "Привет мир 🚀"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type 'Continue' and press enter"), .typeAndSubmit(text: "Continue"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Enter"), .pressKey(key: "Enter"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Tab"), .pressKey(key: "Tab"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Escape"), .pressKey(key: "Escape"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Backspace"), .pressKey(key: "Backspace"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Cmd+C"), .pressKey(key: "Cmd+C"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Cmd+V"), .pressKey(key: "Cmd+V"))
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("press Cmd+A"), .pressKey(key: "Cmd+A"))
         XCTAssertEqual(InPlaceAppTyping.parseCommand("hello world"), .none)
+        XCTAssertEqual(InPlaceAppTyping.parseCommand("type of file"), .none)
+    }
+
+    func testParseKeySpecSpecialAndModifierKeys() {
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Enter"), InPlaceAppTyping.KeySpec(keyCode: 36, flags: 0, displayName: "Enter"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Return"), InPlaceAppTyping.KeySpec(keyCode: 36, flags: 0, displayName: "Enter"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Tab"), InPlaceAppTyping.KeySpec(keyCode: 48, flags: 0, displayName: "Tab"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Escape"), InPlaceAppTyping.KeySpec(keyCode: 53, flags: 0, displayName: "Escape"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Backspace"), InPlaceAppTyping.KeySpec(keyCode: 51, flags: 0, displayName: "Backspace"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Delete"), InPlaceAppTyping.KeySpec(keyCode: 51, flags: 0, displayName: "Backspace"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("ForwardDelete"), InPlaceAppTyping.KeySpec(keyCode: 117, flags: 0, displayName: "Forward Delete"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Space"), InPlaceAppTyping.KeySpec(keyCode: 49, flags: 0, displayName: "Space"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Up"), InPlaceAppTyping.KeySpec(keyCode: 126, flags: 0, displayName: "Up Arrow"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Down"), InPlaceAppTyping.KeySpec(keyCode: 125, flags: 0, displayName: "Down Arrow"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Left"), InPlaceAppTyping.KeySpec(keyCode: 123, flags: 0, displayName: "Left Arrow"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Right"), InPlaceAppTyping.KeySpec(keyCode: 124, flags: 0, displayName: "Right Arrow"))
+
+        // Modifier combinations
+        let cmdMask: UInt64 = 0x100000
+        let shiftMask: UInt64 = 0x020000
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Cmd+C"), InPlaceAppTyping.KeySpec(keyCode: 8, flags: cmdMask, displayName: "Cmd+C"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Cmd+V"), InPlaceAppTyping.KeySpec(keyCode: 9, flags: cmdMask, displayName: "Cmd+V"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Cmd+A"), InPlaceAppTyping.KeySpec(keyCode: 0, flags: cmdMask, displayName: "Cmd+A"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Command+Shift+Z"), InPlaceAppTyping.KeySpec(keyCode: 6, flags: cmdMask | shiftMask, displayName: "Cmd+Shift+Z"))
+        XCTAssertEqual(InPlaceAppTyping.parseKeySpec("Shift+Enter"), InPlaceAppTyping.KeySpec(keyCode: 36, flags: shiftMask, displayName: "Shift+Enter"))
+    }
+
+    func testQuestionIntentStreamParsesTypeTextAndPressKeyTools() throws {
+        func toolFrame(name: String, arguments: String) throws -> String {
+            let obj: [String: Any] = [
+                "choices": [[
+                    "index": 0,
+                    "delta": [
+                        "tool_calls": [[
+                            "index": 0,
+                            "id": "call_123",
+                            "type": "function",
+                            "function": ["name": name, "arguments": arguments]
+                        ]]
+                    ]
+                ]]
+            ]
+            return "data: " + String(decoding: try JSONSerialization.data(withJSONObject: obj), as: UTF8.self)
+        }
+        let finishFrame = #"data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}"#
+
+        var typeStream = QuestionIntentStream()
+        try typeStream.feed(toolFrame(name: "type_text", arguments: #"{"text":"Continue — Привет 🚀"}"#))
+        try typeStream.feed(finishFrame)
+        try typeStream.feed("data: [DONE]")
+        XCTAssertNil(try typeStream.completed())
+        XCTAssertEqual(try typeStream.completedToolAction(), .typeText("Continue — Привет 🚀"))
+
+        var keyStream = QuestionIntentStream()
+        try keyStream.feed(toolFrame(name: "press_key", arguments: #"{"key":"Cmd+V"}"#))
+        try keyStream.feed(finishFrame)
+        try keyStream.feed("data: [DONE]")
+        XCTAssertNil(try keyStream.completed())
+        XCTAssertEqual(try keyStream.completedToolAction(), .pressKey("Cmd+V"))
+    }
+}
+
+final class IdleSelfReflectionAndAutonomyTests: XCTestCase {
+    func testIdleSelfReflectionCadenceAndLogAnalysis() {
+        let engine = IdleSelfReflectionEngine()
+        engine.recordUserActivity(now: 100)
+        engine.markReflected(now: 100)
+        XCTAssertFalse(engine.shouldTriggerReflection(now: 500))
+        XCTAssertTrue(engine.shouldTriggerReflection(now: 701))
+
+        let sampleLog = """
+        [2026-10-16T00:00:00Z] [USER] type 'Continue' in that input
+        [2026-10-16T00:00:02Z] [DOT (SELF-IMPROVEMENT)] TASK: "snap window" | REASON: Window not snapped | MISSING: WindowLayoutManager | PROPOSED_FIX: Add AX window snapping
+        """
+        let suggestion = engine.analyzeConversationLog(logContent: sampleLog)
+        XCTAssertTrue(suggestion.contains("Dot 10-min self-reflection"))
+        XCTAssertTrue(suggestion.contains("WindowLayoutManager"))
+    }
+
+    func testWindowLayoutAndDeveloperSuites() {
+        XCTAssertEqual(WindowLayoutManager.parseCommand("snap window left"), .leftHalf)
+        XCTAssertEqual(WindowLayoutManager.parseCommand("snap window right"), .rightHalf)
+        XCTAssertEqual(WindowLayoutManager.parseCommand("maximize window"), .maximize)
+        XCTAssertEqual(WindowLayoutManager.parseCommand("center window"), .center)
+
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        XCTAssertEqual(WindowLayoutManager.targetFrame(for: .leftHalf, in: screen), CGRect(x: 0, y: 0, width: 720, height: 900))
+        XCTAssertEqual(WindowLayoutManager.targetFrame(for: .rightHalf, in: screen), CGRect(x: 720, y: 0, width: 720, height: 900))
+
+        XCTAssertEqual(SimulatorControlSuite.parseCommand("list simulators"), .listBooted)
+        XCTAssertEqual(SimulatorControlSuite.parseCommand("open simulator"), .openSimulatorApp)
+        XCTAssertEqual(SimulatorControlSuite.parseCommand("simulator screenshot"), .screenshot)
+        XCTAssertTrue(NeuralMetricsInspector.isMetricsQuery("neural metrics"))
+        XCTAssertTrue(NeuralMetricsInspector.isMetricsQuery("diagnostics"))
     }
 }
 

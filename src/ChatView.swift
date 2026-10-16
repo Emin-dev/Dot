@@ -152,6 +152,7 @@ final class ChatModel: ObservableObject {
     private var taskProgress = ResearchTaskProgress()
     private var activeSpeechUpdateID: UUID?
     private var taskProgressTicker: Task<Void, Never>?
+    private var selfReflectionTicker: Task<Void, Never>?
     private var shuttingDown = false
     var onExecuteAction: ((NativeAction) async -> NativeActionResult?)?
     var onRequestResearch: ((String) -> Void)?
@@ -963,14 +964,46 @@ final class ChatModel: ObservableObject {
         }
         proactive.onContextChange = { [weak self] change in
             guard let self, change.applicationIdentifier != Bundle.main.bundleIdentifier else { return }
+            if let front = NSWorkspace.shared.frontmostApplication,
+               front.bundleIdentifier != Bundle.main.bundleIdentifier {
+                InPlaceAppTyping.noteExternalApplication(pid: front.processIdentifier, name: front.localizedName)
+            }
             self.proactiveContextChange = change
             self.proactiveContextChangedAfterUser = true
             self.updateProactiveContext()
         }
     }
 
-    func startProactivity() { proactive.start(); updateProactiveContext() }
-    func stopProactivity() { proactive.stop() }
+    func startProactivity() {
+        proactive.start()
+        updateProactiveContext()
+        IdleSelfReflectionEngine.shared.recordUserActivity()
+        ensureSelfReflectionTicker()
+    }
+    func stopProactivity() {
+        proactive.stop()
+        selfReflectionTicker?.cancel()
+        selfReflectionTicker = nil
+    }
+    private func ensureSelfReflectionTicker() {
+        guard selfReflectionTicker == nil else { return }
+        selfReflectionTicker = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                guard let self, !Task.isCancelled, !self.shuttingDown else { break }
+                guard self.visible, !self.proactive.paused, self.phase == .idle,
+                      !self.generating, !self.runtime.ttsSpeaking(),
+                      !MeetingFocusAwareness.isMeetingActive(),
+                      IdleSelfReflectionEngine.shared.shouldTriggerReflection() else {
+                    continue
+                }
+                let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
+                DiagnosticChatLogger.record(role: "dot (10m-self-reflection)", text: report)
+                self.speakDirect("I reviewed my recent conversations after 10 minutes of inactivity and wrote an improvement suggestion for myself into Antigravity.")
+            }
+            self?.selfReflectionTicker = nil
+        }
+    }
     /// Native control-down must not swap Stop for Talk before mouse-up dispatches
     /// the button action. Revoke future invitations, but let that action own any
     /// active-turn cancellation. This flag intentionally does not publish UI state.
@@ -1246,7 +1279,9 @@ final class ChatModel: ObservableObject {
         DiagnosticChatLogger.record(role: "user", text: text)
         timing(typed ? "text_submitted" : "final_transcript")
         lastAttemptedText = text
-        proactiveEvidence.recordUser(turn: id, now: ProcessInfo.processInfo.systemUptime)
+        let nowUptime = ProcessInfo.processInfo.systemUptime
+        proactiveEvidence.recordUser(turn: id, now: nowUptime)
+        IdleSelfReflectionEngine.shared.recordUserActivity(now: nowUptime)
         proactiveContextChangedAfterUser = false
         phase = .thinking; generating = true
         answer = ""; displayedAnswerTurn = id; chunker = SentenceBuffer()
@@ -1256,8 +1291,72 @@ final class ChatModel: ObservableObject {
         if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
         if history.count > 12 { history.removeFirst(history.count - 12) }
 
+        // Check In-Place App Typing & Key-Press first so "press right arrow" or "type 'hello' in that input" isn't mistaken for pet movement
+        let typingCmd = InPlaceAppTyping.parseCommand(text)
+        switch typingCmd {
+        case .type(let content):
+            let outcome = InPlaceAppTyping.performTypeText(content, checkPermission: true)
+            respondDirectly(outcome.confirmation, id: id)
+            return
+        case .pressKey(let keyName):
+            let outcome = InPlaceAppTyping.performPressKey(keyName, checkPermission: true)
+            respondDirectly(outcome.confirmation, id: id)
+            return
+        case .typeAndSubmit(let content):
+            let outcome = InPlaceAppTyping.performTypeText(content, checkPermission: true)
+            if outcome.succeeded {
+                usleep(40_000)
+                _ = InPlaceAppTyping.sendKey("Enter")
+                respondDirectly(outcome.confirmation.replacingOccurrences(of: "Typed '\(content)'", with: "Typed '\(content)' and pressed Enter"), id: id)
+            } else {
+                respondDirectly(outcome.confirmation, id: id)
+            }
+            return
+        case .none:
+            break
+        }
+
         if let moveCmd = self.detectMovementCommand(text), let replyText = self.onMove?(moveCmd) {
             respondDirectly(replyText, id: id)
+            return
+        }
+
+        if let windowLayout = WindowLayoutManager.parseCommand(text) {
+            let reply = WindowLayoutManager.applyLayout(windowLayout)
+            respondDirectly(reply, id: id)
+            return
+        }
+
+        let simCmd = SimulatorControlSuite.parseCommand(text)
+        if simCmd != .none, let simReply = SimulatorControlSuite.execute(simCmd) {
+            respondDirectly(simReply, id: id)
+            return
+        }
+
+        if NeuralMetricsInspector.isMetricsQuery(text) {
+            let report = NeuralMetricsInspector.currentReport(
+                engineReady: runtime.isReady(),
+                activeTimersCount: SmartTimerScheduler.shared.activeTimers().count
+            )
+            respondDirectly(report, id: id)
+            return
+        }
+
+        let lowerClean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lowerClean == "self reflect" || lowerClean == "reflect on your logs" || lowerClean == "analyze your logs" || lowerClean == "suggest improvements to antigravity" {
+            let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
+            respondDirectly(report, id: id)
+            return
+        }
+        if lowerClean.hasPrefix("search code ") || lowerClean.hasPrefix("search your code for ") {
+            let prefix = lowerClean.hasPrefix("search your code for ") ? "search your code for " : "search code "
+            let query = String(text.trimmingCharacters(in: .whitespacesAndNewlines).dropFirst(prefix.count))
+            let matches = SelfCodebaseReader.searchCodebase(query: query)
+            if matches.isEmpty {
+                respondDirectly("No matches found in my codebase for \"\(query)\".", id: id)
+            } else {
+                respondDirectly("Found \(matches.count) match\(matches.count == 1 ? "" : "es") in my codebase:\n" + matches.joined(separator: "\n"), id: id)
+            }
             return
         }
 
@@ -1341,14 +1440,6 @@ final class ChatModel: ObservableObject {
 
         if let systemReply = self.detectSystemControlCommand(text) {
             respondDirectly(systemReply, id: id)
-            return
-        }
-
-        // In-Place App Typing
-        let typingCmd = InPlaceAppTyping.parseCommand(text)
-        if case .type(let content) = typingCmd {
-            InPlaceAppTyping.type(text: content)
-            respondDirectly("Typed into the active application.", id: id)
             return
         }
 
@@ -1525,6 +1616,7 @@ final class ChatModel: ObservableObject {
                     }
                 }
                 let snapshot = chatInput
+                var executedToolConfirmation: String?
                 let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
                     guard let self, self.gate.accepts(id) else { return }
                     if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
@@ -1536,6 +1628,14 @@ final class ChatModel: ObservableObject {
                 }, onReasoning: { [weak self] in
                     guard let self, self.gate.accepts(id), !self.firstReasoning else { return }
                     self.firstReasoning = true; self.timing("first_reasoning")
+                }, onToolAction: { [weak self] toolAction in
+                    guard let self, self.gate.accepts(id) else { return }
+                    switch toolAction {
+                    case .typeText(let textToType):
+                        executedToolConfirmation = InPlaceAppTyping.performTypeText(textToType, checkPermission: true).confirmation
+                    case .pressKey(let keyToPress):
+                        executedToolConfirmation = InPlaceAppTyping.performPressKey(keyToPress, checkPermission: true).confirmation
+                    }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
                     stage = .capture
@@ -1562,6 +1662,11 @@ final class ChatModel: ObservableObject {
                 })
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 if let tail = self.chunker.flush() { self.enqueueVoice(tail, id: id) }
+                if let confirmation = executedToolConfirmation {
+                    let prefixSpace = self.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " "
+                    self.answer += prefixSpace + confirmation
+                    self.enqueueVoice(confirmation, id: id)
+                }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 let shouldFollowup = !self.voiceDeliveryFailed
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
