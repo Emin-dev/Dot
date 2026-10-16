@@ -1346,6 +1346,21 @@ final class ChatModel: ObservableObject {
         beginListening(continuation: nil)
     }
 
+    /// Battery state from IOKit's power-source description; no permission and no
+    /// polling, and honest when the machine has no battery to report.
+    private static func batteryStatus() -> String {
+        guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef],
+              let source = list.first,
+              let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any] else {
+            return "I cannot read a battery on this Mac."
+        }
+        let percent = info[kIOPSCurrentCapacityKey as String] as? Int ?? 0
+        let charging = info[kIOPSIsChargingKey as String] as? Bool ?? false
+        let onAC = (info[kIOPSPowerSourceStateKey as String] as? String) == (kIOPSACPowerValue as String)
+        return "Battery: \(percent)%" + (charging ? ", charging." : onAC ? ", plugged in." : ", on battery.")
+    }
+
     /// A click or key press that cannot start listening must say why instead of
     /// appearing to do nothing: this is the honest counterpart of the readiness gate.
     private func reportNotReady() {
@@ -1509,6 +1524,16 @@ final class ChatModel: ObservableObject {
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
         let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // "Check battery level" was asked in real use and had no implementation, so it
+        // fell through to the model. Read-only and confined to clear battery questions.
+        if pendingApproval == nil, copyPhrase.count <= 60,
+           copyPhrase.hasPrefix("battery") || copyPhrase.hasPrefix("check battery")
+           || copyPhrase.contains("battery level") || copyPhrase.contains("battery percentage")
+           || copyPhrase == "how much battery" || copyPhrase.contains("power level") {
+            respondDirectly(Self.batteryStatus(), id: id)
+            return
+        }
+
         // "What do you remember" must show the stored core facts. The old parser for
         // this existed but had no caller, so the question fell through to the model,
         // which cannot see the memory store.
