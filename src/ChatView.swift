@@ -1338,8 +1338,10 @@ final class ChatModel: ObservableObject {
         }
         dismissFirstUseHint()
         if phase == .speaking || runtime.ttsSpeaking() || generating {
+            // The documented gesture is "click during an answer to interrupt and listen
+            // again", so the click stops the turn and then opens the microphone; it
+            // used to return after stopping, which silently did nothing more.
             stopCurrentTurn()
-            return
         }
         beginListening(continuation: nil)
     }
