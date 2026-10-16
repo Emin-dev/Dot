@@ -3243,16 +3243,6 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
         return readBullets(from: volatileURL, limit: limit)
     }
 
-    public func forgetMatching(topic: String) -> Int {
-        let needle = topic.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !needle.isEmpty else { return 0 }
-        lock.lock()
-        defer { lock.unlock() }
-        var removed = 0
-        removed += removeMatchingBullets(from: profileURL, header: "# Dot Persistent User Profile & Standing Rules (PROFILE.md)\n", needle: needle)
-        removed += removeMatchingBullets(from: volatileURL, header: "# Dot Active Project & Session Memory (VOLATILE.md)\n", needle: needle)
-        return removed
-    }
 
     private func readBullets(from url: URL, limit: Int) -> [String] {
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
@@ -3306,16 +3296,6 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
         _ = try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: volatileURL.path)
     }
 
-    private func removeMatchingBullets(from url: URL, header: String, needle: String) -> Int {
-        let existing = readBullets(from: url, limit: 200)
-        let kept = existing.filter { !$0.lowercased().contains(needle) }
-        let removedCount = existing.count - kept.count
-        if removedCount > 0 {
-            let body = header + "\n" + kept.joined(separator: "\n") + (kept.isEmpty ? "" : "\n")
-            try? body.write(to: url, atomically: true, encoding: .utf8)
-        }
-        return removedCount
-    }
 
     /// Convenience turn context assembler querying FTS and active desktop state.
     func assembleTurnContext(
@@ -3711,9 +3691,8 @@ public struct RAMMetrics: Equatable, Sendable {
     public let usageRatio: Double
 
     public var freeGB: Double { Double(freeBytes) / 1_073_741_824.0 }
+    public var usagePercent: Double { usageRatio * 100 }
     public var totalGB: Double { Double(totalBytes) / 1_073_741_824.0 }
-    public var usedGB: Double { Double(usedBytes) / 1_073_741_824.0 }
-    public var usagePercent: Int { Int(usageRatio * 100.0) }
     public var isHighPressure: Bool { usageRatio >= 0.90 }
     public var canDeployParallelAgents: Bool { usageRatio < 0.75 && freeGB >= 4.0 }
 }
@@ -3759,27 +3738,8 @@ public final class ParallelAgentCoordinator: @unchecked Sendable {
     private let lock = NSLock()
     private var activeAgentTasks: [UUID: String] = [:]
 
-    public func canSpawnAgent() -> Bool {
-        let ram = SystemRAMInspector.currentRAM()
-        lock.lock()
-        let count = activeAgentTasks.count
-        lock.unlock()
-        return ram.canDeployParallelAgents && count < 4
-    }
 
-    public func registerAgent(id: UUID, label: String) -> Bool {
-        guard canSpawnAgent() else { return false }
-        lock.lock()
-        activeAgentTasks[id] = label
-        lock.unlock()
-        return true
-    }
 
-    public func unregisterAgent(id: UUID) {
-        lock.lock()
-        activeAgentTasks.removeValue(forKey: id)
-        lock.unlock()
-    }
 
     public func activeAgentsSummary() -> String {
         lock.lock()
@@ -4512,10 +4472,6 @@ public enum DiagnosticChatLogger {
         record(role: "screen", text: msg)
     }
 
-    public static func recordVoice(stage: String, detail: String) {
-        let msg = "STAGE: \(stage) | DETAIL: \(detail)"
-        record(role: "voice", text: msg)
-    }
 
     public static func recordEvent(category: String, message: String) {
         record(role: category.lowercased(), text: message)

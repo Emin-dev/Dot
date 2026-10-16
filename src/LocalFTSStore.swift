@@ -291,55 +291,6 @@ actor LocalFTSStore {
         return results
     }
 
-    func recentConversations(limit: Int = 30) throws -> [ConversationHistoryRecord] {
-        guard let db else { throw LocalFTSError.closed }
-        let sql = """
-        SELECT id, turn_id, role, text, created_at, ended_at, generation_status, playback_status
-        FROM conversation_records
-        ORDER BY created_at DESC
-        LIMIT ?;
-        """
-        var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
-            throw LocalFTSError.prepareFailed("Failed to prepare recent conversations query")
-        }
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_int(stmt, 1, Int32(max(1, limit)))
-
-        var results: [ConversationHistoryRecord] = []
-        while sqlite3_step(stmt) == SQLITE_ROW {
-            guard let idStr = sqlite3_column_text(stmt, 0),
-                  let turnStr = sqlite3_column_text(stmt, 1),
-                  let roleStr = sqlite3_column_text(stmt, 2),
-                  let textStr = sqlite3_column_text(stmt, 3),
-                  let id = UUID(uuidString: String(cString: idStr)),
-                  let turnID = UUID(uuidString: String(cString: turnStr)),
-                  let role = ConversationHistoryRole(rawValue: String(cString: roleStr)) else { continue }
-
-            let text = String(cString: textStr)
-            let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
-            let endedAt = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
-            let genStatus = sqlite3_column_text(stmt, 6).flatMap { ConversationGenerationStatus(rawValue: String(cString: $0)) } ?? .unknown
-            let playStatus = sqlite3_column_text(stmt, 7).flatMap { ConversationPlaybackStatus(rawValue: String(cString: $0)) } ?? .unknown
-
-            results.append(ConversationHistoryRecord(
-                id: id,
-                date: createdAt,
-                role: role,
-                text: text,
-                turnID: turnID,
-                generation: genStatus,
-                playback: playStatus,
-                generationCompletedAt: nil,
-                playbackStartedAt: nil,
-                playbackCompletedAt: endedAt,
-                endedAt: endedAt,
-                failureStage: nil,
-                textTruncated: false
-            ))
-        }
-        return results.reversed()
-    }
 
     // MARK: - Evidence-Backed Memory
 

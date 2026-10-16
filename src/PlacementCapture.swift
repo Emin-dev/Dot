@@ -55,12 +55,6 @@ final class PlacementCapture {
         return PlacementSnapshot(displayID: id, displayFrame: screen.frame, visibleFrame: screen.visibleFrame,
                                  capturedAt: now, protected: windows)
     }
-    static func inputIdleSeconds() -> Double {
-        let events: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel,
-         .leftMouseDragged, .rightMouseDragged, .otherMouseDragged]
-        let ages = events.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }
-        return ages.allSatisfy { $0.isFinite && $0 >= 0 } ? (ages.min() ?? 0) : 0
-    }
     func invalidate() { gate.invalidate(); acceptedWindows = nil; work?.cancel() }
     func request(screen: NSScreen, eligible: Bool, immediate: Bool = false) {
         let now = ProcessInfo.processInfo.systemUptime
@@ -177,9 +171,6 @@ final class PlacementCapture {
             }
         }
         return regions
-    }
-    nonisolated static func imageRegions(_ image: CGImage, display: CGRect) throws -> [CGRect] {
-        try analyzeImage(image, display: display).regions
     }
     private nonisolated static func analyzeImage(_ image: CGImage, display: CGRect) throws -> PixelAnalysis {
         try Task.checkCancellation()
