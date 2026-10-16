@@ -88,6 +88,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.webResearchPanel?.model.question = query
             self.webResearchPanel?.model.start()
         }
+        model.onShowHistory = { [weak self] in self?.readHistory() }
         model.startProactivity()
         webResearch.onVisibility = { [weak self] in self?.utilityVisibility("webResearch", visible: $0) }
         model.onForegroundInteraction = { [weak webResearch] in webResearch?.foregroundPause() }

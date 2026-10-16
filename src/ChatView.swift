@@ -123,6 +123,9 @@ final class ChatModel: ObservableObject {
     private let fallbackSynthesizer = AVSpeechSynthesizer()
     var onExecuteAction: ((NativeAction) async -> NativeActionResult?)?
     var onRequestResearch: ((String) -> Void)?
+    /// Opens the readable local history, so a spoken or typed request can put
+    /// Dot's own words on screen (the pet itself deliberately shows no text).
+    var onShowHistory: (() -> Void)?
 
     func speakDirect(_ text: String) {
         guard !shuttingDown, phase == .idle else { return }
@@ -1508,6 +1511,21 @@ final class ChatModel: ObservableObject {
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
         let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // A request to read what Dot said must actually show it: the compact pet
+        // carries no text, so this opens the readable history surface.
+        if pendingApproval == nil,
+           ["show that", "read that", "show your answer", "read your answer", "show me that",
+            "what did you say", "show history", "read history", "show your reply",
+            "read your reply", "show me your answer"].contains(copyPhrase) {
+            if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                respondDirectly("I have not said anything yet.", id: id)
+            } else {
+                onShowHistory?()
+                respondDirectly("Showing what I said in the local history.", id: id)
+            }
+            return
+        }
+
         if pendingApproval == nil,
            ["copy", "copy that", "copy this", "copy it", "copy your answer", "copy the answer",
             "copy your reply", "copy your last answer"].contains(copyPhrase) {
