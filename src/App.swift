@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
     private var flagsMonitorGlobal: Any?
     private var flagsMonitorLocal: Any?
+    private var screenshotMonitorGlobal: Any?
     private var fnKeyDown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -338,6 +339,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         startIdleRoaming()
         setupPushToTalk()
+        setupScreenshotAutoHide()
+    }
+
+    private func setupScreenshotAutoHide() {
+        screenshotMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let flags = event.modifierFlags.intersection([.command, .shift])
+            if flags == [.command, .shift] {
+                // Key code 20 is '3', 21 is '4', 23 is '5'
+                if event.keyCode == 20 || event.keyCode == 21 || event.keyCode == 23 {
+                    self?.hideTemporarilyForScreenshot()
+                }
+            }
+        }
+    }
+
+    private func hideTemporarilyForScreenshot() {
+        guard let panel = self.panel, panel.alphaValue > 0 else { return }
+        panel.alphaValue = 0.0
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let panel = self?.panel, self?.terminating != true else { return }
+            await NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                panel.animator().alphaValue = 1.0
+            }
+        }
     }
 
     private func setupPushToTalk() {
@@ -733,6 +760,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         if let flagsMonitorGlobal { NSEvent.removeMonitor(flagsMonitorGlobal) }
         if let flagsMonitorLocal { NSEvent.removeMonitor(flagsMonitorLocal) }
+        if let screenshotMonitorGlobal { NSEvent.removeMonitor(screenshotMonitorGlobal) }
         // No pkill, process-name matching, or shutdown of borrowed services.
     }
 }

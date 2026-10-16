@@ -4,6 +4,7 @@ import OSLog
 import AVFoundation
 import CoreGraphics
 import IOKit.ps
+import PDFKit
 
 /// Replaceable boundary operations keep coordinator replays model-free. This
 /// carries no turn state; production closures use the existing native managers.
@@ -296,7 +297,7 @@ final class ChatModel: ObservableObject {
         // 6. Keyboard Shortcuts
         if lower == "refresh this page" || lower == "refresh the page" || lower == "refresh page" ||
            lower == "reload this page" || lower == "reload the page" || lower == "reload page" ||
-           lower == "refresh website" || lower == "refresh this website" {
+           lower == "refresh website" || lower == "refresh this website" || lower == "refresh" || lower == "reload" {
             return .sendShortcut(modifiers: ["Cmd"], keys: "R")
         }
         if lower == "new tab" || lower == "open new tab" || lower == "open a new tab" {
@@ -307,6 +308,37 @@ final class ChatModel: ObservableObject {
         }
         if lower == "reopen tab" || lower == "reopen closed tab" || lower == "reopen the closed tab" {
             return .sendShortcut(modifiers: ["Cmd", "Shift"], keys: "T")
+        }
+        if lower == "go back" || lower == "back page" || lower == "previous page" || lower == "back" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "[")
+        }
+        if lower == "go forward" || lower == "forward page" || lower == "next page" || lower == "forward" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "]")
+        }
+        if lower == "next tab" {
+            return .sendShortcut(modifiers: ["Cmd", "Shift"], keys: "]")
+        }
+        if lower == "previous tab" {
+            return .sendShortcut(modifiers: ["Cmd", "Shift"], keys: "[")
+        }
+        if lower == "find on page" || lower == "find in page" || lower == "search page" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "F")
+        }
+        if lower == "zoom in" || lower == "make text bigger" || lower == "increase text size" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "+")
+        }
+        if lower == "zoom out" || lower == "make text smaller" || lower == "decrease text size" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "-")
+        }
+        if lower == "reset zoom" || lower == "actual size" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "0")
+        }
+        if lower == "toggle fullscreen" || lower == "fullscreen" || lower == "enter fullscreen" || lower == "exit fullscreen" {
+            return .sendShortcut(modifiers: ["Ctrl", "Cmd"], keys: "F")
+        }
+        if lower == "pause video" || lower == "play video" || lower == "pause music" || lower == "play music" ||
+           lower == "pause playback" || lower == "resume playback" || lower == "pause" || lower == "play" {
+            return .sendShortcut(modifiers: [], keys: "Space")
         }
         if lower == "select all" || lower == "select all text" {
             return .sendShortcut(modifiers: ["Cmd"], keys: "A")
@@ -1348,6 +1380,40 @@ final class ChatModel: ObservableObject {
         }
     }
 
+    func handleDroppedFile(_ url: URL) {
+        let filename = url.lastPathComponent
+        let ext = url.pathExtension.lowercased()
+        let textExtensions: Set<String> = [
+            "txt", "md", "swift", "py", "js", "ts", "json", "csv", "html", "css", "sh", "yml", "yaml", "xml", "rs", "c", "cpp", "h", "m"
+        ]
+        if ext == "dotsoul" {
+            let (_, msg) = DotSoulManager.shared.importSoul(from: url)
+            respondDirectly(msg, id: UUID())
+            return
+        }
+        if textExtensions.contains(ext) {
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                let truncated = String(content.prefix(4500))
+                _ = submitTyped("I dropped the file '\(filename)'. Here are its contents:\n\n\(truncated)\n\nPlease briefly inspect and summarize this file.")
+                return
+            }
+        } else if ext == "pdf" {
+            if let pdfDoc = PDFDocument(url: url) {
+                var fullText = ""
+                for i in 0..<min(pdfDoc.pageCount, 10) {
+                    if let page = pdfDoc.page(at: i), let str = page.string {
+                        fullText += str + "\n"
+                        if fullText.count > 4500 { break }
+                    }
+                }
+                let truncated = String(fullText.prefix(4500))
+                _ = submitTyped("I dropped the PDF document '\(filename)'. Here is the text extracted from it:\n\n\(truncated)\n\nPlease briefly summarize this PDF.")
+                return
+            }
+        }
+        _ = submitTyped("I dropped the file '\(filename)'. Please let me know how you can help me with it.")
+    }
+
     private func submit(_ text: String, id: UUID, typed: Bool = false) {
         guard gate.accepts(id) else { return }
         DiagnosticChatLogger.record(role: "user", text: text)
@@ -1828,7 +1894,8 @@ final class ChatModel: ObservableObject {
                     self.enqueueVoice(confirmation, id: id)
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
-                let shouldFollowup = !self.voiceDeliveryFailed
+                let hasQ = question != nil || self.answer.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?")
+                let shouldFollowup = !self.voiceDeliveryFailed && hasQ
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
                     let qTrimmed = question.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2062,6 +2129,16 @@ struct PetView: View {
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click for options. Escape stops.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
         .background(accessibilityContractIndicators)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            guard let provider = providers.first else { return false }
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                guard let url else { return }
+                Task { @MainActor in
+                    model.handleDroppedFile(url)
+                }
+            }
+            return true
+        }
     }
 
     @ViewBuilder private var accessibilityContractIndicators: some View {

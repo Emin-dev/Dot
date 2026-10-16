@@ -3675,6 +3675,52 @@ public final class WholeContextExtractor: @unchecked Sendable {
             }
         }
 
+        if appName.contains("textedit") {
+            let script = """
+            tell application "TextEdit"
+                if (count of documents) > 0 then
+                    set docName to name of front document
+                    set docText to text of front document
+                    return docName & "|||" & docText
+                end if
+            end tell
+            """
+            if let output = runAppleScript(script), !output.isEmpty {
+                let parts = output.components(separatedBy: "|||")
+                if parts.count >= 2 {
+                    let docName = parts[0]
+                    let docText = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let truncated = String(docText.prefix(6000))
+                    if !truncated.isEmpty {
+                        return ("TextEdit Document [\(docName)]", truncated)
+                    }
+                }
+            }
+        }
+
+        // 3. Inspect active document URL via Accessibility (kAXDocumentAttribute)
+        if let front = NSWorkspace.shared.frontmostApplication {
+            let pid = front.processIdentifier
+            let appEl = AXUIElementCreateApplication(pid)
+            var winRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appEl, kAXFocusedWindowAttribute as CFString, &winRef) == .success,
+               let win = winRef as! AXUIElement? {
+                var docRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(win, kAXDocumentAttribute as CFString, &docRef) == .success,
+                   let docURLStr = docRef as? String,
+                   let docURL = URL(string: docURLStr), docURL.isFileURL {
+                    let ext = docURL.pathExtension.lowercased()
+                    let readableExts: Set<String> = [
+                        "txt", "md", "swift", "py", "js", "ts", "json", "csv", "html", "sh", "yml", "yaml", "xml", "rs", "c", "h", "cpp"
+                    ]
+                    if readableExts.contains(ext), let text = try? String(contentsOf: docURL, encoding: .utf8), !text.isEmpty {
+                        let truncated = String(text.prefix(6000))
+                        return ("Active File [\(docURL.lastPathComponent)]", truncated)
+                    }
+                }
+            }
+        }
+
         return nil
     }
 
