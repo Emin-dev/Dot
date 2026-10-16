@@ -559,6 +559,14 @@ Recorded before implementation, per the standing documentation rule. These super
 
 **Idle movement.** Dot roams to a new clear spot **every 2 minutes** while idle (3.2 s glide), and relocates every 5 seconds while thinking (0.28 s glide). The idle cadence was 12–18 seconds until 2026-10-17, which was too frequent. It never covers protected windows, text regions or the cursor, and stays put while hovered, pinned, dragging, hidden or in a menu.
 
+**Default appearance (changed 2026-10-17): Dew is the default skin.** The owner replaced the
+long-standing Original default. An explicit stored choice still wins and nothing is written when
+the user has never chosen, so this default can change again without touching anyone's selection.
+
+**No movement while the owner is interacting.** Dot must not relocate while its own context menu is
+open, while the pointer is on it, or while a mouse button is held: thinking relocation, idle roaming
+and reactive evasion all honour that rule.
+
 **Skins and expressions.** All eleven skins share one warm expression set plus amplitude-driven speech. The "120 reviewed recipes per new skin" target (1,200 total) is **retired as a requirement** and must not be presented as delivered; accurate viseme/phoneme lip-sync remains a desirable improvement, not a completed feature.
 
 **Approvals.** Only destructive or irreversible actions require the inline Approve/Deny card. Everything else runs without repeated confirmation, per the owner's maximum-autonomy preference. The card must be reachable by mouse (fixed) and by unambiguous spoken approval only.

@@ -38,7 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// RoamingCore is still used for those escape trips (`performIdleRoam`).
     private static let randomRoamingDisabled = 999_999.0
     private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: AppDelegate.randomRoamingDisabled)
-    private var menuTracking = 0
+    private var menuTracking = 0 {
+        didSet { model?.menuIsOpen = menuTracking > 0 }
+    }
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
     private var documentWorker: WatchedDocumentWorker?
@@ -309,7 +311,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         placement.onSnapshotUpdated = { [weak self] snapshot in
             guard let self, !self.isAnimatingRoam,
                   let panel = self.panel, let model = self.model,
-                  model.screenEnabled, !model.pinned, model.phase == .idle else { return }
+                  model.screenEnabled, !model.pinned, model.phase == .idle,
+                  !model.hovered, model.menuIsOpen == false,
+                  NSEvent.pressedMouseButtons == 0 else { return }
             let now = ProcessInfo.processInfo.systemUptime
             guard now - self.lastRoamRelocationAt > 12.0 else { return }
             guard let screen = panel.screen else { return }
@@ -656,8 +660,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
             model.hovered = false
         }
+        // Never move while the owner has the menu open or the pointer on Dot.
         guard model.phase == .thinking, !model.pinned, !model.hovered,
-              panel.isVisible, NSEvent.pressedMouseButtons == 0 else { return }
+              panel.isVisible, menuTracking == 0, NSEvent.pressedMouseButtons == 0 else { return }
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }

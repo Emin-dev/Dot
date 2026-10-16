@@ -78,6 +78,8 @@ final class ChatModel: ObservableObject {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
     @Published var hovered = false { didSet { if hovered { placementInvalidated?() }; updateProactiveContext() } }
+    /// True while Dot's own context menu is open; movement is suppressed then.
+    @Published var menuIsOpen = false { didSet { if menuIsOpen { placementInvalidated?() } } }
     @Published var pendingApproval: ActionApprovalRequest? = nil
     private var lastNotifiedMeetingID: String? = nil
     /// Throttled screen text for stuck-task detection; never retained beyond the session.

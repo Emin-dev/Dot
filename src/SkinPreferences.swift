@@ -32,7 +32,10 @@ final class SkinPreferences: ObservableObject {
         // still means "no explicit choice" and a later default change keeps applying here.
         // Every valid stored choice is honored, including Dew, which is one of the eleven
         // offered skins and must survive relaunch once the user selects it.
-        selected = defaults.string(forKey: Self.selectionKey).flatMap(DotSkin.init(rawValue:)) ?? .original
+        // The owner chose Dew as the default appearance (2026-10-17). An explicit
+        // stored choice still wins, and nothing is written when the user has never
+        // chosen, so a future default change still applies to them.
+        selected = defaults.string(forKey: Self.selectionKey).flatMap(DotSkin.init(rawValue:)) ?? .dew
         motionDetail = defaults.string(forKey: Self.motionKey).flatMap(SkinMotionDetail.init(rawValue:)) ?? .full
     }
 }
