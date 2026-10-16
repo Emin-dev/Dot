@@ -132,6 +132,7 @@ final class ChatModel: ObservableObject {
             runtime.completeVoice(id)
         } catch {
             let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
             utterance.rate = AVSpeechUtteranceDefaultSpeechRate
             fallbackSynthesizer.speak(utterance)
             phase = .idle
@@ -1265,6 +1266,7 @@ final class ChatModel: ObservableObject {
                     self.runtime.completeVoice(id)
                 } catch {
                     let utterance = AVSpeechUtterance(string: result.text)
+                    utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
                     utterance.rate = AVSpeechUtteranceDefaultSpeechRate
                     self.fallbackSynthesizer.speak(utterance)
                 }

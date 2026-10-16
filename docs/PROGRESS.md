@@ -1,5 +1,12 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 16:30 UTC
+
+- **Restored Native Kokoro Isabella Voice (`bf_isabella.pt`):**
+  - **Root Cause:** When deploying `Dot.app` to `/Users/mac/Applications/Dot.app`, the development build output had overwritten the bundle without its neural runtime assets (`Contents/MacOS/dot-voice`, `Contents/Resources/Offline/Voice`, and `Contents/Frameworks/whisper.framework`). This caused `BionicVoice` to fail initialization and fall back to macOS's default robotic text-to-speech voice ("Samantha").
+  - **Resolution:** Re-populated the full neural voice assets from the complete payload (`dot-voice` native Kokoro synthesizer, `dot-search`, `whisper.framework`, and `Offline/Voice` with `bf_isabella.pt`), verified Kokoro synthesis via direct pipe communication, codesigned deeply with Apple Development identity, and updated AVSpeech fallback to explicitly default to `en-GB`.
+  - **Verification:** Verified `dot-voice` synthesis producing 24kHz audio with `bf_isabella`, confirmed 52/52 static contracts pass, signed and restarted `/Users/mac/Applications/Dot.app` (PID running live).
+
 ## Published checkpoint — 2026-10-16 16:00 UTC
 
 - **Proactivity & Unblocked Spoken Guidance:**
