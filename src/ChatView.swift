@@ -1452,6 +1452,11 @@ final class ChatModel: ObservableObject {
             respondDirectly(msg, id: id)
             return
         }
+        if lowerClean == "import soul" || lowerClean == "import my soul" || lowerClean == "restore soul" || lowerClean == "import dot soul" || lowerClean == "restore my dot" {
+            let (_, msg) = DotSoulManager.shared.importLatestSoulFromDownloads()
+            respondDirectly(msg, id: id)
+            return
+        }
         if lowerClean == "check ram" || lowerClean == "ram status" || lowerClean == "how much ram" || lowerClean == "memory status" || lowerClean == "check memory" {
             let report = SystemRAMInspector.formattedReport()
             respondDirectly(report, id: id)
@@ -1840,6 +1845,7 @@ final class ChatModel: ObservableObject {
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 let finalAnswer = self.answer
                 DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
+                Task { [weak self] in await self?.screen.captureSilentScreenSnapshot() }
 
                 // Auto-copy drafted prompts to clipboard
                 let lowerTask = text.lowercased()
@@ -1919,6 +1925,7 @@ final class ChatModel: ObservableObject {
         }
         self.generating = false
         self.phase = !self.voiceDeliveryFailed && self.runtime.ttsSpeaking() ? .speaking : .idle
+        Task { [weak self] in await self?.screen.captureSilentScreenSnapshot() }
     }
 
     private func block(_ message: String, issue: CompanionIssue) {

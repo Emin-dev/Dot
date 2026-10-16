@@ -3,6 +3,7 @@ import ScreenCaptureKit
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+import Vision
 
 @MainActor
 final class ScreenContext {
@@ -100,7 +101,25 @@ final class ScreenContext {
         }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         try validateCapture(turn: turn)
-        let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        let activeScreen: NSScreen? = {
+            if let frontApp = NSWorkspace.shared.frontmostApplication,
+               frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                if let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] {
+                    for w in windows {
+                        if let pid = (w[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid == frontApp.processIdentifier,
+                           let boundsDict = w[kCGWindowBounds as String] as? [String: Any],
+                           let rect = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+                           rect.width > 100, rect.height > 100 {
+                            if let s = NSScreen.screens.first(where: { $0.frame.intersects(rect) }) {
+                                return s
+                            }
+                        }
+                    }
+                }
+            }
+            return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+        }()
+        let selected = activeScreen ?? NSScreen.main
         let displayID = (selected?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
         guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { throw ScreenFailure.unavailable }
         let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
@@ -115,6 +134,17 @@ final class ScreenContext {
         // the request so framework delay, JPEG encoding and submission all count.
         let acquiredAt = ProcessInfo.processInfo.systemUptime
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+        Task.detached(priority: .utility) {
+            let request = VNRecognizeTextRequest { req, _ in
+                guard let observations = req.results as? [VNRecognizedTextObservation] else { return }
+                let text = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Active App"
+                PreviousScreenMemory.shared.recordScreen(appName: app, windowTitle: "", ocrText: text)
+            }
+            request.recognitionLevel = .fast
+            let handler = VNImageRequestHandler(cgImage: image, options: [:])
+            try? handler.perform([request])
+        }
         try validateCapture(turn: turn)
         let encoder = Task.detached(priority: .userInitiated) { () -> Data? in
             for quality in [0.75, 0.55, 0.35] {
@@ -163,6 +193,33 @@ final class ScreenContext {
         #else
         return []
         #endif
+    }
+    func captureSilentScreenSnapshot() async {
+        guard enabled, CGPreflightScreenCaptureAccess() else { return }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+            let displayID = (selected?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { return }
+            let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+            let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.width = 1024
+            configuration.height = 768
+            configuration.showsCursor = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            Task.detached(priority: .utility) {
+                let request = VNRecognizeTextRequest { req, _ in
+                    guard let observations = req.results as? [VNRecognizedTextObservation] else { return }
+                    let text = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                    let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Active App"
+                    PreviousScreenMemory.shared.recordScreen(appName: app, windowTitle: "", ocrText: text)
+                }
+                request.recognitionLevel = .fast
+                let handler = VNImageRequestHandler(cgImage: image, options: [:])
+                try? handler.perform([request])
+            }
+        } catch {}
     }
     func cancel() { gate.cancel(); permission.cancel(); encoding?.task.cancel(); encoding = nil }
     enum ScreenFailure: LocalizedError {

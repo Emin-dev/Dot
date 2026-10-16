@@ -3469,10 +3469,27 @@ public final class DotSoulManager: @unchecked Sendable {
         do {
             let data = try JSONSerialization.data(withJSONObject: soulExport, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: exportURL)
-            return (exportURL, "Dot's soul exported successfully to \(exportURL.path). You can transfer this file to any Mac and import it.")
+            NSWorkspace.shared.activateFileViewerSelecting([exportURL])
+            return (exportURL, "Dot's soul exported successfully to \(exportURL.path). All memories, notes, and conversations are safely saved! You can transfer this file to any Mac and import it.")
         } catch {
             return (nil, "Failed to export Dot's soul: \(error.localizedDescription)")
         }
+    }
+
+    public func importLatestSoulFromDownloads() -> (success: Bool, message: String) {
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            return (false, "Could not locate Downloads folder.")
+        }
+        guard let files = try? FileManager.default.contentsOfDirectory(at: downloads, includingPropertiesForKeys: [.contentModificationDateKey]),
+              let latest = files.filter({ $0.pathExtension == "dotsoul" || $0.lastPathComponent.hasPrefix("Dot_Soul_") || $0.lastPathComponent.hasPrefix("DotSoul") })
+                .sorted(by: {
+                    let d1 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+                    let d2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
+                    return d1 > d2
+                }).first else {
+            return (false, "No .dotsoul backup file found in Downloads folder.")
+        }
+        return importSoul(from: latest)
     }
 
     public func importSoul(from url: URL) -> (success: Bool, message: String) {
@@ -3487,7 +3504,7 @@ public final class DotSoulManager: @unchecked Sendable {
             if let volatile = obj["volatile"] as? String, !volatile.isEmpty {
                 PersistentMemoryBrain.shared.writeVolatile(volatile)
             }
-            return (true, "Successfully imported Dot's soul! Profile preferences, learned rules, and session memory are restored.")
+            return (true, "Successfully imported Dot's soul from \(url.lastPathComponent)! Profile preferences, learned rules, and session memory are restored.")
         } catch {
             return (false, "Failed to import soul: \(error.localizedDescription)")
         }
@@ -3724,6 +3741,7 @@ public final class PreviousScreenMemory: @unchecked Sendable {
         return "Previously Viewed Screens: " + parts.joined(separator: " ; ")
     }
 }
+
 
 
 
