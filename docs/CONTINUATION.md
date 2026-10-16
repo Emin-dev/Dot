@@ -57,10 +57,13 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`
 scratch path (SwiftPM) or `xattr -cr` before `codesign`, because the File Provider re-applies
-attributes. Installing over `~/Applications/Dot.app` requires cloning the payload
-(`cp -c -R Offline OfflineModels`), embedding `whisper.framework`, signing with
-"Apple Development: Emin Ismayilov (7M2G5ULAUF)" and correcting `build-provenance.json`; a script that
-does this reliably is not yet committed and would be worth adding.
+attributes. Installing over `~/Applications/Dot.app` is now scripted:
+`bash scripts/install_local.sh` builds with the recognizer embedded, clones the payload
+(`cp -c -R`, so the 20 GB is copy-on-write rather than duplicated), writes honest provenance,
+signs with "Apple Development: Emin Ismayilov (7M2G5ULAUF)" so macOS keeps the microphone and
+screen grants, keeps the replaced app at `Dot.app.backup-latest`, relaunches and verifies that the
+installed provenance matches HEAD. It defaults the framework and payload to the app being replaced,
+so it needs no arguments on this Mac.
 
 **Still unverified by the owner.** No microphone, screen-permission, acoustic or device acceptance has
 been observed on the current build: the diagnostic log holds no entries from it, and repeated
