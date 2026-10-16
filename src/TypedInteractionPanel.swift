@@ -60,8 +60,12 @@ final class TypedInteractionPanel: NSObject, NSWindowDelegate {
         let replacedModel = self.model !== model
         self.model = model
         if panel == nil {
-            let panel = TypedInputWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 56),
+            // The panel must be able to show the message, the refusal/readiness
+            // feedback and the controls at once; the original 340x56 strip could
+            // not, which is why a rejected submission appeared to do nothing.
+            let panel = TypedInputWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 400),
                 styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.minSize = NSSize(width: 420, height: 400)
             panel.title = "Dot · Type a message"
             panel.isOpaque = false
             panel.backgroundColor = .clear
