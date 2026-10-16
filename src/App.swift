@@ -30,6 +30,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var movement: Timer?
     private var thinkingRelocationTimer: Timer?
     private var idleRoamTimer: Timer?
+    private var isAnimatingRoam = false
+    private var lastRoamRelocationAt: Double = 0
     private var statusItem: NSStatusItem?
     private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 8.0)
     private var menuTracking = 0
@@ -174,14 +176,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 reply = "Relocating to a new spot!"
             }
 
-            self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
+            let now = ProcessInfo.processInfo.systemUptime
+            self.isAnimatingRoam = true
+            self.lastRoamRelocationAt = now
+            self.roam.cancel(now: now, longRest: true)
             let targetFrame = NSRect(origin: target, size: panel.frame.size)
             NSAnimationContext.runAnimationGroup({ context in
                 context.duration = 0.65
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 panel.animator().setFrame(targetFrame, display: true)
-            }, completionHandler: {
-                panel.setFrameOrigin(target)
+            }, completionHandler: { [weak self] in
+                Task { @MainActor in
+                    panel.setFrameOrigin(target)
+                    self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: true)
+                    self?.isAnimatingRoam = false
+                }
             })
             self.scheduleMovement(interval: 0.5)
             return reply
@@ -289,14 +298,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in model?.visible = true }
         })
         placement.onSnapshotUpdated = { [weak self] snapshot in
-            guard let self, let panel = self.panel, let model = self.model,
+            guard let self, !self.isAnimatingRoam,
+                  let panel = self.panel, let model = self.model,
                   model.screenEnabled, !model.pinned, model.phase == .idle else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - self.lastRoamRelocationAt > 12.0 else { return }
             guard let screen = panel.screen else { return }
             let frame = panel.frame
             if !RoamingCore.clear(frame, regions: snapshot.protected) {
                 let origin = self.roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
                                                          cursor: NSEvent.mouseLocation,
-                                                         now: ProcessInfo.processInfo.systemUptime,
+                                                         now: now,
                                                          displayID: snapshot.displayID,
                                                          snapshot: snapshot)
                 if origin != frame.origin {
@@ -515,19 +527,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleWindowOrAppChange() {
-        guard let panel, let model, model.screenEnabled, !model.pinned, model.phase == .idle else { return }
+        guard !isAnimatingRoam, let panel, let model, model.screenEnabled, !model.pinned, model.phase == .idle else { return }
         guard let screen = panel.screen else { return }
 
         placement.invalidate()
         placement.request(screen: screen, eligible: true, immediate: true)
 
-        let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
-        if let snap, !snap.protected.isEmpty {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastRoamRelocationAt > 12.0,
+           let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen),
+           !snap.protected.isEmpty {
             let frame = panel.frame
             if !RoamingCore.clear(frame, regions: snap.protected) {
                 let origin = roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
                                                     cursor: NSEvent.mouseLocation,
-                                                    now: ProcessInfo.processInfo.systemUptime,
+                                                    now: now,
                                                     displayID: snap.displayID,
                                                     snapshot: snap)
                 if origin != frame.origin {
@@ -540,7 +554,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func moveGently() {
-        guard let panel, let model else { return }
+        guard !isAnimatingRoam, let panel, let model else { return }
+        let cursor = NSEvent.mouseLocation
+        if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
+            model.hovered = false
+        }
+        if model.interactionPaused && NSEvent.pressedMouseButtons == 0 {
+            model.interactionPaused = false
+        }
         let paused = !panel.isVisible || model.hovered || model.interactionPaused
             || model.historyPresented || model.pinned || model.phase.isActive || model.followupPending || menuTracking > 0 || NSEvent.pressedMouseButtons != 0
             || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || NSWorkspace.shared.isVoiceOverEnabled
@@ -554,11 +575,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if eligible && currentSnapshot == nil { placement.request(screen: screen, eligible: eligible) }
         let visible = screen.visibleFrame
         let now = ProcessInfo.processInfo.systemUptime
-        let origin = roam.step(frame: panel.frame, visible: visible, cursor: NSEvent.mouseLocation,
+        let origin = roam.step(frame: panel.frame, visible: visible, cursor: cursor,
                                paused: !eligible || model.phase != .idle, now: now, displayID: displayID, snapshot: snapshot)
         let moved = panel.frame.origin != origin
         if moved { panel.setFrameOrigin(origin) }
-        let pointerNearby = panel.frame.insetBy(dx: -40, dy: -40).contains(NSEvent.mouseLocation)
+        let pointerNearby = panel.frame.insetBy(dx: -40, dy: -40).contains(cursor)
         _ = model.updateIdleMotion(now: now, externallyPaused: paused, pointerNearby: pointerNearby,
                                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, moved: moved)
         let interval = roam.isTravelling ? 1.0 / 60 : 0.5
@@ -589,20 +610,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func relocateDuringThinking() {
-        guard let panel, let model, model.phase == .thinking, !model.pinned, !model.hovered,
+        guard !isAnimatingRoam, let panel, let model else { return }
+        let cursor = NSEvent.mouseLocation
+        if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
+            model.hovered = false
+        }
+        guard model.phase == .thinking, !model.pinned, !model.hovered,
               panel.isVisible, NSEvent.pressedMouseButtons == 0 else { return }
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
 
-        if model.screenEnabled {
-            placement.request(screen: screen, eligible: true, immediate: true)
-        }
-
         let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
         let protectedRegions = snap?.protected ?? []
 
-        let cursor = NSEvent.mouseLocation
         let currentOrigin = panel.frame.origin
         let currentFrame = panel.frame
 
@@ -616,21 +637,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard target != currentOrigin else { return }
 
-        self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
+        let now = ProcessInfo.processInfo.systemUptime
+        self.isAnimatingRoam = true
+        self.lastRoamRelocationAt = now
+        self.roam.cancel(now: now, longRest: true)
         let targetFrame = NSRect(origin: target, size: panel.frame.size)
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.28
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(targetFrame, display: true)
-        }, completionHandler: {
-            panel.setFrameOrigin(target)
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                panel.setFrameOrigin(target)
+                self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: true)
+                self?.isAnimatingRoam = false
+            }
         })
     }
 
     private func startIdleRoaming() {
         idleRoamTimer?.invalidate()
-        let interval: Double = 5.0
+        let interval = Double.random(in: 12.0...18.0)
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.performIdleRoam()
@@ -642,20 +670,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func performIdleRoam() {
-        guard let panel, let model, model.phase == .idle, !model.pinned, !model.hovered,
-              !model.interactionPaused, panel.isVisible, NSEvent.pressedMouseButtons == 0 else { return }
+        guard !isAnimatingRoam, let panel, let model else { return }
+        let cursor = NSEvent.mouseLocation
+        if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
+            model.hovered = false
+        }
+        if model.interactionPaused && NSEvent.pressedMouseButtons == 0 {
+            model.interactionPaused = false
+        }
+        guard model.phase == .idle, !model.pinned, !model.hovered,
+              !model.interactionPaused, panel.isVisible, menuTracking == 0,
+              NSEvent.pressedMouseButtons == 0 else { return }
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
 
-        if model.screenEnabled {
-            placement.request(screen: screen, eligible: true, immediate: true)
-        }
-
         let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
         let protectedRegions = snap?.protected ?? []
 
-        let cursor = NSEvent.mouseLocation
         let currentOrigin = panel.frame.origin
         let currentFrame = panel.frame
 
@@ -669,15 +701,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard target != currentOrigin else { return }
 
-        self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: false)
+        let now = ProcessInfo.processInfo.systemUptime
+        self.isAnimatingRoam = true
+        self.lastRoamRelocationAt = now
+        self.roam.cancel(now: now, longRest: true)
         let targetFrame = NSRect(origin: target, size: panel.frame.size)
 
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.85
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(targetFrame, display: true)
-        }, completionHandler: {
-            panel.setFrameOrigin(target)
+        }, completionHandler: { [weak self] in
+            Task { @MainActor in
+                panel.setFrameOrigin(target)
+                self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: true)
+                self?.isAnimatingRoam = false
+            }
         })
     }
 

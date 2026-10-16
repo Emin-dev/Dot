@@ -253,6 +253,26 @@ final class RoamingTests: XCTestCase {
         XCTAssertTrue(moved)
         XCTAssertNotEqual(currentFrame.origin, frame.origin)
     }
+    func testFindRandomEmptySpaceAlwaysFindsSpotEvenWithMaximizedWindowRegions() {
+        let bounds = RoamingCore.originBounds(window: frame.size, visible: visible)!
+        var seen: Set<String> = []
+        for _ in 0..<12 {
+            let target = RoamingCore.findRandomEmptySpace(
+                frame: frame,
+                bounds: bounds,
+                cursor: cursor,
+                regions: [visible],
+                minDistance: 120
+            )
+            XCTAssertNotNil(target)
+            if let target {
+                XCTAssertNotEqual(target, frame.origin)
+                XCTAssertTrue(bounds.contains(target))
+                seen.insert("\(Int(target.x)),\(Int(target.y))")
+            }
+        }
+        XCTAssertGreaterThan(seen.count, 1)
+    }
 }
 
 final class PlacementScanTests: XCTestCase {

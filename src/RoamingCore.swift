@@ -285,8 +285,36 @@ struct RoamingCore {
             guard hypot(cursor.x - center.x, cursor.y - center.y) >= 30 else { continue }
             fallbackCandidates.append(clamped)
         }
+        if let chosen = fallbackCandidates.randomElement() {
+            return chosen
+        }
 
-        return fallbackCandidates.randomElement()
+        // Pass 3: Screen-wide random fallback when windows or high-contrast content cover the display.
+        // Picks random positions away from the current origin and cursor, preferring lower overlap.
+        let effectiveMinDist = min(100, max(40, minDistance * 0.6))
+        var scoredCandidates: [(point: CGPoint, hits: Int)] = []
+        for candidate in candidates {
+            let clamped = clamp(candidate, to: bounds)
+            let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distToOrigin >= effectiveMinDist else { continue }
+            let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
+            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 60 else { continue }
+            let testRect = CGRect(origin: clamped, size: frame.size)
+            let hits = regions.reduce(into: 0) { count, region in
+                if testRect.intersects(region) { count += 1 }
+            }
+            scoredCandidates.append((clamped, hits))
+        }
+        if !scoredCandidates.isEmpty {
+            scoredCandidates.sort { $0.hits < $1.hits }
+            let poolSize = max(4, scoredCandidates.count / 2)
+            return scoredCandidates.prefix(poolSize).randomElement()?.point
+        }
+
+        let anyMoved = candidates
+            .map { clamp($0, to: bounds) }
+            .filter { hypot($0.x - origin.x, $0.y - origin.y) >= 36 }
+        return anyMoved.randomElement() ?? candidates.map { clamp($0, to: bounds) }.randomElement()
     }
     mutating func evadeToEmptySpace(frame: CGRect, visible: CGRect, cursor: CGPoint,
                                     now: Double, displayID: UInt32, snapshot: PlacementSnapshot) -> CGPoint {
@@ -294,8 +322,10 @@ struct RoamingCore {
               let bounds = Self.originBounds(window: frame.size, visible: visible) else {
             return frame.origin
         }
-        guard let target = Self.findEmptySpace(frame: frame, bounds: bounds, cursor: cursor,
-                                              regions: snapshot.protected, preferredNear: frame.origin) else {
+        guard let target = Self.findRandomEmptySpace(frame: frame, bounds: bounds, cursor: cursor,
+                                                     regions: snapshot.protected, minDistance: 120)
+                ?? Self.findEmptySpace(frame: frame, bounds: bounds, cursor: cursor,
+                                       regions: snapshot.protected, preferredNear: frame.origin) else {
             return frame.origin
         }
         let origin = frame.origin

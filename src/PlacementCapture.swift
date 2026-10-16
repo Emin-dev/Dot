@@ -167,7 +167,7 @@ final class PlacementCapture {
             guard let values = window[kCGWindowBounds as String] as? [String: Any],
                   let rect = CGRect(dictionaryRepresentation: values as CFDictionary),
                   let mapped = PlacementSnapshot.quartzRect(rect, primaryTop: primaryTop) else { throw PlacementFailure.windowMetadata }
-            if mapped.width >= display.width - 2 && mapped.height >= display.height - 2 { continue }
+            if mapped.width >= display.width * 0.5 && mapped.height >= display.height * 0.5 { continue }
             if mapped.intersects(display) { regions.append(mapped.insetBy(dx: -12, dy: -12)) }
         }
         return regions
