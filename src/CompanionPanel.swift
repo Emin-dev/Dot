@@ -148,17 +148,18 @@ final class CompanionSurface {
 final class UtilityPanelHost {
     private let size: NSSize, minSize: NSSize
     private let title: String
-    private let makeWindow: (NSRect) -> NSPanel
+    private let makeWindow: ((NSRect) -> NSPanel)?
     private(set) var panel: NSPanel?
-    init(size: NSSize, minSize: NSSize, title: String,
-         makeWindow: @escaping (NSRect) -> NSPanel = { NSPanel(contentRect: $0, styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false) }) {
+    init(size: NSSize, minSize: NSSize, title: String, makeWindow: ((NSRect) -> NSPanel)? = nil) {
         self.size = size; self.minSize = minSize; self.title = title; self.makeWindow = makeWindow
     }
     /// Creates the window once; later calls return the same surface.
     @discardableResult
     func window(delegate: NSWindowDelegate, configure: (NSPanel) -> Void = { _ in }, content: () -> NSView) -> NSPanel {
         if let panel { return panel }
-        let window = makeWindow(NSRect(x: 0, y: 0, width: size.width, height: size.height))
+        let rect = NSRect(x: 0, y: 0, width: size.width, height: size.height)
+        let window = makeWindow?(rect) ?? NSPanel(contentRect: rect, styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                                                  backing: .buffered, defer: false)
         window.title = title; window.minSize = minSize
         window.isReleasedWhenClosed = false; window.delegate = delegate
         configure(window); window.contentView = content(); window.center()

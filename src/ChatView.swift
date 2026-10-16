@@ -1316,7 +1316,10 @@ final class ChatModel: ObservableObject {
             expressionRevision &+= 1
             return
         }
-        guard !shuttingDown, runtime.isReady() else { return }
+        guard !shuttingDown, runtime.isReady() else {
+            reportNotReady()
+            return
+        }
         dismissFirstUseHint()
         if phase == .speaking || runtime.ttsSpeaking() || generating {
             stopCurrentTurn()
@@ -1325,11 +1328,21 @@ final class ChatModel: ObservableObject {
         beginListening(continuation: nil)
     }
 
+    /// A click or key press that cannot start listening must say why instead of
+    /// appearing to do nothing: this is the honest counterpart of the readiness gate.
+    private func reportNotReady() {
+        let state = OfflinePreparation.shared.state
+        block(state.detail ?? state.caption, issue: .files)
+    }
+
     private var pushToTalkActive = false
     private var pushToTalkStart: Double = 0
 
     func beginPushToTalk() {
-        guard !shuttingDown, runtime.isReady() else { return }
+        guard !shuttingDown, runtime.isReady() else {
+            reportNotReady()
+            return
+        }
         pushToTalkActive = true
         pushToTalkStart = ProcessInfo.processInfo.systemUptime
         dismissFirstUseHint()

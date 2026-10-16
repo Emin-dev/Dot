@@ -20,11 +20,25 @@ command -v cargo >/dev/null || { echo 'cargo is required to build the Dot runtim
 cargo build --release --manifest-path Cargo.toml --bin dot-voice --bin dot-search --bin dot-fetch
 python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "${SOURCES[@]}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+# The speech recognizer is a compile-time branch (`#if canImport(whisper)`), so a
+# build without the framework produces an app that can never listen. Point
+# DOT_WHISPER_FRAMEWORK at a verified whisper.framework to build a talking app; the
+# framework is embedded and linked with the matching rpath.
+WHISPER_FLAGS=()
+if [[ -n "${DOT_WHISPER_FRAMEWORK:-}" ]]; then
+  test -f "$DOT_WHISPER_FRAMEWORK/Modules/module.modulemap" || { echo "DOT_WHISPER_FRAMEWORK must point at a whisper.framework containing Modules/module.modulemap" >&2; exit 1; }
+  WHISPER_FLAGS=(-D DOT_COMPLETE_BUNDLE -F "$(dirname "$DOT_WHISPER_FRAMEWORK")" -framework whisper -Xlinker -rpath -Xlinker @executable_path/../Frameworks)
+  mkdir -p "$APP/Contents/Frameworks"
+  rm -rf "$APP/Contents/Frameworks/whisper.framework"
+  cp -c -R "$DOT_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/" 2>/dev/null || cp -R "$DOT_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/"
+  echo "Embedding speech recognizer: $(basename "$DOT_WHISPER_FRAMEWORK")"
+fi
 xcrun swiftc -O -warnings-as-errors -module-name Dot -target "$TARGET" \
   -module-cache-path "$INTENTS_BUILD/module-cache" \
   -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend "$INTENTS_BUILD/protocols.json" \
   -output-file-map "$INTENTS_BUILD/output-map.json" -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \
-  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit -framework EventKit
+  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit -framework EventKit \
+  ${WHISPER_FLAGS[@]+"${WHISPER_FLAGS[@]}"}
 cp target/release/dot-voice target/release/dot-search target/release/dot-fetch "$APP/Contents/MacOS/"
 mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"

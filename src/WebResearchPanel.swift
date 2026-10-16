@@ -561,7 +561,6 @@ final class WebResearchPanel: NSObject, NSWindowDelegate {
                                         title: "Dot · Web research",
                                         makeWindow: { WebResearchWindow(contentRect: $0, styleMask: [.titled, .closable, .resizable, .utilityWindow],
                                                                         backing: .buffered, defer: false) })
-    private var panel: NSPanel? { host.panel }
     private let confirmation: LocalRecordDeletionConfirmation
     init(model: WebResearchModel, confirmation: LocalRecordDeletionConfirmation? = nil) {
         self.model = model; self.confirmation = confirmation ?? LocalRecordDeletionConfirmation(); super.init()
@@ -581,12 +580,12 @@ final class WebResearchPanel: NSObject, NSWindowDelegate {
     }
     func foregroundPause() { invalidateDeletion(); model.foregroundPause() }
     func cancel() { invalidateDeletion(); model.cancel() }
-    func close() { invalidateDeletion(); model.close(); panel?.close() }
-    func closeAdmissions() { invalidateDeletion(); model.closeAdmissions(); panel?.close() }
+    func close() { invalidateDeletion(); model.close(); host.panel?.close() }
+    func closeAdmissions() { invalidateDeletion(); model.closeAdmissions(); host.panel?.close() }
     func windowWillClose(_ notification: Notification) { invalidateDeletion(); model.close(); onVisibility?(false) }
     private func invalidateDeletion() { confirmation.invalidate(); model.cancelDeletion() }
     func requestDeletion() {
-        guard let panel, let prompt = model.requestDeleteSelected() else { return }
+        guard let panel = host.panel, let prompt = model.requestDeleteSelected() else { return }
         confirmation.present(prompt, for: panel) { [weak model] confirmed in
             if confirmed { model?.confirmDeletion(prompt.id) } else { model?.cancelDeletion() }
         }

@@ -200,7 +200,6 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     let model: ResearchNotebookModel
     private let host = UtilityPanelHost(size: NSSize(width: 720, height: 620), minSize: NSSize(width: 560, height: 430),
                                         title: "Dot · Source notebooks")
-    private var panel: NSPanel? { host.panel }
     private var presentation = UUID()
     private let confirmation: LocalRecordDeletionConfirmation
     var onVisibility: ((Bool) -> Void)?
@@ -219,8 +218,8 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
         model.open(); host.present(onVisibility)
     }
     func cancel() { invalidateSheets(); model.cancel() }
-    func close() { invalidateSheets(); model.close(); panel?.close() }
-    func closeAdmissions() { invalidateSheets(); model.closeAdmissions(); panel?.close() }
+    func close() { invalidateSheets(); model.close(); host.panel?.close() }
+    func closeAdmissions() { invalidateSheets(); model.closeAdmissions(); host.panel?.close() }
     func windowWillClose(_ notification: Notification) { invalidateSheets(); model.close(); onVisibility?(false) }
     private func invalidateSheets() {
         confirmation.invalidate(); model.cancelDeletion()
@@ -228,28 +227,28 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
         host.endAttachedSheet()
     }
     func requestDeletion() {
-        guard let panel, let prompt = model.requestDeleteSelected() else { return }
+        guard let panel = host.panel, let prompt = model.requestDeleteSelected() else { return }
         confirmation.present(prompt, for: panel) { [weak model] confirmed in
             if confirmed { model?.confirmDeletion(prompt.id) } else { model?.cancelDeletion() }
         }
     }
     private func chooseFolder() {
-        guard let panel, !model.busy else { return }
+        guard let panel = host.panel, !model.busy else { return }
         let expected = presentation
         let chooser = NSOpenPanel(); chooser.canChooseFiles = false; chooser.canChooseDirectories = true
         chooser.allowsMultipleSelection = false; chooser.prompt = "Read this folder"; chooser.directoryURL = model.folder
         chooser.beginSheetModal(for: panel) { [weak self, weak panel] response in
-            guard let self, let panel, self.presentation == expected, panel.isVisible, self.panel === panel, response == .OK else { return }
+            guard let self, let panel, self.presentation == expected, panel.isVisible, self.host.panel === panel, response == .OK else { return }
             self.model.selectFolder(chooser.url)
         }
     }
     private func chooseExport() {
-        guard let panel, !model.busy, let id = model.selected?.id else { return }
+        guard let panel = host.panel, !model.busy, let id = model.selected?.id else { return }
         let expected = presentation
         let chooser = NSSavePanel(); chooser.nameFieldStringValue = "dot-source-brief.md"
         chooser.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
         chooser.beginSheetModal(for: panel) { [weak self, weak panel] response in
-            guard let self, let panel, self.presentation == expected, panel.isVisible, self.panel === panel, self.model.selection == id,
+            guard let self, let panel, self.presentation == expected, panel.isVisible, self.host.panel === panel, self.model.selection == id,
                   response == .OK, let url = chooser.url else { return }
             self.model.exportSelected(to: url)
         }

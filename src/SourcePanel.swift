@@ -53,7 +53,6 @@ final class SourceReferencePanel: NSObject, NSWindowDelegate {
     var onVisibility: ((Bool) -> Void)?
     private let host = UtilityPanelHost(size: NSSize(width: 600, height: 520), minSize: NSSize(width: 440, height: 360),
                                         title: "Dot · This version's source")
-    private var panel: NSPanel? { host.panel }
 
     func show() {
         host.window(delegate: self) { NSHostingView(rootView: SourceReferenceView(model: model)) }

@@ -193,7 +193,7 @@ final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { invalidateDeletion(); onVisibility?(false) }
     private func invalidateDeletion() { confirmation.invalidate(); model?.cancelDeletion() }
     func requestDeletion(id: UUID?) {
-        guard let model, let panel, !model.busy, !model.closing else { return }
+        guard let model, let panel = host.panel, !model.busy, !model.closing else { return }
         let prompt = id.flatMap { model.requestDelete(id: $0) } ?? (id == nil ? model.requestClear() : nil)
         guard let prompt else { return }
         confirmation.present(prompt, for: panel) { [weak model] confirmed in

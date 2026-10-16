@@ -55,8 +55,7 @@ func trimConversationalPunctuation(_ text: String) -> String {
 /// The one read-to-EOF subprocess shape: launch, wait for exit, then drain the pipe. Callers keep
 /// their own decoding, trimming, limits and error text so no reply string changes.
 enum SubprocessRunner {
-    struct Output { let data: Data; let status: Int32 }
-    static func run(executable: String, arguments: [String], mergeStandardError: Bool = false) throws -> Output {
+    static func run(executable: String, arguments: [String], mergeStandardError: Bool = false) throws -> (data: Data, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -65,7 +64,7 @@ enum SubprocessRunner {
         if mergeStandardError { process.standardError = pipe }
         try process.run()
         process.waitUntilExit()
-        return Output(data: pipe.fileHandleForReading.readDataToEndOfFile(), status: process.terminationStatus)
+        return (pipe.fileHandleForReading.readDataToEndOfFile(), process.terminationStatus)
     }
 }
 
