@@ -1,3 +1,8 @@
+> **SUPERSEDED (2026-10-17).** This document describes a dated Python-era research slice whose optional
+> pinned SearXNG/Waitress fixtures no longer exist. See [the Rust-only runtime](../rust-runtime.md)
+> for the current runtime. The recorded source contracts and test counts below are kept unchanged as
+> the evidence of what was run at the time; search is now the Rust `dot-search` binary.
+
 # Passive research recovery and explicit local completion
 
 ## Scope and baseline

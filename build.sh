@@ -14,6 +14,10 @@ STAGE=""
 trap 'rm -rf "$INTENTS_BUILD"; if [[ -n "$STAGE" ]]; then rm -rf "$STAGE"; fi' EXIT
 TARGET="$(uname -m)-apple-macosx15.0"
 SOURCES=(src/*.swift)
+# The runtime is Rust-only. Build the binaries first so the bundle always carries
+# them; an absent binary would otherwise silently change runtime behaviour.
+command -v cargo >/dev/null || { echo 'cargo is required to build the Dot runtime' >&2; exit 1; }
+cargo build --release --manifest-path Cargo.toml --bin dot-voice --bin dot-search --bin dot-fetch
 python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "${SOURCES[@]}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 xcrun swiftc -O -warnings-as-errors -module-name Dot -target "$TARGET" \
@@ -21,11 +25,12 @@ xcrun swiftc -O -warnings-as-errors -module-name Dot -target "$TARGET" \
   -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend "$INTENTS_BUILD/protocols.json" \
   -output-file-map "$INTENTS_BUILD/output-map.json" -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \
   -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit -framework EventKit
+cp target/release/dot-voice target/release/dot-search target/release/dot-fetch "$APP/Contents/MacOS/"
 mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
 cp Resources/bundled-models.json "$APP/Contents/Resources/"
-cp -R Resources/Research Resources/Search "$APP/Contents/Resources/"
-cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt Resources/Voice/voice.sb "$APP/Contents/Resources/Voice/"
+cp -R Resources/Research "$APP/Contents/Resources/"
+cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 ICONSET=build/Icon.iconset
 mkdir -p "$ICONSET"
@@ -48,7 +53,13 @@ record = {'commit': sys.argv[2], 'source_dirty': sys.argv[3] == 'true' or bool(c
           'models_bundled': False, 'llm_weights_download_on_first_launch': False}
 (pathlib.Path(sys.argv[1]) / 'Contents/Resources/build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
 PYCODE
+# A cloud-synced checkout (Documents/Desktop under a File Provider) re-applies
+# com.apple.FinderInfo/fileprovider attributes that make codesign reject the
+# bundle with "resource fork, Finder information, or similar detritus not
+# allowed". Clearing them is a no-op on an ordinary checkout.
+xattr -cr "$APP" 2>/dev/null || true
 codesign --force --sign - "$APP"
+codesign --verify --strict "$APP"
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-stage.XXXXXX")
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"

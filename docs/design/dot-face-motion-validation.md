@@ -63,7 +63,7 @@ The user requested that every face and situation remain smiling, warm, and frien
 
 ## What this does not prove
 
-- These are 120 composed parameter combinations per face, not 120 individually authored or perceptually reviewed animation clips. Production acceptance still requires at least 120 reviewed, visibly distinct, context-appropriate named expression/animation recipes for every selected skin.
+- These are 120 composed parameter combinations per face, not 120 individually authored or perceptually reviewed animation clips. The owner retired the "120 reviewed recipes per new skin" production target on 2026-10-17: all eleven skins share one warm expression set plus amplitude-driven speech, and accurate viseme/phoneme lip-sync remains a desirable improvement rather than a completed feature.
 - The procedural motion study is a separate illustration from the realistic concept-art board. It does not animate the pixels in that board or claim to reproduce final production materials.
 - Glass is illustrated with CSS transparency and backdrop effects; it is not Apple's native Liquid Glass implementation or physical refraction.
 - The speaking cycle is silent and synthetic. It is not synchronized to Kokoro phonemes or real audio. Production speech alignment still needs implementation and validation.

@@ -28,28 +28,10 @@ enum VoiceAudioReader {
 }
 
 /// Seatbelt matches the kernel path, not Foundation's preferred /var URL spelling.
-/// This configuration is shared by the production launch and its native sandbox test.
+/// Shared POSIX path and private-directory checks used by the bundled native
+/// launches; it never describes a Python interpreter, script or sandbox profile.
 struct VoiceLaunchConfiguration {
-    let directory: URL
-    let arguments: [String]
-    let environment: [String: String]
     enum Failure: Error { case privateDirectory, launchPath }
-    init(python: URL, helper: URL, profile: URL, root: URL, output: URL) throws {
-        let path = try Self.canonicalPrivatePath(output)
-        let voiceRoot = try Self.canonicalExistingPath(root, directory: true)
-        let pythonRoot = try Self.canonicalExistingPath(python.deletingLastPathComponent().deletingLastPathComponent(), directory: true)
-        let executable = try Self.canonicalExistingPath(python, directory: false)
-        let script = try Self.canonicalExistingPath(helper, directory: false)
-        let policy = try Self.canonicalExistingPath(profile, directory: false)
-        guard executable.hasPrefix(pythonRoot + "/") else { throw Failure.launchPath }
-        directory = URL(fileURLWithPath: path, isDirectory: true)
-        arguments = ["-D", "DOT_OUTPUT=" + path, "-D", "DOT_VOICE_ROOT=" + voiceRoot,
-                     "-D", "DOT_VOICE_HELPER=" + script, "-D", "DOT_PYTHON_ROOT=" + pythonRoot,
-                     "-f", policy, executable, "-I", "-B", "-u", script, "--root", voiceRoot, "--output", path]
-        environment = ["PATH": "/usr/bin:/bin", "HOME": path, "TMPDIR": path,
-                       "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1", "HF_HUB_DISABLE_TELEMETRY": "1",
-                       "PYTHONDONTWRITEBYTECODE": "1", "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1"]
-    }
     struct DirectoryIdentity: Equatable {
         let device: dev_t
         let inode: ino_t

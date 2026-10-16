@@ -32,15 +32,17 @@ enum OfflineFailure: LocalizedError {
 
 actor OfflinePayload {
     static let shared = OfflinePayload()
-    /// A new, independently sandboxed source-fetch process uses only the audited
-    /// interpreter/stdlib. It never joins Splash's process, environment or model.
+    /// A new, independently sandboxed source-fetch process uses the bundled native
+    /// `dot-fetch` reader (`crates/dot-research`). No interpreter, stdlib or script is
+    /// involved, and the reader never joins Splash's process, environment or model.
     nonisolated static func sourceReader() -> ResearchWebReader {
         let resources = Bundle.main.resourceURL
         return ResearchWebReader(transport: ResearchPinnedHTTPTransport(verifiedRuntime: {
-            guard let resources else { throw OfflineFailure.incomplete }
-            let payload = try await OfflinePayload.shared.validate()
-            return try ResearchFetchRuntime(auditedPythonRoot: payload.appendingPathComponent("Splash/python"),
-                signedHelper: resources.appendingPathComponent("Research/dot_source_fetch.py"),
+            guard let resources, let native = Bundle.main.executableURL?
+                .deletingLastPathComponent().appendingPathComponent("dot-fetch") else { throw OfflineFailure.incomplete }
+            // The payload audit is still the integrity receipt for the reader process.
+            _ = try await OfflinePayload.shared.validate()
+            return try ResearchFetchRuntime(signedHelper: native,
                 signedProfile: resources.appendingPathComponent("Research/source_fetch.sb"))
         }))
     }
@@ -99,7 +101,7 @@ actor OfflinePayload {
             try Task.checkCancellation()
             read += Int64(data.count); guard read <= bytes else { throw OfflineFailure.corrupt }; digest.update(data: data)
         }
-        guard read == bytes, digest.finalize().map({ String(format: "%02x", $0) }).joined() == expected else { throw OfflineFailure.corrupt }
+        guard read == bytes, digest.finalize().hexString == expected else { throw OfflineFailure.corrupt }
     }
     nonisolated static func verifyHash(_ url: URL, bytes: Int64, expected: String) async throws {
         try Task.checkCancellation()

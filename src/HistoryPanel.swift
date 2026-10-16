@@ -166,7 +166,9 @@ final class ConversationHistoryModel: ObservableObject {
 /// An explicit Read action opens this reusable native utility surface.
 @MainActor
 final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
-    private var panel: NSPanel?
+    private let host = UtilityPanelHost(size: NSSize(width: 540, height: 500), minSize: NSSize(width: 400, height: 340),
+                                        title: "Dot · Local text history")
+    private var panel: NSPanel? { host.panel }
     private weak var model: ConversationHistoryModel?
     private let confirmation: LocalRecordDeletionConfirmation
     init(confirmation: LocalRecordDeletionConfirmation? = nil) {
@@ -177,24 +179,17 @@ final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
         invalidateDeletion()
         let changedModel = self.model !== model
         self.model = model
-        if panel == nil {
-            let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 540, height: 500),
-                styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
-            window.title = "Dot · Local text history"
-            window.minSize = NSSize(width: 400, height: 340)
-            window.isReleasedWhenClosed = false; window.delegate = self
-            window.contentView = NSHostingView(rootView: ConversationHistoryView(model: model,
+        host.window(delegate: self) {
+            NSHostingView(rootView: ConversationHistoryView(model: model,
                 delete: { [weak self] id in self?.requestDeletion(id: id) },
                 clear: { [weak self] in self?.requestDeletion(id: nil) }))
-            window.center(); panel = window
         }
         if changedModel, let panel {
             panel.contentView = NSHostingView(rootView: ConversationHistoryView(model: model,
                 delete: { [weak self] id in self?.requestDeletion(id: id) },
                 clear: { [weak self] in self?.requestDeletion(id: nil) }))
         }
-        model.reload(); onVisibility?(true)
-        panel?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
+        model.reload(); host.present(onVisibility)
     }
     func windowWillClose(_ notification: Notification) { invalidateDeletion(); onVisibility?(false) }
     private func invalidateDeletion() { confirmation.invalidate(); model?.cancelDeletion() }

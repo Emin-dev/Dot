@@ -6,15 +6,20 @@ LOGS=$(mktemp -d "${TMPDIR:-/tmp}/dot-checks.XXXXXX")
 xcodebuild -version
 xcrun swift --version
 xcrun --sdk macosx --show-sdk-version
+# The native source reader is the third Rust runtime binary built from
+# crates/dot-research. build.sh stages voice/search beside the executable; this
+# gate builds the reader so the assertion below checks a real executable artifact.
+if command -v cargo >/dev/null; then
+  cargo build --release --manifest-path Cargo.toml --bin dot-fetch
+fi
 # Test-only interpreter, explicitly selected before XCTest; never a product runtime fallback.
 TEST_PYTHON=$(python3 -B -c 'import sys,ssl; assert sys.version_info >= (3,11), "Tests require Python3.11+"; assert ssl.OPENSSL_VERSION.startswith("OpenSSL ") and ssl.OPENSSL_VERSION_INFO >= (1,1,1), "Tests require supported OpenSSL"; print(sys.executable)')
 "$TEST_PYTHON" -B -c 'import sys,ssl; print("Test Python:",sys.version); print("Test TLS:",ssl.OPENSSL_VERSION)'
-python3 -B -m unittest discover -s Tests/Python -v 2>&1 | tee "$LOGS/python.log"
-python3 -B scripts/test_voice_sandbox.py 2>&1 | tee "$LOGS/sandbox.log"
-python3 -B scripts/test_splash_sandbox.py 2>&1 | tee "$LOGS/splash-sandbox.log"
+"$TEST_PYTHON" -B -m unittest discover -s Tests/Python -v 2>&1 | tee "$LOGS/python.log"
+"$TEST_PYTHON" -B scripts/test_splash_sandbox.py 2>&1 | tee "$LOGS/splash-sandbox.log"
 # Test-only Darwin capabilities; this never creates runtime acceptance.
 RUNTIME_FINALIZER_STATUS=0
-python3 -B scripts/test_runtime_finalizer_native.py 2>&1 | tee "$LOGS/runtime-finalizer-canary.log" || RUNTIME_FINALIZER_STATUS=$?
+"$TEST_PYTHON" -B scripts/test_runtime_finalizer_native.py 2>&1 | tee "$LOGS/runtime-finalizer-canary.log" || RUNTIME_FINALIZER_STATUS=$?
 # Keep this mandatory failure while collecting independent build evidence.
 if [ "$RUNTIME_FINALIZER_STATUS" -ne 0 ]; then
   echo "FAIL: runtime finalizer canary exited $RUNTIME_FINALIZER_STATUS; continuing independent Swift/Xcode checks"
@@ -44,15 +49,24 @@ file build/Dot.app/Contents/MacOS/Dot
 python3 -B - <<'PY'
 import json, pathlib, subprocess
 resources = pathlib.Path('build/Dot.app/Contents/Resources')
-assert (resources/'Voice/bionic_helper.py').is_file()
-assert (resources/'Voice/voice.sb').is_file()
+macos = resources.parent/'MacOS'
+# The Rust runtime ships beside the app executable, not as a bundled resource.
+for native in ('dot-voice', 'dot-search'):
+    binary = macos/native
+    assert binary.is_file() and binary.stat().st_mode & 0o111, native
 assert (resources/'Voice/BIONIC-LICENSE.txt').is_file()
-assert (resources/'Research/dot_source_fetch.py').is_file()
 assert (resources/'Research/source_fetch.sb').is_file()
-assert (resources/'Search/dot_search.py').is_file()
-assert (resources/'Search/notices/SEARXNG-LICENSE.txt').is_file()
+# The retired Python voice/search/source helpers must not return to the bundle.
+assert not (resources/'Voice/bionic_helper.py').exists()
+assert not (resources/'Voice/voice.sb').exists()
+assert not (resources/'Research/dot_source_fetch.py').exists()
+assert not (resources/'Search').exists()
+# The native source reader is the third runtime binary; the complete bundle stages
+# it beside dot-voice/dot-search, and this workspace must have built it.
+reader = pathlib.Path('target/release/dot-fetch')
+assert reader.is_file() and reader.stat().st_mode & 0o111, 'native source reader'
 provenance = json.loads((resources/'build-provenance.json').read_text())
 assert provenance['commit'] == subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
-print('PASS: bundle helper, license and exact source revision verified')
+print('PASS: bundled native runtime, license and exact source revision verified')
 PY
 echo 'PASS: all build/test/package logs contain zero warning diagnostics'

@@ -51,20 +51,13 @@ final class SourceReferenceModel: ObservableObject {
 final class SourceReferencePanel: NSObject, NSWindowDelegate {
     let model = SourceReferenceModel()
     var onVisibility: ((Bool) -> Void)?
-    private var panel: NSPanel?
+    private let host = UtilityPanelHost(size: NSSize(width: 600, height: 520), minSize: NSSize(width: 440, height: 360),
+                                        title: "Dot · This version's source")
+    private var panel: NSPanel? { host.panel }
 
     func show() {
-        if panel == nil {
-            let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
-                styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
-            panel.title = "Dot · This version's source"
-            panel.minSize = NSSize(width: 440, height: 360)
-            panel.isReleasedWhenClosed = false; panel.delegate = self
-            panel.contentView = NSHostingView(rootView: SourceReferenceView(model: model))
-            panel.center(); self.panel = panel
-        }
-        onVisibility?(true); panel?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: false)
+        host.window(delegate: self) { NSHostingView(rootView: SourceReferenceView(model: model)) }
+        host.present(onVisibility)
     }
 
     func stop() { model.cancel() }

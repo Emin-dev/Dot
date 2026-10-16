@@ -98,7 +98,7 @@ final class CompanionInterfaceTests: XCTestCase {
             skin: #selector(StatusMenuTarget.skin(_:)), motion: #selector(StatusMenuTarget.skin(_:))).submenu)
         let skins = menu.items.filter { $0.representedObject != nil }
         XCTAssertEqual(skins.map(\.title), ["Original", "Pearl", "Mochi", "Cloudlet", "Pip", "Dew", "Ripple", "Sprout", "Veil", "Halo", "Nova"])
-        XCTAssertEqual(skins.filter { $0.state == .on }.map(\.title), ["Dew"])
+        XCTAssertEqual(skins.filter { $0.state == .on }.map(\.title), ["Original"])
         XCTAssertTrue(NSApp.sendAction(#selector(StatusMenuTarget.skin(_:)), to: target, from: skins[8]))
         XCTAssertEqual(target.selectedSkin, "veil")
         XCTAssertEqual(menu.items.last?.submenu?.items.map(\.title), ["Full", "Subtle", "Still"])

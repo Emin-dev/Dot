@@ -1,6 +1,6 @@
 # Startup and first-turn latency
 
-This records the installed Swift warmup design and historical measurements. The [future performance checklist](BUILD_CHECKLIST.md#architecture-and-performance) adds staged Rust services, speech candidates and joint pipeline benchmarks. Selected continuous silence (2/3/5/8 seconds, default 3) must precede reasoning/research on the utterance; model preparation or streaming transcription is not permission to reason early. No future latency result is established here.
+This records the installed Swift warmup design and historical measurements. The [performance checklist](BUILD_CHECKLIST.md#architecture-and-performance) adds speech candidates and joint pipeline benchmarks; as of 2026-10-17 the Rust runtime services already exist as the `dot-voice`, `dot-search` and `dot-fetch` binaries ([Rust runtime](rust-runtime.md)), while Swift still coordinates the app. Selected continuous silence (2/3/5/8 seconds, default 3) must precede reasoning/research on the utterance; model preparation or streaming transcription is not permission to reason early. No future latency result is established here.
 
 ## Observed baseline
 

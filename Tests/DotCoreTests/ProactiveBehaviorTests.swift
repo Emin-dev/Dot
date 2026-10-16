@@ -33,7 +33,8 @@ final class ProactiveBehaviorTests: XCTestCase {
     }
 
     func testLatestContextReplacesPendingAndConsumedContextDoesNotRepeat() throws {
-        var schedule = ProactiveSchedule(now: 0)
+        // This case exercises the 60-second cadence; the shipped default is covered separately.
+        var schedule = ProactiveSchedule(frequency: .high, now: 0)
         schedule.update(ready, now: 0)
         XCTAssertTrue(schedule.offer(key: "old", reason: .workspaceChanged))
         XCTAssertTrue(schedule.offer(key: "fresh", reason: .relevantContextChanged))
@@ -61,7 +62,7 @@ final class ProactiveBehaviorTests: XCTestCase {
 
     func testEveryForegroundOrQuietGateCancelsActiveWorkAndDropsStalePending() throws {
         for condition in 0..<6 {
-            var schedule = ProactiveSchedule(now: 0)
+            var schedule = ProactiveSchedule(frequency: .high, now: 0)
             schedule.update(ready, now: 0)
             schedule.offer(key: "active", reason: .relevantContextChanged)
             let opportunity = try XCTUnwrap(schedule.take(now: 60))
@@ -87,7 +88,7 @@ final class ProactiveBehaviorTests: XCTestCase {
     }
 
     func testEngineBusyPreventsNewWorkButDoesNotCancelOwnInFlightWork() throws {
-        var schedule = ProactiveSchedule(now: 0)
+        var schedule = ProactiveSchedule(frequency: .high, now: 0)
         var busy = ready; busy.engineBusy = true
         schedule.update(busy, now: 0)
         schedule.offer(key: "context", reason: .relevantContextChanged)
@@ -103,7 +104,7 @@ final class ProactiveBehaviorTests: XCTestCase {
     }
 
     func testPauseAndFrequencyChangeStartFreshCadenceWithoutCatchUp() throws {
-        var schedule = ProactiveSchedule(now: 0)
+        var schedule = ProactiveSchedule(frequency: .high, now: 0)
         schedule.update(ready, now: 0)
         schedule.offer(key: "first", reason: .relevantContextChanged)
         let opportunity = try XCTUnwrap(schedule.take(now: 60))
@@ -135,7 +136,7 @@ final class ProactiveBehaviorTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set("preserve", forKey: "unrelated")
         let initial = ProactiveBehavior(defaults: defaults, automaticScheduling: false, observeWorkspace: false)
-        XCTAssertEqual(initial.frequency, .high); XCTAssertFalse(initial.paused)
+        XCTAssertEqual(initial.frequency, .normal); XCTAssertFalse(initial.paused)
         for value in ProactiveFrequency.allCases {
             initial.setFrequency(value); initial.setPaused(true)
             let reopened = ProactiveBehavior(defaults: defaults, automaticScheduling: false, observeWorkspace: false)
@@ -146,7 +147,7 @@ final class ProactiveBehaviorTests: XCTestCase {
         defaults.set("unknown", forKey: ProactiveBehavior.frequencyKey)
         defaults.set("true", forKey: ProactiveBehavior.pausedKey)
         let repaired = ProactiveBehavior(defaults: defaults, automaticScheduling: false, observeWorkspace: false)
-        XCTAssertEqual(repaired.frequency, .high); XCTAssertFalse(repaired.paused)
+        XCTAssertEqual(repaired.frequency, .normal); XCTAssertFalse(repaired.paused)
         XCTAssertEqual(defaults.string(forKey: "unrelated"), "preserve")
     }
 
@@ -156,6 +157,7 @@ final class ProactiveBehaviorTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         var now = 100.0, dispatched: [ProactiveOpportunity] = [], cancelled: [UUID] = []
         let coordinator = ProactiveBehavior(defaults: defaults, clock: { now }, automaticScheduling: false, observeWorkspace: false)
+        coordinator.setFrequency(.high) // This case exercises the 60-second cadence.
         coordinator.onOpportunity = { dispatched.append($0) }
         coordinator.onCancel = { cancelled.append($0) }
         coordinator.updateContext(ready)

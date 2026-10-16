@@ -18,7 +18,7 @@ private actor PanelSearchFixture: WebSearchProvider {
     func release() { hold = nil; continuation?.resume(); continuation = nil }
     func search(query: String, limit: Int) async throws -> [WebSearchResult] {
         calls.append(query)
-        if needsReview { throw SearXNGSearchError.unavailable }
+        if needsReview { throw SearchRuntimeFailure.runtimeMissing }
         if hold == query { await withCheckedContinuation { continuation = $0 } }
         let path = query.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed)!
         return [WebSearchResult(url: URL(string: "https://example.org/\(path)")!, title: query, snippet: "Untrusted search hint", publicationDateHint: nil)]

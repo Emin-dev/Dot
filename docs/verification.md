@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-10-17).** Parts of this ledger describe the retired Python voice helper (the
+> "Bionic bridge", its Python mocked helper tests and the Python helper lifecycle), which no longer
+> exists. See [the Rust-only runtime](rust-runtime.md) for the current runtime. The ledger was already
+> historical by design: entries, dates, revisions and numbers below are preserved unchanged as the
+> record of what was run at the time, and none of them certifies the current Rust runtime.
+
 # Verification ledger
 
 This is a historical ledger: dates and exact revisions define each result. See [current verified progress](PROGRESS.md) for the installed baseline and [the canonical checklist](BUILD_CHECKLIST.md#definition-of-tested-completion) for future work and completion criteria. Older unverified statements below describe their original stages, not a reversal of later evidence.

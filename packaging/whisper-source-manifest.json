@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "kind": "pinned_whisper_source_manifest",
+  "title": "Dot bundled offline Whisper source manifest",
+  "status": "RESEARCH_ONLY_NOT_A_RELEASE_LOCK",
+  "note": "Whisper pin retained verbatim from the retired packaging/voice-source-manifest.json after the Python voice runtime was replaced by the Rust dot-voice binary. The retired file's Python voice/STT wheel closure is not part of this manifest.",
+  "runtime_artifacts": [
+    {
+      "name": "whisper.cpp official XCFramework",
+      "version": "v1.7.6",
+      "filename": "whisper-v1.7.6-xcframework.zip",
+      "size_bytes": 41291976,
+      "sha256": "9fcb28106d0b94a525e59bec057e35b57033195ac7408d7e1ab8e4b597cdfeb5"
+    }
+  ]
+}

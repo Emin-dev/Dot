@@ -80,6 +80,9 @@ final class ChatModel: ObservableObject {
     @Published var hovered = false { didSet { if hovered { placementInvalidated?() }; updateProactiveContext() } }
     @Published var pendingApproval: ActionApprovalRequest? = nil
     private var lastNotifiedMeetingID: String? = nil
+    /// Throttled screen text for stuck-task detection; never retained beyond the session.
+    private var lastStuckOCR = ""
+    private var lastStuckOCRAt = 0.0
     @Published var interactionPaused = false { didSet { if interactionPaused { placementInvalidated?(); cancelForInteraction() }; updateProactiveContext() } }
     var placementInvalidated: (() -> Void)?
     @Published var placementCapturing = false
@@ -131,11 +134,11 @@ final class ChatModel: ObservableObject {
             runtime.enqueueVoice(text, id)
             runtime.completeVoice(id)
         } catch {
-            let utterance = AVSpeechUtterance(string: text)
-            utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
-            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-            fallbackSynthesizer.speak(utterance)
+            // Never substitute a different voice silently: the bundled British
+            // engine is the only permitted voice, so report the failure instead.
+            logFailure(error, stage: .voice)
             phase = .idle
+            block(error.localizedDescription, issue: .voice)
         }
     }
 
@@ -174,18 +177,10 @@ final class ChatModel: ObservableObject {
     }
 
     static func runShellCommand(_ command: String) async -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-c", command]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
         do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return output.isEmpty ? "(Exit code \(process.terminationStatus))" : output
+            let result = try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command], mergeStandardError: true)
+            let output = String(decoding: result.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return output.isEmpty ? "(Exit code \(result.status))" : output
         } catch {
             return "Failed to run command: \(error.localizedDescription)"
         }
@@ -413,21 +408,16 @@ final class ChatModel: ObservableObject {
     private func detectSystemControlCommand(_ text: String) -> String? {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count <= 250 else { return nil }
-        var clean = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        var clean = trimConversationalPunctuation(trimmed.lowercased())
 
         // Common conversational prefixes
-        let prefixes = [
+        clean = stripConversationalPrefixes(clean, prefixes: [
             "can you please ", "could you please ", "can you ", "could you ", "would you ",
             "please ", "hey dot ", "dot ", "i want you to ", "try to ",
             "yes, ", "yes ", "ok, ", "ok ", "okay, ", "okay ", "sure, ", "sure ",
             "i mean, ", "i mean ", "пожалуйста ", "дот "
-        ]
-        for p in prefixes {
-            if clean.hasPrefix(p) {
-                clean = String(clean.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        ])
+        clean = trimConversationalPunctuation(clean)
 
         let suiteCmd = SystemControlSuite.parseCommand(clean)
         if suiteCmd != .none {
@@ -603,10 +593,11 @@ final class ChatModel: ObservableObject {
 
         // 9. Inquiries about why Dot is not moving / staying in one spot
         if clean.contains("why") && (clean.contains("don't move") || clean.contains("dont move") || clean.contains("stay in the same place") || clean.contains("stay in one place") || clean.contains("aren't you moving") || clean.contains("not moving")) {
+            let policy = "I relocate to a clear safe zone every 5 seconds while I'm thinking, and when I'm idle I only move if a window or your cursor covers me."
             if let reply = self.onMove?(.random) {
-                return "I roam to new spots every 5 seconds when idle, and immediately relocate every 5 seconds while thinking! " + reply
+                return policy + " " + reply
             }
-            return "I roam to new spots every 5 seconds when idle, and immediately relocate every 5 seconds while thinking! Relocating right now."
+            return policy + " Moving to a clear spot now."
         }
 
         // 10. Codebase & GitHub Repository Access
@@ -687,22 +678,17 @@ final class ChatModel: ObservableObject {
 
     func detectMovementCommand(_ text: String) -> DotMovementCommand? {
         var clean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        clean = trimConversationalPunctuation(clean)
         guard clean.count <= 250 else { return nil }
 
-        let prefixes = [
+        clean = stripConversationalPrefixes(clean, prefixes: [
             "can you please ", "could you please ", "can you ", "could you ", "would you ",
             "please ", "hey dot ", "dot ", "i want you to ", "try to ",
             "yes, ", "yes ", "yeah, ", "yeah ", "ok, ", "ok ", "okay, ", "okay ", "sure, ", "sure ",
             "i mean, ", "i mean ", "well, ", "well ", "now ",
             "пожалуйста ", "дот "
-        ]
-        for p in prefixes {
-            if clean.hasPrefix(p) {
-                clean = String(clean.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
-        clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        ])
+        clean = trimConversationalPunctuation(clean)
         clean = clean.replacingOccurrences(of: "yourself, yourself", with: "yourself")
         clean = clean.replacingOccurrences(of: "to the screen ", with: "to ")
         clean = clean.replacingOccurrences(of: "to screen ", with: "to ")
@@ -932,7 +918,7 @@ final class ChatModel: ObservableObject {
         pinned = defaults.bool(forKey: "petPinned")
         screenEnabled = ScreenPrivacyPreference.enabled(in: defaults)
         self.runtime = runtime ?? ChatRuntime(
-            isReady: { true },
+            isReady: { OfflinePreparation.shared.ready },
             startPreparation: { OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available) },
             microphoneAuthorized: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized },
             currentRoute: { VoiceAudioRoute.current() }, screenAuthorized: { CGPreflightScreenCaptureAccess() },
@@ -968,6 +954,9 @@ final class ChatModel: ObservableObject {
                   VoiceTimingSettings.silenceChoices.contains(evidence.selectedSilenceSeconds),
                   evidence.captureStartedAt <= evidence.firstSpeechAt,
                   evidence.firstSpeechAt <= evidence.speechEndedAt,
+                  // A held-Fn release ends the turn without the silence rule being
+                  // satisfied; its evidence carries the last PCM actually processed.
+                  evidence.outcome == .forcedFinish ||
                   abs(evidence.silenceSatisfiedAt - evidence.speechEndedAt - evidence.selectedSilenceSeconds) < 0.000001 else { return }
             self.speechEndedAt = evidence.speechEndedAt
             self.silenceSatisfiedAt = evidence.silenceSatisfiedAt
@@ -1099,7 +1088,16 @@ final class ChatModel: ObservableObject {
 
                     if !MeetingFocusAwareness.isMeetingActive() {
                         let desktop = ActiveDesktopContext.current()
-                        if let stuckEvent = StuckTaskDetector.shared.evaluate(appName: desktop.appName, windowTitle: desktop.windowTitle, ocrText: desktop.selectedText, now: now) {
+                        // Stuck-task detection needs visible screen text; the accessibility
+                        // selection alone cannot describe a persistent compile/terminal error.
+                        if self.screenEnabled, self.runtime.screenAuthorized(),
+                           self.lastStuckOCRAt == 0 || (now - self.lastStuckOCRAt) > 20.0 {
+                            if let lines = try? await self.screen.extractVisibleScreenText() {
+                                self.lastStuckOCR = lines.map(\.text).joined(separator: "\n")
+                                self.lastStuckOCRAt = now
+                            }
+                        }
+                        if let stuckEvent = StuckTaskDetector.shared.evaluate(appName: desktop.appName, windowTitle: desktop.windowTitle, ocrText: self.lastStuckOCR, now: now) {
                             self.speakDirect(stuckEvent.guidance)
                             DiagnosticChatLogger.record(role: "dot (stuck-guidance)", text: stuckEvent.guidance)
                         } else if let next = CalendarMeetingAssistant.shared.fetchNextMeeting() {
@@ -1142,7 +1140,7 @@ final class ChatModel: ObservableObject {
         let userBusy = proactiveTurn == nil && (phase.isActive || runtime.recording() || runtime.transcribing() || followupPending)
         let context = ProactiveContext(
             ready: !shuttingDown && runtime.isReady() && issue == nil
-                && (!screenEnabled || runtime.screenAuthorized()) && proactiveEvidence.isRecent(now: now),
+                && proactiveEvidence.isRecent(now: now),
             visible: visible, foregroundBusy: userBusy,
             interactionBusy: interactionPaused || historyPresented || self.externalInteractionBusy
                 || (controlInteraction && proactiveTurn == nil),
@@ -1265,10 +1263,8 @@ final class ChatModel: ObservableObject {
                     if let question, !question.isEmpty, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
                     self.runtime.completeVoice(id)
                 } catch {
-                    let utterance = AVSpeechUtterance(string: result.text)
-                    utterance.voice = AVSpeechSynthesisVoice(language: "en-GB") ?? AVSpeechSynthesisVoice(language: "en-US")
-                    utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-                    self.fallbackSynthesizer.speak(utterance)
+                    // Same rule as speakDirect: report, never swap in a system voice.
+                    self.logFailure(error, stage: .voice)
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.answer = result.text
@@ -1475,7 +1471,10 @@ final class ChatModel: ObservableObject {
 
         if pendingApproval != nil {
             let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-            if ["approve", "yes", "confirm", "run it", "do it", "proceed", "okay", "sure", "accept"].contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
+            // Only unambiguous approval wording may execute a pending destructive
+            // action. Generic acknowledgements ("yes", "okay", "sure") can be an
+            // answer to an unrelated question and must never approve one.
+            if ["approve", "approved", "run it", "do it"].contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
                 approvePendingAction()
                 return
             } else if ["deny", "no", "cancel", "stop", "don't do it", "reject", "nevermind", "abort"].contains(lower) || lower.hasPrefix("deny") || lower.hasPrefix("cancel") {

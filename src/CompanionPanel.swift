@@ -141,6 +141,52 @@ final class CompanionSurface {
     }
 }
 
+/// One utility-surface lifecycle for the app's native panels: the same titled, closable, resizable
+/// window, delegate wiring, centring and show order. Panels keep their own size, title, content and
+/// window class, so no existing surface changes.
+@MainActor
+final class UtilityPanelHost {
+    private let size: NSSize
+    private let minSize: NSSize
+    private let title: String
+    private let makeWindow: (NSRect) -> NSPanel
+    private(set) var panel: NSPanel?
+
+    init(size: NSSize, minSize: NSSize, title: String,
+         makeWindow: @escaping (NSRect) -> NSPanel = {
+             NSPanel(contentRect: $0, styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
+         }) {
+        self.size = size; self.minSize = minSize; self.title = title; self.makeWindow = makeWindow
+    }
+
+    /// Creates the window once; later calls return the same surface.
+    @discardableResult
+    func window(delegate: NSWindowDelegate, configure: (NSPanel) -> Void = { _ in }, content: () -> NSView) -> NSPanel {
+        if let panel { return panel }
+        let window = makeWindow(NSRect(x: 0, y: 0, width: size.width, height: size.height))
+        window.title = title
+        window.minSize = minSize
+        window.isReleasedWhenClosed = false; window.delegate = delegate
+        configure(window)
+        window.contentView = content()
+        window.center()
+        panel = window
+        return window
+    }
+
+    /// The shared show order: report visibility, then key and front, then activate.
+    func present(_ onVisibility: ((Bool) -> Void)?) {
+        onVisibility?(true)
+        panel?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: false)
+    }
+
+    /// Ends any attached sheet so a closing or re-shown surface never keeps a stale modal.
+    func endAttachedSheet() {
+        if let panel, let sheet = panel.attachedSheet { panel.endSheet(sheet, returnCode: .cancel) }
+    }
+}
+
 
 @MainActor
 enum CompanionStatusMenu {

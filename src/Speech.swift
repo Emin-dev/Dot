@@ -13,6 +13,29 @@ final class CapturedPCM: @unchecked Sendable {
     private var deadline: VoiceCaptureDeadline?
     private var continuity = VoiceAudioContinuity()
     init(rate: Double) { self.rate = rate; maximum = Int(rate * VoiceCaptureDeadline.maximumDuration); samples.reserveCapacity(maximum) }
+    /// Re-arm this turn's capture store for a new input format after a route change.
+    /// The deadline (startedAt, first/last speech, processed audio and elapsed bound)
+    /// and the PCM captured before the change carry over, so the turn is neither
+    /// restarted nor dropped. Timestamp continuity restarts with the new tap, whose
+    /// deliberate restart gap is not missing PCM. Samples are kept as recorded: a
+    /// rate change re-times the whole buffer from this re-arm epoch instead of
+    /// discarding the user's speech, and the old tap's late callbacks are inert
+    /// because the previous store is cleared and deactivated here.
+    init(rate: Double, migrating previous: CapturedPCM, at now: Double) {
+        self.rate = rate
+        maximum = Int(rate * VoiceCaptureDeadline.maximumDuration)
+        previous.lock.lock()
+        samples = previous.samples
+        active = previous.active
+        loudness = previous.loudness
+        deadline = previous.deadline
+        previous.samples = []
+        previous.active = false
+        previous.deadline = nil
+        previous.lock.unlock()
+        samples.reserveCapacity(maximum)
+        deadline?.rearmAfterRouteChange(at: now)
+    }
     func begin(at now: Double, silence: Double, invitation: Double?) {
         lock.lock(); defer { lock.unlock() }
         deadline = VoiceCaptureDeadline(startedAt: now, silenceSeconds: silence, invitationSeconds: invitation)
@@ -78,11 +101,17 @@ final class CapturedPCM: @unchecked Sendable {
     }
     /// Evaluation and terminal close share the tap lock: no callback can append
     /// newly resumed speech between the main timer's decision and capture closure.
-    func poll(at now: Double) -> (level: Double, decision: VoiceCaptureDecision, evidence: VoiceCaptureTimingEvidence?, snapshot: VoiceCaptureTimingSnapshot?, endReason: VoiceCaptureEndReason?) {
+    /// `finishing` is the explicit push-to-talk release: a still-listening turn is
+    /// closed now, and it publishes measured evidence instead of an invented
+    /// trailing silence. A turn whose silence rule already completed keeps its
+    /// satisfied evidence.
+    func poll(at now: Double, finishing: Bool = false) -> VoiceCaptureObservation {
         lock.lock(); defer { lock.unlock() }
+        if finishing, deadline?.evaluate(at: now) == .listening { deadline?.forceFinish() }
         if active, deadline?.evaluate(at: now) != .listening { active = false }
-        return (loudness, deadline?.decision ?? .cancelled, deadline?.timingEvidence,
-                deadline?.snapshot(at: now), deadline?.endReason)
+        return VoiceCaptureObservation(level: loudness, decision: deadline?.decision ?? .cancelled,
+                                       evidence: deadline?.closedEvidence, snapshot: deadline?.snapshot(at: now),
+                                       endReason: deadline?.endReason)
     }
     func take() -> [Float] { lock.lock(); defer { lock.unlock() }; active = false; let result = samples; samples = []; return result }
     func cancel() { lock.lock(); active = false; deadline?.cancel(); samples = []; lock.unlock() }
@@ -192,17 +221,39 @@ final class STTManager: ObservableObject {
         timingSnapshot = observation.snapshot
         switch observation.decision {
         case .listening: break
+        case .silenceSatisfied, .forcedFinish:
+            closeCapture(id, observation)
+        case .noSpeech, .maximumDuration, .audioUnavailable, .cancelled:
+            endCapture(id, reason: observation.endReason ?? .invalidAudio)
+        }
+    }
+    /// Apply a closed observation to the turn. The satisfied-silence and the
+    /// explicit-release paths both publish measured evidence before the transcript
+    /// is delivered, so the coordinator can verify the turn it is being given.
+    func closeCapture(_ id: UUID, _ observation: VoiceCaptureObservation) {
+        switch observation.decision {
+        case .listening: break
         case .silenceSatisfied:
             if let evidence = observation.evidence { onSpeechEnded?(id, evidence) }
+            finishCapture(id)
+        case .forcedFinish:
+            // A release with no measured speech has no utterance to transcribe and
+            // no evidence to publish: it ends quietly instead of inventing one.
+            guard let evidence = observation.evidence else { endCapture(id, reason: .noSpeech); return }
+            onSpeechEnded?(id, evidence)
             finishCapture(id)
         case .noSpeech, .maximumDuration, .audioUnavailable, .cancelled:
             endCapture(id, reason: observation.endReason ?? .invalidAudio)
         }
     }
+    /// Releasing push-to-talk cuts audio now and transcribes what was captured,
+    /// without waiting for trailing silence. The turn closes with evidence measured
+    /// from the PCM that was really processed; a silence rule that did not complete
+    /// is never reported as satisfied, and a real capture failure is reported as
+    /// itself instead of being replaced by a timing complaint.
     func forceFinishCapture() {
-        if let id = capture, recording {
-            finishCapture(id)
-        }
+        guard let id = capture, recording, let pcm else { return }
+        closeCapture(id, pcm.poll(at: ProcessInfo.processInfo.systemUptime, finishing: true))
     }
     private func finishCapture(_ id: UUID) {
         guard capture == id, let pcm, let modelURL else { return }
@@ -237,7 +288,7 @@ final class STTManager: ObservableObject {
             && current.commonFormat == captureFormat.commonFormat && current.isInterleaved == captureFormat.isInterleaved
     }
     private func handleAudioRouteChange(_ id: UUID) {
-        guard capture == id, recording, let pcm else { return }
+        guard capture == id, recording, let existing = pcm else { return }
         if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
@@ -249,9 +300,15 @@ final class STTManager: ObservableObject {
             endCapture(id, reason: .routeChanged)
             return
         }
+        // A route or format change re-arms the same turn for the new device: the
+        // store keeps the deadline and the PCM captured before the change, and the
+        // new tap starts a fresh continuity epoch, so post-switch audio is accepted
+        // instead of being rejected as invalid or gapped.
+        let migrated = CapturedPCM(rate: format.sampleRate, migrating: existing, at: ProcessInfo.processInfo.systemUptime)
+        pcm = migrated
         captureFormat = format
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, time in
-            pcm.append(buffer, at: time)
+            migrated.append(buffer, at: time)
         }
         tapInstalled = true
         do {
@@ -259,6 +316,7 @@ final class STTManager: ObservableObject {
                 engine.prepare()
                 try engine.start()
             }
+            timingSnapshot = migrated.poll(at: ProcessInfo.processInfo.systemUptime).snapshot
         } catch {
             endCapture(id, reason: .routeChanged)
         }

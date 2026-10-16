@@ -236,7 +236,7 @@ class WhisperBuildIntegrationTests(unittest.TestCase):
         self.assertIn('FRAMEWORK_PARENT="$WHISPER_BUILD/whisper-input"', source)
         self.assertIn('/usr/bin/ditto "$VERIFIED_WHISPER_FRAMEWORK"', source)
         self.assertLess(source.index('scripts/verify_whisper_input.py --archive'), source.index('xcrun swiftc'))
-        self.assertIn('git ls-files --error-unmatch -- packaging/voice-source-manifest.json scripts/verify_whisper_input.py', source)
+        self.assertIn('git ls-files --error-unmatch -- packaging/whisper-source-manifest.json scripts/verify_whisper_input.py', source)
 
     def test_actual_metadata_block_records_verified_input_and_final_binary_separately(self):
         with tempfile.TemporaryDirectory() as temporary:

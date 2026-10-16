@@ -1,3 +1,10 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python SearXNG search stack, which
+> no longer exists. See [the Rust-only runtime](../rust-runtime.md) for the current runtime. The
+> SearXNG revision, Waitress, curl_cffi, wheel and payload numbers below are kept unchanged as the
+> record of what was inspected and run at the time; `Resources/Search/**`, `packaging/search/**`,
+> `Tests/Portable/**`, `profile-bootstrap-basis.json`, the fixtures and the canary workflow are all
+> deleted.
+
 # Search proxy canaries: build-only and native-unrun
 
 Prepared on Linux x86_64, 2026-10-14. The production broker remains unimplemented in this stage. `currentnativeblocked` and `usercancelhold` are preserved. Nothing was published, installed, assembled into the app, admitted, downloaded, or run against a live provider. The separate frozen interpreter publication candidate and `/workspace/shared/dot-cloud-build` were only read.

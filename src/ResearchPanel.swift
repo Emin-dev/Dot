@@ -9,13 +9,13 @@ final class ResearchNotebookModel: ObservableObject {
     @Published var title = "Source brief" {
         didSet {
             if title.count > 200 || title.utf8.count > 800 {
-                title = String(Self.boundedUTF8(title, bytes: 800).prefix(200))
+                title = String(title.truncated(toUTF8Bytes: 800).prefix(200))
                 error = "Notebook titles are limited to 200 characters."
             }
         }
     }
     @Published var urlText = "" {
-        didSet { if urlText.utf8.count > 81_920 { urlText = Self.boundedUTF8(urlText, bytes: 81_920); error = "The source URL list is too long." } }
+        didSet { if urlText.utf8.count > 81_920 { urlText = urlText.truncated(toUTF8Bytes: 81_920); error = "The source URL list is too long." } }
     }
     @Published var selection: UUID? { didSet { if selection != oldValue { copyRevision = UUID(); cancelDeletion() } } }
     @Published private(set) var folder: URL?
@@ -69,15 +69,6 @@ final class ResearchNotebookModel: ObservableObject {
             guard let url = URL(string: String($0)), ResearchWebReader.allowed(url) else { throw ResearchNotebookError.invalidInput }
             return url
         }
-    }
-    private static func boundedUTF8(_ text: String, bytes: Int) -> String {
-        let prefix = Array(text.utf8.prefix(bytes))
-        var end = prefix.count
-        while end > 0 {
-            if let value = String(bytes: prefix[..<end], encoding: .utf8) { return value }
-            end -= 1
-        }
-        return ""
     }
     func selectFolder(_ folder: URL?) {
         guard acceptingActions, !busy else { return }
@@ -207,7 +198,9 @@ final class ResearchNotebookModel: ObservableObject {
 @MainActor
 final class ResearchPanel: NSObject, NSWindowDelegate {
     let model: ResearchNotebookModel
-    private var panel: NSPanel?
+    private let host = UtilityPanelHost(size: NSSize(width: 720, height: 620), minSize: NSSize(width: 560, height: 430),
+                                        title: "Dot · Source notebooks")
+    private var panel: NSPanel? { host.panel }
     private var presentation = UUID()
     private let confirmation: LocalRecordDeletionConfirmation
     var onVisibility: ((Bool) -> Void)?
@@ -218,18 +211,12 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     func show() {
         guard !model.shuttingDown else { return }
         invalidateSheets()
-        if panel == nil {
-            let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: 620),
-                                 styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
-            window.title = "Dot · Source notebooks"; window.minSize = NSSize(width: 560, height: 430)
-            window.isReleasedWhenClosed = false; window.delegate = self
-            window.contentView = NSHostingView(rootView: ResearchNotebookView(model: model,
+        host.window(delegate: self) {
+            NSHostingView(rootView: ResearchNotebookView(model: model,
                 chooseFolder: { [weak self] in self?.chooseFolder() }, export: { [weak self] in self?.chooseExport() },
                 delete: { [weak self] in self?.requestDeletion() }))
-            window.center(); panel = window
         }
-        model.open(); onVisibility?(true)
-        panel?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
+        model.open(); host.present(onVisibility)
     }
     func cancel() { invalidateSheets(); model.cancel() }
     func close() { invalidateSheets(); model.close(); panel?.close() }
@@ -238,7 +225,7 @@ final class ResearchPanel: NSObject, NSWindowDelegate {
     private func invalidateSheets() {
         confirmation.invalidate(); model.cancelDeletion()
         presentation = UUID()
-        if let panel, let sheet = panel.attachedSheet { panel.endSheet(sheet, returnCode: .cancel) }
+        host.endAttachedSheet()
     }
     func requestDeletion() {
         guard let panel, let prompt = model.requestDeleteSelected() else { return }

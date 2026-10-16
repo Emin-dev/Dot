@@ -1,5 +1,54 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-17 (Rust-only runtime; every repository gate green)
+
+This checkpoint records work verified on this machine, not intentions. Everything below was run and observed.
+
+**Older checkpoints in this file are historical.** Entries dated before 2026-10-17 describe the retired Python voice helper, Python source fetcher and SearXNG search stack. Their dates, run counts and receipts are kept unchanged as records of what was run at the time and do not describe the current runtime; see [the Rust runtime reference](rust-runtime.md).
+
+**Repository gates (all four independently re-run and green):**
+
+| Gate | Result |
+| --- | --- |
+| `scripts/check_contracts.py` | **53 static guardrails passed** |
+| `python3 -B -m unittest discover -s Tests/Python` (Python 3.13) | **604 passed, 4 skipped, 0 failures** |
+| `swift test` | **534 tests, 0 failures** |
+| `xcodebuild -project Dot.xcodeproj -scheme Dot build` | **BUILD SUCCEEDED** |
+
+The Xcode app target previously could not build at all: it hard-wired `SWIFT_ACTIVE_COMPILATION_CONDITIONS = DOT_COMPLETE_BUNDLE`, `-framework whisper` and a `build-complete/` framework search path that is gitignored and absent, so `src/WhisperRecognizer.swift:2` raised `#error` on a clean checkout and `scripts/verify_macos.sh` could never pass. The target now builds the development configuration; complete bundles remain with the `swiftc`-based scripts that pass the define themselves. Separately, `scripts/verify_macos.sh` selected a Python ≥3.11 interpreter and then ran the suite with bare `python3`; it now uses the interpreter it validated, and the Portable Search contracts gate pull requests as well as main pushes.
+
+**The runtime is Rust-only.** `dot-voice` (Kokoro), `dot-search` (search) and `dot-fetch` (pinned source reader) are Rust binaries that `build.sh` now actually builds (`cargo build --release`) and copies into `Contents/MacOS`. That was the root cause of the Rust runtime never running: no script or workflow built either crate, so `dot-voice` was always missing and the app silently fell back to the Python torch helper.
+
+Both components were verified against the owner's real payload on this machine:
+
+- `dot-voice` loaded the bundled Kokoro `bf_isabella` model and synthesized a real turn — `{"protocol":1,"event":"audio",...,"samples":78000,"sample_rate":24000}` into a 156,044-byte WAV, fully offline.
+- `dot-search` started, emitted its `ready` event with a per-launch capability token, and returned live DuckDuckGo/Wikipedia results through its capability-gated loopback endpoint.
+
+Deleted as a result: `Resources/Voice/bionic_helper.py`, `Resources/Voice/voice.sb`, the Python voice dependency closure, `Resources/Research/dot_source_fetch.py`, the entire Python SearXNG stack (`Resources/Search/**`, `packaging/search/**`, its 31 pinned wheels, AGPL notices, its canary workflow and its Portable contracts), and the Python-era tests and scripts for all three. Dot-authored Python remains only in the Splash supervisor/TLS relay (`Resources/Runtime/dot_*.py`, stdlib-only); porting it to Rust is the next migration step. Splash's own interpreter is part of the external offline payload and is deliberately retained: the owner confirmed Qwen 3.8 27B Q4 on Splash is the fastest available path.
+
+**Defects fixed, each with regression tests:**
+
+- `dot-search` parsed each HTTP request with a single `read()`, so any client that delivers head and body in separate TCP segments (CFNetwork/URLSession does exactly that) got HTTP 400 — the app only worked because the Swift client happened to write head+body in one syscall. It now reads until the head is complete *and* the declared `Content-Length` body has arrived, and rejects chunked framing explicitly. Verified: a deliberately split-segment request returns `HTTP/1.1 200 OK` with real results.
+- Hold-Fn push-to-talk discarded every transcript: the forced-release path published no timing evidence, so the coordinator rejected the turn with "Listening timing could not be verified". The Speech layer now publishes measured evidence for a release and `ChatView` accepts it without pretending the silence rule was satisfied.
+- Audio-route hot-swap could never preserve a capture: the store created for the old device rate rejected every post-switch buffer as `.invalidAudio` and the continuity state was never reset. The capture is now migrated to the new format instead of dropped.
+- The destructive-command approval gate was a substring heuristic, so `/bin/rm -rf ~/Documents`, `sh -c "rm -rf /tmp/x"`, `find . -delete`, `curl … | zsh` and unquoted `>` redirects all executed with **no** approval card. It is now tokenized (19 bypass forms covered, 12 safe commands still pass).
+- Model-supplied tool numbers were unclamped: `scroll_screen`'s `amount` reached `Int32(_:)` and trapped (process death), and `click_point`'s `clicks` drove a `@MainActor` loop with 50 ms sleeps per click (≈8 minutes frozen). Both are clamped at the parse boundary and at the engine entry points.
+- The production `ChatRuntime` hard-coded `isReady: { true }` and `screenAuthorized: true`, so the careful `OfflinePreparation` payload verification gated nothing. Readiness is now real, and proactivity no longer requires Screen Recording (voice-only use stays proactive).
+- Screen freshness was 5 seconds while the checklist claimed 15; it is now the documented 15.
+- The hardware launch gate demanded macOS 27 and 48 GB — no shipping macOS satisfied it — and its default Return button was "Stop", which quit the app on every launch. It now matches the documented minimum (36 GB, macOS 26.4+; 48 GB/27 advisory), defaults to "Run Anyway" and remembers the acknowledgement.
+- Stuck-task detection was fed the accessibility text selection instead of screen OCR, so the "stuck on a build error" feature could effectively never fire.
+- The laser/highlight overlay mixed AppKit and CG/Vision coordinate spaces, so highlights could render vertically mirrored; coordinates are now converted explicitly.
+- Approval cards were unclickable (`controlHitTest = { _ in false }`), so clicking "Approve" started a listening turn instead; a pending card now receives mouse input.
+- Spoken "okay"/"sure"/"yes" auto-approved a queued destructive command; only unambiguous approval wording approves now.
+- The silent system-voice fallback is removed: a voice failure reports honestly instead of quietly speaking in a different voice.
+- Idle roaming was disabled by a `999999` sentinel while the UI told the user it roamed every 5 seconds; the owner's agreed cadence (12–18 s idle, 5 s while thinking) is now implemented and documented.
+
+**Owner decisions recorded on 2026-10-17** (see [the canonical checklist](BUILD_CHECKLIST.md#owner-decisions--2026-10-17-rust-only-runtime-and-accepted-corrections)): end goal includes the public-release path; Rust-only runtime with Splash retained as the model engine; no SearXNG and no API keys by default; proactive default Normal (4 minutes); idle roaming 12–18 s; the 120-recipes-per-skin demand is retired; approval cards only for destructive actions; five-tier memory where ageing compresses and promotes but never deletes, and eviction happens only under memory pressure starting at T1; broad local-file and online access; the self-improvement loop writes to its own file and offers a clipboard paste instead of typing into another app unprompted.
+
+**Documentation (updated 2026-10-17 after this checkpoint):** the stale runtime documentation set (`docs/voice-bridge.md`, `docs/search-helper.md`, `docs/source-transport.md`, `docs/runtime-reconstruction.md`, `docs/offline-voice-assembly.md`, `docs/bundled-voice-research.md`, `docs/self-contained-build-plan.md`, `docs/architecture/staged-services.md`, `docs/verification.md`, `docs/verification/*`, `docs/PROFILE_BOOTSTRAP.md`, `docs/BUILD_CHECKLIST.md`, `docs/BUILD_CHECKLIST.txt`) has been rewritten or explicitly banner-marked against the Rust-only runtime; see [the Rust runtime reference](rust-runtime.md).
+
+**Still open and not claimed as done:** porting the Splash supervisor/TLS relay to Rust; the five-tier memory, broad file access, provider resilience and self-improvement clipboard flow; the dead-code and duplication reduction pass; the packaging-side gates that still require the deleted Python voice closure (`scripts/audit_runtime_payload.py` and `packaging/runtime/reconstruction-policy.json`, recorded in [the Rust runtime reference](rust-runtime.md)); installing the rebuilt app over the currently installed one; and every public-release gate (first-launch downloader, license closure, notarization, clean second-Mac acceptance). No installed-app, acoustic, device or release acceptance is claimed by this checkpoint.
+
 ## Published checkpoint — 2026-10-16 16:30 UTC
 
 - **Restored Native Kokoro Isabella Voice (`bf_isabella.pt`):**

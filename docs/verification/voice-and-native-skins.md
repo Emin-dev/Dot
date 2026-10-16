@@ -2,6 +2,8 @@
 
 This candidate advances the [canonical checklist](../BUILD_CHECKLIST.md). It is source for review, not an installed or released app. The installed `b26a145` app and the original compact-UI recovery patch are preserved.
 
+**Update, 2026-10-17:** the Python voice helper this milestone used has been replaced by the Rust `dot-voice` runtime, and the "120 reviewed recipes per new skin" target it refers to is retired by the owner's [2026-10-17 decisions](../BUILD_CHECKLIST.md#owner-decisions--2026-10-17-rust-only-runtime-and-accepted-corrections). The implemented-behaviour list and the render inspection below remain the record of what that candidate shipped.
+
 ## Implemented behavior
 
 - Native menu options persist trailing silence 2/3/5/8 seconds (default 3) and the question invitation 3/6/9/12/20 seconds (default 6). The latter is time to **begin** speaking; accepted speech continues to the selected silence, within the existing 60-second capture bound.
@@ -9,7 +11,7 @@ This candidate advances the [canonical checklist](../BUILD_CHECKLIST.md). It is 
 - Splash returns explicit validated `ask_user` intent. A successful terminal response and all ordered synthesis/playback completions are required before one automatic invitation. Punctuation, intermediate drains, empty audio, failures and stale callbacks cannot authorize it. Automatic capture never requests a fresh OS permission prompt.
 - A 400 ms playback-to-capture settling interval and fresh microphone/screen/route checks supplement same-turn cancellation. Stop, replacement, drag/menu interactions, hiding, Quit, sleep and route/permission loss revoke the conversation. The inherited provisional cap is three automatic replies per manual conversation; chain-length product policy remains open.
 - Original remains the default alongside Pearl, Mochi, Cloudlet, Pip, Dew, Ripple, Sprout, Veil, Halo and Nova. These are actual shared-rig SwiftUI renderers with persistent selection and Full/Subtle/Still motion options. Veil is clearer than Dew; reduce-transparency fallback and light/dark contrast are supported.
-- Five initial shared named phase recipes cover idle, listening, thinking, speaking and blocked states with warm facial geometry. New-skin speaking aperture consumes current-player amplitude metering. This is **not phoneme alignment or a completed 120-recipe-per-skin library**. Original's established animated appearance remains available.
+- Five initial shared named phase recipes cover idle, listening, thinking, speaking and blocked states with warm facial geometry. New-skin speaking aperture consumes current-player amplitude metering. All eleven skins share this one warm expression set; the former per-skin 120-recipe production target is retired as a requirement, and accurate viseme/phoneme lip-sync remains a desirable improvement rather than a completed feature. Original's established animated appearance remains available.
 - The preserved compact diagnostic UI and Show Dot/Quit menu work are integrated. Opening options preserves blocked diagnostics for copying.
 
 ## Native render inspection
@@ -20,4 +22,4 @@ This candidate advances the [canonical checklist](../BUILD_CHECKLIST.md). It is 
 
 Real microphone/speaker echo, speaker/headphone/Bluetooth route switching, denied/revoked permissions, sleep/hide/drag/menu interruption, and the exact complete-bundle conversation loop still require hardware acceptance. Playback scheduling metrics are labelled as such; no acoustic first-audible latency improvement is claimed. Measure selected silence and post-silence processing separately, against the preserved baseline.
 
-Full expression libraries, phoneme alignment, exact Liquid Glass rendering, proactive scheduling, tiny idle-motion fallback, persistent history/memory, research/files/tools, and Rust services remain open checklist milestones. Fixed Splash/Qwen and British Kokoro assets are unchanged. No model download, replacement, installation or public release is part of this candidate publication.
+Full expression libraries, phoneme alignment, exact Liquid Glass rendering, proactive scheduling, tiny idle-motion fallback, persistent history/memory and research/files/tools remain open checklist milestones. The Rust runtime services (`dot-voice`, `dot-search`, `dot-fetch`) are now implemented and built by `build.sh` ([Rust runtime](../rust-runtime.md)); porting the retained Python Splash supervisor/TLS relay to Rust is the remaining migration step. Fixed Splash/Qwen and British Kokoro assets are unchanged. No model download, replacement, installation or public release is part of this candidate publication.

@@ -28,25 +28,17 @@
       "bytes": 5241,
       "sha256": "bdec554df069295ad904ecaec01ba4deba31f62a2c71f9ad99fe234b7a03db1b"
     },
-    "scripts/prepare_voice_install.py": {
-      "bytes": 15142,
-      "sha256": "c970cab026b85e7c730be863450ce1ef755ed176c46384bf8f17813b22ad6ae9"
-    },
     "scripts/build_complete.sh": {
-      "bytes": 8240,
-      "sha256": "3d480e05b11c3bc02bd311f55cacdd3e56e32f4d2581fa25860bdcc8dd13879d"
+      "bytes": 7343,
+      "sha256": "fdcafdb079b87ac771089c1a7e5a01cdabd6fcc020988bc022de7d7f9d08a808"
     },
     "scripts/patch_splash_listener.py": {
       "bytes": 10418,
       "sha256": "743f747cf3470ca4005531926fb8c11d5dc32e0bdec3e737f132160aaa96d161"
     },
     "scripts/verify_whisper_input.py": {
-      "bytes": 15649,
-      "sha256": "be845f438a7a5c65c672477b0a1e88e2155bc2b72d446ea3ce4ccfed96202ff1"
-    },
-    "scripts/audit_complete_search.py": {
-      "bytes": 20514,
-      "sha256": "36e4ea31b003ca6338ff8edfbe8d27e0309d896f91dbbcba334befcc1688f576"
+      "bytes": 15651,
+      "sha256": "a9665120605618eba3a45fc4e4f432fdedf0c6782615f39da74587fb75c7444b"
     },
     "Resources/Runtime/splash-managed-listener-patch.json": {
       "bytes": 1043,
@@ -61,44 +53,20 @@
       "sha256": "78475b502b417093f78d608245f4f024ebaa2a811ee28d606310a3531cfe303c"
     },
     "Resources/Runtime/dot_tls.py": {
-      "bytes": 14753,
-      "sha256": "9be79444ead41a8a6303cc26530290b87b78d56dd77b2507ebea5bfbb75f65bf"
+      "bytes": 14810,
+      "sha256": "00befd7b0162876868d2f8cb0300e35ac4bdb21521f1894f63d2ae803ce2a915"
     },
     "Resources/Runtime/splash.sb": {
       "bytes": 1978,
       "sha256": "b4f9fd3cd943f5a43a09de1525e21b1788991be35eb6fa75cf6c5ce89b55d5e3"
     },
-    "Resources/Voice/bionic_helper.py": {
-      "bytes": 10256,
-      "sha256": "cf0a81bd6a1774096060830ffc1dff4ae700b01d8604c6860e0ac5b80b48da92"
-    },
-    "Resources/Voice/voice.sb": {
-      "bytes": 1827,
-      "sha256": "0d64eeeb3fec6ee111987a1ac2cb46962ab0886147363fd5fe0de1cefe261d26"
-    },
     "Resources/bundled-models.json": {
       "bytes": 2580,
       "sha256": "4250f1e6882e7c4037bfec20616ed23fbad01f2316cb4dd84fe30f63b17397fe"
     },
-    "packaging/voice/complete-voice-lock.json": {
-      "bytes": 168139,
-      "sha256": "6e8f8aa951fdafe30f575537e2ef4a17fe918758685d0766a89bf5fe452c02a5"
-    },
-    "packaging/voice/complete-closure-audit.json": {
-      "bytes": 162317,
-      "sha256": "de5f5649fd90e088b2c536152855e93a0829521c5dc474ea2e508172a68572c7"
-    },
-    "packaging/voice-source-manifest.json": {
-      "bytes": 32975,
-      "sha256": "880482e58543352416cef232da3946381e2e99349d955ed7fb0d3cefd6c05a4e"
-    },
     "packaging/closure-plan.json": {
-      "bytes": 2559,
-      "sha256": "a257129a6e3cb87d806520e11b58da79ae547526203bf99becd79d405fee6f2d"
-    },
-    "packaging/signing/signing-policy.json": {
-      "bytes": 722,
-      "sha256": "4aa7a69372b7aa83d58390763a50ee46b450355fa489795c6d0bc7f90d82f83f"
+      "bytes": 2437,
+      "sha256": "0599a65c26b36db76b9d3f15922a0c56550edf99677cfac63fb26ae3dc9ec13a"
     },
     "docs/offline-voice-assembly.md": {
       "bytes": 9625,
@@ -109,8 +77,8 @@
       "sha256": "04706fac42a1b13333d9941945531db0adb69486d11a91e9549c9bfbd8068af0"
     },
     "src/OfflinePayload.swift": {
-      "bytes": 15545,
-      "sha256": "ae5af69a363b4b7d50dcde6f77d9a91b33a53c48510d71ef9f20154fe0f39e6f"
+      "bytes": 12024,
+      "sha256": "429372bb00e33eb1f951f8fed3d786c50f024bd7c81617f266110303a626e5f8"
     }
   },
   "archive_basis": {
@@ -220,12 +188,7 @@
       "Resources/Runtime/dot_tls.py",
       "Resources/Runtime/splash-managed-listener-patch.json",
       "Resources/Runtime/splash.sb",
-      "Resources/Voice/bionic_helper.py",
-      "Resources/Voice/voice.sb",
       "packaging/runtime/reconstruction-policy.json",
-      "packaging/voice-source-manifest.json",
-      "packaging/voice/complete-closure-audit.json",
-      "packaging/voice/complete-voice-lock.json",
       "scripts/patch_splash_listener.py",
       "scripts/reconstruct_runtime_payload.py"
     ]

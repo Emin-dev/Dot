@@ -1,3 +1,10 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python voice/STT stack, which no
+> longer exists. See [the Rust-only runtime](rust-runtime.md) for the current runtime. The lock,
+> audit, interpreter and wheel names below are historical assembly inputs: `packaging/voice/**`,
+> `packaging/voice-source-manifest.json`, `scripts/prepare_voice_install.py`, `Resources/Voice/bionic_helper.py`
+> and `Resources/Voice/voice.sb` are deleted, and speech is now the Rust `dot-voice` binary. The
+> numbers below are kept unchanged as the record of what was assembled at the time.
+
 # Offline voice assembly
 
 The complete static dependency lock is `packaging/voice/complete-voice-lock.json`.

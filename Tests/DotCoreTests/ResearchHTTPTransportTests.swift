@@ -377,65 +377,42 @@ final class ResearchHTTPTransportTests: XCTestCase {
         }
         XCTAssertEqual(Set(ResearchBoundedProcess.environment.keys), ["PATH", "HOME", "LC_ALL", "PYTHONDONTWRITEBYTECODE"])
     }
-    func testRuntimeChoosesOnlyContainedFrameworkOrStandaloneInterpreter() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: root) }
-        let standalone = root.appendingPathComponent("bin/python3")
-        let framework = root.appendingPathComponent("Resources/Python.app/Contents/MacOS/Python")
-        for file in [standalone, framework] {
-            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("fixture executable".utf8).write(to: file)
-            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: file.path)
+    /// The shipped reader is the native `dot-fetch` executable. There is no
+    /// interpreter selection left: exactly one executable regular file is admissible,
+    /// and both literals handed to Seatbelt are kernel-resolved paths.
+    func testNativeRuntimeAdmitsOnlyOneExecutableReaderThroughKernelPaths() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let reader = directory.appendingPathComponent("dot-fetch"), profile = directory.appendingPathComponent("source_fetch.sb")
+        try Data("fixture native reader".utf8).write(to: reader)
+        try Data("(version 1)".utf8).write(to: profile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: reader.path)
+        let alias = directory.appendingPathComponent("reader-alias", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: directory)
+        let runtime = try ResearchFetchRuntime(signedHelper: alias.appendingPathComponent("dot-fetch"),
+            signedProfile: alias.appendingPathComponent("source_fetch.sb"))
+        let expectedReader = try Self.kernelPath(reader), expectedProfile = try Self.kernelPath(profile)
+        XCTAssertEqual(runtime.helper, expectedReader); XCTAssertEqual(runtime.profile, expectedProfile)
+        XCTAssertNotEqual(runtime.helper, alias.appendingPathComponent("dot-fetch").path)
+        let arguments = try runtime.arguments(url: URL(string: "https://example.org/")!, address: "1.1.1.1", remaining: 2)
+        XCTAssertEqual(arguments, ["-f", expectedProfile, "-D", "DOT_SOURCE_HELPER=" + expectedReader,
+            expectedReader, "https://example.org/", "1.1.1.1", "2.000"])
+        // A non-executable, directory, missing or remote helper is never a reader.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: reader.path)
+        XCTAssertThrowsError(try ResearchFetchRuntime(signedHelper: alias.appendingPathComponent("dot-fetch"),
+            signedProfile: alias.appendingPathComponent("source_fetch.sb")))
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: reader.path)
+        for invalid in [directory, directory.appendingPathComponent("missing-reader"), URL(string: "https://example.org/dot-fetch")!] {
+            XCTAssertThrowsError(try ResearchFetchRuntime(signedHelper: invalid, signedProfile: profile))
         }
-        let helper = root.appendingPathComponent("helper.py"), profile = root.appendingPathComponent("profile.sb")
-        try Data().write(to: helper); try Data().write(to: profile)
-        let first = try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile)
-        XCTAssertEqual(first.python, try Self.kernelPath(framework))
-        try FileManager.default.removeItem(at: framework)
-        let second = try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile)
-        XCTAssertEqual(second.python, try Self.kernelPath(standalone))
-        try FileManager.default.createSymbolicLink(at: framework, withDestinationURL: URL(fileURLWithPath: "/usr/bin/true"))
-        XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: root, signedHelper: helper, signedProfile: profile))
+        XCTAssertThrowsError(try ResearchFetchRuntime(signedHelper: reader, signedProfile: directory))
     }
 
     private static func kernelPath(_ url: URL) throws -> String {
         let resolved = try XCTUnwrap(realpath(url.path, nil))
         defer { free(resolved) }
         return String(cString: resolved)
-    }
-
-    func testRuntimeUsesKernelPathsForSandboxAndChildThroughSymlink() throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let root = directory.appendingPathComponent("runtime", isDirectory: true)
-        let python = root.appendingPathComponent("bin/python3")
-        try FileManager.default.createDirectory(at: python.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("fixture executable".utf8).write(to: python)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: python.path)
-        let helper = root.appendingPathComponent("helper.py"), profile = root.appendingPathComponent("profile.sb")
-        try Data().write(to: helper); try Data().write(to: profile)
-        let alias = directory.appendingPathComponent("runtime-alias", isDirectory: true)
-        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: root)
-        let runtime = try ResearchFetchRuntime(auditedPythonRoot: alias,
-            signedHelper: alias.appendingPathComponent("helper.py"), signedProfile: alias.appendingPathComponent("profile.sb"))
-        let expectedRoot = try Self.kernelPath(root), expectedPython = try Self.kernelPath(python)
-        let expectedHelper = try Self.kernelPath(helper), expectedProfile = try Self.kernelPath(profile)
-        XCTAssertEqual(runtime.pythonRoot, expectedRoot); XCTAssertEqual(runtime.python, expectedPython)
-        XCTAssertEqual(runtime.helper, expectedHelper); XCTAssertEqual(runtime.profile, expectedProfile)
-        XCTAssertNotEqual(runtime.pythonRoot, alias.path)
-        let arguments = try runtime.arguments(url: URL(string: "https://example.org/")!, address: "1.1.1.1", remaining: 2)
-        XCTAssertEqual(arguments, ["-f", expectedProfile, "-D", "DOT_SOURCE_PYTHON=" + expectedPython,
-            "-D", "DOT_SOURCE_PYTHON_ROOT=" + expectedRoot, "-D", "DOT_SOURCE_HELPER=" + expectedHelper,
-            expectedPython, "-I", "-S", "-B", expectedHelper, "https://example.org/", "1.1.1.1", "2.000"])
-        for invalid in [root, root.appendingPathComponent("missing.py"), URL(string: "https://example.org/helper.py")!] {
-            XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: alias, signedHelper: invalid, signedProfile: profile))
-            XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: alias, signedHelper: helper, signedProfile: invalid))
-        }
-        XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: helper, signedHelper: helper, signedProfile: profile))
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: python.path)
-        XCTAssertThrowsError(try ResearchFetchRuntime(auditedPythonRoot: alias, signedHelper: helper, signedProfile: profile))
     }
 
     func testOwnedProcessDeadlineCancellationAndOutputLimit() async throws {
@@ -728,16 +705,25 @@ final class ResearchHTTPTransportTests: XCTestCase {
     }
 
 #if !SWIFT_PACKAGE
+    private static var repository: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// The shipped native reader is the second `[[bin]]` of `crates/dot-research`.
+    /// `scripts/verify_macos.sh` builds it before the XCTest lane; a direct Xcode run
+    /// without it skips instead of substituting another reader.
+    private static func nativeReader() throws -> URL {
+        let reader = repository.appendingPathComponent("target/release/dot-fetch")
+        guard FileManager.default.isExecutableFile(atPath: reader.path) else {
+            throw XCTSkip("Build the native source reader first: cargo build --release --manifest-path Cargo.toml --bin dot-fetch")
+        }
+        return reader
+    }
+
+    /// Assemble the runtime over the staged native reader and the shipped profile.
     @MainActor private func sourceRuntime(helper: URL) async throws -> ResearchFetchRuntime {
-        let python = try XCTUnwrap(ProcessInfo.processInfo.environment["DOT_TEST_PYTHON"], "Run scripts/verify_macos.sh for the explicit test runtime")
-        let result = try await ResearchBoundedProcess.run(executable: python,
-            arguments: ["-I", "-S", "-B", "-c", "import sys; print(sys.base_prefix)"],
-            deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 4_096, stderrLimit: 1_024)
-        XCTAssertEqual(result.status, 0); XCTAssertTrue(result.stderr.isEmpty)
-        let root = try XCTUnwrap(String(data: result.stdout, encoding: .utf8)).trimmingCharacters(in: .whitespacesAndNewlines)
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        return try ResearchFetchRuntime(auditedPythonRoot: URL(fileURLWithPath: root), signedHelper: helper,
-            signedProfile: repository.appendingPathComponent("Resources/Research/source_fetch.sb"))
+        try ResearchFetchRuntime(signedHelper: helper,
+            signedProfile: Self.repository.appendingPathComponent("Resources/Research/source_fetch.sb"))
     }
 
     @MainActor private func inheritedTCPFixture() async throws -> (FileHandle, FileHandle, Int) {
@@ -785,51 +771,37 @@ final class ResearchHTTPTransportTests: XCTestCase {
         XCTAssertEqual(Data(buffer.prefix(max(0, count))), expected)
     }
 
-    @MainActor func testAssembledRuntimePassesOnlyConnectedSocketUnderExactSandbox() async throws {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let helper = directory.appendingPathComponent("socket-canary.py")
-        try Data("""
-        import errno, socket, sys, urllib.parse
-        inherited = socket.socket(fileno=0)
-        inherited.settimeout(1)
-        port = urllib.parse.urlsplit(sys.argv[1]).port
-        assert inherited.getpeername() == ('127.0.0.1', port)
-        inherited.sendall(b'connected-only')
-        inherited.close()
-        fresh = None
-        try:
-            fresh = socket.socket()
-            fresh.settimeout(1)
-            fresh.connect(('127.0.0.1', port))
-        except OSError as error:
-            assert error.errno in (errno.EPERM, errno.EACCES), error
-        else:
-            raise AssertionError('fresh connection allowed')
-        finally:
-            if fresh is not None:
-                fresh.close()
-        print('native-socket-ok')
-        """.utf8).write(to: helper)
-        let runtime = try await sourceRuntime(helper: helper)
-        XCTAssertEqual(runtime.helper, try Self.kernelPath(helper), "The exact sandbox literal must retain /private when required")
+    @MainActor func testAssembledNativeReaderRunsOnlyThePinnedExecutableUnderExactSandbox() async throws {
+        let reader = try Self.nativeReader()
+        let runtime = try await sourceRuntime(helper: reader)
+        XCTAssertEqual(runtime.helper, try Self.kernelPath(reader), "The exact sandbox literal must retain /private when required")
+        // The reader adopts the inherited descriptor and has no dialing call site at
+        // all, so (deny network*) is not the only reason it cannot reach another peer.
+        let source = try String(contentsOf: Self.repository.appendingPathComponent("crates/dot-research/src/fetch.rs"), encoding: .utf8)
+        XCTAssertFalse(source.contains("TcpStream::connect"))
+        XCTAssertFalse(source.contains("to_socket_addrs"))
+        // The exact profile admits one executable: the pinned reader. Any substituted
+        // child is refused by Seatbelt before it runs, so no reader can be swapped in.
+        let substituted = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec",
+            arguments: ["-f", runtime.profile, "-D", "DOT_SOURCE_HELPER=" + runtime.helper, "/usr/bin/true"],
+            deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 128, stderrLimit: 4_096)
+        XCTAssertNotEqual(substituted.status, 0); XCTAssertTrue(substituted.stdout.isEmpty)
+        // Under the profile the reader inherits exactly this connected socket and
+        // refuses a peer that is not the pin before any request byte leaves it.
         let (inherited, peer, port) = try await inheritedTCPFixture()
         defer { try? inherited.close(); try? peer.close() }
         let arguments = try runtime.arguments(url: URL(string: "https://fixture.invalid:\(port)/")!, address: "1.1.1.1", remaining: 2)
         XCTAssertFalse(arguments.contains { $0.contains("DOT_SOURCE_ENDPOINT") })
         let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec", arguments: arguments,
             deadline: ProcessInfo.processInfo.systemUptime + 3, stdoutLimit: 128, stderrLimit: 4_096, standardInput: inherited)
-        XCTAssertEqual(result.status, 0, String(decoding: result.stderr, as: UTF8.self))
-        XCTAssertEqual(result.stdout, Data("native-socket-ok\n".utf8)); XCTAssertTrue(result.stderr.isEmpty)
+        XCTAssertEqual(result.status, 1, String(decoding: result.stderr, as: UTF8.self))
+        XCTAssertTrue(result.stdout.isEmpty); XCTAssertTrue(result.stderr.isEmpty)
         try inherited.close()
-        try assertPeerBytes(peer, expected: Data("connected-only".utf8))
         try assertPeerBytes(peer, expected: Data())
     }
 
-    @MainActor func testAssembledProductionHelperRejectsInheritedPeerBeforeHTTPBytes() async throws {
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let runtime = try await sourceRuntime(helper: repository.appendingPathComponent("Resources/Research/dot_source_fetch.py"))
+    @MainActor func testAssembledProductionReaderRejectsInheritedPeerBeforeHTTPBytes() async throws {
+        let runtime = try await sourceRuntime(helper: try Self.nativeReader())
         let (inherited, peer, port) = try await inheritedTCPFixture()
         defer { try? inherited.close(); try? peer.close() }
         let arguments = try runtime.arguments(url: URL(string: "https://fixture.invalid:\(port)/secret")!, address: "1.1.1.1", remaining: 2)

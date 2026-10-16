@@ -1,3 +1,10 @@
+> **Update (2026-10-17).** This is a dated milestone record. Two statements below are superseded by the
+> owner's [2026-10-17 decisions](../BUILD_CHECKLIST.md#owner-decisions--2026-10-17-rust-only-runtime-and-accepted-corrections):
+> the "120 reviewed recipes per new skin" target is retired (all eleven skins share one warm
+> expression set with amplitude-driven speech), and search/voice are now the Rust `dot-search` and
+> `dot-voice` binaries rather than Python helpers. The recorded counts and implemented-scope list are
+> kept unchanged.
+
 # Reliability, history and native utility milestone
 
 Exact source: [`125e0e9c9a4fa37a1f5977c235cfe98a6d596c42`](https://github.com/Emin-dev/Dot/commit/125e0e9c9a4fa37a1f5977c235cfe98a6d596c42). Tested on 2026-10-13 in a clean detached checkout. This is a source milestone, not full-checklist completion, installation or physical voice acceptance.

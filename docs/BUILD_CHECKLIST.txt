@@ -1,3 +1,10 @@
+> **SUPERSEDED (2026-10-17).** This plain-text companion describes the retired Python voice helper,
+> source fetcher and SearXNG search stack as pending work, and no longer exists in that form. See
+> [the Rust-only runtime](rust-runtime.md) and the current
+> [canonical checklist](BUILD_CHECKLIST.md#owner-decisions--2026-10-17-rust-only-runtime-and-accepted-corrections)
+> for the current direction, where SearXNG is retired and the runtime is Rust-only. Requirement text
+> and checkbox state below are the 2026-10-14 snapshot and are preserved unchanged.
+
 # dot: product roadmap and build checklist
 
 Agreed direction, updated 2026-10-14. **This is the canonical future-product checklist.** [PROGRESS](PROGRESS.md) records verified source, tests and installation; agreement here does not mean a feature is built. Roadmap capability boxes remain unchecked until their stated scope is verified; the separate candidate ledger below records narrower source and automated-check milestones. This documentation delta changes no application code; the preview review is complete and checklist implementation is authorized in tested stages. Voice is the first milestone, with a separate reviewable native skin/settings batch; installation remains a separate step.

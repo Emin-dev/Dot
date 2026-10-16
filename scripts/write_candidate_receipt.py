@@ -41,10 +41,14 @@ def candidate_receipt(root, commit, host_arch, macos_version, sdk_version, app_a
            or provenance[key] != value for key, value in expected.items()):
         raise ValueError("Bundle provenance is not the exact clean model-free development build")
     for path in [resources / "Offline", resources / "OfflineModels",
-                 app / "Contents/Frameworks/whisper.framework", resources / "Search/python",
-                 resources / "Search/search-runtime-manifest.json"]:
+                 app / "Contents/Frameworks/whisper.framework", resources / "Search"]:
         if path.exists() or path.is_symlink():
             raise ValueError("Unexpected runtime payload in model-free development build")
+    # The native Rust runtimes ship beside the executable, never as bundled resources.
+    for native in ["dot-search", "dot-voice"]:
+        binary = nonempty_file(app / "Contents/MacOS" / native)
+        if binary.is_symlink() or not os.access(binary, os.X_OK):
+            raise ValueError(f"The bundled native {native} runtime must be an executable regular file")
     info = plistlib.loads(nonempty_file(app / "Contents/Info.plist").read_bytes())
     minimum = info.get("LSMinimumSystemVersion")
     if not isinstance(minimum, str) or not re.fullmatch(r"\d+(?:\.\d+){1,2}", minimum):
@@ -66,14 +70,14 @@ def candidate_receipt(root, commit, host_arch, macos_version, sdk_version, app_a
                      "executable_architectures": app_archs, "build_host_architecture": host_arch,
                      "build_host_macos_version": macos_version, "sdk_version": sdk_version},
         "signing": "ad-hoc", "notarized": False,
-        "runtime_bundled": False, "models_bundled": False, "search_runtime_bundled": False,
+        "runtime_bundled": False, "models_bundled": False, "search_runtime_bundled": True,
         "llm_weights_download_on_first_launch": False,
         "hardware_acceptance": "not-performed-by-CI",
         "limitations": [
             "Native UI development candidate; not a complete neural app or public release.",
-            "No bundled Whisper, Splash/Qwen, or Kokoro runtime; voice and typed replies unavailable.",
-            "No verified Search payload/provider; web research and local answer synthesis unavailable.",
-            "General web-source fetching also needs the missing audited runtime.",
+            "No bundled model payload: the native voice and search runtimes ship without Whisper, Splash/Qwen or Kokoro model files.",
+            "Web search runs through the bundled native dot-search runtime; no hosted search provider credential is bundled.",
+            "General web-source fetching needs the native source reader staged beside the app executable.",
             "Ad-hoc signed and unnotarized; macOS may block opening.",
             "A renamed copy shares app identity and local data; use a separate macOS account for isolation."
         ]

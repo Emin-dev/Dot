@@ -11,14 +11,17 @@ final class NativeSkinTests: XCTestCase {
         try body(defaults)
     }
 
-    @MainActor func testDefaultAndUnknownSelectionKeepDewWithoutOverwritingOtherPreferences() {
+    @MainActor func testDefaultAndUnknownSelectionResolveToOriginalWithoutOverwritingOtherPreferences() {
         preferences { defaults in
             defaults.set("keep", forKey: "unrelated-setting")
-            XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .dew)
+            XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .original)
+            // The documented default stays a default rather than a stored election: nothing is
+            // written, so an absent value still means "the user has not changed it" and a later
+            // product default change keeps applying to this user.
             XCTAssertNil(defaults.object(forKey: SkinPreferences.selectionKey))
             for invalid in ["fold", "prototype-pearl", "future-skin"] {
                 defaults.set(invalid, forKey: SkinPreferences.selectionKey)
-                XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .dew)
+                XCTAssertEqual(SkinPreferences(defaults: defaults).selected, .original)
             }
             XCTAssertEqual(defaults.string(forKey: "unrelated-setting"), "keep")
         }
@@ -28,6 +31,9 @@ final class NativeSkinTests: XCTestCase {
         XCTAssertEqual(DotSkin.allCases.map(\.rawValue), ["original", "pearl", "mochi", "cloudlet", "pip", "dew", "ripple", "sprout", "veil", "halo", "nova"])
         preferences { defaults in
             let settings = SkinPreferences(defaults: defaults)
+            // All eleven choices are offered and a per-user choice persists. Dew is included
+            // deliberately: it was a former product default, and choosing it now must survive
+            // relaunch instead of silently reverting to Original.
             for skin in DotSkin.allCases {
                 settings.selected = skin
                 XCTAssertEqual(SkinPreferences(defaults: defaults).selected, skin)

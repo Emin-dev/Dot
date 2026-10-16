@@ -8,7 +8,7 @@ enum RuntimeCertificatePin {
     static func matches(_ data: Data, expected: String, host: String) -> Bool {
         guard host == "127.0.0.1", !data.isEmpty, data.count <= 65_536,
               expected.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { return false }
-        return SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == expected
+        return data.sha256Hex == expected
     }
 }
 

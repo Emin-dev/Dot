@@ -7,6 +7,13 @@ edition = "2021"
 name = "dot-search"
 path = "src/main.rs"
 
+# Pinned single-GET source reader for the Research path. It replaces the packaged
+# Python helper: no interpreter, no HTTP client stack, no resolver, no proxy or
+# cookie state. The host passes one vetted, already-connected socket as stdin.
+[[bin]]
+name = "dot-fetch"
+path = "src/fetch.rs"
+
 [dependencies]
 tokio = { version = "1", features = ["full"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "socks"] }
@@ -18,3 +25,9 @@ form_urlencoded = "1.2"
 httparse = "1.10"
 base64 = "0.22"
 getrandom = "0.2"
+# dot-fetch only: rustls with the ring provider (no C toolchain, no OpenSSL, no
+# platform trust daemon), pure-Rust DEFLATE and a CRC32 for the gzip trailer.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+crc32fast = "1.5"
+libc = "0.2"

@@ -1,3 +1,12 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python Search proxy/SearXNG canary
+> stage, which no longer exists. See [the Rust-only runtime](docs/rust-runtime.md) for the current
+> runtime. Every input it names is deleted: `profile-bootstrap-basis.json`,
+> `Tests/Fixtures/search_proxy_canary.sb`, `Tests/Native/search-proxy-bootstrap-canary.c`,
+> `Tests/Native/search_proxy_bootstrap_probe.py`, `scripts/search_proxy_canary_support.py`,
+> `scripts/test_search_proxy_sandbox_canary.py`, `scripts/test_search_proxy_bootstrap_canary.py` and
+> `Resources/Search/search.sb`. The recorded counts and hashes below are preserved unchanged as the
+> record of that work; no canary described here can be run today.
+
 # Independent profile and bootstrap canaries
 
 This stage adds uniquely named test files only. Existing native gate scripts and their original C/Python dependencies remain unchanged. The inspected `/workspace/shared/dot-cloud-build` source is read-only. `profile-bootstrap-basis.json` binds the six source files used and the reviewed proposal. The production `Resources/Search/search.sb`, native bootstrap and packaging are unchanged.

@@ -34,6 +34,11 @@ class CandidateReceiptTests(unittest.TestCase):
         self.binary = self.app / "Contents/MacOS/Dot"
         self.binary.parent.mkdir()
         self.binary.write_bytes(b"synthetic binary fixture; not executable")
+        # The development app always carries its native Rust runtimes.
+        for native in ("dot-search", "dot-voice"):
+            runtime = self.app / "Contents/MacOS" / native
+            runtime.write_bytes(b"synthetic native runtime fixture")
+            runtime.chmod(0o700)
 
     def write_provenance(self):
         (self.resources / "build-provenance.json").write_text(json.dumps(self.provenance))
@@ -55,10 +60,23 @@ class CandidateReceiptTests(unittest.TestCase):
         self.assertFalse(result["final_installer"])
         self.assertFalse(result["runtime_bundled"])
         self.assertFalse(result["models_bundled"])
-        self.assertFalse(result["search_runtime_bundled"])
+        self.assertTrue(result["search_runtime_bundled"])
         self.assertFalse(result["notarized"])
         self.assertEqual(result["hardware_acceptance"], "not-performed-by-CI")
         self.assertGreaterEqual(len(result["limitations"]), 6)
+
+    def test_missing_non_executable_or_linked_native_runtime_fails(self):
+        for native in ("dot-search", "dot-voice"):
+            runtime = self.app / "Contents/MacOS" / native
+            original = runtime.read_bytes()
+            runtime.unlink()
+            with self.subTest(native=native, state="missing"), self.assertRaises(ValueError): self.make()
+            runtime.write_bytes(original); runtime.chmod(0o600)
+            with self.subTest(native=native, state="not executable"), self.assertRaises(ValueError): self.make()
+            runtime.chmod(0o700); runtime.unlink()
+            runtime.symlink_to(self.binary)
+            with self.subTest(native=native, state="linked"), self.assertRaises(ValueError): self.make()
+            runtime.unlink(); runtime.write_bytes(original); runtime.chmod(0o700)
 
     def test_records_intel_build_without_claiming_arm_support(self):
         self.assertEqual(self.make(host_arch="x86_64", app_archs=["x86_64"])
@@ -94,7 +112,7 @@ class CandidateReceiptTests(unittest.TestCase):
 
     def test_unexpected_payloads_fail(self):
         for relative in ["Resources/Offline", "Resources/OfflineModels", "Frameworks/whisper.framework",
-                         "Resources/Search/python", "Resources/Search/search-runtime-manifest.json"]:
+                         "Resources/Search"]:
             path = self.app / "Contents" / relative
             path.parent.mkdir(parents=True, exist_ok=True); path.touch()
             with self.subTest(path=relative), self.assertRaises(ValueError): self.make()
@@ -157,7 +175,7 @@ class CandidateReceiptTests(unittest.TestCase):
         self.assertIn("permissions:\n  contents: read", workflow)
         gates = (ROOT / "scripts/verify_macos.sh").read_text()
         for required in ["set -euo pipefail", "unittest discover -s Tests/Python",
-                         "scripts/test_voice_sandbox.py", "scripts/test_splash_sandbox.py",
+                         "scripts/test_splash_sandbox.py",
                          "scripts/check_contracts.py", "swift test", "CODE_SIGNING_ALLOWED=NO test",
                          "CODE_SIGNING_ALLOWED=NO build", "bash build.sh",
                          "FAIL: warning detected", "codesign --verify --strict build/Dot.app"]:
@@ -169,7 +187,7 @@ class CandidateReceiptTests(unittest.TestCase):
         self.assertNotIn("build/Dot.dmg", workflow)
         self.assertNotIn("build/Dot.app", workflow)
         gates = (ROOT / "scripts/verify_macos.sh").read_text()
-        for log in ["python", "sandbox", "splash-sandbox", "swift", "test", "release", "package"]:
+        for log in ["python", "splash-sandbox", "swift", "test", "release", "package"]:
             with self.subTest(log=log): self.assertIn(f'2>&1 | tee "$LOGS/{log}.log"', gates)
         self.assertIn('print(text, end="")', (ROOT / "scripts/write_candidate_receipt.py").read_text())
 

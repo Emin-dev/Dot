@@ -1,42 +1,106 @@
 # Connection-pinned source reading
 
-The source reader runs separately from inference. App wiring first requires the normal complete payload integrity audit, then reuses only its Python executable and standard library in a new isolated process. It does not share Splash's running process, environment, models or launcher. The fetch helper and profile are signed application resources. Missing or invalid payloads fail closed; system Python, URLSession and curl are not production fallbacks.
+Current as of 2026-10-17. The original-source reader is the Rust binary `dot-fetch`, built from
+`crates/dot-research/src/fetch.rs` (`[[bin]] name = "dot-fetch"`) and run under the shipped Seatbelt
+profile `Resources/Research/source_fetch.sb`. The retired Python helper
+`Resources/Research/dot_source_fetch.py` no longer exists and is never executed by this path. See the
+[Rust runtime reference](rust-runtime.md).
 
-## Transport and trust policy
+The host side is `src/ResearchHTTPTransport.swift` and `src/OfflinePayload.swift`: the app resolves the
+host itself, makes one numeric TCP connection and hands that already-connected socket to the reader as
+standard input. The reader owns no resolver, no proxy, no cookie or credential store and no ability to
+open a second connection. There is no Python, URLSession or system-curl fallback, and a missing or
+unaudited reader binary fails closed.
 
-`/usr/bin/curl --resolve` correctly pins its explicit HTTP connection while preserving TLS SNI and hostname validation. Seven Linux probes confirmed host preservation, mismatch rejection before HTTP, direct/no-proxy/config/auth/cookie behavior and decompression. However, macOS's TLS trust path can fetch missing intermediates through SecTrust outside that pinned connection. Apple also patches its system LibreSSL to consult native trust. Neither a DNS preflight nor a private-IP post-hoc metric solves that problem. An undocumented trust override is not a maintainable security boundary. 
+## Host admission
 
-The selected exchange uses Python's standard `socket`, `ssl` and `http.client`, with the already-audited bundled OpenSSL backend. It is launched with `-I -S -B`, no shell, no site packages and an explicit environment allowlist. The Swift host opens one socket to a verified numeric address and passes it as the helper’s standard input. The helper independently checks that inherited peer, wraps the socket with original-host SNI/certificate verification, and hands HTTP framing to the stdlib. It cannot create a new network connection. No URL hostname is passed to a resolver during connect. The stdlib helper creates no persistent files and has no cookie, proxy, credential, keychain, auth negotiation, redirect or retry facility.
+- HTTPS-only admission, independently repeated by the reader. HTTP input is rejected rather than
+  upgraded; custom HTTPS ports remain supported. The URL is canonicalized (lowercased host, fragment
+  removed) and bounded.
+- The OS resolver `/usr/bin/dscacheutil` runs in a separate bounded process. Only IPv4 candidates are
+  considered; the complete candidate set is rejected if any pin is unsafe, IPv6 candidates (including
+  IPv6-only origins) are never admitted, and no unbounded resolver work is left behind.
+- One literal connection to one vetted numeric peer: no alternate-address retry, no transparent
+  re-resolution within a hop.
+- The host owns redirect policy. The reader never follows a redirect; when the response is 301, 302,
+  303, 307 or 308 the host re-resolves, re-pins and reconnects for the next hop, at most three hops,
+  and `ResearchWebReader.allowed` admits only HTTPS so a downgrade fails. A non-2xx response that is
+  not a redirect fails the fetch.
+- One overall 30-second budget; cancellation or deadline kills the exact owned child and awaits real
+  termination and pipe closure before the fetch settles.
 
-TLS policy is explicit: certificate chain, hostname and validity checks with TLS 1.2+ and the OS `/etc/ssl/cert.pem` file trust anchors. It fails on a missing chain rather than fetching AIA. Standard OpenSSL/Python does not perform online OCSP/CRL fetching here; this is a deliberate no-network trust policy, not a claim that online revocation checking is retained. No insecure flag or certificate-verification bypass is used. Sites relying on user-keychain-only roots or missing intermediates may fail closed. The exact bundled OpenSSL and CA-file behavior still needs native/runtime acceptance.
+## Reader contract (`dot-fetch`)
 
-Sources checked:
-- Apple DNS utility implementation, showing both AF_INET6 and AF_INET lookups and the exact output keys: https://github.com/apple-oss-distributions/DSTools/blob/main/dscacheutil/dscacheutil.m
-- Apple trust network fetching behavior: https://developer.apple.com/documentation/security/sectrustsetnetworkfetchallowed(_:_:)
-- Apple's curl build/backend information: https://github.com/apple-oss-distributions/curl and https://github.com/apple-oss-distributions/curl/blob/main/curl.plist
-- curl verification and native-trust behavior: https://curl.se/docs/sslcerts.html
-- IANA special-purpose policy references: https://www.iana.org/assignments/iana-ipv4-special-registry and https://www.iana.org/assignments/iana-ipv6-special-registry
+- Before a single request byte leaves the process it re-validates the inherited descriptor: it must be
+  a stream socket whose peer is exactly the pinned IPv4 address and whose port is the URL port. A
+  private pin, a mismatching peer or a non-stream descriptor exits with status 1 and zero request bytes.
+- It completes a rustls handshake with SNI for the original hostname and verifies the hostname's
+  certificate chain against the shipped system root bundle `/etc/ssl/cert.pem`. SecTrust is
+  deliberately not used, because Apple trust evaluation may fetch missing issuers (AIA) over the
+  network, which this path forbids. There is no insecure flag or verification bypass; sites that need
+  user-keychain-only roots or fetchable intermediates fail closed.
+- Exactly one HTTP/1.1 GET with `Host` and no cookies, authorization or proxy headers. No redirect is
+  followed, no retry and no second request is made.
+- Bounds: 4 MiB transferred body and 4 MiB decoded body, 64 KiB response header block, 8 KiB
+  single header/chunk line, 30-second maximum and 10-second idle timeout. Exceeding a size bound exits
+  with status 63; every other failure exits with status 1.
+- Complete framing is required: a declared `Content-Length` must be satisfied, a chunked body must be
+  terminated, and `identity`, `gzip` and `deflate` are the only accepted codings. gzip framing
+  (RFC 1952) is checked including its CRC32/ISIZE trailer and zlib streams are checked to their
+  Adler-32 trailer; truncated or trailer-mismatched bodies fail closed. Redirect and error bodies are
+  not consumed beyond the header block.
+- Body bytes go to stdout; one bounded JSON metadata object (including `content-type`,
+  `content-length`, `content-encoding`, `transfer-encoding`, `last-modified` and `location`) goes to
+  stderr. On failure nothing is written beyond that metadata: no URL, body, peer, path, certificate or
+  diagnostic is logged, and the panics hook is silenced so a crash cannot leak them either.
 
-## Enforced bounds and failure policy
+## Seatbelt profile
 
-- HTTPS-only admission before DNS/connect, independently repeated by the helper. HTTP input and downgrade redirects are rejected rather than silently upgraded. Custom HTTPS ports 1–65535 remain supported. Other lexical URL checks retained: no userinfo/numeric/local host forms, hostname/label/port/8,192-byte URL bounds; canonical lowercased host and fragment removal.
-- OS `/usr/bin/dscacheutil` resolves both address families in a separate process, at most five seconds, 16 KiB output and 64 addresses. Every A candidate must be public; any unsafe A candidate rejects the set. AAAA syntax is validated but these records are never connected. The 64-answer bound counts both A and discarded AAAA records; malformed or scoped AAAA records fail closed. A custom resolver must return only public IPv4 candidates; an IPv6 candidate rejects its entire set. No unbounded resolver thread is left behind.
-- IPv4 special, private, reserved, multicast and documentation networks are denied. All IPv6 pins are denied because an arbitrary network-specific NAT64 prefix can translate an apparently global address into private IPv4. DNS parsing validates but discards AAAA records; dual-stack origins use only vetted A records, and IPv6-only origins or networks are unsupported and fail closed. No IPv6 fallback occurs. Discarding a syntactically valid private/translated AAAA record does not make it an admitted pin; only public A records can reach the connection step. This conservative policy also denies globally reachable special-purpose exceptions. It is an application allow policy, not a statement that every DNS record or address in the Internet has been enumerated.
-- One literal connection, no alternate-address retry, no second DNS resolution; every manual redirect re-resolves and repins, including same-host redirects. Maximum three redirects, no HTTPS downgrade, no cookie/auth forwarding. Rebinding cannot change the selected numeric peer within a hop; each fresh fetch or redirect must independently pass current DNS admission. This does not claim knowledge of arbitrary network routing beyond the selected IPv4 peer.
-- One overall 30-second monotonic network budget, bounded nonblocking pipes, 64 KiB headers/8 KiB line cap, four MiB encoded and four MiB decoded body cap. The helper skips redirect/error bodies. Process cancellation/deadline/overflow kills only the exact owned child PID. The parent always discards partial/late output after cancellation.
-- Stdlib framing is preserved; 103 Early Hints is consumed without fetching hinted resources, 101 upgrades rejected, unsupported Transfer-Encoding and conflicting Content-Length rejected, duplicate consequential headers rejected. Truncated compression/declared bodies fail closed.
-- The fetch sandbox reads only the audited Python root, exact helper and required public system TLS/runtime material. It denies all new network connections, including DNS and reconnects to the selected destination; only the host-owned inherited connection is used. User files, models, launchers and writable state directories remain unavailable. It does not claim complete Mach/process containment; exact native canaries are required before certifying those OS-specific restrictions.
+`Resources/Research/source_fetch.sb` is the reader's profile: default-allow with file reads, file
+writes, executable mapping, all network access and process execution denied, then narrowly re-allowed
+for `/System/Library`, `/usr/lib`, the public TLS bundle, `/dev/null`-class devices and the reader
+binary itself (parameter `DOT_SOURCE_HELPER`). There is no network exception at all — the reader
+cannot connect, reconnect or choose another peer, and the binary contains no `socket()`/`connect()`
+call site. The only executable it may run is itself; there is no interpreter or script. The profile
+does not claim complete Mach/process containment.
+
+## Verification status
+
+The in-tree end-to-end driver `crates/dot-research/tests/dot_fetch_e2e.py` performs a real public
+HTTPS exchange through the shipped binary, repeats the identical exchange under
+`/usr/bin/sandbox-exec` with the shipped profile, and checks the private-pin, wrong-peer and
+non-stream-descriptor refusals. It is a development fixture: it is not packaged, and this document
+records no run result for it. `Tests/DotCoreTests/ResearchHTTPTransportTests.swift` and
+`Tests/Python/test_research_transport_contract.py` exercise the host fixtures and the retired-helper
+guards. Source policy, hosted fixtures, an audited complete runtime and an actual sourced-answer
+acceptance remain separate gates; none of those gates is closed here. In particular there is no
+recorded native Seatbelt enforcement receipt for the reader in this documentation set, and CFNetwork
+proxy/PAC behaviour, real NAT64 networks, live search, upstream snippet-retention rights and installer
+acceptance are not established.
 
 ## Historical evidence and new synthesis
 
-New web receipts include an optional `httpsOnlyV1` transport-policy record after the HTTPS-only reader succeeds. This records the app’s retrieval checks; it is neither a cryptographic attestation nor independent verification of source claims. A SHA-256 receipt still identifies only the bytes received.
+New web receipts include an optional `httpsOnlyV1` transport-policy record after the HTTPS-only reader
+succeeds. This records the app's retrieval checks; it is neither a cryptographic attestation nor
+independent verification of source claims. A SHA-256 receipt still identifies only the bytes received.
 
-Legacy source records, including HTTP results, remain structurally readable. Opening, copying and exporting an old notebook does not rewrite its original brief or receipts; presentation adds an unverified-transport warning. Saved research answers and quotations remain available with the same warning. New briefs omit unverified web extracts while retaining labeled inventory receipts, and new model evidence/citation admission excludes those sources. All older web receipts without the new marker are conservatively unverified, including HTTPS endpoints: the older receipt did not record intermediate redirects. Local sources are unchanged.
+Legacy source records, including HTTP results, remain structurally readable. Opening, copying and
+exporting an old notebook does not rewrite its original brief or receipts; presentation adds an
+unverified-transport warning. Saved research answers and quotations remain available with the same
+warning. New briefs omit unverified web extracts while retaining labeled inventory receipts, and new
+model evidence/citation admission excludes those sources. All older web receipts without the marker
+are conservatively unverified, including HTTPS endpoints: the older receipt did not record
+intermediate redirects. Local sources are unchanged.
 
-To reuse excluded web material, start a new research pass and read it over HTTPS. There is no automatic refetch, HTTP upgrade, silent migration or additional confirmation prompt. Resuming an old pending HTTP read records a source failure without attempting network access. A mixed session can synthesize from at least two eligible sources and two completed searches; retained legacy sources still consume the original session budgets.
+To reuse excluded web material, start a new research pass and read it over HTTPS. There is no
+automatic refetch, HTTP upgrade, silent migration or additional confirmation prompt. Resuming an old
+pending HTTP read records a source failure without attempting network access. A mixed session can
+synthesize from at least two eligible sources and two completed searches; retained legacy sources
+still consume the original session budgets.
 
-## Verification scope
+## Sources checked
 
-Portable fixtures exercise actual helper HTTPS/chunked/gzip reads with fixture trust, HTTP rejection before socket admission, insecure-TLS-policy rejection, bounds, private-pin rejection, original-host TLS mismatch before HTTP, and missing-intermediate AIA with zero requests to a private listener. Native Swift fixtures cover mixed DNS/custom resolvers, discarded-AAAA bounds, translated/mapped/custom-NAT64 IPv6 rejection, public-IPv4 redirect repinning, repeated/same-host redirect rebinding, metadata, process deadline/cancellation and default-unattached failure. The exact Seatbelt canary runs only on macOS and is never reported as passed from a Linux skip.
-
-The source implementation, hosted synthetic canaries, audited complete runtime and actual sourced-answer acceptance are separate gates. Source URL and public trust-store compatibility, the IPv4-only policy limitation and complete-bundle behavior must be recorded for the exact final artifact. This source-policy change does not establish behavioral proof of CFNetwork proxy/PAC handling, a real NAT64-network result, security-scanner closure, live search, upstream snippet-retention rights or final installer acceptance.
+- Apple DNS utility implementation, showing both AF_INET6 and AF_INET lookups and the exact output
+  keys: https://github.com/apple-oss-distributions/DSTools/blob/main/dscacheutil/dscacheutil.m
+- Apple trust network fetching behavior: https://developer.apple.com/documentation/security/sectrustsetnetworkfetchallowed(_:_:)
+- IANA special-purpose policy references: https://www.iana.org/assignments/iana-ipv4-special-registry

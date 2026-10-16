@@ -5,7 +5,8 @@ The complete build now requires `DOT_WHISPER_ARCHIVE`, pointing to the local
 `DOT_WHISPER_FRAMEWORK` directory as authority.
 
 `scripts/verify_whisper_input.py` reads the repository-owned pin from
-`packaging/voice-source-manifest.json`: 41,291,976 bytes and SHA-256
+`packaging/whisper-source-manifest.json` (the Whisper pin was retained verbatim there when the Python
+voice stack was retired): 41,291,976 bytes and SHA-256
 `9fcb28106d0b94a525e59bec057e35b57033195ac7408d7e1ab8e4b597cdfeb5`.
 The source file and verifier must be tracked in the clean build snapshot. The
 CLI exposes no alternate manifest, expected hash or disabled-verification option.
@@ -49,8 +50,4 @@ framework is compatible. Before complete-build acceptance, provide the exact
 pinned archive locally and run the verifier, real arm64 link, nested/outer
 signature checks, and relocation/load checks on the supported macOS target.
 
-This is partial remediation of executable-input authenticity. The final
-Splash/Voice runtime closure still needs an independently approved lock; its
-self-manifest is insufficient. Cached runtime/model path verification and the
-later native launch/consumption race remain separate open issues. No security
-finding or complete-app release gate is closed by this change alone.
+This is partial remediation of executable-input authenticity. The Splash runtime closure still needs an independently approved lock; its self-manifest is insufficient. The speech runtime is now the Rust `dot-voice` binary built from `crates/dot-voice`, so the retired Python voice/STT wheel closure is no longer part of the build; its crate dependencies are declared in `Cargo.toml`/`Cargo.lock` and are not an audited license or provenance lock. Cached runtime/model path verification and the later native launch/consumption race remain separate open issues. No security finding or complete-app release gate is closed by this change alone.

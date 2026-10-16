@@ -39,14 +39,12 @@
       "role": "speech_synthesis",
       "engine": "Kokoro CPU",
       "voice": "bf_isabella",
-      "status": "transitive_closure_and_licenses_pending",
-      "source_files_manifest": "voice-source-manifest.json"
+      "status": "transitive_closure_and_licenses_pending"
     },
     {
       "role": "speech_recognition",
       "language": "English",
       "status": "publisher_pins_verified_native_integration_pending",
-      "source_files_manifest": "voice-source-manifest.json",
       "engine_candidate": "whisper.cpp v1.7.6, English base model"
     }
   ],

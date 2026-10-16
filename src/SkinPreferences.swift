@@ -27,13 +27,12 @@ final class SkinPreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        let stored = defaults.string(forKey: Self.selectionKey).flatMap(DotSkin.init(rawValue:))
-        if let stored, stored != .dew {
-            selected = stored
-        } else {
-            selected = .original
-            defaults.set(DotSkin.original.rawValue, forKey: Self.selectionKey)
-        }
+        // Original remains the default until the user changes it: an absent or unrecognized
+        // stored value resolves to Original without rewriting storage, so "no stored value"
+        // still means "no explicit choice" and a later default change keeps applying here.
+        // Every valid stored choice is honored, including Dew, which is one of the eleven
+        // offered skins and must survive relaunch once the user selects it.
+        selected = defaults.string(forKey: Self.selectionKey).flatMap(DotSkin.init(rawValue:)) ?? .original
         motionDetail = defaults.string(forKey: Self.motionKey).flatMap(SkinMotionDetail.init(rawValue:)) ?? .full
     }
 }

@@ -47,7 +47,10 @@ final class TTSManager: ObservableObject {
     func shutdown() { generation = nil; playbackLevel = 0; bionic.shutdown() }
 }
 
-/// Only launches the bundled helper using only its app-bundled runtime.
+/// Only launches the bundled native engine (`Contents/MacOS/dot-voice`) against
+/// its app-bundled model root. No interpreter, script or sandbox-profile
+/// fallback: a build without that binary reports the failure instead of
+/// substituting a different voice.
 /// No socket adoption, shell interpolation, model download or external-service fallback.
 @MainActor
 final class BionicVoice: NSObject, AVAudioPlayerDelegate {
@@ -87,50 +90,18 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         let base = URL(fileURLWithPath: root, isDirectory: true)
 
         let nativeVoice = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("dot-voice")
-        let useNative = nativeVoice != nil && FileManager.default.isExecutableFile(atPath: nativeVoice!.path)
+        guard let native = nativeVoice, FileManager.default.isExecutableFile(atPath: native.path) else { throw VoiceFailure.setup }
 
         let requested = FileManager.default.temporaryDirectory.appendingPathComponent("dot-voice-" + UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: requested, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        guard let identity = try? VoiceLaunchConfiguration.privateIdentity(requested) else { throw VoiceFailure.setup }
+        guard (try? VoiceLaunchConfiguration.privateIdentity(requested)) != nil else { throw VoiceFailure.setup }
 
         let child = Process(), stdin = Pipe(), stdout = Pipe()
-        let dir: URL
-
-        if useNative, let native = nativeVoice {
-            dir = requested
-            child.executableURL = native
-            child.arguments = ["--root", base.path, "--output", requested.path]
-            child.environment = ["PATH": "/usr/bin:/bin"]
-            child.currentDirectoryURL = requested
-        } else {
-            guard let helper = Bundle.main.url(forResource: "bionic_helper", withExtension: "py", subdirectory: "Voice"),
-                  let profile = Bundle.main.url(forResource: "voice", withExtension: "sb", subdirectory: "Voice") else {
-                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
-                throw VoiceFailure.setup
-            }
-            let python = base.appendingPathComponent("python/bin/python3")
-            guard FileManager.default.isExecutableFile(atPath: python.path),
-                  FileManager.default.isExecutableFile(atPath: "/usr/bin/sandbox-exec"),
-                  ["model/config.json", "model/kokoro-v1_0.pth", "model/voices/bf_isabella.pt"].allSatisfy({
-                      FileManager.default.isReadableFile(atPath: base.appendingPathComponent($0).path)
-                  }) else {
-                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
-                throw VoiceFailure.setup
-            }
-            let launch: VoiceLaunchConfiguration
-            do {
-                launch = try VoiceLaunchConfiguration(python: python, helper: helper, profile: profile, root: base, output: requested)
-                guard try VoiceLaunchConfiguration.privateIdentity(launch.directory) == identity else { throw VoiceFailure.setup }
-            } catch {
-                VoiceLaunchConfiguration.removeEmptyIfUnchanged(requested, identity: identity)
-                throw VoiceFailure.setup
-            }
-            dir = launch.directory
-            child.executableURL = URL(fileURLWithPath: "/usr/bin/sandbox-exec")
-            child.arguments = launch.arguments
-            child.environment = launch.environment
-            child.currentDirectoryURL = launch.directory
-        }
+        let dir = requested
+        child.executableURL = native
+        child.arguments = ["--root", base.path, "--output", requested.path]
+        child.environment = ["PATH": "/usr/bin:/bin"]
+        child.currentDirectoryURL = requested
         child.standardInput = stdin; child.standardOutput = stdout
         // Library diagnostics may contain paths. They never go into application logs.
         child.standardError = FileHandle.nullDevice

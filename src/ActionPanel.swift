@@ -228,7 +228,9 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
     typealias Picker = @MainActor (PickerKind, NSPanel, @escaping PickerReply) -> Void
     let model: NativeActionPanelModel
     var onVisibility: ((Bool) -> Void)?
-    private var panel: NSPanel?
+    private let host = UtilityPanelHost(size: NSSize(width: 640, height: 620), minSize: NSSize(width: 520, height: 500),
+                                        title: "Dot · Native actions")
+    private var panel: NSPanel? { host.panel }
     private var presentation = UUID()
     private let pickerOverride: Picker?
     init(model: NativeActionPanelModel? = nil, picker: Picker? = nil) {
@@ -237,16 +239,11 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
     func show() {
         guard !model.shuttingDown else { return }
         invalidateSheets()
-        if panel == nil {
-            let window = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 620),
-                styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
-            window.title = "Dot · Native actions"; window.minSize = NSSize(width: 520, height: 500)
-            window.isReleasedWhenClosed = false; window.delegate = self
-            window.contentView = NSHostingView(rootView: NativeActionView(model: model, chooseFolder: { [weak self] in self?.chooseFolder() },
-                                                                         chooseApplication: { [weak self] in self?.chooseApplication() }))
-            window.center(); panel = window
+        host.window(delegate: self) {
+            NSHostingView(rootView: NativeActionView(model: model, chooseFolder: { [weak self] in self?.chooseFolder() },
+                                                     chooseApplication: { [weak self] in self?.chooseApplication() }))
         }
-        model.open(); onVisibility?(true); panel?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
+        model.open(); host.present(onVisibility)
         Task { await model.reloadReceipts() }
     }
     func stop() { invalidateSheets(); model.stop() }
@@ -254,7 +251,7 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) { invalidateSheets(); model.close(); onVisibility?(false) }
     private func invalidateSheets() {
         presentation = UUID()
-        if let panel, let sheet = panel.attachedSheet { panel.endSheet(sheet, returnCode: .cancel) }
+        host.endAttachedSheet()
     }
     func chooseFolder() {
         guard !model.shuttingDown, !model.busy, let panel, panel.isVisible, panel.attachedSheet == nil else { return }

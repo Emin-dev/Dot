@@ -39,7 +39,10 @@ final class VoiceTimingSettings {
 }
 
 enum VoiceCaptureDecision: Equatable, Sendable {
-    case listening, silenceSatisfied, noSpeech, maximumDuration, audioUnavailable, cancelled
+    /// `forcedFinish` is an explicit end of an unfinished turn (the user released
+    /// push-to-talk). It is a terminal outcome of its own, never a satisfied
+    /// trailing silence.
+    case listening, silenceSatisfied, forcedFinish, noSpeech, maximumDuration, audioUnavailable, cancelled
 }
 
 enum VoiceCaptureState: Equatable, Sendable {
@@ -51,10 +54,13 @@ enum VoiceCaptureState: Equatable, Sendable {
 enum VoiceCaptureEndReason: String, CaseIterable, Equatable, Sendable {
     case intentionalCancellation, noSpeech, routeChanged, permissionLost
     case invalidAudio, missingAudio, maximumDuration, systemSleep, noRecognizedWords
+    /// The user ended the turn explicitly (push-to-talk release). Not a failure,
+    /// and not a satisfied trailing silence: the audio captured so far is used.
+    case forcedFinish
 
     var recoveryMessage: String? {
         switch self {
-        case .intentionalCancellation, .noSpeech: return nil
+        case .intentionalCancellation, .noSpeech, .forcedFinish: return nil
         case .routeChanged: return "The microphone or speaker changed. Click me to start again with the current devices."
         case .permissionLost: return "Microphone access is off. Enable Dot in System Settings → Privacy & Security → Microphone, then click me."
         case .invalidAudio: return "The microphone audio was interrupted or unreadable. Check your input device, then click me to try again."
@@ -81,13 +87,54 @@ struct VoiceCaptureTimingSnapshot: Equatable, Sendable {
     let decision: VoiceCaptureDecision
 }
 
+/// One immutable measurement of a turn's audio timeline at the moment capture was
+/// closed. Nothing here is inferred from the selected settings alone: `outcome`
+/// distinguishes a completed trailing silence from an explicit release, and
+/// `audioProcessedThrough` is always PCM that was really processed.
 struct VoiceCaptureTimingEvidence: Equatable, Sendable {
+    /// How the turn's speech boundary was closed. Only `.silenceSatisfied` claims
+    /// the selected trailing-silence rule completed.
+    enum Outcome: Equatable, Sendable { case silenceSatisfied, forcedFinish }
     let captureStartedAt: Double
     let firstSpeechAt: Double
     let speechEndedAt: Double
+    /// The instant this evidence releases the turn for transcription. It is the
+    /// satisfied trailing-silence deadline for `.silenceSatisfied`, and the last
+    /// audio actually processed for `.forcedFinish`. It is never a fabricated
+    /// silence deadline.
     let silenceSatisfiedAt: Double
+    /// Monotonic end of the PCM that was really processed for this turn.
+    let audioProcessedThrough: Double
     let selectedSilenceSeconds: Double
     let invitationSeconds: Double?
+    let outcome: Outcome
+
+    init(captureStartedAt: Double, firstSpeechAt: Double, speechEndedAt: Double, silenceSatisfiedAt: Double,
+         audioProcessedThrough: Double? = nil, selectedSilenceSeconds: Double, invitationSeconds: Double?,
+         outcome: Outcome = .silenceSatisfied) {
+        self.captureStartedAt = captureStartedAt
+        self.firstSpeechAt = firstSpeechAt
+        self.speechEndedAt = speechEndedAt
+        self.silenceSatisfiedAt = silenceSatisfiedAt
+        self.audioProcessedThrough = audioProcessedThrough ?? max(silenceSatisfiedAt, speechEndedAt)
+        self.selectedSilenceSeconds = selectedSilenceSeconds
+        self.invitationSeconds = invitationSeconds
+        self.outcome = outcome
+    }
+    /// The terminal reason this evidence reports, or `nil` when the selected
+    /// trailing silence completed normally.
+    var endReason: VoiceCaptureEndReason? { outcome == .forcedFinish ? .forcedFinish : nil }
+    var isSilenceSatisfied: Bool { outcome == .silenceSatisfied }
+}
+
+/// One locked sample of a capture store: the level to display, the decision the
+/// caller must act on, and the evidence that authorizes transcription.
+struct VoiceCaptureObservation: Equatable, Sendable {
+    let level: Double
+    let decision: VoiceCaptureDecision
+    let evidence: VoiceCaptureTimingEvidence?
+    let snapshot: VoiceCaptureTimingSnapshot?
+    let endReason: VoiceCaptureEndReason?
 }
 
 /// Monotonic audio timeline, independent of timers and the main actor. A deadline is
@@ -97,6 +144,10 @@ struct VoiceCaptureTimingEvidence: Equatable, Sendable {
 struct VoiceCaptureDeadline: Sendable {
     static let maximumDuration = 60.0
     static let missingAudioGrace = 1.0
+    /// A route/format change removes the tap on purpose, so its restart gap is not
+    /// missing PCM. This is the bounded window allowed for the re-armed tap to
+    /// deliver; it can never extend past `maximumDuration`.
+    static let routeRearmGrace = 2.0
     let startedAt: Double
     let silenceSeconds: Double
     let invitationSeconds: Double?
@@ -105,6 +156,13 @@ struct VoiceCaptureDeadline: Sendable {
     private(set) var audioThrough: Double
     private(set) var decision = VoiceCaptureDecision.listening
     private(set) var audioFailure: VoiceCaptureEndReason?
+    private(set) var routeRearmedAt: Double?
+    /// Earliest instant covered by the current contiguous PCM epoch. A deliberate
+    /// tap re-arm opens a new epoch when its first buffer arrives, so a device gap
+    /// can never be counted as silence: only speech observed at or after the epoch
+    /// start may be followed by a satisfied silence.
+    private(set) var coverageStartedAt: Double
+    private var awaitingCoverageResume = false
     private var latestBufferContainsSpeech = false
 
     init(startedAt: Double, silenceSeconds: Double, invitationSeconds: Double? = nil) {
@@ -112,14 +170,22 @@ struct VoiceCaptureDeadline: Sendable {
         self.silenceSeconds = VoiceTimingSettings.silenceChoices.contains(silenceSeconds) ? silenceSeconds : 3
         self.invitationSeconds = invitationSeconds.map { VoiceTimingSettings.invitationChoices.contains($0) ? $0 : 6 }
         audioThrough = startedAt
+        coverageStartedAt = startedAt
     }
 
     mutating func observeAudio(firstSpeech: Double?, lastSpeech: Double?, through: Double) {
         guard decision == .listening, through.isFinite, through >= audioThrough else { return }
+        routeRearmedAt = nil // PCM is flowing again, so the re-arm window is over.
+        if awaitingCoverageResume {
+            // Conservatively the epoch starts where this buffer ends: the gap
+            // itself stays uncovered and cannot prove silence.
+            awaitingCoverageResume = false; coverageStartedAt = through
+        }
         latestBufferContainsSpeech = false
         // A delayed UI timer must not join two utterances separated by a fully
         // satisfied silence interval. Audio timestamps decide this boundary too.
-        if let lastSpeechAt, lastSpeechAt + silenceSeconds <= startedAt + Self.maximumDuration {
+        if let lastSpeechAt, lastSpeechAt + silenceSeconds <= startedAt + Self.maximumDuration,
+           coverageStartedAt <= lastSpeechAt {
             let silenceDeadline = lastSpeechAt + silenceSeconds
             if through >= silenceDeadline, firstSpeech.map({ $0 >= silenceDeadline }) ?? true {
                 audioThrough = through; decision = .silenceSatisfied; return
@@ -152,17 +218,43 @@ struct VoiceCaptureDeadline: Sendable {
             deadline = nil; completion = .maximumDuration
         }
         // The earliest satisfied boundary wins, even after delayed main-thread work.
-        if let deadline, deadline <= limit, now >= deadline, audioThrough >= deadline {
+        // A silence is only proven inside one contiguous PCM epoch, so a device gap
+        // can never finalize the turn as satisfied silence.
+        if let deadline, deadline <= limit, now >= deadline, audioThrough >= deadline,
+           completion != .silenceSatisfied || coverageStartedAt <= (lastSpeechAt ?? startedAt) {
             decision = completion
         } else if now >= limit {
             decision = .maximumDuration
-        } else if now >= audioThrough + Self.missingAudioGrace {
+        } else if now >= missingAudioDeadline {
             // Missing PCM is not silence, including before a manual turn's first
             // word. A live microphone cannot remain "listening" for 60s with no tap.
+            // The only exemption is a deliberate tap re-arm after a route change,
+            // and it is bounded by the same audio deadline as everything else.
             audioFailure = .missingAudio; decision = .audioUnavailable
         }
         return decision
     }
+
+    private var missingAudioDeadline: Double {
+        guard let routeRearmedAt else { return audioThrough + Self.missingAudioGrace }
+        return max(audioThrough, routeRearmedAt) + Self.routeRearmGrace
+    }
+
+    /// The input device changed and the tap was re-armed for its new format. The
+    /// turn keeps its original timeline: the re-arm only buys a bounded window for
+    /// the first buffer of the new tap, and it opens a fresh PCM coverage epoch so
+    /// the gap itself is never mistaken for silence. It cannot outlive the capture's
+    /// own limit.
+    mutating func rearmAfterRouteChange(at now: Double) {
+        guard decision == .listening, now.isFinite else { return }
+        routeRearmedAt = now
+        awaitingCoverageResume = true
+    }
+
+    /// The user ended an unfinished turn explicitly (push-to-talk release). The
+    /// audio already processed stays usable for transcription; the selected
+    /// silence rule is never reported as satisfied.
+    mutating func forceFinish() { if decision == .listening { decision = .forcedFinish } }
 
     mutating func cancel() { decision = .cancelled }
     mutating func rejectAudio() {
@@ -172,6 +264,7 @@ struct VoiceCaptureDeadline: Sendable {
     var endReason: VoiceCaptureEndReason? {
         switch decision {
         case .listening, .silenceSatisfied: return nil
+        case .forcedFinish: return .forcedFinish
         case .noSpeech: return .noSpeech
         case .maximumDuration: return .maximumDuration
         case .audioUnavailable: return audioFailure ?? .invalidAudio
@@ -195,11 +288,38 @@ struct VoiceCaptureDeadline: Sendable {
             maximumRemainingSeconds: max(0, startedAt + Self.maximumDuration - sample),
             selectedSilenceSeconds: silenceSeconds, invitationSeconds: invitationSeconds, decision: decision)
     }
+    /// Evidence for a completed trailing silence. Unchanged: it exists only when
+    /// the selected silence rule really completed inside the processed audio.
     var timingEvidence: VoiceCaptureTimingEvidence? {
         guard decision == .silenceSatisfied, let firstSpeechAt, let lastSpeechAt else { return nil }
         return VoiceCaptureTimingEvidence(captureStartedAt: startedAt, firstSpeechAt: firstSpeechAt,
                                           speechEndedAt: lastSpeechAt, silenceSatisfiedAt: lastSpeechAt + silenceSeconds,
-                                          selectedSilenceSeconds: silenceSeconds, invitationSeconds: invitationSeconds)
+                                          audioProcessedThrough: audioThrough,
+                                          selectedSilenceSeconds: silenceSeconds, invitationSeconds: invitationSeconds,
+                                          outcome: .silenceSatisfied)
+    }
+    /// Evidence for a turn closed by explicit release. Every value is measured from
+    /// processed PCM; `silenceSatisfiedAt` is the audio that was really processed
+    /// (the instant the release authorizes transcription), never a silence deadline.
+    /// `nil` when no speech was measured, because such a turn has no utterance.
+    var forcedFinishEvidence: VoiceCaptureTimingEvidence? {
+        guard decision == .forcedFinish, let firstSpeechAt else { return nil }
+        let endedAt = min(max(lastSpeechAt ?? firstSpeechAt, firstSpeechAt), audioThrough)
+        return VoiceCaptureTimingEvidence(captureStartedAt: startedAt, firstSpeechAt: firstSpeechAt,
+                                          speechEndedAt: endedAt, silenceSatisfiedAt: audioThrough,
+                                          audioProcessedThrough: audioThrough,
+                                          selectedSilenceSeconds: silenceSeconds, invitationSeconds: invitationSeconds,
+                                          outcome: .forcedFinish)
+    }
+    /// The evidence a closed turn publishes, whichever way it ended. It stays `nil`
+    /// while the turn is still listening and after any failure that cannot
+    /// authorize transcription.
+    var closedEvidence: VoiceCaptureTimingEvidence? {
+        switch decision {
+        case .silenceSatisfied: return timingEvidence
+        case .forcedFinish: return forcedFinishEvidence
+        default: return nil
+        }
     }
 }
 

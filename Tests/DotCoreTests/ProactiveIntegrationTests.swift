@@ -99,6 +99,7 @@ final class ProactiveIntegrationTests: XCTestCase {
             guard opportunity == currentOpportunity else { return }
             cancellations += 1; followup.cancel(); currentOpportunity = nil
         }
+        coordinator.setFrequency(.high) // This case exercises the 60-second cadence.
         coordinator.start(); defer { coordinator.stop() }
         coordinator.updateContext(.init(ready: true, visible: true))
         coordinator.offerContext(key: "changed-work", reason: .foregroundApplicationChanged)

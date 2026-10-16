@@ -1,3 +1,11 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python voice/STT stack, which no
+> longer exists. See [the Rust-only runtime](rust-runtime.md) for the current runtime. Speech is now
+> the Rust `dot-voice` binary built on the `any-tts` Kokoro crate, and the Python wheel closure,
+> CPython interpreter, Misaki/spaCy/phonemizer/torch packaging plan and the voice source manifest
+> below are retired. The asset pins, publisher hashes and historical numbers are kept unchanged as
+> the research record of that decision; the Whisper pin now lives in
+> [packaging/whisper-source-manifest.json](../packaging/whisper-source-manifest.json).
+
 # Dot bundled offline voice: technical research
 
 Research date: 12 October 2026. Historical snapshot: at that research stage dependency closure, licensing closure, imports, signing and end-to-end audio were unverified. Later personal-app assembly and component evidence is recorded in [PROGRESS](PROGRESS.md); this inventory is not a live status feed or release lock. The [future roadmap](BUILD_CHECKLIST.md) governs speech candidates, the stricter product hardware target and public downloader; the no-provisioning design below describes the complete offline owner bundle.
@@ -19,7 +27,7 @@ Source baseline: [Bionic commit 5166bf4 requirements](https://github.com/Emin-de
 
 ## Exact model and runtime assets
 
-Publisher-only hashes below are expected SHA-256 values, not local verification of the large files. Only Kokoro config.json and the small eSpeak loader wheel were independently hashed. Full structured records and provenance are in ../packaging/voice-source-manifest.json.
+Publisher-only hashes below are expected SHA-256 values, not local verification of the large files. Only Kokoro config.json and the small eSpeak loader wheel were independently hashed. The retired Python-era manifest that held the full structured records is deleted; the retained Whisper pin is in [packaging/whisper-source-manifest.json](../packaging/whisper-source-manifest.json).
 
 ### Kokoro model (9871713c6a29032f914cee65b617e2b6b3323770)
 

@@ -213,16 +213,82 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn handle_connection(mut socket: TcpStream, state: Arc<SearchState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf = vec![0u8; 16384];
-    let n = socket.read(&mut buf).await?;
-    if n == 0 {
+    // A client may deliver the request head and body as separate TCP segments
+    // (CFNetwork/URLSession does exactly that), so a single read() can see a
+    // complete head and an empty body. Read until httparse reports the head is
+    // complete AND the declared Content-Length body has actually arrived.
+    const MAX_REQUEST: usize = 128 * 1024;
+    const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+    let mut buf: Vec<u8> = Vec::with_capacity(16384);
+    let mut head_len: Option<usize> = None;
+    let mut expected_body: usize = 0;
+    let mut chunked = false;
+
+    loop {
+        let have_whole_request = match head_len {
+            Some(head) => buf.len() >= head + expected_body,
+            None => false,
+        };
+        if have_whole_request || chunked {
+            break;
+        }
+        let mut chunk = [0u8; 16384];
+        let read = match tokio::time::timeout(READ_TIMEOUT, socket.read(&mut chunk)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => n,
+            Ok(Err(_)) => return Ok(()),
+            Err(_) => return Ok(()),
+        };
+        if buf.len() + read > MAX_REQUEST {
+            let resp = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = socket.write_all(resp.as_bytes()).await;
+            return Ok(());
+        }
+        buf.extend_from_slice(&chunk[..read]);
+        if head_len.is_none() {
+            let mut probe_headers = [httparse::EMPTY_HEADER; 32];
+            let mut probe = httparse::Request::new(&mut probe_headers);
+            match probe.parse(&buf) {
+                Ok(httparse::Status::Complete(offset)) => {
+                    head_len = Some(offset);
+                    for header in probe.headers.iter() {
+                        if header.name.eq_ignore_ascii_case("Content-Length") {
+                            expected_body = std::str::from_utf8(header.value)
+                                .ok()
+                                .and_then(|value| value.trim().parse::<usize>().ok())
+                                .unwrap_or(0);
+                        }
+                        if header.name.eq_ignore_ascii_case("Transfer-Encoding")
+                            && std::str::from_utf8(header.value)
+                                .map(|value| value.to_ascii_lowercase().contains("chunked"))
+                                .unwrap_or(false)
+                        {
+                            chunked = true;
+                        }
+                    }
+                }
+                Ok(httparse::Status::Partial) => {}
+                Err(_) => return Ok(()),
+            }
+        }
+    }
+
+    if buf.is_empty() {
+        return Ok(());
+    }
+    if chunked {
+        // Framing we do not implement is rejected explicitly instead of being
+        // silently treated as an empty body.
+        let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = socket.write_all(resp.as_bytes()).await;
         return Ok(());
     }
 
-    let request_str = String::from_utf8_lossy(&buf[..n]);
+    let request_str = String::from_utf8_lossy(&buf);
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut req = httparse::Request::new(&mut headers);
-    let body_offset = match req.parse(&buf[..n]) {
+    let body_offset = match req.parse(&buf) {
         Ok(httparse::Status::Complete(offset)) => offset,
         Ok(httparse::Status::Partial) => return Ok(()),
         Err(_) => return Ok(()),

@@ -513,6 +513,49 @@ final class VoiceCoordinatorTests: XCTestCase {
         }
     }
 
+    /// Hold-Fn push-to-talk: releasing the key cuts audio and transcribes what was
+    /// captured. The forced evidence is measured, never a satisfied silence, so the
+    /// coordinator must accept it through `VoiceCaptureTimingEvidence.outcome`
+    /// (ChatView.swift:975, the `evidence.outcome == .forcedFinish ||` branch).
+    @MainActor func testForcedFinishEvidenceAndTranscriptAreAcceptedByTheCoordinator() async throws {
+        let f = try CoordinatorFixture(stream: CoordinatorStream.ordinary("Released-key reply accepted."))
+        addTeardownBlock { await f.close() }
+        f.model.clicked()
+        try await eventually("Explicit click should start fixture capture") { f.captures.count == 1 }
+        let attempt = f.captures[0]
+        f.model.stt.onRecording?(attempt.id)
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 100, silence: attempt.silence, invitation: nil)
+        func append(start: Double, frames: UInt32 = 800, amplitude: Float) {
+            let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 8_000, channels: 1, interleaved: false)!
+            let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
+            buffer.frameLength = frames
+            buffer.floatChannelData!.pointee.initialize(repeating: amplitude, count: Int(frames))
+            pcm.append(buffer, at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
+        }
+        append(start: 100, amplitude: 0.1)
+        append(start: 100.1, amplitude: 0.1)
+        XCTAssertEqual(pcm.poll(at: 100.25).decision, .listening)
+        // The key is released now: no trailing silence was ever observed.
+        let released = pcm.poll(at: 100.3, finishing: true)
+        XCTAssertEqual(released.decision, .forcedFinish)
+        let evidence = try XCTUnwrap(released.evidence)
+        XCTAssertEqual(evidence.outcome, .forcedFinish)
+        XCTAssertFalse(evidence.isSilenceSatisfied)
+        XCTAssertGreaterThan(abs(evidence.silenceSatisfiedAt - evidence.speechEndedAt
+                                 - evidence.selectedSilenceSeconds), 0.000001,
+                             "A released key must never be reported as a satisfied silence")
+        XCTAssertFalse(pcm.take().isEmpty, "Released audio is what transcription receives")
+        f.recording = false
+        f.model.stt.onSpeechEnded?(attempt.id, evidence) // exactly what forceFinishCapture publishes
+        // The transcript itself is a fixture: the recognizer is not part of this replay.
+        f.model.stt.onFinal?(attempt.id, "Continue the plan")
+        try await eventually("A released key must submit its transcript") { f.completedTurns.count == 1 }
+        XCTAssertNil(f.model.issue)
+        XCTAssertEqual(f.model.answer, "Released-key reply accepted.")
+        XCTAssertEqual(f.transport.requestPaths.filter { $0 == "/v1/chat/completions" }.count, 1)
+    }
+
     @MainActor func testStopDuringLiveGenerationCancelsTransportAndKeepsPartialHistoryUndelivered() async throws {
         let f = try CoordinatorFixture(stream: CoordinatorStream.frame(["content": "Keep this partial finding. "]), hold: true)
         addTeardownBlock { await f.close() }

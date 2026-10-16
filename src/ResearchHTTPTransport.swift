@@ -10,10 +10,11 @@ protocol ResearchHTTPTransport: Sendable {
     func fetch(_ url: URL) async throws -> ResearchHTTPResult
 }
 
-/// The OS resolver and isolated stdlib reader are separate bounded processes.
+/// The OS resolver and the isolated native reader are separate bounded processes.
 /// The host connects once to a vetted numeric address and passes that socket.
 /// The reader cannot resolve or create connections inside its network-deny sandbox.
-/// Neither URLSession nor system curl is a fallback (macOS curl trust may fetch AIA).
+/// Neither Python, URLSession nor system curl is a fallback (macOS curl trust may
+/// fetch AIA).
 struct ResearchPinnedHTTPTransport: ResearchHTTPTransport {
     typealias Resolver = @Sendable (String, TimeInterval) async throws -> [String]
     typealias Exchange = @Sendable (URL, String, TimeInterval) async throws -> ResearchHTTPResult
@@ -244,40 +245,37 @@ enum ResearchPinnedSocket {
 /// App must call this only after its pinned runtime audit succeeds. Keeping the
 /// audit factory outside DotCore avoids a SwiftPM dependency on model packaging.
 /// Paths alone are not an integrity receipt; there is no ambient/runtime fallback.
+///
+/// The reader is the native `dot-fetch` executable built from `crates/dot-research`:
+/// one GET over the inherited pinned socket, original-hostname TLS verification,
+/// bounded transfer/decoded bodies and one JSON metadata object on stderr. The
+/// retired Python helper is never executed by this path.
 struct ResearchFetchRuntime: Sendable {
-    let python: String
-    let pythonRoot: String
     let helper: String
     let profile: String
 
-    init(auditedPythonRoot: URL, signedHelper: URL, signedProfile: URL) throws {
-        func canonical(_ url: URL, directory: Bool) throws -> String {
+    init(signedHelper: URL, signedProfile: URL) throws {
+        func canonical(_ url: URL) throws -> String {
             // Seatbelt needs the kernel path; Foundation can strip /private from /var paths.
             guard url.isFileURL, let resolved = realpath(url.path, nil) else { throw ResearchNotebookError.networkFailure }
             defer { free(resolved) }
             let path = String(cString: resolved)
             var info = stat()
             guard path.hasPrefix("/"), lstat(path, &info) == 0,
-                  info.st_mode & S_IFMT == (directory ? S_IFDIR : S_IFREG) else { throw ResearchNotebookError.networkFailure }
+                  info.st_mode & S_IFMT == S_IFREG else { throw ResearchNotebookError.networkFailure }
             return path
         }
-        pythonRoot = try canonical(auditedPythonRoot, directory: true)
-        // Python.org framework bin/python3 is a launcher that execs Python.app.
-        // Run the contained interpreter directly so Seatbelt permits one exact executable.
-        let frameworkInterpreter = auditedPythonRoot.appendingPathComponent("Resources/Python.app/Contents/MacOS/Python")
-        let interpreter = FileManager.default.fileExists(atPath: frameworkInterpreter.path)
-            ? frameworkInterpreter : auditedPythonRoot.appendingPathComponent("bin/python3")
-        python = try canonical(interpreter, directory: false)
-        helper = try canonical(signedHelper, directory: false)
-        profile = try canonical(signedProfile, directory: false)
-        guard python.hasPrefix(pythonRoot + "/"), FileManager.default.isExecutableFile(atPath: python) else { throw ResearchNotebookError.networkFailure }
+        helper = try canonical(signedHelper)
+        profile = try canonical(signedProfile)
+        // The profile permits exactly one executable. A directory, a script or a
+        // non-executable file is never an admissible reader.
+        guard FileManager.default.isExecutableFile(atPath: helper) else { throw ResearchNotebookError.networkFailure }
     }
 
     func arguments(url: URL, address: String, remaining: TimeInterval) throws -> [String] {
         guard ResearchWebReader.allowed(url), ResearchPublicAddress.allowed(address), remaining > 0 else { throw ResearchNotebookError.networkFailure }
-        return ["-f", profile, "-D", "DOT_SOURCE_PYTHON=" + python, "-D", "DOT_SOURCE_PYTHON_ROOT=" + pythonRoot,
-                "-D", "DOT_SOURCE_HELPER=" + helper,
-                python, "-I", "-S", "-B", helper, url.absoluteString, address,
+        return ["-f", profile, "-D", "DOT_SOURCE_HELPER=" + helper,
+                helper, url.absoluteString, address,
                 String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), min(30, remaining))]
     }
 }

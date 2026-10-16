@@ -33,7 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isAnimatingRoam = false
     private var lastRoamRelocationAt: Double = 0
     private var statusItem: NSStatusItem?
-    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 999999.0)
+    /// Random wandering is deliberately disabled: Dot stays in its safe spot while
+    /// idle and only glides away when a window or the cursor actually covers it.
+    /// RoamingCore is still used for those escape trips (`performIdleRoam`).
+    private static let randomRoamingDisabled = 999_999.0
+    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: AppDelegate.randomRoamingDisabled)
     private var menuTracking = 0
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
@@ -228,7 +232,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                        y: PetLayout.petBottom, width: PetLayout.petSize.width,
                                        height: PetLayout.petSize.height)).contains(point)
         }
-        panel.controlHitTest = { _ in false }
+        // While an approval card is presented it covers the pet, so mouse input must
+        // reach the card's buttons instead of being consumed as a click-to-talk.
+        panel.controlHitTest = { [weak model] _ in model?.pendingApproval != nil }
         panel.controlInteraction = { [weak self, weak model] active in
             model?.setControlInteraction(active)
             self?.cancelMovement()
@@ -629,6 +635,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startThinkingRelocation() {
         stopThinkingRelocation()
         relocateDuringThinking()
+        // The documented policy is a safe-zone relocation every 5 seconds for as
+        // long as the thinking phase lasts, never covering windows or content.
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.relocateDuringThinking() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        thinkingRelocationTimer = timer
     }
 
     private func stopThinkingRelocation() {
@@ -685,7 +698,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startIdleRoaming() {
         idleRoamTimer?.invalidate()
-        let interval = Double.random(in: 60.0...90.0)
+        // The agreed cadence: Dot moves to a new clear spot every 12-18 seconds
+        // while idle, always choosing a safe zone that does not cover content.
+        let interval = Double.random(in: 12.0...18.0)
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.performIdleRoam()
@@ -715,13 +730,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
         let protectedRegions = snap?.protected ?? []
 
+        // Roam on the agreed cadence to a clear safe zone: `findRandomEmptySpace`
+        // rejects positions that would cover protected windows or the cursor.
         let currentOrigin = panel.frame.origin
         let currentFrame = panel.frame
-
-        // Screen awareness: only relocate during idle if an active window or cursor is covering Dot
-        let isCovered = !protectedRegions.isEmpty && !RoamingCore.clear(currentFrame, regions: protectedRegions)
-        let isCursorNear = currentFrame.insetBy(dx: -20, dy: -20).contains(cursor)
-        guard isCovered || isCursorNear else { return }
 
         guard let target = RoamingCore.findRandomEmptySpace(
             frame: currentFrame,

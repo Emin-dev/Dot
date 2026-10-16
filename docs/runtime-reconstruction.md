@@ -1,3 +1,12 @@
+> **PARTLY SUPERSEDED (2026-10-17).** The Python voice/STT closure this document's native phase and
+> several of its gates were built around has been deleted and replaced by the Rust `dot-voice` binary,
+> and the Python source fetcher and SearXNG search stack are gone. See
+> [the Rust-only runtime](rust-runtime.md) for the current runtime. The policy at
+> `packaging/runtime/reconstruction-policy.json` still pins the retired Python voice archive, its
+> 92-wheel lock and audited lock hashes as inert context, and its native voice gates therefore cannot
+> be satisfied by the current runtime — see "Known inconsistency" below. The tool's own contract,
+> bounds and transaction behaviour are unchanged and are not superseded.
+
 # Offline runtime reconstruction and guarded native finalization
 
 This command prepares inert runtime bytes and provides guarded owner-run native
@@ -29,11 +38,12 @@ Only fully validated native finalization may write `runtime-manifest.json` and
 been accepted. Policy support flags and self-manifests grant no authority.
 
 The archive ID `pinned-local-archives-v1` returns
-`ARCHIVE_LAYOUT_UNREVIEWED` (exit 4). The exact Splash and standalone CPython
-archive pins and complete 92-wheel lock/audit pins are retained in source policy,
-but archive extraction and installation are not implemented. An arbitrary Python
+`ARCHIVE_LAYOUT_UNREVIEWED` (exit 4). The exact Splash and standalone CPython archive pins and
+complete 92-wheel lock/audit pins are retained in the source policy as inert context, but archive
+extraction and installation are not implemented. An arbitrary Python
 tree plus a newly written extraction report is never an alternate input route.
-The existing Voice install planner remains the owner of wheel preparation.
+The Python Voice install planner that once owned wheel preparation is deleted; speech is now built
+from `crates/dot-voice` and is not part of this reconstruction path.
 
 ## Historical basis and inventory
 
@@ -93,10 +103,12 @@ The patch record must agree with the policy's overlay ID, upstream revision and
 three output hashes. The pristine upstream files remain independently pinned
 inputs. No candidate artifact supplies expected source hashes.
 
-A `native` Context adds `Resources/Runtime/{dot_runtime.py,dot_process.py,
-dot_tls.py,splash.sb}`, `Resources/Voice/{bionic_helper.py,voice.sb}`,
-`packaging/voice/{complete-voice-lock.json,complete-closure-audit.json}` and
-`packaging/voice-source-manifest.json`. `verify_native_contract` requires this
+A `native` Context adds `Resources/Runtime/{dot_runtime.py,dot_process.py,dot_tls.py,splash.sb}`
+and `Resources/Runtime/splash-managed-listener-patch.json` (the policy's
+`phase_source_paths.native` list, verified 2026-10-17). The retired Python voice entries
+(`Resources/Voice/{bionic_helper.py,voice.sb}`, `packaging/voice/**`,
+`packaging/voice-source-manifest.json`) are no longer phase sources.
+`verify_native_contract` requires this
 phase for its structural-only legacy interface. Full finalization uses schema-2
 admission. Actual probe source dependencies must be reviewed and added before
 their evidence can satisfy its gates.
@@ -325,6 +337,15 @@ Actual argv/environment/source/target/raw outputs must match exact reviewed
 invocations. Receipt headers bind a concrete validated event, macOS/arm64 host,
 wall diagnostics, integer duration, exited-zero outcome and complete cleanup.
 Arbitrary nonempty observations, echo-prefix probes or self-approved markers fail.
+
+**Known inconsistency (2026-10-17).** Gates 2, 5 and 8 above still describe the retired Python voice
+closure: the exact 92-distribution lock with `pip check`, the Python helper's protocol events and PCM
+WAV, and a Voice/Splash case across spaces/comma/Unicode including the eSpeak long-path check. Those
+components are deleted and the production policy retains their pins only as inert context, so native
+finalization of the voice part of a payload cannot be satisfied by the current Rust `dot-voice`
+runtime. `packaging/runtime/reconstruction-policy.json` and
+`scripts/reconstruct_runtime_payload.py` are outside this documentation change; updating or retiring
+those gates is separate work, and this note does not claim they have been changed.
 
 Actual observation harnesses remain prerequisites. Distribution/import/immutable
 observers must emit their own canonical facts. Voice observers must emit ordered

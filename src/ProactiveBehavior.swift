@@ -127,7 +127,7 @@ struct ProactiveSchedule {
     private var recentKeys: [String] = []
     private static let maximumRecentKeys = 128
 
-    init(frequency: ProactiveFrequency = .high, paused: Bool = false, now: Double) {
+    init(frequency: ProactiveFrequency = .normal, paused: Bool = false, now: Double) {
         self.frequency = frequency; self.paused = paused
         nextEligibleAt = (now.isFinite ? now : 0) + frequency.interval
     }
@@ -216,7 +216,7 @@ final class ProactiveBehavior: ObservableObject {
          automaticScheduling: Bool = true, observeWorkspace: Bool = true) {
         self.defaults = defaults; self.clock = clock; self.automaticScheduling = automaticScheduling
         self.observeWorkspace = observeWorkspace
-        let selected = defaults.string(forKey: Self.frequencyKey).flatMap(ProactiveFrequency.init(rawValue:)) ?? .high
+        let selected = defaults.string(forKey: Self.frequencyKey).flatMap(ProactiveFrequency.init(rawValue:)) ?? .normal
         let storedPause = defaults.object(forKey: Self.pausedKey) as? NSNumber
         let savedPause = storedPause.map { CFGetTypeID($0) == CFBooleanGetTypeID() && $0.boolValue } ?? false
         frequency = selected; paused = savedPause

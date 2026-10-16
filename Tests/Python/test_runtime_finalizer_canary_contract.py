@@ -219,7 +219,9 @@ class CapabilityContractTests(unittest.TestCase):
 
     def test_existing_verify_pipeline_has_failing_native_gate(self):
         source = (ROOT / 'scripts/verify_macos.sh').read_text()
-        line = 'python3 -B scripts/test_runtime_finalizer_native.py 2>&1 | tee "$LOGS/runtime-finalizer-canary.log"'
+        # The pipeline selects one explicit test interpreter before XCTest and uses it
+        # for every Python lane, including this mandatory native canary.
+        line = '"$TEST_PYTHON" -B scripts/test_runtime_finalizer_native.py 2>&1 | tee "$LOGS/runtime-finalizer-canary.log"'
         self.assertEqual(source.count(line), 1)
         self.assertIn('set -euo pipefail', source)
         self.assertNotIn('|| true', line)

@@ -468,8 +468,13 @@ struct NativeFacePose: Equatable {
         let expression = amount == 0 ? NativeExpressionPose.rest : NativeExpressionPose.rest.mixed(toward: selected.recipe.sample(elapsed: selected.elapsed), by: amount)
         let blink = amount > 0 ? selected.recipe.blink(elapsed: selected.elapsed) : 1
         let speaking = state == .speaking
-        let cadence = still ? 0.5 : (abs(sin(context.elapsed * 16.0)) * 0.5 + 0.5)
-        let opening = speaking ? (amount == 0 ? 0.12 : max(0.12, (playbackLevel.map(unit) ?? 0.18) * 0.8 + cadence * ((playbackLevel ?? 0) > 0.05 ? 0.45 : 0.12))) : 0
+        // The mouth articulates strictly inside the real playback envelope: silence
+        // closes it and unknown playback uses the resting opening. A cadence-driven
+        // oscillation here kept the mouth moving while no audio was playing, which
+        // contradicts "synchronize speaking to playback". When expression motion is
+        // disabled (Reduce Motion or still) the aperture stays at the static resting
+        // value instead of following playback, so the face never articulates.
+        let opening = speaking ? (amount == 0 ? 0.12 : min(1, max(0, playbackLevel.map(unit) ?? 0.12))) : 0
         let listening = state == .listening && amount > 0 ? unit(inputLevel) : 0
         return Self(bob: expression.lift, tilt: expression.tilt * 1.2, blink: blink,
                     gazeX: expression.gazeX * 1.3, gazeY: expression.gazeY * 1.3, browTilt: -4,

@@ -141,7 +141,7 @@ actor SourceReferenceStore {
         else { throw SourceReferenceError.invalidText }
         let reference = SourceReference(commit: provenance.commit, path: path, text: text,
                                         citationURL: try provenance.citationURL(path: path),
-                                        contentSHA256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                                        contentSHA256: data.sha256Hex,
                                         fetchedAt: now())
         cacheReference(reference, bytes: data.count)
         return reference

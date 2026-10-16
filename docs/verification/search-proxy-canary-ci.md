@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python SearXNG search stack and its
+> canary workflow, which no longer exist. See [the Rust-only runtime](../rust-runtime.md) for the
+> current runtime. `.github/workflows/search-proxy-canary.yml`, `packaging/search/**`,
+> `Tests/Portable/**` and the pinned interpreter/SearXNG inputs are deleted; the historical lock,
+> receipt and payload numbers below are kept unchanged as the record of that CI work.
+
 # Hosted native Search proxy canaries
 
 This is a separate build-only workflow with manual dispatch and a bounded main-branch push trigger:

@@ -1,23 +1,68 @@
-# Bionic voice bridge, protocol 1
+# dot-voice bridge, protocol 1
 
-Dot bundles its own warm helper, adapted from the MIT-licensed CPU Kokoro synthesis in [Emin-dev/Bionic at 5166bf4915d436c505f4731667daf5b9375b5e77](https://github.com/Emin-dev/Bionic/blob/5166bf4915d436c505f4731667daf5b9375b5e77/voice/tts.py). Original source SHA256: cb2a485bf84eb93dc6fb6df49a2742d2d5005d4d2df917a742d78bb6100abca9. The original MIT notice is bundled as Resources/Voice/BIONIC-LICENSE.txt. The small development build does not redistribute weights or Python packages; the complete-runtime packaging path requires their audited redistribution closure and licenses. This is a new, versioned bridge, not a claim of compatibility with the owner's locally modified socket daemon.
+Current as of 2026-10-17. The voice engine is the Rust binary `dot-voice`, built from
+`crates/dot-voice/src/main.rs` (Rust `any-tts` crate with the `kokoro` feature) and copied into
+`Contents/MacOS` by `build.sh` and `scripts/build_complete.sh`. The retired Python helper
+(`Resources/Voice/bionic_helper.py`) and its Seatbelt profile (`Resources/Voice/voice.sb`) no longer
+exist. See the [Rust runtime reference](rust-runtime.md) for the full runtime picture.
 
-## Setup and limits
+The minimum host is `src/BionicVoice.swift`: it launches the sibling executable
+`Contents/MacOS/dot-voice` with `--root <model directory> --output <private WAV directory>`, gives it
+the two pipes it needs and the environment `PATH=/usr/bin:/bin`, sends protocol frames on stdin and
+reads protocol events on stdout. A missing or non-executable binary is an honest setup failure; there
+is no system-TTS or Python fallback. The private output directory is created with mode 0700 under the
+temporary directory and removed when the voice shuts down.
 
-The production path uses only Dot.app/Contents/Resources/Offline/Voice, including python/bin/python3 and model/config.json, model/kokoro-v1_0.pth and model/voices/bf_isabella.pt. There is no folder picker, external Python or daemon discovery. Supported Kokoro and Misaki versions are 0.9.4. The full dependency closure and offline import probe passed for the personal assembled app; exact public-installer acceptance remains separate. See [verified progress](PROGRESS.md). The [future speech checklist](BUILD_CHECKLIST.md#architecture-and-performance) evaluates alternatives against the required local British female voice and this working baseline; no replacement is implemented here.
+## Startup and model
 
-The helper runs CPU-only in an owned subprocess behind macOS sandbox-exec with network access denied. Missing sandbox, packages, language data or assets fail closed. The isolated Python invocation includes explicit `-B` to suppress bytecode writes into the immutable app: `-I` implies `-E`, so `PYTHONDONTWRITEBYTECODE` alone is ignored ([Python 3.11 command-line contract](https://docs.python.org/3.11/using/cmdline.html)). Offline flags and disabled spaCy downloader add defense in depth. These flags alone are not network isolation. Only Dot's owned Process is terminated. The native system TTS class is retained for a manual diagnostic harness, not selected as a product fallback.
+The binary takes `--root` (required; the Kokoro model tree, or a directory containing `model/`) and
+`--output` (required; where finished WAV files are written). Missing arguments or a model that fails
+to load emit an `unavailable` event and exit with status 2. Exactly one model is loaded and one
+worker thread synthesizes requests, so the model stays warm across sentences in one launch.
+
+The binary does **not** currently run under a Seatbelt profile: the host starts it directly as an
+owned child with a minimal environment and no inherited entitlements. The retired Python voice path
+was the only component with a `voice.sb` profile, and that file is deleted. Sandboxing the Rust voice
+process is open work, not an implemented control.
 
 ## Protocol
 
-Bounded UTF-8 JSON lines over the owned subprocess's stdin/stdout. Every frame includes protocol:1. Hello must name engine:kokoro, voice:bf_isabella, sample_rate:24000 and offline:true. Speak requests contain UUID id and turn plus at most 1000 characters. A single worker uses one cached model/pipeline for ordered synthesis. Maximum 24 queued items, 60 seconds of audio per item, and 60 seconds between expected synthesis responses. Standard output is reserved for protocol data even during library diagnostics; text and audio are not logged.
+Bounded UTF-8 JSON lines over the owned child's stdin/stdout. Every frame carries `protocol: 1`.
 
-Cancel advances the helper's generation, discards queued work and suppresses old results after the current model operation yields. The Swift host stops audio immediately, clears all queued output and rejects stale turn IDs. Cancellation does not preempt a CPU inference kernel; a new answer can wait for that kernel to return. Shutdown closes pipes and terminates only the owned process. WAV files are unique, stored in a per-process owner-only temporary directory, validated with no-follow regular-file checks and read off the main actor into bounded memory, then deleted. Completion is session/turn-guarded and playback order is preserved even if disk reads finish out of order. The 20 Hz playback/deadline timer stops while the warm helper is idle. Process exit removes the directory. Playback is serialized mono 24 kHz PCM. No response cache retains private text/audio.
+Requests (stdin, one JSON object per line; a line longer than 8,192 bytes or an empty line is
+ignored):
 
-## Diagnosis and verification
+- `{"protocol":1,"type":"speak","id":"<uuid>","turn":"<uuid>","text":"…"}` — queued for synthesis.
+- `{"protocol":1,"type":"cancel"}` — advances the cancellation generation and answers `cancelled`.
+- `{"protocol":1,"type":"shutdown"}` — ends the loop cleanly. Closing stdin does the same.
 
-The public baseline constructs its model for each CLI invocation. Keeping one model/pipeline warm removes that repeated initialization from subsequent sentences; this is a source-level optimization, not a measured latency claim. Dot logs durations only for final transcript, first reasoning, first answer, playback scheduled and completion, measured monotonically from the initiating click. `playback_started` means AVAudioPlayer accepted playback, not measured audible output. The intentional three-second end-of-speech wait remains part of user-perceived latency. Thinking remains on at low effort, separately visible in timing.
+Events (stdout):
 
-Python protocol tests and pure Swift event-validation tests require no model. CI checks the actual no-network sandbox using a standard-library local socket probe and builds the full client. These do not validate the neural voice. Historical real voice PCM/playback/drain, cancellation/EOF, relocation and owner-confirmed voice evidence is recorded in [PROGRESS](PROGRESS.md). Fresh exact-candidate quality, cold/warm audible latency and the broader failure/interaction matrix remain necessary; prior component evidence does not validate future speech changes.
+- `hello` — `{"protocol":1,"event":"hello","engine":"kokoro","voice":"bf_isabella","sample_rate":24000,"offline":true}`.
+- `audio` — `{"protocol":1,"event":"audio","id":…,"turn":…,"file":"audio-<uuid>.wav","samples":N,"sample_rate":24000}`.
+- `cancelled` — `{"protocol":1,"event":"cancelled"}`.
+- `error` — `{"protocol":1,"event":"error","id":…,"turn":…,"code":…}` with fixed codes
+  (`synthesis_failed`, `write_wav_failed`, `queue_full`, `unsupported_request`).
+- `unavailable` — `{"protocol":1,"event":"unavailable","code":…}` for `missing_root_argument`,
+  `missing_output_argument`, `local_voice_setup_failed`, `invalid_protocol_request` or
+  `unsupported_protocol`. The process exits after these.
 
-Splash 1.3.1 defaults to releasing idle model memory after ten minutes. A live process is not proof of a warm resident model. Keep the default until a measured memory-pressure policy is established; test latency after that idle interval. Language migration and these source-level scheduling changes are not measured speed claims.
+The queue holds at most 24 pending `speak` requests; a full queue is reported as `queue_full` rather
+than blocking. Cancellation invalidates queued work and discards a synthesis result whose generation
+changed, but it cannot preempt a synthesis kernel already running — the current call finishes before
+the worker observes the new generation. WAV files are written once per accepted request and the host
+reads, validates and deletes each one. No text or audio is logged.
+
+## Evidence and limits
+
+Recorded on 2026-10-17 ([PROGRESS](PROGRESS.md)): `dot-voice` loaded the bundled `bf_isabella` assets
+and synthesized one turn fully offline, emitting `samples: 78000` at `sample_rate: 24000` into a
+156,044-byte WAV.
+
+Not established by that run, and not claimed here: audible/acoustic verification, cold/warm latency,
+voice quality, cancellation timing under a running kernel, multi-sentence playback order, memory or
+energy cost, sandbox containment, and any installed-app or device acceptance. The retired Python
+helper was adapted from the MIT-licensed Bionic Kokoro synthesis; its notice is still bundled at
+`Resources/Voice/BIONIC-LICENSE.txt`, and the Rust binary links the `any-tts` crate declared in
+`crates/dot-voice/Cargo.toml`. The Python-era helper design and its assembly pipeline are kept only
+as [history](offline-voice-assembly.md).

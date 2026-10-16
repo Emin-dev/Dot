@@ -17,7 +17,7 @@ import stat
 import unicodedata
 import zipfile
 
-SOURCE_MANIFEST = Path(__file__).resolve().parents[1] / 'packaging/voice-source-manifest.json'
+SOURCE_MANIFEST = Path(__file__).resolve().parents[1] / 'packaging/whisper-source-manifest.json'
 ARCHIVE_NAME = 'whisper-v1.7.6-xcframework.zip'
 MAX_ARCHIVE_BYTES = 128 * 1024 * 1024
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024

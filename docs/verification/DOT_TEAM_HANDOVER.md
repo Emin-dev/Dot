@@ -1,3 +1,13 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python voice helper, source fetcher
+> and SearXNG search stack, which no longer exist. See [the Rust-only runtime](../rust-runtime.md) for
+> the current runtime. This handover is a frozen historical record of what was verified on
+> 14 October 2026; its numbers, receipts and unresolved items are preserved unchanged and no longer
+> describe the runtime. In particular, `Resources/Voice/bionic_helper.py`, `Resources/Voice/voice.sb`,
+> `Resources/Research/dot_source_fetch.py`, `Resources/Search/**`, `packaging/search/**`,
+> `packaging/voice/**`, `Tests/Portable/**`, `profile-bootstrap-basis.json` and the
+> `search-proxy-canary` workflow are deleted, and `Resources/Search/search-dependency-pins.json` no
+> longer exists.
+
 # Dot implementation and delivery handover
 
 **Development and monitoring are stopped.** The owner's latest instruction is: “stop all work , stop all tasks. upload latest edits to GitHub so team can continue. then don't touch anything. send me handover now”. This supersedes earlier instructions to continue autonomously. Only the final safe publication/handover is authorized now. All four project automations were verified disabled at 23:37 UTC. The incumbent integration owner relinquishes implementation ownership after that final handoff. The continuation plan below is a plan for a newly authorized receiving team, not permission for the current team to resume. Reconcile ownership and access before any future edits.
@@ -824,7 +834,7 @@ The following **97 current requirements** retain their stable IDs and exact cano
 
 ### R64
 
-- [ ] Before installation, review the integrated exact candidate and run applicable native acceptance; preserve stable signing/permissions and recoverable prior app. Before public release, satisfy the separate [exact-artifact acceptance contract](offline-acceptance.md).
+- [ ] Before installation, review the integrated exact candidate and run applicable native acceptance; preserve stable signing/permissions and recoverable prior app. Before public release, satisfy the separate [exact-artifact acceptance contract](../offline-acceptance.md).
 
 ### R65
 

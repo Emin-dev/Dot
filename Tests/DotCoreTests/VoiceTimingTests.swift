@@ -337,8 +337,8 @@ final class VoiceTimingTests: XCTestCase {
 
     func testTypedTerminalReasonsKeepQuietAndRecoveryOutcomesSeparate() {
         for reason in VoiceCaptureEndReason.allCases {
-            if reason == .intentionalCancellation || reason == .noSpeech {
-                XCTAssertNil(reason.recoveryMessage)
+            if reason == .intentionalCancellation || reason == .noSpeech || reason == .forcedFinish {
+                XCTAssertNil(reason.recoveryMessage, "\(reason) is not a failure and must stay quiet")
             } else { XCTAssertFalse(reason.recoveryMessage?.isEmpty ?? true) }
         }
         var quiet = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3, invitationSeconds: 3)
@@ -350,6 +350,112 @@ final class VoiceTimingTests: XCTestCase {
         var maximum = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
         maximum.reachCaptureLimit()
         XCTAssertEqual(maximum.endReason, .maximumDuration)
+        var released = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
+        released.forceFinish()
+        XCTAssertEqual(released.endReason, .forcedFinish)
+    }
+
+    /// Releasing push-to-talk closes the turn with evidence measured from the PCM
+    /// that was really processed. It must never borrow a silence deadline it did
+    /// not observe.
+    func testForcedFinishPublishesMeasuredEvidenceAndNeverClaimsSatisfiedSilence() throws {
+        var capture = VoiceCaptureDeadline(startedAt: 100, silenceSeconds: 3)
+        capture.observeAudio(firstSpeech: 100.2, lastSpeech: 101, through: 101.05)
+        XCTAssertEqual(capture.evaluate(at: 101.2), .listening)
+        capture.forceFinish()
+        XCTAssertEqual(capture.decision, .forcedFinish)
+        XCTAssertEqual(capture.endReason, .forcedFinish)
+        XCTAssertNil(capture.timingEvidence, "A released turn did not complete the silence rule")
+        let evidence = try XCTUnwrap(capture.forcedFinishEvidence)
+        XCTAssertEqual(evidence.outcome, .forcedFinish)
+        XCTAssertEqual(evidence.endReason, .forcedFinish)
+        XCTAssertFalse(evidence.isSilenceSatisfied)
+        XCTAssertEqual(evidence.captureStartedAt, 100)
+        XCTAssertEqual(evidence.firstSpeechAt, 100.2)
+        XCTAssertEqual(evidence.speechEndedAt, 101)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 101.05, "The release anchor is the audio really processed")
+        XCTAssertEqual(evidence.audioProcessedThrough, 101.05)
+        XCTAssertEqual(evidence.selectedSilenceSeconds, 3)
+        XCTAssertNotEqual(evidence.silenceSatisfiedAt, evidence.speechEndedAt + evidence.selectedSilenceSeconds)
+        XCTAssertEqual(capture.closedEvidence, evidence)
+        XCTAssertNil(VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3).forcedFinishEvidence)
+    }
+
+    func testForcedFinishIsTerminalAndLateAudioCannotReopenOrProveSilence() throws {
+        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
+        capture.observeAudio(firstSpeech: 0.1, lastSpeech: 1, through: 1)
+        capture.forceFinish()
+        // A late buffer that would have completed the silence rule cannot revise it.
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 5)
+        XCTAssertEqual(capture.evaluate(at: 5), .forcedFinish)
+        XCTAssertNil(capture.timingEvidence)
+        let evidence = try XCTUnwrap(capture.closedEvidence)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 1, "The release stays anchored to the audio processed then")
+        XCTAssertEqual(capture.audioThrough, 1, "Audio arriving after the release is not counted")
+    }
+
+    func testReleaseAfterACompletedSilenceKeepsSatisfiedEvidence() throws {
+        var capture = VoiceCaptureDeadline(startedAt: 10, silenceSeconds: 2)
+        capture.observeAudio(firstSpeech: 10.1, lastSpeech: 10.5, through: 12.5)
+        XCTAssertEqual(capture.evaluate(at: 12.5), .silenceSatisfied)
+        capture.forceFinish()
+        XCTAssertEqual(capture.decision, .silenceSatisfied, "A completed rule is never downgraded by a release")
+        let evidence = try XCTUnwrap(capture.timingEvidence)
+        XCTAssertEqual(evidence.outcome, .silenceSatisfied)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 12.5)
+        XCTAssertNil(evidence.endReason)
+    }
+
+    /// Pins the exact coordinator contract: a forced turn satisfies every existing
+    /// check except the silence arithmetic, so the caller must branch on `outcome`.
+    func testForcedEvidenceNeedsTheExplicitOutcomeBranchInTheCoordinator() throws {
+        var capture = VoiceCaptureDeadline(startedAt: 20, silenceSeconds: 8)
+        capture.observeAudio(firstSpeech: 20.5, lastSpeech: 21, through: 21.02)
+        capture.forceFinish()
+        let evidence = try XCTUnwrap(capture.closedEvidence)
+        XCTAssertTrue([evidence.captureStartedAt, evidence.firstSpeechAt, evidence.speechEndedAt,
+                       evidence.silenceSatisfiedAt, evidence.audioProcessedThrough].allSatisfy(\.isFinite))
+        XCTAssertTrue(VoiceTimingSettings.silenceChoices.contains(evidence.selectedSilenceSeconds))
+        XCTAssertLessThanOrEqual(evidence.captureStartedAt, evidence.firstSpeechAt)
+        XCTAssertLessThanOrEqual(evidence.firstSpeechAt, evidence.speechEndedAt)
+        XCTAssertGreaterThan(abs(evidence.silenceSatisfiedAt - evidence.speechEndedAt
+                                 - evidence.selectedSilenceSeconds), 0.000001,
+                             "Only a completed silence may satisfy this arithmetic")
+        XCTAssertEqual(evidence.outcome, .forcedFinish)
+        XCTAssertEqual(evidence.endReason, .forcedFinish)
+    }
+
+    func testRouteRearmKeepsTheTurnListeningWithinItsBoundedWindow() {
+        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
+        capture.observeAudio(firstSpeech: 0.1, lastSpeech: 1, through: 1)
+        capture.rearmAfterRouteChange(at: 1.05)
+        XCTAssertEqual(capture.evaluate(at: 2.5), .listening, "A deliberate restart gap is not missing PCM")
+        XCTAssertNil(capture.closedEvidence)
+        XCTAssertEqual(capture.evaluate(at: 3.06), .audioUnavailable, "A re-armed tap that never delivers fails closed")
+        XCTAssertEqual(capture.endReason, .missingAudio)
+    }
+
+    func testRouteRearmGapIsNeverSilentPCMAndLaterSpeechReanchorsTheRule() {
+        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 2)
+        capture.observeAudio(firstSpeech: 0.1, lastSpeech: 1, through: 1)
+        capture.rearmAfterRouteChange(at: 1.05)
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 4)
+        XCTAssertEqual(capture.evaluate(at: 4), .listening, "Uncovered audio cannot prove silence")
+        XCTAssertNil(capture.closedEvidence)
+        capture.observeAudio(firstSpeech: 4.1, lastSpeech: 4.5, through: 4.5)
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 6.5)
+        XCTAssertEqual(capture.evaluate(at: 6.5), .silenceSatisfied)
+        XCTAssertEqual(capture.timingEvidence?.speechEndedAt, 4.5)
+        XCTAssertEqual(capture.timingEvidence?.firstSpeechAt, 0.1, "The turn's own timeline survives the change")
+    }
+
+    func testRouteRearmCannotOutliveTheCaptureLimit() {
+        var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 8, invitationSeconds: 6)
+        capture.observeAudio(firstSpeech: 1, lastSpeech: 2, through: 2)
+        capture.rearmAfterRouteChange(at: 59.9)
+        XCTAssertEqual(capture.evaluate(at: 60.5), .maximumDuration, "The 60-second bound still wins")
+        XCTAssertNil(capture.timingEvidence)
+        XCTAssertNil(capture.closedEvidence)
     }
 }
 
@@ -358,12 +464,19 @@ import AVFoundation
 
 /// Deterministic AVAudioPCMBuffer replay; no microphone, recognizer, or model starts.
 final class CapturedPCMTimingTests: XCTestCase {
-    private func append(_ pcm: CapturedPCM, at start: Double, amplitude: Float, frames: UInt32 = 800) {
-        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 8_000, channels: 1, interleaved: false)!
+    private func buffer(rate: Double, frames: UInt32, amplitude: Float) -> AVAudioPCMBuffer {
+        let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false)!
         let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames)!
         buffer.frameLength = frames
         buffer.floatChannelData!.pointee.initialize(repeating: amplitude, count: Int(frames))
-        pcm.append(buffer, at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
+        return buffer
+    }
+    private func append(_ pcm: CapturedPCM, at start: Double, amplitude: Float, frames: UInt32 = 800) {
+        append(pcm, at: start, rate: 8_000, amplitude: amplitude, frames: frames)
+    }
+    private func append(_ pcm: CapturedPCM, at start: Double, rate: Double, amplitude: Float, frames: UInt32 = 800) {
+        pcm.append(buffer(rate: rate, frames: frames, amplitude: amplitude),
+                   at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: start)))
     }
 
     func testLockedSnapshotAndDecisionShareActualProcessedPCMDeadline() {
@@ -412,6 +525,165 @@ final class CapturedPCMTimingTests: XCTestCase {
         XCTAssertEqual(ended.endReason, .intentionalCancellation)
         XCTAssertNil(ended.evidence)
         XCTAssertTrue(pcm.take().isEmpty)
+    }
+
+    // MARK: - Explicit release (hold-Fn push-to-talk)
+
+    func testExplicitReleaseClosesCaptureWithMeasuredEvidenceAndKeepsSamples() throws {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 100, silence: 3, invitation: nil)
+        append(pcm, at: 100.0, amplitude: 0.1)
+        append(pcm, at: 100.1, amplitude: 0.1)
+        append(pcm, at: 100.2, amplitude: 0)
+        XCTAssertEqual(pcm.poll(at: 100.3).decision, .listening)
+        let released = pcm.poll(at: 100.4, finishing: true)
+        XCTAssertEqual(released.decision, .forcedFinish, "A release closes an unfinished turn")
+        XCTAssertEqual(released.endReason, .forcedFinish)
+        let evidence = try XCTUnwrap(released.evidence)
+        XCTAssertEqual(evidence.outcome, .forcedFinish)
+        XCTAssertFalse(evidence.isSilenceSatisfied)
+        XCTAssertEqual(evidence.firstSpeechAt, 100, accuracy: 0.00001)
+        XCTAssertEqual(evidence.speechEndedAt, 100.2, accuracy: 0.00001)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 100.3, accuracy: 0.00001)
+        XCTAssertEqual(evidence.audioProcessedThrough, 100.3, accuracy: 0.00001)
+        XCTAssertNotEqual(evidence.silenceSatisfiedAt, evidence.speechEndedAt + evidence.selectedSilenceSeconds)
+        XCTAssertEqual(pcm.take().count, 2_400, "Released audio is transcribed instead of discarded")
+    }
+
+    func testReleaseAfterCompletedSilenceKeepsSatisfiedEvidence() throws {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 200, silence: 2, invitation: nil)
+        append(pcm, at: 200.0, amplitude: 0.1)
+        for index in 1...21 { append(pcm, at: 200.0 + Double(index) / 10, amplitude: 0) }
+        let released = pcm.poll(at: 202.2, finishing: true)
+        XCTAssertEqual(released.decision, .silenceSatisfied)
+        let evidence = try XCTUnwrap(released.evidence)
+        XCTAssertEqual(evidence.outcome, .silenceSatisfied)
+        XCTAssertNil(evidence.endReason)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 202.1, accuracy: 0.00001)
+    }
+
+    func testReleaseWithNoMeasuredSpeechPublishesNoEvidence() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 300, silence: 3, invitation: 6)
+        append(pcm, at: 300.0, amplitude: 0)
+        let released = pcm.poll(at: 300.2, finishing: true)
+        XCTAssertEqual(released.decision, .forcedFinish)
+        XCTAssertNil(released.evidence, "No measured utterance means nothing to transcribe")
+        XCTAssertEqual(released.endReason, .forcedFinish)
+    }
+
+    func testReleaseCannotHideARealCaptureFailure() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 400, silence: 3, invitation: nil)
+        append(pcm, at: 400.0, amplitude: .nan)
+        let released = pcm.poll(at: 400.2, finishing: true)
+        XCTAssertEqual(released.decision, .audioUnavailable)
+        XCTAssertEqual(released.endReason, .invalidAudio)
+        XCTAssertNil(released.evidence)
+    }
+
+    @MainActor func testSTTManagerPublishesForcedFinishEvidenceForTheCoordinator() {
+        let manager = STTManager()
+        var published: (UUID, VoiceCaptureTimingEvidence)?
+        manager.onSpeechEnded = { published = ($0, $1) }
+        let id = UUID()
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 1_000, silence: 3, invitation: nil)
+        append(pcm, at: 1_000.0, amplitude: 0.1)
+        manager.closeCapture(id, pcm.poll(at: 1_000.2, finishing: true))
+        XCTAssertEqual(published?.0, id)
+        XCTAssertEqual(published?.1.outcome, .forcedFinish, "A forced finish publishes evidence, not silence")
+        XCTAssertEqual(published?.1.endReason, .forcedFinish)
+        XCTAssertEqual(published?.1.silenceSatisfiedAt ?? -1, 1_000.1, accuracy: 0.00001)
+    }
+
+    // MARK: - Audio route/format change mid-capture
+
+    func testUnmigratedStoresAreExactlyWhatTheRouteChangeFixReplaces() {
+        let staleRate = CapturedPCM(rate: 8_000)
+        staleRate.begin(at: 500, silence: 3, invitation: nil)
+        append(staleRate, at: 500.0, amplitude: 0.1)
+        staleRate.append(buffer(rate: 16_000, frames: 1_600, amplitude: 0.1),
+                         at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 500.1)))
+        XCTAssertEqual(staleRate.poll(at: 500.2).endReason, .invalidAudio,
+                       "Post-switch audio in an old-rate store is rejected")
+        let gapped = CapturedPCM(rate: 8_000)
+        gapped.begin(at: 600, silence: 3, invitation: nil)
+        append(gapped, at: 600.0, amplitude: 0.1)
+        append(gapped, at: 600.8, amplitude: 0)
+        XCTAssertEqual(gapped.poll(at: 600.9).endReason, .invalidAudio,
+                       "Unreset continuity rejects the tap restart gap")
+    }
+
+    func testFormatAndRateChangeReArmsCaptureAndPreservesCapturedAudio() {
+        let before = CapturedPCM(rate: 8_000)
+        before.begin(at: 700, silence: 3, invitation: nil)
+        append(before, at: 700.0, amplitude: 0.1)
+        append(before, at: 700.1, amplitude: 0.1)
+        XCTAssertEqual(before.poll(at: 700.25).decision, .listening)
+        // The input device switches to 16 kHz and its tap resumes 0.5s later.
+        let after = CapturedPCM(rate: 16_000, migrating: before, at: 700.7)
+        append(after, at: 700.8, rate: 16_000, amplitude: 0.1, frames: 1_600)
+        let observation = after.poll(at: 700.9)
+        XCTAssertEqual(observation.decision, .listening, "Post-switch audio must keep the turn alive")
+        XCTAssertNotEqual(observation.endReason, .invalidAudio)
+        XCTAssertEqual(observation.snapshot?.phase, .speaking)
+        XCTAssertEqual(observation.snapshot?.audioThrough ?? -1, 700.9, accuracy: 0.00001)
+        XCTAssertEqual(after.rate, 16_000, "The store reports the new device rate")
+        append(before, at: 700.85, amplitude: 0.1) // retired tap callback
+        XCTAssertEqual(after.poll(at: 700.95).decision, .listening, "The retired tap cannot disturb the turn")
+        XCTAssertEqual(after.take().count, 3_200, "Pre-switch and post-switch audio are both preserved")
+    }
+
+    func testReArmedCaptureKeepsItsOriginalSixtySecondBound() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 800, silence: 3, invitation: nil)
+        append(pcm, at: 800.0, amplitude: 0.1)
+        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 850.0)
+        XCTAssertEqual(migrated.poll(at: 850.0).snapshot?.maximumRemainingSeconds ?? -1, 10, accuracy: 0.00001)
+        XCTAssertEqual(migrated.poll(at: 860.1).decision, .maximumDuration, "The turn ends at its original bound")
+    }
+
+    func testCancellationSurvivesAFormatChange() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 900, silence: 3, invitation: nil)
+        append(pcm, at: 900.0, amplitude: 0.1)
+        let migrated = CapturedPCM(rate: 16_000, migrating: pcm, at: 900.2)
+        migrated.cancel()
+        append(migrated, at: 900.3, rate: 16_000, amplitude: 0.1)
+        let cancelled = migrated.poll(at: 900.4)
+        XCTAssertEqual(cancelled.decision, .cancelled)
+        XCTAssertEqual(cancelled.endReason, .intentionalCancellation)
+        XCTAssertTrue(migrated.take().isEmpty)
+    }
+
+    func testReArmedTapThatNeverDeliversStillFailsClosedAsMissingAudio() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 1_000, silence: 3, invitation: nil)
+        append(pcm, at: 1_000.0, amplitude: 0)
+        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 1_000.2)
+        XCTAssertEqual(migrated.poll(at: 1_001.0).decision, .listening, "A deliberate restart gap is tolerated")
+        XCTAssertEqual(migrated.poll(at: 1_002.3).endReason, .missingAudio, "No first buffer still fails closed")
+    }
+
+    func testDeviceGapAcrossAReArmIsNeverCountedAsSilence() {
+        let pcm = CapturedPCM(rate: 8_000)
+        pcm.begin(at: 1_100, silence: 2, invitation: nil)
+        append(pcm, at: 1_100.0, amplitude: 0.1)
+        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 1_100.2)
+        append(migrated, at: 1_101.0, amplitude: 0)
+        for index in 1...11 { append(migrated, at: 1_101.0 + Double(index) / 10, amplitude: 0) }
+        let duringGap = migrated.poll(at: 1_102.2)
+        XCTAssertEqual(duringGap.decision, .listening, "A device gap is not silent PCM")
+        XCTAssertNil(duringGap.evidence)
+        append(migrated, at: 1_102.2, amplitude: 0.1)
+        append(migrated, at: 1_102.3, amplitude: 0.1)
+        for index in 4...24 { append(migrated, at: 1_102.0 + Double(index) / 10, amplitude: 0) }
+        let ended = migrated.poll(at: 1_104.6)
+        XCTAssertEqual(ended.decision, .silenceSatisfied)
+        XCTAssertEqual(ended.evidence?.firstSpeechAt ?? -1, 1_100, accuracy: 0.00001)
+        XCTAssertEqual(ended.evidence?.speechEndedAt ?? -1, 1_102.4, accuracy: 0.00001)
     }
 }
 #endif

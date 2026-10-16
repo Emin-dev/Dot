@@ -6,10 +6,10 @@ final class WebResearchModel: ObservableObject {
     typealias Synthesis = @MainActor @Sendable (WebResearchSession) async throws -> WebResearchSynthesis
     enum Activity: String { case loading = "Reading saved research…", retrieving = "Searching and reading sources…", synthesizing = "Reasoning locally…", pausing = "Pausing…", copying = "Preparing copy…", deleting = "Deleting research…" }
     @Published var question = "" {
-        didSet { if question.utf8.count > 1_800 { question = Self.bounded(question, bytes: 1_800); error = "Please keep the research question within 1,800 UTF-8 bytes." } }
+        didSet { if question.utf8.count > 1_800 { question = question.truncated(toUTF8Bytes: 1_800); error = "Please keep the research question within 1,800 UTF-8 bytes." } }
     }
     @Published var queryText = "" {
-        didSet { if queryText.utf8.count > 12_288 { queryText = Self.bounded(queryText, bytes: 12_288); error = "The search plan is too long." } }
+        didSet { if queryText.utf8.count > 12_288 { queryText = queryText.truncated(toUTF8Bytes: 12_288); error = "The search plan is too long." } }
     }
     @Published private(set) var summaries: [WebResearchSessionSummary] = []
     @Published private(set) var selected: WebResearchStoredSession?
@@ -482,11 +482,6 @@ final class WebResearchModel: ObservableObject {
     private static func hasSynthesisEvidence(_ session: WebResearchSession) -> Bool {
         session.synthesisSources.count >= 2 && session.queries.filter { $0.status == .completed }.count >= 2
     }
-    private static func bounded(_ text: String, bytes: Int) -> String {
-        let data = Array(text.utf8.prefix(bytes)); var count = data.count
-        while count > 0 { if let text = String(bytes: data[..<count], encoding: .utf8) { return text }; count -= 1 }
-        return ""
-    }
     func stageLabel(_ stage: WebResearchStage) -> String { Self.stageLabel(stage, retention: transient ? .transient : .permittedPersistence) }
     static func stageLabel(_ stage: WebResearchStage, retention: WebResearchRetention = .permittedPersistence) -> String {
         switch stage {
@@ -562,26 +557,27 @@ final class WebResearchModel: ObservableObject {
 final class WebResearchPanel: NSObject, NSWindowDelegate {
     let model: WebResearchModel
     var onVisibility: ((Bool) -> Void)?
-    private var panel: WebResearchWindow?
+    private let host = UtilityPanelHost(size: NSSize(width: 720, height: 660), minSize: NSSize(width: 560, height: 480),
+                                        title: "Dot · Web research",
+                                        makeWindow: { WebResearchWindow(contentRect: $0, styleMask: [.titled, .closable, .resizable, .utilityWindow],
+                                                                        backing: .buffered, defer: false) })
+    private var panel: NSPanel? { host.panel }
     private let confirmation: LocalRecordDeletionConfirmation
     init(model: WebResearchModel, confirmation: LocalRecordDeletionConfirmation? = nil) {
         self.model = model; self.confirmation = confirmation ?? LocalRecordDeletionConfirmation(); super.init()
     }
+    @discardableResult
     func prepare() -> NSPanel {
-        if let panel { return panel }
-        let window = WebResearchWindow(contentRect: NSRect(x: 0, y: 0, width: 720, height: 660),
-            styleMask: [.titled, .closable, .resizable, .utilityWindow], backing: .buffered, defer: false)
-        window.title = "Dot · Web research"; window.minSize = NSSize(width: 560, height: 480)
-        window.isReleasedWhenClosed = false; window.delegate = self
-        window.pause = { [weak self] in self?.foregroundPause() }
-        window.contentView = NSHostingView(rootView: WebResearchView(model: model, delete: { [weak self] in self?.requestDeletion() }))
-        window.center(); panel = window; return window
+        host.window(delegate: self, configure: { [weak self] window in
+            (window as? WebResearchWindow)?.pause = { [weak self] in self?.foregroundPause() }
+        }) {
+            NSHostingView(rootView: WebResearchView(model: model, delete: { [weak self] in self?.requestDeletion() }))
+        }
     }
     func show() {
         guard !model.shuttingDown else { return }
         invalidateDeletion()
-        let window = prepare(); model.open(); onVisibility?(true)
-        window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: false)
+        prepare(); model.open(); host.present(onVisibility)
     }
     func foregroundPause() { invalidateDeletion(); model.foregroundPause() }
     func cancel() { invalidateDeletion(); model.cancel() }

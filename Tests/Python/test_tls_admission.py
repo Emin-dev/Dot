@@ -6,6 +6,7 @@ Synthetic credentials only; never starts Splash or loads a model.
 import errno
 import hashlib
 import importlib.util
+from contextlib import nullcontext
 from pathlib import Path
 import socket
 import ssl
@@ -78,6 +79,17 @@ class TLSAdmissionTests(unittest.TestCase):
     def no_upstream(self):
         self.backend.settimeout(0.05)
         with self.assertRaises(socket.timeout): self.backend.accept()
+
+    def release_backend_queue(self):
+        # A kernel can report more overflow connects as established than it
+        # actually keeps queued, so the fixture's count is an upper bound rather
+        # than the occupancy. Release whatever the queue really holds; callers
+        # still prove nothing stale is left before the next exchange.
+        self.backend.settimeout(0.05)
+        while True:
+            try: connection, _ = self.backend.accept()
+            except (socket.timeout, ConnectionAbortedError): break
+            self.upstreams.append(connection); connection.close()
 
     def wait_workers(self, count, timeout=3):
         deadline = time.monotonic() + timeout
@@ -455,7 +467,8 @@ class TLSAdmissionTests(unittest.TestCase):
     def test_authenticated_tls_backpressure_keeps_total_send_deadline(self):
         self.relay.io_timeout = 0.35
         client, upstream = self.exchange(receive_buffer=4096); self.pressure_tls_output(client)
-        retried = threading.Event(); send = ssl.SSLSocket.send
+        retried = threading.Event(); exhausted = threading.Event()
+        send = ssl.SSLSocket.send
         sendall = self.relay._sendall; operations = []
         def observed_sendall(connection, data):
             if not isinstance(connection, ssl.SSLSocket): return sendall(connection, data)
@@ -463,6 +476,7 @@ class TLSAdmissionTests(unittest.TestCase):
             operations.append(operation)
             result = sendall(connection, data)
             operation.update(result=result, elapsed=time.monotonic() - operation['started'])
+            if not result: exhausted.set()
             return result
         def observed_send(connection, *args, **kwargs):
             try: return send(connection, *args, **kwargs)
@@ -474,13 +488,27 @@ class TLSAdmissionTests(unittest.TestCase):
             try: upstream.sendall(b'fixture response' * 131072)
             except OSError: pass
         sender = threading.Thread(target=flood)
+        # A small SO_RCVBUF is a request, not a contract: Darwin clamps it up
+        # (326640 here) and autotunes it, so this never-reading client absorbs
+        # hundreds of KiB before one production send can exhaust its budget.
+        # The relay drains that queue through its own 4096-byte transport buffer
+        # at most one chunk per io_poll_interval, so bound the wait by the
+        # capacity the kernel reports instead of assuming Linux's instant stall.
+        chunks = client.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF) // 32768 + 3
+        saturation_budget = chunks * (self.relay.io_timeout + self.relay.io_poll_interval)
         with patch.object(ssl.SSLSocket, 'send', observed_send), \
              patch.object(self.relay, '_sendall', observed_sendall):
-            started = time.monotonic(); sender.start()
+            sender.start()
             try:
                 self.assertTrue(retried.wait(timeout=0.8))
-                self.wait_workers(0, timeout=0.8)
-                self.assertLess(time.monotonic() - started, 0.9)
+                # Wait for the real condition - one production send that
+                # exhausted its unchanged absolute budget - instead of guessing
+                # when the kernel's receive queue happens to be full.
+                self.assertTrue(exhausted.wait(timeout=saturation_budget),
+                                'no production send exhausted its absolute send budget')
+                # No byte is sent after the absolute deadline: the worker must
+                # release its slot and sockets as soon as that send failed.
+                self.wait_workers(0, timeout=0.3)
                 # A transient WANT can finish normally. Prove one particular
                 # unfinished production send exhausted its unchanged budget.
                 failed = [operation for operation in operations if not operation['result']]
@@ -569,7 +597,7 @@ class TLSAdmissionTests(unittest.TestCase):
         self.fail('backend accept queue did not saturate within fixture bound')
 
     def test_stop_during_saturated_backend_connect_closes_tracked_socket_and_worker(self):
-        client = self.client(); queued = self.fill_backend_accept_queue()
+        client = self.client(); self.fill_backend_accept_queue()
         entered = threading.Event(); captured = []; tracked = []
         connect = socket.socket.connect; connect_ex = socket.socket.connect_ex
         close = socket.socket.close; shutdown = socket.socket.shutdown
@@ -598,7 +626,7 @@ class TLSAdmissionTests(unittest.TestCase):
         self.assertTrue(workers); self.assertTrue(all(not worker.is_alive() for worker in workers))
         with socket.socket() as contender:
             with self.assertRaises(OSError): contender.bind(self.backend.getsockname())
-        for _ in range(queued): self.upstream().close()
+        self.release_backend_queue()
         with socket.create_connection(self.backend.getsockname(), timeout=1) as direct:
             accepted = self.upstream(); direct.sendall(b'owned')
             self.assertEqual(accepted.recv(5), b'owned')
@@ -606,24 +634,93 @@ class TLSAdmissionTests(unittest.TestCase):
 
     def test_saturated_backend_connect_keeps_absolute_deadline_without_sending(self):
         self.relay.io_timeout = 0.35
-        client = self.client(); queued = self.fill_backend_accept_queue()
-        entered = threading.Event(); captured = []; sent = []
-        connect_ex = socket.socket.connect_ex; send = socket.socket.send
-        def observed_connect(connection, address):
-            captured.append(connection); entered.set()
-            return connect_ex(connection, address)
-        def observed_send(connection, data, *args, **kwargs):
-            if connection in captured: sent.append(bytes(data))
-            return send(connection, data, *args, **kwargs)
-        with patch.object(socket.socket, 'connect_ex', observed_connect), \
-             patch.object(socket.socket, 'send', observed_send):
-            started = time.monotonic(); client.sendall(HEADER)
-            self.assertTrue(entered.wait(timeout=1)); self.wait_workers(0, timeout=0.8)
-            elapsed = time.monotonic() - started
-        self.assertGreaterEqual(elapsed, 0.3); self.assertLess(elapsed, 0.9)
-        self.assertEqual(sent, []); self.assertEqual([item.fileno() for item in captured], [-1])
-        self.assertFalse(self.relay.connections); self.assert_closed(client)
-        for _ in range(queued): self.upstream().close()
+        self.fill_backend_accept_queue()
+        connect_ex = socket.socket.connect_ex; getsockopt = socket.socket.getsockopt
+        send = socket.socket.send
+        pending = (errno.EINPROGRESS, errno.EALREADY, errno.EWOULDBLOCK, errno.EINTR)
+        def attempt(connect, *, never_ready=False):
+            # One admitted attempt against the backend. Records what the kernel
+            # answered about that connect and every byte the relay sent to it;
+            # the caller decides what those answers must imply.
+            client = self.client()
+            entered = threading.Event(); captured = []; results = []; errors = []; sent = []
+            def observed_connect(connection, address):
+                captured.append(connection); entered.set()
+                result = connect(connection, address); results.append(result)
+                return result
+            def observed_error(connection, level, option, *arguments):
+                result = getsockopt(connection, level, option, *arguments)
+                if level == socket.SOL_SOCKET and option == socket.SO_ERROR and connection in captured:
+                    errors.append(result)
+                return result
+            def observed_send(connection, data, *arguments, **keywords):
+                if connection in captured: sent.append(bytes(data))
+                return send(connection, data, *arguments, **keywords)
+            started = time.monotonic()
+            with patch.object(socket.socket, 'connect_ex', observed_connect), \
+                 patch.object(socket.socket, 'getsockopt', observed_error), \
+                 patch.object(socket.socket, 'send', observed_send), \
+                 (patch.object(tls.select, 'select', lambda *arguments, **keywords: ([], [], []))
+                  if never_ready else nullcontext()):
+                client.sendall(HEADER)
+                self.assertTrue(entered.wait(timeout=1))
+                with self.relay.lock: serving = bool(self.relay.workers)
+                if serving:
+                    # The connect was accepted, so this worker is still serving
+                    # it: end the attempt from the client side instead of
+                    # waiting on a worker that is doing its job.
+                    time.sleep(0.05)
+                    client.close()
+                self.wait_workers(0, timeout=0.8)  # No worker may outlive its connect.
+                elapsed = time.monotonic() - started
+            self.assertLess(elapsed, 0.9)
+            # Whatever the kernel answered, the tracked socket ends closed, no
+            # tracked connection survives, and a refused connect is closed by
+            # the relay itself.
+            self.assertEqual([item.fileno() for item in captured], [-1])
+            self.assertFalse(self.relay.connections)
+            if not serving: self.assert_closed(client)
+            return elapsed, results, errors, sent
+        # The saturated backlog is answered differently per kernel: Linux drops
+        # the SYN-ACK and leaves the connect pending, Darwin resets the pending
+        # connect at once, and a saturated Darwin queue transiently reports some
+        # overflow connects as established before resetting them (measured on
+        # about a quarter of attempts). The kernel's own answer, not a guess,
+        # decides what is legitimate here; an accepted attempt is not this
+        # scenario, so it is torn down and repeated rather than asserted away.
+        for _ in range(8):
+            elapsed, results, errors, sent = attempt(connect_ex)
+            if sent:
+                # Bytes may only follow a connect the kernel reported as
+                # established, and then only the request it already admitted.
+                self.assertTrue(errors and not any(errors), 'bytes sent on a connect the kernel reported as failed')
+                self.assertIn(sent, ([], [HEADER]))
+                continue
+            if errors and any(errors):
+                # The kernel reported this connect as failed: not one admitted
+                # byte may follow it, and its budget must not be burnt.
+                self.assertEqual(sent, []); self.assertLess(elapsed, 0.3)
+            elif results and all(result in pending for result in results):
+                # The kernel never resolved that pending connect, so the relay
+                # must consume, and not exceed, its unchanged absolute io_timeout
+                # budget while still sending nothing.
+                self.assertEqual(sent, []); self.assertGreaterEqual(elapsed, 0.3)
+            else:
+                # Refused at once: no budget may be burnt and nothing sent.
+                self.assertEqual(sent, []); self.assertLess(elapsed, 0.3)
+            break
+        else:
+            self.fail('saturated backend never refused the relay connect')
+        # Kernel-independent halves of the same guarantee, exercised on every
+        # platform: a refused connect sends nothing and returns at once, and a
+        # connect that never becomes ready can only leave the loop through that
+        # same absolute budget.
+        refused = attempt(lambda connection, address: errno.ECONNRESET)
+        self.assertEqual(refused[3], []); self.assertLess(refused[0], 0.3)
+        unresolved = attempt(lambda connection, address: errno.EINPROGRESS, never_ready=True)
+        self.assertEqual(unresolved[3], [])
+        self.assertGreaterEqual(unresolved[0], 0.3); self.assertLess(unresolved[0], 0.9)
+        self.release_backend_queue()
         self.no_upstream(); self.exchange()
 
     def test_successful_backend_connect_is_tracked_nonblocking_and_checks_socket_error(self):

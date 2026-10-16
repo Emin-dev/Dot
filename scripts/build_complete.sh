@@ -19,7 +19,7 @@ WHISPER_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-whisper-complete.XXXXXX")
 trap 'rm -rf "$INTENTS_BUILD" "$WHISPER_BUILD"' EXIT
 # Authenticate the archive and derive this framework from those exact bytes.
 # Never link or copy an independently supplied framework directory.
-git ls-files --error-unmatch -- packaging/voice-source-manifest.json scripts/verify_whisper_input.py >/dev/null
+git ls-files --error-unmatch -- packaging/whisper-source-manifest.json scripts/verify_whisper_input.py >/dev/null
 python3 -B scripts/verify_whisper_input.py --archive "$DOT_WHISPER_ARCHIVE" \
   --output "$WHISPER_BUILD/whisper-input" > "$WHISPER_BUILD/whisper-input.json"
 VERIFIED_WHISPER_FRAMEWORK="$WHISPER_BUILD/whisper-input/whisper.framework"
@@ -44,10 +44,10 @@ nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
 /usr/bin/ditto "$DOT_RUNTIME_PAYLOAD" "$APP/Contents/Resources/Offline"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
-cp Resources/Voice/bionic_helper.py Resources/Voice/BIONIC-LICENSE.txt Resources/Voice/voice.sb "$APP/Contents/Resources/Voice/"
+cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
 cp Resources/bundled-models.json "$APP/Contents/Resources/"
-cp -R Resources/Research Resources/Search "$APP/Contents/Resources/"
+cp -R Resources/Research "$APP/Contents/Resources/"
 python3 -B scripts/copy_offline_models.py --source "$DOT_MODEL_PAYLOAD" \
   --destination "$APP/Contents/Resources/OfflineModels" --manifest Resources/bundled-models.json
 ICONSET=build-complete/Icon.iconset; mkdir -p "$ICONSET"
@@ -62,14 +62,13 @@ SIGN_IDENTITY=$(security find-identity -p codesigning -v | grep -o 'Apple Develo
 if [ -z "$SIGN_IDENTITY" ]; then
   SIGN_IDENTITY="-"
 fi
-if [[ -f target/release/dot-search ]]; then
-  cp target/release/dot-search "$APP/Contents/MacOS/dot-search"
-  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/dot-search"
-fi
-if [[ -f target/release/dot-voice ]]; then
-  cp target/release/dot-voice "$APP/Contents/MacOS/dot-voice"
-  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/dot-voice"
-fi
+# The complete app ships all three Rust binaries beside its executable. A build
+# without them is not a complete app, so a missing binary stops assembly here.
+for native in dot-search dot-voice dot-fetch; do
+  [[ -f "target/release/$native" ]] || { echo "Missing Rust runtime binary target/release/$native; run cargo build --release."; exit 1; }
+  cp "target/release/$native" "$APP/Contents/MacOS/$native"
+  codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/$native"
+done
 # Runtime native code must already be finalized/signed before its immutable manifest was made.
 codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/whisper.framework"
 assert_source_snapshot

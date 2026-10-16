@@ -3,45 +3,40 @@ import Foundation
 /// Deliberately independent of URLs supplied by callers and of any other runtime.
 /// The private control protocol carries only bounded ASCII scalar values.
 enum SearchRuntimeFailure: Error, Equatable, LocalizedError, WebSearchTemporarilyUnavailable {
-    case unavailable, invalidPayload, unacceptedPayload, invalidSignature
-    case invalidControl, startupFailed, startupTimeout, stopped
+    /// The bundled `dot-search` runtime is not beside the app executable.
+    case runtimeMissing
+    case invalidQuery, invalidControl, startupFailed, startupTimeout, stopped, unavailable
+    case forbidden, challenge, malformedResponse, invalidResults, responseTooLarge, timeout, networkFailure
+    case httpStatus(Int)
+
+    /// The bundled runtime is not a remote rate-limited service; nothing here is a
+    /// scheduled retry. Callers treat these as terminal for the current pass. Only
+    /// conditions an operator must repair ask for review first.
     var retryDate: Date? { nil }
-    var retryRequiresReview: Bool { true }
-    var errorDescription: String? {
+    var retryRequiresReview: Bool {
         switch self {
-        case .unavailable: return "Web search is unavailable in this build. Its separate local Search runtime is missing."
-        case .invalidPayload, .unacceptedPayload, .invalidSignature:
-            return "The separate Search runtime has not passed its required integrity and acceptance checks."
-        case .invalidControl, .startupFailed, .startupTimeout:
-            return "The owned Search runtime could not start safely."
-        case .stopped: return "Web search was stopped."
+        case .invalidQuery, .timeout, .networkFailure, .stopped, .unavailable, .httpStatus: return false
+        default: return true
         }
     }
-}
-
-enum SearchRuntimeStopReason: Sendable, Equatable { case userStop, interruption, sleep, quit, failure }
-
-/// A lock makes revocation immediate even in an async cancellation handler.
-/// No caller task, main-actor scheduling delay or stale provider can revive it.
-final class SearchGenerationLease: @unchecked Sendable {
-    let generation: UUID
-    private let lock = NSLock()
-    private var valid = true
-    private var cancellations: [UUID: @Sendable () -> Void] = [:]
-    init(generation: UUID = UUID()) { self.generation = generation }
-    var isValid: Bool { lock.lock(); defer { lock.unlock() }; return valid }
-    func register(_ cancellation: @escaping @Sendable () -> Void) -> UUID {
-        let id = UUID()
-        lock.lock()
-        if valid { cancellations[id] = cancellation; lock.unlock() }
-        else { lock.unlock(); cancellation() }
-        return id
-    }
-    func unregister(_ id: UUID) { lock.lock(); cancellations.removeValue(forKey: id); lock.unlock() }
-    func invalidate() {
-        lock.lock(); valid = false
-        let pending = Array(cancellations.values); cancellations.removeAll(); lock.unlock()
-        for cancel in pending { cancel() }
+    var errorDescription: String? {
+        switch self {
+        case .runtimeMissing: return "This build is missing its bundled search runtime, so web search cannot start."
+        case .invalidQuery: return "Provide a nonempty search query within the supported limits."
+        case .invalidControl: return "The bundled search runtime did not present a valid startup receipt."
+        case .startupFailed: return "The bundled search runtime could not start safely."
+        case .startupTimeout: return "The bundled search runtime did not become ready in time."
+        case .stopped: return "Web search was stopped."
+        case .unavailable: return "The search runtime reported that every reviewed engine was unavailable."
+        case .forbidden: return "The bundled search runtime rejected this app's capability."
+        case .challenge: return "The search runtime returned a web page instead of search results."
+        case .malformedResponse: return "The search runtime returned an unsupported response."
+        case .invalidResults: return "Search returned no usable web results from a nonempty response."
+        case .responseTooLarge: return "The search response exceeded its bounded size."
+        case .timeout: return "The search request timed out."
+        case .networkFailure: return "The search request could not finish."
+        case .httpStatus(let status): return "The search runtime returned HTTP \(status)."
+        }
     }
 }
 
@@ -55,6 +50,9 @@ struct SearchReadyReceipt: Equatable, Sendable, CustomStringConvertible, CustomD
     var debugDescription: String { description }
 }
 
+/// The whole control surface of the bundled `dot-search` runtime: one `ready` line
+/// per launch and a `stopped` line when it closes. Nothing here is inferred from the
+/// port, the process list, or caller-supplied text.
 enum SearchControlEvent: Equatable, Sendable {
     case ready(SearchReadyReceipt), stopped(UUID), failed
 
@@ -100,7 +98,7 @@ enum SearchControlEvent: Equatable, Sendable {
 
 /// Unlike JSONSerialization/JSONDecoder, this rejects duplicate keys, booleans
 /// masquerading as numbers, floats, escaped endpoint spellings and nested values.
-/// The helper emits ASCII scalars only; a permissive general parser is unnecessary.
+/// The runtime emits ASCII scalars only; a permissive general parser is unnecessary.
 private struct SearchControlParser {
     enum Scalar: Equatable {
         case string(String), integer(Int), null

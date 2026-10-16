@@ -123,7 +123,8 @@ final class EngineIntegrationTests: XCTestCase {
         XCTAssertEqual(nextMessages.last?["content"] as? String, "Describe this fixture.")
     }
     @MainActor func testExpiredImagePreventsChatSubmissionAfterEncoding() async throws {
-        let engine = makeEngine(clock: { 106 }); defer { engine.shutdown() }
+        // The documented freshness window is `CapturedScreenImage.maximumAge`.
+        let engine = makeEngine(clock: { 100 + CapturedScreenImage.maximumAge + 1 }); defer { engine.shutdown() }
         let image = try screenFixture(acquiredAt: 100)
         do {
             _ = try await engine.chat(history: [ChatMessage(role: "user", content: "Fixture")],
@@ -134,7 +135,8 @@ final class EngineIntegrationTests: XCTestCase {
     }
     @MainActor func testImageExpiringDuringRequestAssemblyNeverReachesTransport() async throws {
         var sample = 0
-        let clockValues = [100.0, 104.9, 105.01]
+        // Fresh at assembly start, one tick past the documented window during assembly.
+        let clockValues = [100.0, 100 + CapturedScreenImage.maximumAge - 0.1, 100 + CapturedScreenImage.maximumAge + 0.01]
         let engine = makeEngine(clock: { defer { sample += 1 }; return clockValues[min(sample, 2)] })
         defer { engine.shutdown() }
         let image = try screenFixture(acquiredAt: 100)

@@ -32,7 +32,10 @@ def runtime_handoff_contract(source):
 
 
 root = Path(__file__).resolve().parents[1]
-read = lambda p: (root / p).read_text()
+# A missing file yields empty text: one deletion can only fail its own guard, never
+# abort the whole run before the remaining guards report.
+read = lambda p: (root / p).read_text() if (root / p).is_file() else ''
+swift_sources = ''.join(path.read_text() for path in sorted((root / 'src').glob('*.swift')))
 engine, speech, chat = map(read, ['src/Engine.swift', 'src/Speech.swift', 'src/ChatView.swift'])
 checks = {
     'no borrowed runtime or broad process kills': not re.search(r'pkill|llama-server|DOT_SPLASH_URL|splashURL', engine),
@@ -60,8 +63,9 @@ checks = {
     'compact actual status and accessible errors remain': 'Text(shortStatus)' in chat and 'stt.timingSnapshot' in chat and 'CompanionAccessibility.value(status: status, detail: detail' in chat,
     'compact issue and screen indicators remain': 'exclamationmark.circle.fill' in chat and 'eye.fill' in chat,
     'zero-progress and paused readiness stay visible': 'Circle().stroke(Color.accentColor.opacity(0.45)' in chat and 'pause.circle.fill' in chat and 'hourglass' in chat,
-    'isolated voice Python explicitly disables bytecode writes': 'executable, "-I", "-B", "-u", script' in read('src/VoiceAudioReader.swift') and 'child.arguments = launch.arguments' in read('src/BionicVoice.swift'),
-    'voice sandbox uses private writes and OpenMP environment fallback': '(deny file-write*)' in read('Resources/Voice/voice.sb') and '(subpath (param "DOT_OUTPUT"))' in read('Resources/Voice/voice.sb') and '(deny file-read-data (literal "/tmp") (literal "/private/tmp"))' in read('Resources/Voice/voice.sb') and '"DOT_OUTPUT="' in read('src/VoiceAudioReader.swift') and 'child.environment = launch.environment' in read('src/BionicVoice.swift'),
+    'voice launch uses the bundled native engine with a POSIX canonical private output': 'realpath(directory.path, nil)' in read('src/VoiceAudioReader.swift') and 'before.st_ino == after.st_ino' in read('src/VoiceAudioReader.swift') and 'appendingPathComponent("dot-voice")' in read('src/BionicVoice.swift') and 'FileManager.default.isExecutableFile(atPath: native.path)' in read('src/BionicVoice.swift') and 'sandbox-exec' not in read('src/BionicVoice.swift') and 'bionic_helper' not in read('src/BionicVoice.swift'),
+    'shipped sources reference no retired Python runtime helper': all(retired not in swift_sources for retired in ['dot_source_fetch.py', 'bionic_helper.py', 'dot_search.py']),
+    'retired Search resource directory is not shipped': not (root / 'Resources/Search').exists(),
     'installer requires native offline acceptance': 'offline_acceptance.py' in read('scripts/package_complete.sh') and 'hdiutil create' not in read('scripts/build_complete.sh'),
     'owned runtime transport is TLS pinned': 'https://127.0.0.1:' in read('src/BundledSplash.swift') and 'RuntimeCertificatePin.matches' in engine,
     'runtime listener and scoped credential pipe retained across child exec': runtime_handoff_contract(read('Resources/Runtime/dot_runtime.py')),
@@ -70,7 +74,7 @@ checks = {
     'runtime protocol reads available pipe bytes without waiting for EOF': 'Darwin.read(descriptor' in read('src/BundledSplash.swift') and 'O_NONBLOCK' in read('src/BundledSplash.swift') and 'FD_CLOEXEC' in read('src/BundledSplash.swift') and 'read(upToCount:' not in read('src/BundledSplash.swift'),
     'runtime startup timeout closes only current owned generation': re.search(r'let error = await failure\(\).*?guard token == expected, !Task.isCancelled.*?outcome=timeout.*?shutdown\(\).*?throw error', read('src/BundledSplash.swift'), re.S) is not None,
     'turn failure logging excludes cancellation and uses finite identifiers': 'error is CancellationError' in chat and '(error as? URLError)?.code == .cancelled' in chat and 'PipelineDiagnostic.failure(stage: actualStage, reason: reason' in chat and 'self.logFailure(error, stage: stage)' in chat,
-    'voice sandbox uses POSIX canonical private output consistently': 'realpath(directory.path, nil)' in read('src/VoiceAudioReader.swift') and 'before.st_ino == after.st_ino' in read('src/VoiceAudioReader.swift') and '"HOME": path, "TMPDIR": path' in read('src/VoiceAudioReader.swift') and 'VoiceLaunchConfiguration(python: python' in read('src/BionicVoice.swift') and 'DOT_OUTPUT=" + dir.resolvingSymlinksInPath()' not in read('src/BionicVoice.swift'),
+    'voice native child receives only bounded private paths': 'attributes: [.posixPermissions: 0o700]' in read('src/BionicVoice.swift') and 'child.arguments = ["--root", base.path, "--output", requested.path]' in read('src/BionicVoice.swift') and 'child.standardError = FileHandle.nullDevice' in read('src/BionicVoice.swift') and 'child.environment = ["PATH": "/usr/bin:/bin"]' in read('src/BionicVoice.swift') and 'try? FileManager.default.removeItem(at: directory)' in read('src/BionicVoice.swift'),
     'screen permission precedes microphone and rechecks without another prompt': chat.index('self.screen.prepare(turn: id, requestPermission: !invitation)') < chat.index('await self.runtime.startCapture(id, self.voiceTiming, invitation)') and 'permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess)' in read('src/ScreenContext.swift'),
     'warmup starts only after accepted microphone capture and is reused': 'stt.onRecording =' in chat and speech.index('recording = true') < speech.index('onRecording?(id)') and 'try await self.warmup.wait(turn: id)' in chat and 'warmup.cancel()' in chat,
     'full integrity checks run in exactly two bounded verification branches': 'PayloadVerification.run(runtime: self.runtimeCheck' in read('src/OfflinePreparation.swift') and read('src/OfflinePreparation.swift').count('group.addTask {') == 2 and 'try await OfflinePayload.verifyHash(path' in read('src/OfflinePreparation.swift'),

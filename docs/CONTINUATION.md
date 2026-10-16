@@ -1,3 +1,9 @@
+> **SUPERSEDED (2026-10-17).** This document describes the retired Python voice helper, source fetcher
+> and SearXNG/Waitress search stack, which no longer exist. See [the Rust-only runtime](rust-runtime.md)
+> for the current runtime. It is a dated continuation handoff: the revisions, run counts, receipts and
+> blockers below are preserved unchanged as the record of what was observed on 14 October 2026, and
+> its Search/voice lanes and next steps no longer describe the repository.
+
 # dot: current continuation handoff
 
 ## Published checkpoint — 2026-10-14 22:25 UTC

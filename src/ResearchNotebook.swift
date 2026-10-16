@@ -167,7 +167,7 @@ enum ResearchExtraction {
             return ResearchSource(id: UUID(), originalURL: url, finalURL: url, title: url.lastPathComponent,
                                   kind: pdf ? .localPDF : .localText, retrievedAt: Date(),
                                   modifiedAt: modifiedAt,
-                                  bytesRead: data.count, sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                                  bytesRead: data.count, sha256: data.sha256Hex,
                                   pagesRead: extracted.pages, text: extracted.text, truncated: extracted.truncated)
         }
     }
@@ -248,7 +248,7 @@ final class ResearchWebReader: @unchecked Sendable {
             return ResearchSource(id: UUID(), originalURL: url, finalURL: finalURL, title: finalURL.lastPathComponent.isEmpty ? (finalURL.host ?? "Web source") : finalURL.lastPathComponent,
                                   kind: pdf ? .webPDF : .webPage, retrievedAt: Date(),
                                   modifiedAt: response.value(forHTTPHeaderField: "Last-Modified").flatMap { formatter.date(from: $0) },
-                                  bytesRead: data.count, sha256: SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(),
+                                  bytesRead: data.count, sha256: data.sha256Hex,
                                   pagesRead: extracted.pages, text: extracted.text, truncated: extracted.truncated, transportReceipt: .httpsOnlyV1)
         } catch is CancellationError { throw CancellationError() }
         catch let error as ResearchNotebookError { throw error }

@@ -340,9 +340,7 @@ actor ConversationHistoryStore {
     private static func timestamp(_ date: Date) -> Date { Date(timeIntervalSince1970: (date.timeIntervalSince1970 * 1_000).rounded() / 1_000) }
     private static func bounded(_ text: String, bytes: Int) -> (text: String, truncated: Bool) {
         guard text.utf8.count > bytes else { return (text, false) }
-        var prefix = Array(text.utf8.prefix(bytes))
-        while String(bytes: prefix, encoding: .utf8) == nil { prefix.removeLast() }
-        return (String(bytes: prefix, encoding: .utf8) ?? "", true)
+        return (text.truncated(toUTF8Bytes: bytes), true)
     }
     private static func copyText(_ record: ConversationHistoryRecord) -> String {
         guard record.role == .assistant else { return record.text }
