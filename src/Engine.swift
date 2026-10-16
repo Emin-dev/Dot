@@ -517,7 +517,10 @@ final class EngineManager: ObservableObject {
         try Task.checkCancellation()
         guard !inferenceClosed else { throw CancellationError() }
         let began = ProcessInfo.processInfo.systemUptime
-        var outcome = "stopped"
+        // Distinguish the early exits: a bare "stopped" was the default that survived
+        // every throw, so a cancelled readiness, a configuration failure and a dead
+        // supervisor all looked identical in the log.
+        var outcome = "cancelled"
         Self.log.notice("DOT_READINESS event=started")
         defer {
             let milliseconds = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
@@ -525,7 +528,10 @@ final class EngineManager: ObservableObject {
         }
         let base: URL, model: String, ownedPID: Int?, identityPort: Int
         if let configuredEndpoint {
-            guard protocolClasses?.isEmpty == false, let url = LocalEndpoint.validate(configuredEndpoint), let selected = configuredModel, !selected.isEmpty else { throw EngineError.configuration }
+            guard protocolClasses?.isEmpty == false, let url = LocalEndpoint.validate(configuredEndpoint), let selected = configuredModel, !selected.isEmpty else {
+                outcome = "configuration"
+                throw EngineError.configuration
+            }
             base = url; model = selected; ownedPID = nil; identityPort = url.port ?? 0
         } else {
             let connection = try await BundledSplash.shared.connection()
@@ -542,7 +548,10 @@ final class EngineManager: ObservableObject {
         for attempt in 0..<attempts {
             try Task.checkCancellation()
             guard !inferenceClosed else { throw CancellationError() }
-            if let ownedPID, !BundledSplash.shared.owns(pid: ownedPID) { throw await BundledSplash.shared.failure() }
+            if let ownedPID, !BundledSplash.shared.owns(pid: ownedPID) {
+                outcome = "supervisor_died"
+                throw await BundledSplash.shared.failure()
+            }
             var request = URLRequest(url: base.appendingPathComponent("status")); request.timeoutInterval = 2
             if ownedPID != nil, let key = BundledSplash.shared.apiKey { request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization") }
             do {
