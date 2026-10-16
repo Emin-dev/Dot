@@ -545,13 +545,14 @@ struct QuestionIntentStream {
         case clickPoint(x: Double, y: Double, button: String, clicks: Int)
         case clickElement(description: String)
         case pointOnScreen(x: Double, y: Double, label: String?)
+        case scrollScreen(direction: String, amount: Int)
     }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.
     private static let questionObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"question"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
     private static let allowedToolNames: Set<String> = [
-        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen"
+        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen"
     ]
     private var callID: String?
     private var functionName: String?
@@ -679,6 +680,10 @@ struct QuestionIntentStream {
                   let y = (object["y"] as? NSNumber)?.doubleValue else { throw Failure.invalid }
             let label = object["label"] as? String
             return .pointOnScreen(x: x, y: y, label: label)
+        case "scroll_screen":
+            let dir = (object["direction"] as? String) ?? "down"
+            let amt = (object["amount"] as? NSNumber)?.intValue ?? 6
+            return .scrollScreen(direction: dir, amount: amt)
         default:
             return nil
         }
@@ -2965,7 +2970,19 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
             }
         }
 
-        let desktopSnippet = activeDesktop?.promptContextSnippet
+        if let webpage = WholeContextExtractor.shared.extractActiveDocumentOrWebpageText() {
+            docEvidence.append("\(webpage.source): \(webpage.content)")
+        }
+
+        var desktopSnippet = activeDesktop?.promptContextSnippet
+        if let pastScreens = PreviousScreenMemory.shared.formatPromptSnippet() {
+            if let existing = desktopSnippet {
+                desktopSnippet = existing + " | " + pastScreens
+            } else {
+                desktopSnippet = "[" + pastScreens + "]"
+            }
+        }
+
         return assembleTurnContext(
             pinnedMemories: pinnedMems,
             queryMemories: queryMems,
@@ -3483,6 +3500,228 @@ public final class DotSoulManager: @unchecked Sendable {
             return true
         }
         return false
+    }
+}
+
+// MARK: - Native Screen Scroll Engine (CoreGraphics Event Synthesis)
+
+public enum ScrollDirection: String, Codable, Sendable {
+    case up, down, left, right, top, bottom, pageUp, pageDown
+}
+
+public enum ScrollCommand: Equatable {
+    case scroll(direction: ScrollDirection, amount: Int)
+    case none
+}
+
+public enum ScrollControlEngine {
+    public static func parseCommand(_ text: String) -> ScrollCommand {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let clean = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
+
+        let prefixes = ["can you please ", "could you please ", "please ", "can you ", "could you ", "dot "]
+        var s = clean
+        for p in prefixes {
+            if s.hasPrefix(p) {
+                s = String(s.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        if s == "scroll down" || s == "scroll down a bit" || s == "scroll down a little" || s == "scroll" || s == "прокрути вниз" {
+            return .scroll(direction: .down, amount: 6)
+        }
+        if s == "scroll up" || s == "scroll up a bit" || s == "scroll up a little" || s == "прокрути вверх" {
+            return .scroll(direction: .up, amount: 6)
+        }
+        if s == "scroll down more" || s == "scroll down a lot" || s == "scroll down fast" {
+            return .scroll(direction: .down, amount: 16)
+        }
+        if s == "scroll up more" || s == "scroll up a lot" || s == "scroll up fast" {
+            return .scroll(direction: .up, amount: 16)
+        }
+        if s == "scroll to top" || s == "scroll to the top" || s == "scroll all the way up" || s == "go to top" || s == "в самый верх" {
+            return .scroll(direction: .top, amount: 0)
+        }
+        if s == "scroll to bottom" || s == "scroll to the bottom" || s == "scroll all the way down" || s == "go to bottom" || s == "в самый низ" {
+            return .scroll(direction: .bottom, amount: 0)
+        }
+        if s == "page down" || s == "next page" {
+            return .scroll(direction: .pageDown, amount: 0)
+        }
+        if s == "page up" || s == "previous page" {
+            return .scroll(direction: .pageUp, amount: 0)
+        }
+        if s == "scroll left" {
+            return .scroll(direction: .left, amount: 6)
+        }
+        if s == "scroll right" {
+            return .scroll(direction: .right, amount: 6)
+        }
+        return .none
+    }
+
+    @discardableResult
+    @MainActor
+    public static func scroll(direction: ScrollDirection, amount: Int = 6) -> Bool {
+        guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else { return false }
+        switch direction {
+        case .down:
+            let delta = Int32(-max(1, amount))
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else { return false }
+            event.post(tap: .cghidEventTap)
+            return true
+        case .up:
+            let delta = Int32(max(1, amount))
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 1, wheel1: delta, wheel2: 0, wheel3: 0) else { return false }
+            event.post(tap: .cghidEventTap)
+            return true
+        case .left:
+            let delta = Int32(max(1, amount))
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: 0, wheel2: delta, wheel3: 0) else { return false }
+            event.post(tap: .cghidEventTap)
+            return true
+        case .right:
+            let delta = Int32(-max(1, amount))
+            guard let event = CGEvent(scrollWheelEvent2Source: nil, units: .line, wheelCount: 2, wheel1: 0, wheel2: delta, wheel3: 0) else { return false }
+            event.post(tap: .cghidEventTap)
+            return true
+        case .top:
+            return InPlaceAppTyping.performPressKey("Cmd+Up", checkPermission: false).succeeded
+        case .bottom:
+            return InPlaceAppTyping.performPressKey("Cmd+Down", checkPermission: false).succeeded
+        case .pageDown:
+            return InPlaceAppTyping.performPressKey("PageDown", checkPermission: false).succeeded
+        case .pageUp:
+            return InPlaceAppTyping.performPressKey("PageUp", checkPermission: false).succeeded
+        }
+    }
+}
+
+// MARK: - Whole-Document & Active Webpage Reader (DOM Text Extraction)
+
+public final class WholeContextExtractor: @unchecked Sendable {
+    public static let shared = WholeContextExtractor()
+
+    public func extractActiveDocumentOrWebpageText() -> (source: String, content: String)? {
+        let frontApp = NSWorkspace.shared.frontmostApplication
+        let appName = (frontApp?.localizedName ?? "").lowercased()
+
+        if appName.contains("safari") {
+            let script = """
+            tell application "Safari"
+                if (count of windows) > 0 then
+                    set curTab to current tab of front window
+                    set pageURL to URL of curTab
+                    set pageTitle to name of curTab
+                    set pageText to do JavaScript "document.body.innerText" in curTab
+                    return pageTitle & "|||" & pageURL & "|||" & pageText
+                end if
+            end tell
+            """
+            if let output = runAppleScript(script), !output.isEmpty {
+                let parts = output.components(separatedBy: "|||")
+                if parts.count >= 3 {
+                    let title = parts[0]
+                    let url = parts[1]
+                    let body = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let truncated = String(body.prefix(6000))
+                    if !truncated.isEmpty {
+                        return ("Safari Webpage [\(title)] (\(url))", truncated)
+                    }
+                }
+            }
+        }
+
+        if appName.contains("chrome") {
+            let script = """
+            tell application "Google Chrome"
+                if (count of windows) > 0 then
+                    set curTab to active tab of front window
+                    set pageURL to URL of curTab
+                    set pageTitle to title of curTab
+                    set pageText to execute curTab javascript "document.body.innerText"
+                    return pageTitle & "|||" & pageURL & "|||" & pageText
+                end if
+            end tell
+            """
+            if let output = runAppleScript(script), !output.isEmpty {
+                let parts = output.components(separatedBy: "|||")
+                if parts.count >= 3 {
+                    let title = parts[0]
+                    let url = parts[1]
+                    let body = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let truncated = String(body.prefix(6000))
+                    if !truncated.isEmpty {
+                        return ("Chrome Webpage [\(title)] (\(url))", truncated)
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func runAppleScript(_ source: String) -> String? {
+        var error: NSDictionary?
+        if let scriptObject = NSAppleScript(source: source) {
+            let output = scriptObject.executeAndReturnError(&error)
+            if error == nil {
+                return output.stringValue
+            }
+        }
+        return nil
+    }
+}
+
+// MARK: - Previous-Screen Memory Buffer ("Just-Left Page" Memory)
+
+public struct PastScreenContext: Sendable {
+    public let timestamp: Date
+    public let appName: String
+    public let windowTitle: String
+    public let ocrTextSummary: String
+}
+
+public final class PreviousScreenMemory: @unchecked Sendable {
+    public static let shared = PreviousScreenMemory()
+    private let lock = NSLock()
+    private var buffer: [PastScreenContext] = []
+
+    public func recordScreen(appName: String, windowTitle: String, ocrText: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        let summary = String(ocrText.trimmingCharacters(in: .whitespacesAndNewlines).prefix(1500))
+        guard !summary.isEmpty else { return }
+        if let last = buffer.last, last.appName == appName && last.windowTitle == windowTitle && last.ocrTextSummary == summary {
+            return
+        }
+        buffer.append(PastScreenContext(
+            timestamp: Date(),
+            appName: appName,
+            windowTitle: windowTitle,
+            ocrTextSummary: summary
+        ))
+        if buffer.count > 6 {
+            buffer.removeFirst()
+        }
+    }
+
+    public func recallRecentScreens() -> [PastScreenContext] {
+        lock.lock()
+        defer { lock.unlock() }
+        return buffer
+    }
+
+    public func formatPromptSnippet() -> String? {
+        let screens = recallRecentScreens()
+        guard screens.count > 1 else { return nil }
+        let past = screens.dropLast().suffix(2)
+        guard !past.isEmpty else { return nil }
+        var parts: [String] = []
+        for p in past {
+            parts.append("\(p.appName) (\"\(p.windowTitle)\"): \(p.ocrTextSummary.prefix(350))")
+        }
+        return "Previously Viewed Screens: " + parts.joined(separator: " ; ")
     }
 }
 

@@ -173,7 +173,7 @@ final class NativeActionPanelModel: ObservableObject {
 
     private func executor(for action: NativeAction) throws -> NativeActionExecutor {
         switch action {
-        case .launchApplication, .openWebURL, .sendShortcut, .moveMouse, .click, .clickElement:
+        case .launchApplication, .openWebURL, .sendShortcut, .moveMouse, .click, .clickElement, .scrollScreen:
             if let applicationExecutor { return applicationExecutor }
             guard let applicationStorage else { throw NativeActionError.storageUnavailable }
             try FileManager.default.createDirectory(at: applicationStorage, withIntermediateDirectories: true,

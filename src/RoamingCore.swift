@@ -116,19 +116,15 @@ struct RoamingCore {
     /// Overlap escape has its own short retry so content is cleared quickly without
     /// re-running a failed empty-space search on every tick.
     private var escapeRetryAt = 0.0
-    init(seed: UInt64, now: Double, initialWanderDelay: Double = 45.0) {
+    init(seed: UInt64, now: Double, initialWanderDelay: Double = 999999.0) {
         self.seed = seed
         self.nextDecision = now + 6
         self.nextWander = now + initialWanderDelay
     }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
-        if longRest {
-            minimumRestUntil = now + 45
-            nextWander = max(nextWander, now + 45)
-        } else {
-            nextWander = max(nextWander, now + 3)
-        }
+        minimumRestUntil = now + 45
+        nextWander = now + 999999.0
         nextDecision = max(minimumRestUntil, now + 6)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
@@ -232,33 +228,39 @@ struct RoamingCore {
     /// (windows, text boxes, buttons) and maintains distance from the cursor and current position.
     static func findRandomEmptySpace(frame: CGRect, bounds: CGRect, cursor: CGPoint,
                                      regions: [CGRect], minDistance: CGFloat = 140) -> CGPoint? {
-        var candidates: [CGPoint] = []
         let margin: CGFloat = 24
 
-        // 1. Screen corner and margin pockets
-        candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin))
-        candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin))
-        candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin))
-        candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.minY + margin))
-        candidates.append(CGPoint(x: bounds.maxX - margin, y: bounds.midY))
-        candidates.append(CGPoint(x: bounds.minX + margin, y: bounds.midY))
-        candidates.append(CGPoint(x: bounds.midX, y: bounds.maxY - margin))
-        candidates.append(CGPoint(x: bounds.midX, y: bounds.minY + margin))
+        // 1. Screen corner and perimeter gutter pockets (strongly preferred)
+        let perimeterCandidates: [CGPoint] = [
+            CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin), // Top right
+            CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin), // Top left
+            CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin), // Bottom right
+            CGPoint(x: bounds.minX + margin, y: bounds.minY + margin), // Bottom left
+            CGPoint(x: bounds.maxX - margin, y: bounds.midY),           // Right edge
+            CGPoint(x: bounds.minX + margin, y: bounds.midY),           // Left edge
+            CGPoint(x: bounds.midX, y: bounds.maxY - margin),           // Top center
+            CGPoint(x: bounds.midX, y: bounds.minY + margin),           // Bottom center
+            CGPoint(x: bounds.maxX - margin - 48, y: bounds.minY + margin),
+            CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin + 48),
+            CGPoint(x: bounds.maxX - margin - 48, y: bounds.maxY - margin),
+            CGPoint(x: bounds.minX + margin + 48, y: bounds.maxY - margin)
+        ]
 
-        // 2. Grid sampling across visible bounds
+        // 2. Interior grid sampling across visible bounds
+        var interiorCandidates: [CGPoint] = []
         let stepX: CGFloat = max(80, bounds.width / 12)
         let stepY: CGFloat = max(80, bounds.height / 10)
-        for y in stride(from: bounds.minY + margin, through: bounds.maxY - margin, by: stepY) {
-            for x in stride(from: bounds.minX + margin, through: bounds.maxX - margin, by: stepX) {
-                candidates.append(CGPoint(x: x, y: y))
+        for y in stride(from: bounds.minY + margin + 40, through: bounds.maxY - margin - 40, by: stepY) {
+            for x in stride(from: bounds.minX + margin + 40, through: bounds.maxX - margin - 40, by: stepX) {
+                interiorCandidates.append(CGPoint(x: x, y: y))
             }
         }
 
         let origin = frame.origin
-        var safeCandidates: [CGPoint] = []
 
-        // Pass 1: Strict clearance (10pt padding, 60pt cursor distance, minDistance from origin)
-        for candidate in candidates {
+        // Priority 1: Safe perimeter/gutter positions that are completely clear of windows, buttons, and text
+        var safePerimeter: [CGPoint] = []
+        for candidate in perimeterCandidates {
             let clamped = clamp(candidate, to: bounds)
             let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
             guard distToOrigin >= minDistance else { continue }
@@ -266,16 +268,31 @@ struct RoamingCore {
             guard clear(testRect, regions: regions) else { continue }
             let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
             guard hypot(cursor.x - center.x, cursor.y - center.y) >= 60 else { continue }
-            safeCandidates.append(clamped)
+            safePerimeter.append(clamped)
         }
-
-        if let chosen = safeCandidates.randomElement() {
+        if let chosen = safePerimeter.randomElement() {
             return chosen
         }
 
-        // Pass 2: Relaxed margin if no candidate found (4pt padding, 30pt cursor distance, minDistance/2)
-        var fallbackCandidates: [CGPoint] = []
-        for candidate in candidates {
+        // Priority 2: Interior candidates that are completely clear of all regions
+        var safeInterior: [CGPoint] = []
+        for candidate in interiorCandidates {
+            let clamped = clamp(candidate, to: bounds)
+            let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
+            guard distToOrigin >= minDistance else { continue }
+            let testRect = CGRect(origin: clamped, size: frame.size).insetBy(dx: -10, dy: -10)
+            guard clear(testRect, regions: regions) else { continue }
+            let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
+            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 60 else { continue }
+            safeInterior.append(clamped)
+        }
+        if let chosen = safeInterior.randomElement() {
+            return chosen
+        }
+
+        // Pass 2: Relaxed margin for perimeter candidates first (minDistance / 2)
+        var fallbackPerimeter: [CGPoint] = []
+        for candidate in perimeterCandidates {
             let clamped = clamp(candidate, to: bounds)
             let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
             guard distToOrigin >= min(80, minDistance / 2) else { continue }
@@ -283,22 +300,22 @@ struct RoamingCore {
             guard clear(testRect, regions: regions) else { continue }
             let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
             guard hypot(cursor.x - center.x, cursor.y - center.y) >= 30 else { continue }
-            fallbackCandidates.append(clamped)
+            fallbackPerimeter.append(clamped)
         }
-        if let chosen = fallbackCandidates.randomElement() {
+        if let chosen = fallbackPerimeter.randomElement() {
             return chosen
         }
 
-        // Pass 3: Screen-wide random fallback when windows or high-contrast content cover the display.
-        // Picks random positions away from the current origin and cursor, preferring lower overlap.
-        let effectiveMinDist = min(100, max(40, minDistance * 0.6))
+        // Pass 3: When screen is heavily covered with windows, prefer perimeter/corners with fewest hits
         var scoredCandidates: [(point: CGPoint, hits: Int)] = []
-        for candidate in candidates {
+        let allCandidates = perimeterCandidates + interiorCandidates
+        let effectiveMinDist = min(100, max(40, minDistance * 0.6))
+        for candidate in allCandidates {
             let clamped = clamp(candidate, to: bounds)
             let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
             guard distToOrigin >= effectiveMinDist else { continue }
             let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
-            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 60 else { continue }
+            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 50 else { continue }
             let testRect = CGRect(origin: clamped, size: frame.size)
             let hits = regions.reduce(into: 0) { count, region in
                 if testRect.intersects(region) { count += 1 }
@@ -307,14 +324,12 @@ struct RoamingCore {
         }
         if !scoredCandidates.isEmpty {
             scoredCandidates.sort { $0.hits < $1.hits }
-            let poolSize = max(4, scoredCandidates.count / 2)
-            return scoredCandidates.prefix(poolSize).randomElement()?.point
+            let minHits = scoredCandidates.first?.hits ?? 0
+            let bestCandidates = scoredCandidates.filter { $0.hits == minHits }
+            return bestCandidates.randomElement()?.point
         }
 
-        let anyMoved = candidates
-            .map { clamp($0, to: bounds) }
-            .filter { hypot($0.x - origin.x, $0.y - origin.y) >= 36 }
-        return anyMoved.randomElement() ?? candidates.map { clamp($0, to: bounds) }.randomElement()
+        return perimeterCandidates.map { clamp($0, to: bounds) }.randomElement()
     }
     mutating func evadeToEmptySpace(frame: CGRect, visible: CGRect, cursor: CGPoint,
                                     now: Double, displayID: UInt32, snapshot: PlacementSnapshot) -> CGPoint {
@@ -396,13 +411,13 @@ struct RoamingCore {
             }
             active.elapsed += dt
             let travelDist = hypot(active.target.x - active.start.x, active.target.y - active.start.y)
-            let travelDuration = max(0.6, min(1.2, travelDist / 250.0))
+            let travelDuration = max(2.5, min(3.8, travelDist / 50.0))
             let t = min(1, active.elapsed / travelDuration), eased = t * t * (3 - 2 * t)
             let result = CGPoint(x: active.start.x + (active.target.x - active.start.x) * eased,
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = now + 12.0 + Double(seed % 8)
+                nextWander = now + 999999.0
             } else {
                 trip = active
             }

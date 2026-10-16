@@ -1412,6 +1412,14 @@ final class ChatModel: ObservableObject {
             break
         }
 
+        let scrollCmd = ScrollControlEngine.parseCommand(text)
+        if case .scroll(let direction, let amount) = scrollCmd {
+            let ok = ScrollControlEngine.scroll(direction: direction, amount: amount)
+            let reply = ok ? "Scrolled \(direction.rawValue)." : "Could not scroll \(direction.rawValue). Check Accessibility permissions."
+            respondDirectly(reply, id: id)
+            return
+        }
+
         if let moveCmd = self.detectMovementCommand(text), let replyText = self.onMove?(moveCmd) {
             respondDirectly(replyText, id: id)
             return
@@ -1778,6 +1786,10 @@ final class ChatModel: ObservableObject {
                     case .pointOnScreen(let x, let y, let label):
                         ScreenGuideLaserOverlay.shared.showPointer(at: CGPoint(x: x, y: y), duration: 2.5)
                         executedToolConfirmation = "Pointing at (\(Int(x)), \(Int(y)))\(label != nil ? " (" + label! + ")" : "")."
+                    case .scrollScreen(let direction, let amount):
+                        let dir = ScrollDirection(rawValue: direction.lowercased()) ?? .down
+                        let ok = ScrollControlEngine.scroll(direction: dir, amount: amount)
+                        executedToolConfirmation = ok ? "Scrolled \(direction)." : "Could not scroll \(direction)."
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }

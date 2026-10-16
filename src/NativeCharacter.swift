@@ -25,7 +25,7 @@ struct PetCharacter: View {
     let phase: PetPhase
     let level: Double
     let still: Bool
-    var skin: DotSkin = .dew
+    var skin: DotSkin = .original
     var playbackLevel: Double? = nil
     var motionDetail: SkinMotionDetail = .full
     var expressionRevision: UInt64 = 0

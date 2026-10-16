@@ -534,20 +534,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         placement.request(screen: screen, eligible: true, immediate: true)
 
         let now = ProcessInfo.processInfo.systemUptime
-        if now - lastRoamRelocationAt > 12.0,
+        if now - lastRoamRelocationAt > 30.0,
            let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen),
            !snap.protected.isEmpty {
             let frame = panel.frame
             if !RoamingCore.clear(frame, regions: snap.protected) {
-                let origin = roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
-                                                    cursor: NSEvent.mouseLocation,
-                                                    now: now,
-                                                    displayID: snap.displayID,
-                                                    snapshot: snap)
-                if origin != frame.origin {
-                    panel.setFrameOrigin(origin)
-                }
-                scheduleMovement(interval: 1.0 / 60)
+                performIdleRoam()
             }
         }
         model.updateProactiveContext()
@@ -597,11 +589,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startThinkingRelocation() {
         stopThinkingRelocation()
         relocateDuringThinking()
-        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.relocateDuringThinking() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        thinkingRelocationTimer = timer
     }
 
     private func stopThinkingRelocation() {
@@ -658,7 +645,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startIdleRoaming() {
         idleRoamTimer?.invalidate()
-        let interval = Double.random(in: 12.0...18.0)
+        let interval = Double.random(in: 60.0...90.0)
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.performIdleRoam()
@@ -708,7 +695,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let targetFrame = NSRect(origin: target, size: panel.frame.size)
 
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.85
+            context.duration = 2.8
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(targetFrame, display: true)
         }, completionHandler: { [weak self] in

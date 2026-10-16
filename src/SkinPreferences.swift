@@ -27,7 +27,13 @@ final class SkinPreferences: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        selected = defaults.string(forKey: Self.selectionKey).flatMap(DotSkin.init(rawValue:)) ?? .dew
+        let stored = defaults.string(forKey: Self.selectionKey).flatMap(DotSkin.init(rawValue:))
+        if let stored, stored != .dew {
+            selected = stored
+        } else {
+            selected = .original
+            defaults.set(DotSkin.original.rawValue, forKey: Self.selectionKey)
+        }
         motionDetail = defaults.string(forKey: Self.motionKey).flatMap(SkinMotionDetail.init(rawValue:)) ?? .full
     }
 }

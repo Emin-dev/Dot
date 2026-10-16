@@ -21,6 +21,7 @@ enum NativeAction: Codable, Equatable, Sendable {
     case moveMouse(to: CGPoint)
     case click(at: CGPoint, button: NativeMouseButton, clicks: Int)
     case clickElement(description: String)
+    case scrollScreen(direction: String, amount: Int)
 }
 
 struct NativeActionRequest: Sendable {
@@ -32,7 +33,7 @@ struct NativeActionRequest: Sendable {
 enum NativeActionStatus: String, Codable, Sendable { case started, succeeded, handedOff, failed, cancelled }
 enum NativeActionVerification: String, Codable, Sendable {
     case none, runningApplication, browserHandoff, textRead, contentHash, fileMoved, directoryCreated, undoVerified
-    case keyboardShortcut, mouseMoved, mouseClicked, elementClicked
+    case keyboardShortcut, mouseMoved, mouseClicked, elementClicked, screenScrolled
 }
 
 struct NativeActionReceipt: Codable, Equatable, Identifiable, Sendable {
@@ -398,6 +399,17 @@ actor NativeActionExecutor {
             let outcome = await MouseControlEngine.clickElement(description: description)
             guard outcome.succeeded else { throw NativeActionError.elementNotFound }
             return Output(verification: .elementClicked, detail: outcome.confirmation)
+        case .scrollScreen(let direction, let amount):
+            guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+                throw NativeActionError.accessibilityRequired
+            }
+            try Task.checkCancellation()
+            let dir = ScrollDirection(rawValue: direction) ?? .down
+            let ok = await MainActor.run {
+                ScrollControlEngine.scroll(direction: dir, amount: amount)
+            }
+            guard ok else { throw NativeActionError.invalidRequest }
+            return Output(verification: .screenScrolled, detail: "Scrolled \(direction) by \(amount) lines.")
         }
     }
 
@@ -612,6 +624,7 @@ actor NativeActionExecutor {
         case .moveMouse: return "moveMouse"
         case .click: return "click"
         case .clickElement: return "clickElement"
+        case .scrollScreen: return "scrollScreen"
         }
     }
     private static func target(_ action: NativeAction) -> String {
@@ -626,6 +639,7 @@ actor NativeActionExecutor {
         case .moveMouse(let point): value = "(\(Int(point.x)), \(Int(point.y)))"
         case .click(let point, let button, let clicks): value = "\(button.rawValue)x\(clicks) at (\(Int(point.x)), \(Int(point.y)))"
         case .clickElement(let desc): value = desc
+        case .scrollScreen(let dir, let amt): value = "\(dir) (\(amt) lines)"
         }
         return String(value.unicodeScalars.filter { $0.value >= 32 && $0.value != 127 }.prefix(1024))
     }
