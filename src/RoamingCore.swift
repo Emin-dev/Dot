@@ -10,7 +10,6 @@ enum PetLayout {
     static let edgePadding: CGFloat = 4
     static let panelSize = CGSize(width: petSize.width + edgePadding * 2, height: petSize.height + edgePadding * 2 + PetStatusLayout.controlHeight)
     static var petBottom: CGFloat { edgePadding + PetStatusLayout.controlHeight }
-    static var petCenterY: CGFloat { petBottom + petSize.height / 2 }
 }
 
 /// A pointer gesture can become a click or a drag, never both.

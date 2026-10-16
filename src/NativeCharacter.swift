@@ -891,46 +891,4 @@ struct NativeBodyShape: Shape {
     }
 }
 
-/// Slim progress halo for long tasks exceeding two minutes (LP01-LP07).
-struct LongTaskHaloView: View {
-    let halo: LongTaskProgress.Halo
-    let stageText: String?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        ZStack {
-            switch halo {
-            case .hidden:
-                EmptyView()
-            case .indeterminate:
-                Circle()
-                    .strokeBorder(Color.accentColor.opacity(0.30), lineWidth: 2)
-                    .frame(width: 116, height: 116)
-                Circle()
-                    .trim(from: 0.0, to: 0.25)
-                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .frame(width: 116, height: 116)
-                    .rotationEffect(.degrees(reduceMotion ? 0 : 360))
-                    .animation(reduceMotion ? nil : .linear(duration: 2).repeatForever(autoreverses: false), value: reduceMotion)
-            case .determinate(let fraction):
-                Circle()
-                    .strokeBorder(Color.primary.opacity(0.12), lineWidth: 2)
-                    .frame(width: 116, height: 116)
-                Circle()
-                    .trim(from: 0.0, to: CGFloat(min(1.0, max(0.0, fraction))))
-                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                    .frame(width: 116, height: 116)
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 0.3), value: fraction)
-            case .verifiedComplete:
-                Circle()
-                    .strokeBorder(Color.green, lineWidth: 2.5)
-                    .frame(width: 116, height: 116)
-                    .animation(.spring(), value: true)
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(stageText ?? "Task progress")
-    }
-}
 

@@ -1424,15 +1424,6 @@ final class ChatModel: ObservableObject {
         submit(value, id: id, typed: true)
         return true
     }
-    func retryLastTurn() {
-        if let lastAttemptedText { _ = submitTyped(lastAttemptedText) }
-        else { clicked() }
-    }
-    func continueWithoutScreen() {
-        let text = lastAttemptedText
-        screenEnabled = false
-        if let text { _ = submitTyped(text) } else { clicked() }
-    }
     private func beginListening(continuation: UUID?) {
         onForegroundInteraction?()
         let invitation = continuation != nil
