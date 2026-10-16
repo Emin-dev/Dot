@@ -96,6 +96,9 @@ final class ChatModel: ObservableObject {
     private let defaults: UserDefaults
     private let runtime: ChatRuntime
     let ftsStore: LocalFTSStore
+    /// Five-tier memory (session/working/keyPoints/longTerm/core). Optional so a
+    /// failed store never prevents the app from running; nil disables tier writes.
+    let memory: MemoryTierStore?
     @Published private(set) var idleMotionOffset = IdleMotionOffset.zero
     private var idleMotion = IdleMotionCore()
     private var proactiveEvidence = ProactiveConversationEvidence()
@@ -436,6 +439,7 @@ final class ChatModel: ObservableObject {
             )
             Task { [weak self] in
                 _ = try? await self?.ftsStore.saveMemory(category: .userCorrection, fact: "User instructed: \(text). Always execute movement immediately when asked.", isCorrection: true)
+                _ = try? await self?.memory?.remember(text: "User instructed: \(text)", tier: .core, source: .userStated, now: Date())
             }
             if let reply = self.onMove?(.center) ?? self.onMove?(.random) {
                 return "I apologize! " + reply
@@ -909,6 +913,8 @@ final class ChatModel: ObservableObject {
         self.engine = engine ?? EngineManager()
         self.textHistory = textHistory ?? ConversationHistoryModel()
         self.ftsStore = (try? LocalFTSStore()) ?? (try! LocalFTSStore(inMemory: true))
+        self.memory = try? MemoryTierStore()
+        if let memory { Task { _ = try? await memory.age(now: Date()) } }
         self.defaults = defaults
         voiceTiming = VoiceTimingSettings(defaults: defaults)
         skinPreferences = SkinPreferences(defaults: defaults)
@@ -1986,6 +1992,7 @@ final class ChatModel: ObservableObject {
             if !factToSave.isEmpty {
                 Task { [weak self] in
                     _ = try? await self?.ftsStore.saveMemory(category: .userPreference, fact: factToSave, isCorrection: false)
+                    _ = try? await self?.memory?.remember(text: factToSave, source: .preference, now: Date())
                 }
             }
         }
