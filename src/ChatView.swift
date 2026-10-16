@@ -1346,6 +1346,17 @@ final class ChatModel: ObservableObject {
         beginListening(continuation: nil)
     }
 
+    /// The subject of an explicit "forget ..." request, or nil when the turn is not one.
+    /// A bare "everything" becomes an empty subject so the caller asks instead of wiping.
+    private static func forgetSubject(from phrase: String) -> String? {
+        for prefix in ["forget that ", "forget about ", "forget ", "delete the memory ", "delete memory "]
+        where phrase.hasPrefix(prefix) {
+            let subject = String(phrase.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return ["everything", "all", "all of it", "them", "it"].contains(subject) ? "" : subject
+        }
+        return nil
+    }
+
     /// Battery state from IOKit's power-source description; no permission and no
     /// polling, and honest when the machine has no battery to report.
     private static func batteryStatus() -> String {
@@ -1524,6 +1535,31 @@ final class ChatModel: ObservableObject {
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
         let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Explicit, user-initiated forgetting. Automatic deletion stays confined to real
+        // memory pressure; this is the owner asking, so it is bounded and reported, and
+        // it refuses a vague subject rather than guessing what to remove.
+        if pendingApproval == nil, let subject = Self.forgetSubject(from: copyPhrase) {
+            guard !subject.isEmpty else {
+                respondDirectly("Tell me which memory to forget and I will remove just that one.", id: id)
+                return
+            }
+            Task { [weak self] in
+                guard let self else { return }
+                var removed = 0
+                if let memory = self.memory,
+                   let matches = try? await memory.recall(query: subject, limit: 5, now: Date()) {
+                    for match in matches.prefix(5) where (try? await memory.forget(id: match.id)) == true {
+                        removed += 1
+                    }
+                }
+                self.respondDirectly(removed == 0
+                    ? "I found nothing stored about \"\(subject)\"."
+                    : "Forgot \(removed) memory record\(removed == 1 ? "" : "s") about \"\(subject)\".",
+                    id: id)
+            }
+            return
+        }
+
         // "Check battery level" was asked in real use and had no implementation, so it
         // fell through to the model. Read-only and confined to clear battery questions.
         if pendingApproval == nil, copyPhrase.count <= 60,
