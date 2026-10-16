@@ -138,6 +138,27 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - Conversational commands: "type this: <text>", "type into app: <text>", "dictate: <text>".
 - [x] **Focus & Meeting Mode Awareness:**
   - Automatically suppresses proactive spoken interruptions and suggestions when meeting or recording apps (Zoom, Teams, Meet, Webex, FaceTime, Slack, OBS) are active.
+- [x] **Keyboard Shortcut Injection (`sendShortcut` via CoreGraphics):**
+  - Synthesizes `CGEvent` keyboard shortcuts to the frontmost application.
+  - Supports Cmd+R, Cmd+W, Cmd+T, Cmd+C, Cmd+V, Cmd+A, Cmd+Shift+T, Cmd+[, Cmd+], and Ctrl+Cmd+F.
+  - Natural-language fast paths: "refresh this page", "new tab", "close tab", "reopen closed tab", "copy", "paste", "select all".
+  - Strictly requires Accessibility permission (`AXIsProcessTrusted`) with an informative system settings prompt.
+- [x] **Native Mouse Control (Move, Click, & OCR Element Finding):**
+  - `moveMouse(to: CGPoint)` with absolute and relative screen movement ("move mouse to center of screen", "top right", etc.).
+  - `click(at: CGPoint, button: .left/.right, clicks: Int)` for left, right, middle, and double clicks.
+  - `clickElement(description:)` on-device screen Vision OCR (`VNRecognizeTextRequest`) + `AXUIElement` fallback finding matching buttons, links, or text and clicking them hands-free.
+  - Natural language triggers: "click that button", "click the refresh icon", "move mouse to center", "double click the file".
+- [x] **Fresh Screen Capture & Multi-Turn Perception:**
+  - Guarantees fresh screen acquisition upon user question submission and executes post-answer background screen capture.
+  - Extended freshness window to 15s to eliminate false-stale drops during reasoning/warmup.
+- [x] **Host RAM Monitoring & Parallel Agent Deployments:**
+  - Real-time Mach kernel `host_statistics64` VM memory inspector (`SystemRAMInspector`).
+  - Guards against exceeding 90% memory threshold.
+  - Recommends parallel background agents when free RAM >= 4GB and memory usage < 75%.
+- [x] **Persistent Soul Manager & Non-Destructive Context Compaction:**
+  - Context auto-compaction under memory pressure without deleting facts or conversation notes.
+  - Soul archive directory (`~/Library/Application Support/Dot/Soul/`).
+  - One-click `exportSoul()` creating a portable `.dotsoul` bundle in `~/Downloads/` and `importSoul(from:)`.
 
 ### Upcoming & Next-to-Add Capabilities (Roadmap)
 - [ ] **1. Window Layout & Workspace Management:**

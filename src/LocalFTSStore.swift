@@ -227,10 +227,18 @@ actor LocalFTSStore {
     }
 
     func searchConversations(query: String, limit: Int = 20) throws -> [ConversationHistoryRecord] {
-        guard let db else { throw LocalFTSError.closed }
-        let cleanQuery = sanitizeFTSQuery(query)
-        guard !cleanQuery.isEmpty else { return [] }
+        let strictQuery = sanitizeFTSQuery(query, joinOperator: "AND")
+        guard !strictQuery.isEmpty else { return [] }
+        let strictResults = try performSearchConversations(ftsQuery: strictQuery, limit: limit)
+        if !strictResults.isEmpty { return strictResults }
 
+        let broadQuery = sanitizeFTSQuery(query, joinOperator: "OR")
+        guard !broadQuery.isEmpty, broadQuery != strictQuery else { return [] }
+        return try performSearchConversations(ftsQuery: broadQuery, limit: limit)
+    }
+
+    private func performSearchConversations(ftsQuery: String, limit: Int) throws -> [ConversationHistoryRecord] {
+        guard let db else { throw LocalFTSError.closed }
         let searchSQL = """
         SELECT c.id, c.turn_id, c.role, c.text, c.created_at, c.ended_at, c.generation_status, c.playback_status
         FROM fts_conversations f
@@ -245,7 +253,7 @@ actor LocalFTSStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, cleanQuery, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, ftsQuery, -1, Self.SQLITE_TRANSIENT)
         sqlite3_bind_int(stmt, 2, Int32(limit))
 
         var results: [ConversationHistoryRecord] = []
@@ -283,6 +291,56 @@ actor LocalFTSStore {
         return results
     }
 
+    func recentConversations(limit: Int = 30) throws -> [ConversationHistoryRecord] {
+        guard let db else { throw LocalFTSError.closed }
+        let sql = """
+        SELECT id, turn_id, role, text, created_at, ended_at, generation_status, playback_status
+        FROM conversation_records
+        ORDER BY created_at DESC
+        LIMIT ?;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw LocalFTSError.prepareFailed("Failed to prepare recent conversations query")
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(max(1, limit)))
+
+        var results: [ConversationHistoryRecord] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            guard let idStr = sqlite3_column_text(stmt, 0),
+                  let turnStr = sqlite3_column_text(stmt, 1),
+                  let roleStr = sqlite3_column_text(stmt, 2),
+                  let textStr = sqlite3_column_text(stmt, 3),
+                  let id = UUID(uuidString: String(cString: idStr)),
+                  let turnID = UUID(uuidString: String(cString: turnStr)),
+                  let role = ConversationHistoryRole(rawValue: String(cString: roleStr)) else { continue }
+
+            let text = String(cString: textStr)
+            let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+            let endedAt = sqlite3_column_type(stmt, 5) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5))
+            let genStatus = sqlite3_column_text(stmt, 6).flatMap { ConversationGenerationStatus(rawValue: String(cString: $0)) } ?? .unknown
+            let playStatus = sqlite3_column_text(stmt, 7).flatMap { ConversationPlaybackStatus(rawValue: String(cString: $0)) } ?? .unknown
+
+            results.append(ConversationHistoryRecord(
+                id: id,
+                date: createdAt,
+                role: role,
+                text: text,
+                turnID: turnID,
+                generation: genStatus,
+                playback: playStatus,
+                generationCompletedAt: nil,
+                playbackStartedAt: nil,
+                playbackCompletedAt: endedAt,
+                endedAt: endedAt,
+                failureStage: nil,
+                textTruncated: false
+            ))
+        }
+        return results.reversed()
+    }
+
     // MARK: - Evidence-Backed Memory
 
     func saveMemory(id: UUID = UUID(), category: MemoryFactCategory, fact: String, sourcePassage: String? = nil,
@@ -290,6 +348,25 @@ actor LocalFTSStore {
                     isCorrection: Bool = false, supersedesID: UUID? = nil) throws -> MemoryFactRecord {
         guard let db else { throw LocalFTSError.closed }
         let now = Date()
+        var effectiveID = id
+        var effectiveCreatedAt = now
+        var effectiveConfidence = confidence
+
+        if supersedesID == nil {
+            let checkSQL = "SELECT id, created_at, confidence FROM memory_facts WHERE LOWER(TRIM(fact)) = LOWER(TRIM(?)) AND is_stale = 0 LIMIT 1;"
+            var checkStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, checkSQL, -1, &checkStmt, nil) == SQLITE_OK {
+                sqlite3_bind_text(checkStmt, 1, fact, -1, Self.SQLITE_TRANSIENT)
+                if sqlite3_step(checkStmt) == SQLITE_ROW,
+                   let existingIDStr = sqlite3_column_text(checkStmt, 0),
+                   let existingUUID = UUID(uuidString: String(cString: existingIDStr)) {
+                    effectiveID = existingUUID
+                    effectiveCreatedAt = Date(timeIntervalSince1970: sqlite3_column_double(checkStmt, 1))
+                    effectiveConfidence = max(confidence, sqlite3_column_double(checkStmt, 2))
+                }
+                sqlite3_finalize(checkStmt)
+            }
+        }
 
         if let supersedes = supersedesID {
             let staleSQL = "UPDATE memory_facts SET is_stale = 1, updated_at = ? WHERE id = ?;"
@@ -312,7 +389,7 @@ actor LocalFTSStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, effectiveID.uuidString, -1, Self.SQLITE_TRANSIENT)
         sqlite3_bind_text(stmt, 2, category.rawValue, -1, Self.SQLITE_TRANSIENT)
         sqlite3_bind_text(stmt, 3, fact, -1, Self.SQLITE_TRANSIENT)
         if let passage = sourcePassage {
@@ -330,7 +407,7 @@ actor LocalFTSStore {
         } else {
             sqlite3_bind_null(stmt, 6)
         }
-        sqlite3_bind_double(stmt, 7, confidence)
+        sqlite3_bind_double(stmt, 7, effectiveConfidence)
         sqlite3_bind_int(stmt, 8, isCorrection ? 1 : 0)
         if let supersedes = supersedesID {
             sqlite3_bind_text(stmt, 9, supersedes.uuidString, -1, Self.SQLITE_TRANSIENT)
@@ -338,18 +415,27 @@ actor LocalFTSStore {
             sqlite3_bind_null(stmt, 9)
         }
         sqlite3_bind_int(stmt, 10, 0)
-        sqlite3_bind_double(stmt, 11, now.timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 11, effectiveCreatedAt.timeIntervalSince1970)
         sqlite3_bind_double(stmt, 12, now.timeIntervalSince1970)
 
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw LocalFTSError.executionFailed("Insert memory failed")
         }
 
+        // Remove any prior FTS row for this ID before inserting updated FTS entry
+        let ftsDelete = "DELETE FROM fts_memories WHERE id = ?;"
+        var delStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, ftsDelete, -1, &delStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(delStmt, 1, effectiveID.uuidString, -1, Self.SQLITE_TRANSIENT)
+            _ = sqlite3_step(delStmt)
+            sqlite3_finalize(delStmt)
+        }
+
         // FTS update
         let ftsInsert = "INSERT INTO fts_memories (id, category, fact, source_passage) VALUES (?, ?, ?, ?);"
         var ftsStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, ftsInsert, -1, &ftsStmt, nil) == SQLITE_OK {
-            sqlite3_bind_text(ftsStmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+            sqlite3_bind_text(ftsStmt, 1, effectiveID.uuidString, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 2, category.rawValue, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 3, fact, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 4, sourcePassage ?? "", -1, Self.SQLITE_TRANSIENT)
@@ -358,32 +444,67 @@ actor LocalFTSStore {
         }
 
         return MemoryFactRecord(
-            id: id,
+            id: effectiveID,
             category: category,
             fact: fact,
             sourcePassage: sourcePassage,
             sourceURL: sourceURL,
             sourceSHA256: sourceSHA256,
-            confidence: confidence,
+            confidence: effectiveConfidence,
             isCorrection: isCorrection,
             supersedesID: supersedesID,
             isStale: false,
-            createdAt: now,
+            createdAt: effectiveCreatedAt,
             updatedAt: now
         )
     }
 
-    func searchMemories(query: String, includeStale: Bool = false, limit: Int = 20) throws -> [MemoryFactRecord] {
+    func listPinnedMemories(limit: Int = 25) throws -> [MemoryFactRecord] {
         guard let db else { throw LocalFTSError.closed }
-        let cleanQuery = sanitizeFTSQuery(query)
-        guard !cleanQuery.isEmpty else { return [] }
+        let sql = """
+        SELECT id, category, fact, source_passage, source_url, source_sha256, confidence, is_correction, supersedes_id, is_stale, created_at, updated_at
+        FROM memory_facts
+        WHERE is_stale = 0
+        ORDER BY is_correction DESC,
+                 CASE category
+                     WHEN 'userCorrection' THEN 0
+                     WHEN 'userPreference' THEN 1
+                     WHEN 'projectContext' THEN 2
+                     WHEN 'learnedFact' THEN 3
+                     ELSE 4
+                 END ASC,
+                 confidence DESC,
+                 updated_at DESC
+        LIMIT ?;
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
+            throw LocalFTSError.prepareFailed("Failed to prepare pinned memories query")
+        }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_int(stmt, 1, Int32(max(1, limit)))
+        return readMemoryRows(stmt: stmt)
+    }
 
+    func searchMemories(query: String, includeStale: Bool = false, limit: Int = 20) throws -> [MemoryFactRecord] {
+        let strictQuery = sanitizeFTSQuery(query, joinOperator: "AND")
+        guard !strictQuery.isEmpty else { return [] }
+        let strictResults = try performSearchMemories(ftsQuery: strictQuery, includeStale: includeStale, limit: limit)
+        if !strictResults.isEmpty { return strictResults }
+
+        let broadQuery = sanitizeFTSQuery(query, joinOperator: "OR")
+        guard !broadQuery.isEmpty, broadQuery != strictQuery else { return [] }
+        return try performSearchMemories(ftsQuery: broadQuery, includeStale: includeStale, limit: limit)
+    }
+
+    private func performSearchMemories(ftsQuery: String, includeStale: Bool, limit: Int) throws -> [MemoryFactRecord] {
+        guard let db else { throw LocalFTSError.closed }
         let searchSQL = """
         SELECT m.id, m.category, m.fact, m.source_passage, m.source_url, m.source_sha256, m.confidence, m.is_correction, m.supersedes_id, m.is_stale, m.created_at, m.updated_at
         FROM fts_memories f
         JOIN memory_facts m ON f.id = m.id
         WHERE fts_memories MATCH ? \(includeStale ? "" : "AND m.is_stale = 0")
-        ORDER BY bm25(fts_memories) ASC, m.updated_at DESC
+        ORDER BY bm25(fts_memories) ASC, m.is_correction DESC, m.updated_at DESC
         LIMIT ?;
         """
         var stmt: OpaquePointer?
@@ -392,9 +513,12 @@ actor LocalFTSStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, cleanQuery, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, ftsQuery, -1, Self.SQLITE_TRANSIENT)
         sqlite3_bind_int(stmt, 2, Int32(limit))
+        return readMemoryRows(stmt: stmt)
+    }
 
+    private func readMemoryRows(stmt: OpaquePointer?) -> [MemoryFactRecord] {
         var results: [MemoryFactRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
             guard let idStr = sqlite3_column_text(stmt, 0),
@@ -496,6 +620,14 @@ actor LocalFTSStore {
         }
 
         // FTS update
+        let ftsDelete = "DELETE FROM fts_evidence WHERE id = ?;"
+        var delStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, ftsDelete, -1, &delStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(delStmt, 1, source.id.uuidString, -1, Self.SQLITE_TRANSIENT)
+            _ = sqlite3_step(delStmt)
+            sqlite3_finalize(delStmt)
+        }
+
         let ftsInsert = "INSERT INTO fts_evidence (id, title, text) VALUES (?, ?, ?);"
         var ftsStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, ftsInsert, -1, &ftsStmt, nil) == SQLITE_OK {
@@ -508,12 +640,20 @@ actor LocalFTSStore {
     }
 
     func searchEvidence(query: String, limit: Int = 10) throws -> [EvidenceSearchResult] {
-        guard let db else { throw LocalFTSError.closed }
-        let cleanQuery = sanitizeFTSQuery(query)
-        guard !cleanQuery.isEmpty else { return [] }
+        let strictQuery = sanitizeFTSQuery(query, joinOperator: "AND")
+        guard !strictQuery.isEmpty else { return [] }
+        let strictResults = try performSearchEvidence(ftsQuery: strictQuery, limit: limit)
+        if !strictResults.isEmpty { return strictResults }
 
+        let broadQuery = sanitizeFTSQuery(query, joinOperator: "OR")
+        guard !broadQuery.isEmpty, broadQuery != strictQuery else { return [] }
+        return try performSearchEvidence(ftsQuery: broadQuery, limit: limit)
+    }
+
+    private func performSearchEvidence(ftsQuery: String, limit: Int) throws -> [EvidenceSearchResult] {
+        guard let db else { throw LocalFTSError.closed }
         let searchSQL = """
-        SELECT e.id, e.title, e.url, e.kind, snippet(fts_evidence, 2, '<b>', '</b>', '...', 24), e.sha256, e.retrieved_at
+        SELECT e.id, e.title, e.url, e.kind, snippet(fts_evidence, 2, '<b>', '</b>', '...', 32), e.sha256, e.retrieved_at
         FROM fts_evidence f
         JOIN document_evidence e ON f.id = e.id
         WHERE fts_evidence MATCH ?
@@ -526,7 +666,7 @@ actor LocalFTSStore {
         }
         defer { sqlite3_finalize(stmt) }
 
-        sqlite3_bind_text(stmt, 1, cleanQuery, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, ftsQuery, -1, Self.SQLITE_TRANSIENT)
         sqlite3_bind_int(stmt, 2, Int32(limit))
 
         var results: [EvidenceSearchResult] = []
@@ -570,12 +710,37 @@ actor LocalFTSStore {
         """)
     }
 
-    private func sanitizeFTSQuery(_ query: String) -> String {
+    private static let ftsStopWords: Set<String> = [
+        "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
+        "can", "could", "did", "do", "does", "for", "from", "had", "has", "have",
+        "he", "her", "here", "him", "his", "how", "i", "if", "in", "into",
+        "is", "it", "its", "just", "me", "my", "no", "not", "now", "of",
+        "on", "or", "our", "out", "please", "right", "she", "should", "so", "some",
+        "tell", "than", "that", "the", "their", "them", "then", "there", "these", "they",
+        "this", "to", "up", "us", "was", "we", "were", "what", "when", "where",
+        "which", "who", "why", "will", "with", "would", "you", "your", "about"
+    ]
+
+    private func sanitizeFTSQuery(_ query: String, joinOperator: String = "AND") -> String {
         // Strip out non-alphanumeric chars that break FTS5 token syntax
-        let components = query.components(separatedBy: CharacterSet.alphanumerics.inverted)
+        let rawTokens = query.components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        guard !components.isEmpty else { return "" }
-        return components.map { "\"\($0)\"" }.joined(separator: " AND ")
+        guard !rawTokens.isEmpty else { return "" }
+
+        let meaningful = rawTokens.filter { !Self.ftsStopWords.contains($0.lowercased()) && $0.count >= 2 }
+        let chosen = meaningful.isEmpty ? rawTokens : meaningful
+        // Deduplicate while preserving order, cap at 12 tokens for fast FTS5 matching
+        var seen = Set<String>()
+        var unique: [String] = []
+        for token in chosen {
+            let lower = token.lowercased()
+            if seen.insert(lower).inserted {
+                unique.append(token)
+                if unique.count >= 12 { break }
+            }
+        }
+        guard !unique.isEmpty else { return "" }
+        return unique.map { "\"\($0)\"" }.joined(separator: " \(joinOperator) ")
     }
 }
 

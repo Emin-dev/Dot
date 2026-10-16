@@ -140,7 +140,7 @@ struct CapturedScreenImage: Sendable {
     let turn: UUID
     let acquiredAt: Double
     private let encodedDataURL: String
-    static let maximumAge: Double = 5
+    static let maximumAge: Double = 15
 
     fileprivate init(turn: UUID, acquiredAt: Double, dataURL: String) {
         self.turn = turn; self.acquiredAt = acquiredAt; encodedDataURL = dataURL
@@ -540,14 +540,19 @@ struct QuestionIntentStream {
     enum ToolAction: Equatable, Sendable {
         case typeText(String)
         case pressKey(String)
+        case sendShortcut(modifiers: [String], key: String)
+        case moveMouse(x: Double, y: Double)
+        case clickPoint(x: Double, y: Double, button: String, clicks: Int)
+        case clickElement(description: String)
+        case pointOnScreen(x: Double, y: Double, label: String?)
     }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.
     private static let questionObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"question"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
-    private static let textObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"text"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
-    private static let keyObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"key"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
-    private static let allowedToolNames: Set<String> = ["ask_user", "type_text", "press_key"]
+    private static let allowedToolNames: Set<String> = [
+        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen"
+    ]
     private var callID: String?
     private var functionName: String?
     private var arguments = ""
@@ -619,7 +624,7 @@ struct QuestionIntentStream {
             return nil
         }
         guard terminal == "tool_calls", callID != nil, let functionName else { throw Failure.invalid }
-        if functionName == "type_text" || functionName == "press_key" {
+        if functionName != "ask_user" {
             _ = try completedToolAction()
             return nil
         }
@@ -635,26 +640,45 @@ struct QuestionIntentStream {
     func completedToolAction() throws -> ToolAction? {
         guard !invalid, done, sawCall else { return nil }
         guard terminal == "tool_calls", callID != nil, let functionName else { throw Failure.invalid }
+        guard let data = arguments.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw Failure.invalid
+        }
         switch functionName {
         case "type_text":
-            guard arguments.range(of: Self.textObjectPattern, options: .regularExpression) != nil,
-                  let data = arguments.data(using: .utf8),
-                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Set(object.keys) == ["text"],
-                  let text = object["text"] as? String,
-                  !text.isEmpty,
-                  text.count <= 1500,
-                  text.utf8.count <= 2048 else { throw Failure.invalid }
+            guard let text = object["text"] as? String, !text.isEmpty, text.count <= 1500 else { throw Failure.invalid }
             return .typeText(text)
         case "press_key":
-            guard arguments.range(of: Self.keyObjectPattern, options: .regularExpression) != nil,
-                  let data = arguments.data(using: .utf8),
-                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Set(object.keys) == ["key"],
-                  let key = object["key"] as? String else { throw Failure.invalid }
-            let trimmedKey = key.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmedKey.isEmpty, trimmedKey.count <= 100 else { throw Failure.invalid }
-            return .pressKey(trimmedKey)
+            guard let key = object["key"] as? String else { throw Failure.invalid }
+            let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 100 else { throw Failure.invalid }
+            return .pressKey(trimmed)
+        case "send_shortcut":
+            let raw = (object["shortcut"] as? String) ?? (object["key"] as? String) ?? ""
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 100 else { throw Failure.invalid }
+            let mods = (object["modifiers"] as? [String]) ?? []
+            return .sendShortcut(modifiers: mods, key: trimmed)
+        case "click_element":
+            guard let desc = object["description"] as? String else { throw Failure.invalid }
+            let trimmed = desc.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 250 else { throw Failure.invalid }
+            return .clickElement(description: trimmed)
+        case "move_mouse":
+            guard let x = (object["x"] as? NSNumber)?.doubleValue,
+                  let y = (object["y"] as? NSNumber)?.doubleValue else { throw Failure.invalid }
+            return .moveMouse(x: x, y: y)
+        case "click_point":
+            guard let x = (object["x"] as? NSNumber)?.doubleValue,
+                  let y = (object["y"] as? NSNumber)?.doubleValue else { throw Failure.invalid }
+            let button = (object["button"] as? String) ?? "left"
+            let clicks = (object["clicks"] as? NSNumber)?.intValue ?? 1
+            return .clickPoint(x: x, y: y, button: button, clicks: clicks)
+        case "point_on_screen":
+            guard let x = (object["x"] as? NSNumber)?.doubleValue,
+                  let y = (object["y"] as? NSNumber)?.doubleValue else { throw Failure.invalid }
+            let label = object["label"] as? String
+            return .pointOnScreen(x: x, y: y, label: label)
         default:
             return nil
         }
@@ -1376,6 +1400,9 @@ public enum InPlaceTypingCommand: Equatable, Sendable {
     case type(text: String)
     case pressKey(key: String)
     case typeAndSubmit(text: String)
+    case clickElement(description: String)
+    case clickPoint(x: Double, y: Double, button: NativeMouseButton, clicks: Int)
+    case moveMouse(description: String)
     case none
 }
 
@@ -1640,6 +1667,64 @@ public enum InPlaceAppTyping {
 
         let lower = working.lowercased()
 
+        // 0. App, browser, and navigation shortcuts
+        if lower == "refresh this page" || lower == "refresh the page" || lower == "refresh page" ||
+           lower == "reload this page" || lower == "reload the page" || lower == "reload page" ||
+           lower == "refresh website" || lower == "refresh this website" {
+            return .pressKey(key: "Cmd+R")
+        }
+        if lower == "new tab" || lower == "open new tab" || lower == "open a new tab" {
+            return .pressKey(key: "Cmd+T")
+        }
+        if lower == "close tab" || lower == "close this tab" || lower == "close the tab" {
+            return .pressKey(key: "Cmd+W")
+        }
+        if lower == "reopen tab" || lower == "reopen closed tab" || lower == "reopen the closed tab" {
+            return .pressKey(key: "Cmd+Shift+T")
+        }
+        if lower == "select all" || lower == "select all text" {
+            return .pressKey(key: "Cmd+A")
+        }
+        if lower == "copy" || lower == "copy that" || lower == "copy this" {
+            return .pressKey(key: "Cmd+C")
+        }
+        if lower == "paste" || lower == "paste that" || lower == "paste here" {
+            return .pressKey(key: "Cmd+V")
+        }
+        if lower == "go back" || lower == "navigate back" {
+            return .pressKey(key: "Cmd+[")
+        }
+        if lower == "go forward" || lower == "navigate forward" {
+            return .pressKey(key: "Cmd+]")
+        }
+        if lower == "fullscreen" || lower == "full screen" || lower == "toggle fullscreen" || lower == "exit fullscreen" {
+            return .pressKey(key: "Ctrl+Cmd+F")
+        }
+
+        // 0.5. Mouse movement and clicks
+        if lower.hasPrefix("move mouse ") || lower.hasPrefix("move cursor ") || lower.hasPrefix("move the mouse ") {
+            let desc = working.components(separatedBy: " ").dropFirst(2).joined(separator: " ")
+            return .moveMouse(description: desc)
+        }
+        if lower.hasPrefix("double click ") || lower.hasPrefix("double-click ") || lower.hasPrefix("double click on ") {
+            let desc = working.components(separatedBy: " ").dropFirst(2).joined(separator: " ")
+            return .clickElement(description: desc)
+        }
+        if lower.hasPrefix("right click ") || lower.hasPrefix("right-click ") || lower.hasPrefix("right click on ") {
+            let desc = working.components(separatedBy: " ").dropFirst(2).joined(separator: " ")
+            return .clickElement(description: desc)
+        }
+        if lower.hasPrefix("click ") || lower.hasPrefix("click on ") || lower.hasPrefix("click the ") || lower.hasPrefix("click that ") {
+            var desc = working.components(separatedBy: " ").dropFirst(1).joined(separator: " ")
+            if desc.lowercased().hasPrefix("on ") { desc = String(desc.dropFirst(3)) }
+            if desc.lowercased().hasPrefix("the ") { desc = String(desc.dropFirst(4)) }
+            if desc.lowercased().hasPrefix("that ") { desc = String(desc.dropFirst(5)) }
+            desc = desc.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !desc.isEmpty {
+                return .clickElement(description: desc)
+            }
+        }
+
         // 1. Check for "press <key>" / "hit <key>" / "send <key>"
         let keyVerbs = ["press ", "hit ", "tap ", "send key "]
         for verb in keyVerbs {
@@ -1896,29 +1981,36 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         let content = (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
         let suggestion = analyzeConversationLog(logContent: content)
 
-        // Always copy to clipboard so it is immediately available
-        ClipboardIntelligence.write(suggestion)
+        // Write to dedicated reflections log in Downloads
+        if let reflectionURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_self_reflections.txt") {
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            let entry = "[\(timestamp)] \(suggestion)\n"
+            if let handle = try? FileHandle(forWritingTo: reflectionURL) {
+                handle.seekToEndOfFile()
+                if let data = entry.data(using: .utf8) { handle.write(data) }
+                try? handle.close()
+            } else {
+                try? entry.write(to: reflectionURL, atomically: true, encoding: .utf8)
+            }
+        }
 
         #if canImport(AppKit)
-        // If Accessibility is trusted, focus Antigravity (or active editor) and type the suggestion into the input
+        // If Accessibility is trusted, focus Antigravity ONLY and type the suggestion into its input
         if InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: false) {
             let running = NSWorkspace.shared.runningApplications
             if let antigravityApp = running.first(where: {
                 let name = ($0.localizedName ?? "").lowercased()
                 let bundle = ($0.bundleIdentifier ?? "").lowercased()
-                return name.contains("antigravity") || bundle.contains("antigravity")
+                return name == "antigravity" || name.contains("antigravity") || bundle.contains("antigravity")
             }) {
                 antigravityApp.activate()
                 usleep(100_000)
                 _ = InPlaceAppTyping.type(text: suggestion)
                 return "Typed self-improvement suggestion into Antigravity: \"\(suggestion)\""
-            } else {
-                _ = InPlaceAppTyping.performTypeText(suggestion, checkPermission: false)
-                return "Typed self-improvement suggestion into the focused app: \"\(suggestion)\""
             }
         }
         #endif
-        return "Prepared self-improvement suggestion (copied to clipboard): \"\(suggestion)\""
+        return "Recorded self-improvement suggestion: \"\(suggestion)\""
     }
 }
 
@@ -2509,4 +2601,890 @@ public final class AutonomousMacAgent {
     }
     #endif
 }
+
+// MARK: - Hierarchical Persistent Memory Brain & Expanded Context Window
+
+public struct ExtractedMemoryFact: Equatable, Sendable {
+    public let category: String // matches MemoryFactCategory rawValue
+    public let fact: String
+    public let confidence: Double
+    public let isCorrection: Bool
+    public let isVolatile: Bool
+
+    public init(category: String, fact: String, confidence: Double = 1.0, isCorrection: Bool = false, isVolatile: Bool = false) {
+        self.category = category
+        self.fact = fact
+        self.confidence = confidence
+        self.isCorrection = isCorrection
+        self.isVolatile = isVolatile
+    }
+}
+
+public enum MemoryDirectCommand: Equatable, Sendable {
+    case listMemories
+    case forget(topic: String)
+    case rememberExplicit(fact: String)
+    case none
+}
+
+public final class PersistentMemoryBrain: @unchecked Sendable {
+    public static let shared = PersistentMemoryBrain()
+
+    private let lock = NSLock()
+    private let memoryDirectory: URL
+    private let profileURL: URL
+    private let volatileURL: URL
+
+    public init(directory: URL? = nil) {
+        if let directory {
+            self.memoryDirectory = directory
+        } else {
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? FileManager.default.temporaryDirectory
+            self.memoryDirectory = support
+                .appendingPathComponent("Dot", isDirectory: true)
+                .appendingPathComponent("Memory", isDirectory: true)
+        }
+        self.profileURL = self.memoryDirectory.appendingPathComponent("PROFILE.md")
+        self.volatileURL = self.memoryDirectory.appendingPathComponent("VOLATILE.md")
+        try? FileManager.default.createDirectory(at: self.memoryDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    }
+
+    public static func parseCommand(_ text: String) -> MemoryDirectCommand {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = trimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!."))
+        if lower == "what do you remember" || lower == "what do you remember about me" ||
+           lower == "show memories" || lower == "list memories" || lower == "my memories" ||
+           lower == "memory status" || lower == "show your memory" || lower == "what is in your memory" {
+            return .listMemories
+        }
+        let forgetPrefixes = ["forget that ", "forget about ", "delete memory ", "remove from memory "]
+        for prefix in forgetPrefixes {
+            if lower.hasPrefix(prefix) {
+                let topic = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !topic.isEmpty {
+                    return .forget(topic: topic)
+                }
+            }
+        }
+        let explicitRememberPrefixes = ["remember strictly: ", "remember always: ", "save to memory: "]
+        for prefix in explicitRememberPrefixes {
+            if lower.hasPrefix(prefix) {
+                let fact = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !fact.isEmpty {
+                    return .rememberExplicit(fact: fact)
+                }
+            }
+        }
+        return .none
+    }
+
+    /// Automatically extracts important facts from any user utterance (identity, preferences,
+    /// standing corrections/rules, project/ticket context, and explicit remember requests).
+    public static func extractImportantFacts(from text: String) -> [ExtractedMemoryFact] {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 6_000 else { return [] }
+
+        // Do not extract facts from pure questions unless they contain explicit "remember"
+        let lowerWhole = trimmed.lowercased()
+        let isPureShortQuestion = trimmed.hasSuffix("?") && trimmed.count < 80
+            && !lowerWhole.contains("remember") && !lowerWhole.contains("my name is")
+            && !lowerWhole.contains("call me") && !lowerWhole.contains("i prefer")
+        if isPureShortQuestion {
+            return []
+        }
+
+        var extracted: [ExtractedMemoryFact] = []
+        var seenNormalized = Set<String>()
+
+        func addFact(category: String, fact: String, confidence: Double, isCorrection: Bool = false, isVolatile: Bool = false) {
+            let cleaned = fact.trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: ".,;"))
+            guard cleaned.count >= 4, cleaned.count <= 500 else { return }
+            let key = cleaned.lowercased()
+            guard seenNormalized.insert(key).inserted else { return }
+            extracted.append(ExtractedMemoryFact(
+                category: category,
+                fact: cleaned,
+                confidence: confidence,
+                isCorrection: isCorrection,
+                isVolatile: isVolatile
+            ))
+        }
+
+        // Split into clauses/sentences for granular extraction
+        let clauses = trimmed.components(separatedBy: CharacterSet(charactersIn: "\n.!?;"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        for clause in clauses {
+            let lower = clause.lowercased()
+
+            // 1. Explicit memory directives ("remember ...", "keep in mind ...", "don't forget ...", "note that ...")
+            let explicitPatterns = [
+                #"^(?:please\s+)?remember\s+that\s+(.+)$"#,
+                #"^(?:please\s+)?remember:?\s+(.+)$"#,
+                #"^(?:please\s+)?keep\s+in\s+mind\s+(?:that\s+)?(.+)$"#,
+                #"^(?:please\s+)?don'?t\s+forget\s+(?:that\s+)?(.+)$"#,
+                #"^(?:please\s+)?note\s+that\s+(.+)$"#,
+                #"^(?:please\s+)?save\s+to\s+memory:?\s+(.+)$"#
+            ]
+            var matchedExplicit = false
+            for pattern in explicitPatterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                   let match = regex.firstMatch(in: clause, options: [], range: NSRange(location: 0, length: (clause as NSString).length)),
+                   match.numberOfRanges > 1 {
+                    let captured = (clause as NSString).substring(with: match.range(at: 1))
+                    let isCorr = lower.contains("never") || lower.contains("always") || lower.contains("don't") || lower.contains("stop")
+                    addFact(
+                        category: isCorr ? "userCorrection" : "userPreference",
+                        fact: captured,
+                        confidence: 1.0,
+                        isCorrection: isCorr,
+                        isVolatile: false
+                    )
+                    matchedExplicit = true
+                    break
+                }
+            }
+            if matchedExplicit { continue }
+
+            // 2. Standing rules & user corrections ("always ...", "never ...", "from now on ...", "make sure you ...", "stop doing ...")
+            if lower.hasPrefix("always ") || lower.hasPrefix("never ") || lower.hasPrefix("from now on ") ||
+               lower.hasPrefix("make sure you ") || lower.hasPrefix("make sure dot ") ||
+               lower.hasPrefix("do not ever ") || lower.hasPrefix("don't ever ") ||
+               lower.hasPrefix("stop asking ") || lower.hasPrefix("correction:") {
+                addFact(
+                    category: "userCorrection",
+                    fact: "Standing user rule: \(clause)",
+                    confidence: 1.0,
+                    isCorrection: true,
+                    isVolatile: false
+                )
+                continue
+            }
+
+            // 3. Identity & Personal Profile ("my name is ...", "call me ...", "i am a ...", "i work at/on ...")
+            let identityPatterns = [
+                #"\bmy\s+name\s+is\s+([A-Za-z0-9_ -]{2,60})"#,
+                #"\bcall\s+me\s+([A-Za-z0-9_ -]{2,40})"#,
+                #"\bi\s+am\s+(?:a|an|the)\s+([A-Za-z0-9_ ,/-]{3,80})"#,
+                #"\bi'?m\s+(?:a|an|the)\s+([A-Za-z0-9_ ,/-]{3,80})"#,
+                #"\bmy\s+(?:role|job|title|email|github|timezone|language)\s+is\s+([^\.,;]{2,80})"#,
+                #"\bi\s+(?:work\s+at|live\s+in)\s+([^\.,;]{2,80})"#
+            ]
+            for pattern in identityPatterns {
+                if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+                   regex.firstMatch(in: clause, options: [], range: NSRange(location: 0, length: (clause as NSString).length)) != nil {
+                    addFact(
+                        category: "userPreference",
+                        fact: "User profile: \(clause)",
+                        confidence: 0.98,
+                        isCorrection: false,
+                        isVolatile: false
+                    )
+                    break
+                }
+            }
+
+            // 4. User Preferences ("i prefer ...", "i like ...", "i love ...", "i don't like ...", "i hate ...")
+            if lower.contains("i prefer ") || lower.contains("i like ") || lower.contains("i love ") ||
+               lower.contains("i don't like ") || lower.contains("i hate ") || lower.contains("my favorite ") ||
+               lower.contains("my preferred ") {
+                addFact(
+                    category: "userPreference",
+                    fact: "User preference: \(clause)",
+                    confidence: 0.95,
+                    isCorrection: false,
+                    isVolatile: false
+                )
+            }
+
+            // 5. Project, Codebase & Ticket Context ("working on ...", "building ...", ticket IDs like RENTBUTIK-361, repo URLs)
+            let hasTicketID = clause.range(of: #"\b[A-Z]{2,12}-\d{1,6}\b"#, options: .regularExpression) != nil
+            let hasGitHubURL = lower.contains("github.com/")
+            let hasProjectPhrase = lower.contains("working on ") || lower.contains("building ") ||
+                lower.contains("current project ") || lower.contains("our project ") ||
+                lower.contains("our repo ") || lower.contains("deadline is ") || lower.contains("shipping ")
+            if hasTicketID || hasGitHubURL || hasProjectPhrase {
+                addFact(
+                    category: "projectContext",
+                    fact: "Project context: \(clause)",
+                    confidence: 0.92,
+                    isCorrection: false,
+                    isVolatile: true
+                )
+            }
+        }
+
+        return extracted
+    }
+
+    /// Persists extracted facts into PROFILE.md and VOLATILE.md on disk (deduplicated and bounded).
+    public func persistFacts(_ facts: [ExtractedMemoryFact]) {
+        guard !facts.isEmpty else { return }
+        lock.lock()
+        defer { lock.unlock() }
+
+        try? FileManager.default.createDirectory(at: memoryDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+
+        let profileFacts = facts.filter { !$0.isVolatile || $0.isCorrection }
+        let volatileFacts = facts.filter { $0.isVolatile }
+
+        if !profileFacts.isEmpty {
+            updateMarkdownFile(
+                url: profileURL,
+                header: "# Dot Persistent User Profile & Standing Rules (PROFILE.md)\n",
+                newBullets: profileFacts.map { fact in
+                    let tag = fact.isCorrection ? "[RULE/CORRECTION]" : "[\(fact.category)]"
+                    return "- \(tag) \(fact.fact)"
+                },
+                maxLines: 60
+            )
+        }
+
+        if !volatileFacts.isEmpty {
+            updateMarkdownFile(
+                url: volatileURL,
+                header: "# Dot Active Project & Session Memory (VOLATILE.md)\n",
+                newBullets: volatileFacts.map { "- [\($0.category)] \($0.fact)" },
+                maxLines: 40
+            )
+        }
+    }
+
+    public func readProfileBullets(limit: Int = 30) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return readBullets(from: profileURL, limit: limit)
+    }
+
+    public func readVolatileBullets(limit: Int = 20) -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return readBullets(from: volatileURL, limit: limit)
+    }
+
+    public func forgetMatching(topic: String) -> Int {
+        let needle = topic.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !needle.isEmpty else { return 0 }
+        lock.lock()
+        defer { lock.unlock() }
+        var removed = 0
+        removed += removeMatchingBullets(from: profileURL, header: "# Dot Persistent User Profile & Standing Rules (PROFILE.md)\n", needle: needle)
+        removed += removeMatchingBullets(from: volatileURL, header: "# Dot Active Project & Session Memory (VOLATILE.md)\n", needle: needle)
+        return removed
+    }
+
+    private func readBullets(from url: URL, limit: Int) -> [String] {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let lines = content.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.hasPrefix("- ") }
+        return Array(lines.suffix(limit))
+    }
+
+    private func updateMarkdownFile(url: URL, header: String, newBullets: [String], maxLines: Int) {
+        var existing = readBullets(from: url, limit: maxLines * 2)
+        for bullet in newBullets {
+            let norm = bullet.lowercased()
+            if !existing.contains(where: { $0.lowercased() == norm }) {
+                existing.append(bullet)
+            }
+        }
+        if existing.count > maxLines {
+            existing = Array(existing.suffix(maxLines))
+        }
+        let body = header + "\n" + existing.joined(separator: "\n") + "\n"
+        try? body.write(to: url, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    public func readProfile() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return (try? String(contentsOf: profileURL, encoding: .utf8)) ?? ""
+    }
+
+    public func readVolatile() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return (try? String(contentsOf: volatileURL, encoding: .utf8)) ?? ""
+    }
+
+    public func writeProfile(_ content: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        try? FileManager.default.createDirectory(at: memoryDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? content.write(to: profileURL, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: profileURL.path)
+    }
+
+    public func writeVolatile(_ content: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        try? FileManager.default.createDirectory(at: memoryDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try? content.write(to: volatileURL, atomically: true, encoding: .utf8)
+        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: volatileURL.path)
+    }
+
+    private func removeMatchingBullets(from url: URL, header: String, needle: String) -> Int {
+        let existing = readBullets(from: url, limit: 200)
+        let kept = existing.filter { !$0.lowercased().contains(needle) }
+        let removedCount = existing.count - kept.count
+        if removedCount > 0 {
+            let body = header + "\n" + kept.joined(separator: "\n") + (kept.isEmpty ? "" : "\n")
+            try? body.write(to: url, atomically: true, encoding: .utf8)
+        }
+        return removedCount
+    }
+
+    /// Convenience turn context assembler querying FTS and active desktop state.
+    func assembleTurnContext(
+        query: String,
+        ftsStore: LocalFTSStore?,
+        activeDesktop: ActiveDesktopContext?
+    ) async -> String? {
+        var queryMems: [String] = []
+        var pastTurns: [String] = []
+        var docEvidence: [String] = []
+        var pinnedMems: [String] = []
+
+        if let fts = ftsStore {
+            if let pinned = try? await fts.listPinnedMemories(limit: 15) {
+                pinnedMems = pinned.map { $0.fact }
+            }
+            if let searched = try? await fts.searchMemories(query: query, limit: 10) {
+                queryMems = searched.map { $0.fact }
+            }
+            if let past = try? await fts.searchConversations(query: query, limit: 5) {
+                pastTurns = past.map { "\($0.role.rawValue): \($0.text)" }
+            }
+            if let evidence = try? await fts.searchEvidence(query: query, limit: 3) {
+                docEvidence = evidence.map { "\($0.title): \($0.snippet)" }
+            }
+        }
+
+        let desktopSnippet = activeDesktop?.promptContextSnippet
+        return assembleTurnContext(
+            pinnedMemories: pinnedMems,
+            queryMemories: queryMems,
+            recalledConversations: pastTurns,
+            documentEvidence: docEvidence,
+            desktopContextSnippet: desktopSnippet,
+            includeMarkdownFiles: true
+        )
+    }
+
+    /// Assembles a unified, deduplicated memory context block combining always-pinned facts,
+    /// query-relevant memories, recalled past conversations, document evidence, and desktop context.
+    public func assembleTurnContext(
+        pinnedMemories: [String],
+        queryMemories: [String],
+        recalledConversations: [String],
+        documentEvidence: [String],
+        desktopContextSnippet: String?,
+        includeMarkdownFiles: Bool = true
+    ) -> String? {
+        var sections: [String] = []
+        var seenFacts = Set<String>()
+        var coreItems: [String] = []
+
+        func appendCore(_ raw: String) {
+            let cleaned = raw.replacingOccurrences(of: #"^-\s*"#, with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { return }
+            let norm = cleaned.lowercased()
+            guard seenFacts.insert(norm).inserted else { return }
+            coreItems.append(cleaned)
+        }
+
+        for fact in pinnedMemories { appendCore(fact) }
+        if includeMarkdownFiles {
+            for bullet in readProfileBullets(limit: 20) { appendCore(bullet) }
+            for bullet in readVolatileBullets(limit: 12) { appendCore(bullet) }
+        }
+        for fact in queryMemories { appendCore(fact) }
+
+        if !coreItems.isEmpty {
+            sections.append("Persistent Memories: " + coreItems.prefix(28).joined(separator: " ; "))
+        }
+        if !recalledConversations.isEmpty {
+            sections.append("Recalled Past Turns: " + recalledConversations.prefix(6).joined(separator: " ; "))
+        }
+        if !documentEvidence.isEmpty {
+            sections.append("Document Evidence: " + documentEvidence.prefix(5).joined(separator: " ; "))
+        }
+        if let desktop = desktopContextSnippet, !desktop.isEmpty {
+            sections.append(desktop)
+        }
+        guard !sections.isEmpty else { return nil }
+        return "\n[Context: " + sections.joined(separator: " | ") + "]"
+    }
+}
+
+public enum ExpandedContextWindow {
+    /// Maximum conversation messages retained in live memory (increased from 12 to 64).
+    public static let maxHistoryMessages: Int = 64
+    /// Maximum characters per message sent to the local LLM (increased from 6,000 to 24,000).
+    public static let maxCharsPerMessage: Int = 24_000
+    /// Maximum total character budget across the multi-turn conversation history (~30,000 tokens).
+    public static let maxTotalHistoryChars: Int = 120_000
+    /// Maximum completion tokens per turn (increased from 1,536 to 4,096).
+    public static let maxCompletionTokens: Int = 4_096
+
+    /// Selects the most recent messages up to `maxMessages`, truncating individual messages to
+    /// `maxCharsPerMessage` and fitting within `maxTotalChars` while always keeping the newest message.
+    public static func buildMessages(
+        from history: [(role: String, content: String)],
+        maxMessages: Int = maxHistoryMessages,
+        maxCharsPerMessage: Int = maxCharsPerMessage,
+        maxTotalChars: Int = maxTotalHistoryChars
+    ) -> [[String: Any]] {
+        let candidateSlice = history.suffix(max(1, maxMessages))
+        var selectedReversed: [[String: Any]] = []
+        var totalChars = 0
+
+        for item in candidateSlice.reversed() {
+            let truncated = String(item.content.prefix(max(1, maxCharsPerMessage)))
+            let len = truncated.count
+            if !selectedReversed.isEmpty && (totalChars + len > maxTotalChars) {
+                break
+            }
+            selectedReversed.append(["role": item.role, "content": truncated])
+            totalChars += len
+        }
+
+        return selectedReversed.reversed()
+    }
+}
+
+// MARK: - Mouse Control Engine (Move, Click & Vision OCR Match)
+
+#if canImport(CoreGraphics) && canImport(AppKit)
+@MainActor
+public enum MouseControlEngine {
+    public static func moveMouse(to point: CGPoint) -> Bool {
+        guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+            return false
+        }
+        let screens = NSScreen.screens
+        guard !screens.isEmpty else { return false }
+
+        CGWarpMouseCursorPosition(point)
+        let source = CGEventSource(stateID: .hidSystemState)
+        let moveEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left)
+        moveEvent?.post(tap: .cghidEventTap)
+        return true
+    }
+
+    public static func moveMouseRelative(description: String) -> (succeeded: Bool, confirmation: String) {
+        guard let screen = NSScreen.main else {
+            return (false, "No active screen found.")
+        }
+        let frame = screen.frame
+        let lower = description.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let targetPoint: CGPoint
+        let label: String
+
+        if lower.contains("center") || lower.contains("middle") {
+            targetPoint = CGPoint(x: frame.midX, y: frame.midY)
+            label = "center of the screen"
+        } else if lower.contains("top left") {
+            targetPoint = CGPoint(x: frame.minX + 100, y: frame.maxY - 100)
+            label = "top-left of the screen"
+        } else if lower.contains("top right") {
+            targetPoint = CGPoint(x: frame.maxX - 100, y: frame.maxY - 100)
+            label = "top-right of the screen"
+        } else if lower.contains("bottom left") {
+            targetPoint = CGPoint(x: frame.minX + 100, y: frame.minY + 100)
+            label = "bottom-left of the screen"
+        } else if lower.contains("bottom right") {
+            targetPoint = CGPoint(x: frame.maxX - 100, y: frame.minY + 100)
+            label = "bottom-right of the screen"
+        } else if lower.contains("top") {
+            targetPoint = CGPoint(x: frame.midX, y: frame.maxY - 100)
+            label = "top edge of the screen"
+        } else if lower.contains("bottom") {
+            targetPoint = CGPoint(x: frame.midX, y: frame.minY + 100)
+            label = "bottom edge of the screen"
+        } else if lower.contains("left") {
+            targetPoint = CGPoint(x: frame.minX + 100, y: frame.midY)
+            label = "left edge of the screen"
+        } else if lower.contains("right") {
+            targetPoint = CGPoint(x: frame.maxX - 100, y: frame.midY)
+            label = "right edge of the screen"
+        } else {
+            targetPoint = CGPoint(x: frame.midX, y: frame.midY)
+            label = "center of the screen"
+        }
+
+        let ok = moveMouse(to: targetPoint)
+        if ok {
+            ScreenGuideLaserOverlay.shared.showPointer(at: targetPoint, duration: 1.5)
+            return (true, "Moved mouse to \(label) (\(Int(targetPoint.x)), \(Int(targetPoint.y))).")
+        } else {
+            return (false, "Could not move mouse. Check Accessibility permissions.")
+        }
+    }
+
+    public static func click(at point: CGPoint, button: NativeMouseButton = .left, clicks: Int = 1) -> Bool {
+        guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+            return false
+        }
+        let source = CGEventSource(stateID: .hidSystemState)
+        CGWarpMouseCursorPosition(point)
+        usleep(15_000)
+
+        let downType: CGEventType
+        let upType: CGEventType
+        let cgButton: CGMouseButton
+
+        switch button {
+        case .left:
+            downType = .leftMouseDown
+            upType = .leftMouseUp
+            cgButton = .left
+        case .right:
+            downType = .rightMouseDown
+            upType = .rightMouseUp
+            cgButton = .right
+        case .middle:
+            downType = .otherMouseDown
+            upType = .otherMouseUp
+            cgButton = .center
+        }
+
+        for clickIndex in 1...max(1, clicks) {
+            guard let down = CGEvent(mouseEventSource: source, mouseType: downType, mouseCursorPosition: point, mouseButton: cgButton),
+                  let up = CGEvent(mouseEventSource: source, mouseType: upType, mouseCursorPosition: point, mouseButton: cgButton) else {
+                return false
+            }
+            down.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+            up.setIntegerValueField(.mouseEventClickState, value: Int64(clickIndex))
+
+            down.post(tap: .cghidEventTap)
+            usleep(25_000)
+            up.post(tap: .cghidEventTap)
+            usleep(25_000)
+        }
+
+        ScreenGuideLaserOverlay.shared.showPointer(at: point, duration: 1.5)
+        return true
+    }
+
+    public static func clickElement(description: String) async -> (succeeded: Bool, confirmation: String) {
+        guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+            return (false, InPlaceAppTyping.accessibilityPermissionPromptMessage)
+        }
+        let trimmedDesc = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedDesc.isEmpty else {
+            return (false, "No element description provided.")
+        }
+
+        do {
+            let screenContext = ScreenContext()
+            let lines = try await screenContext.extractVisibleScreenText()
+            let target = trimmedDesc.lowercased()
+
+            var bestMatch: ScreenOCRLine?
+            for line in lines {
+                let textLower = line.text.lowercased()
+                if textLower == target || textLower.contains(target) || target.contains(textLower) {
+                    bestMatch = line
+                    break
+                }
+            }
+
+            if bestMatch == nil {
+                let targetTokens = Set(target.split(whereSeparator: \.isWhitespace).map { String($0) })
+                var highestScore = 0
+                for line in lines {
+                    let lineTokens = Set(line.text.lowercased().split(whereSeparator: \.isWhitespace).map { String($0) })
+                    let common = targetTokens.intersection(lineTokens).count
+                    if common > highestScore && common >= 1 {
+                        highestScore = common
+                        bestMatch = line
+                    }
+                }
+            }
+
+            if let matched = bestMatch {
+                let screen = NSScreen.main ?? NSScreen.screens.first
+                let screenWidth = Double(screen?.frame.width ?? 1440)
+                let screenHeight = Double(screen?.frame.height ?? 900)
+
+                let clickX = (matched.boundingBox.origin.x + matched.boundingBox.width / 2.0) * screenWidth
+                let clickY = (1.0 - (matched.boundingBox.origin.y + matched.boundingBox.height / 2.0)) * screenHeight
+                let clickPoint = CGPoint(x: clickX, y: clickY)
+
+                let ok = click(at: clickPoint, button: .left, clicks: 1)
+                if ok {
+                    return (true, "Clicked \"\(matched.text)\" at (\(Int(clickPoint.x)), \(Int(clickPoint.y))).")
+                } else {
+                    return (false, "Found \"\(matched.text)\" but failed to dispatch mouse click.")
+                }
+            }
+        } catch {
+            // Screen OCR unavailable; continue to accessibility fallback
+        }
+
+        if let axMatch = findElementViaAX(description: trimmedDesc) {
+            let ok = click(at: axMatch.center, button: .left, clicks: 1)
+            if ok {
+                return (true, "Clicked element \"\(axMatch.title)\" at (\(Int(axMatch.center.x)), \(Int(axMatch.center.y))).")
+            }
+        }
+
+        return (false, "Could not find \"\(trimmedDesc)\" on screen. Please make sure it is visible.")
+    }
+
+    private struct AXElementMatch {
+        let title: String
+        let center: CGPoint
+    }
+
+    private static func findElementViaAX(description: String) -> AXElementMatch? {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = front.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        var windowRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &windowRef) == .success,
+              let windowElement = windowRef as! AXUIElement? else {
+            return nil
+        }
+        return searchAXChildren(element: windowElement, target: description.lowercased(), depth: 0)
+    }
+
+    private static func searchAXChildren(element: AXUIElement, target: String, depth: Int) -> AXElementMatch? {
+        guard depth < 6 else { return nil }
+        var titleRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &titleRef) == .success,
+           let title = titleRef as? String, !title.isEmpty {
+            if title.lowercased().contains(target) {
+                var posRef: CFTypeRef?
+                var sizeRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &posRef) == .success,
+                   AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &sizeRef) == .success,
+                   let posVal = posRef, let sizeVal = sizeRef {
+                    var pos = CGPoint.zero
+                    var size = CGSize.zero
+                    if AXValueGetValue(posVal as! AXValue, .cgPoint, &pos),
+                       AXValueGetValue(sizeVal as! AXValue, .cgSize, &size) {
+                        let center = CGPoint(x: pos.x + size.width / 2, y: pos.y + size.height / 2)
+                        return AXElementMatch(title: title, center: center)
+                    }
+                }
+            }
+        }
+
+        var childrenRef: CFTypeRef?
+        if AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+           let children = childrenRef as? [AXUIElement] {
+            for child in children.prefix(20) {
+                if let match = searchAXChildren(element: child, target: target, depth: depth + 1) {
+                    return match
+                }
+            }
+        }
+        return nil
+    }
+}
+#endif
+
+// MARK: - System RAM Inspector & Parallel Agent Coordinator
+
+public struct RAMMetrics: Equatable, Sendable {
+    public let totalBytes: UInt64
+    public let freeBytes: UInt64
+    public let usedBytes: UInt64
+    public let usageRatio: Double
+
+    public var freeGB: Double { Double(freeBytes) / 1_073_741_824.0 }
+    public var totalGB: Double { Double(totalBytes) / 1_073_741_824.0 }
+    public var usedGB: Double { Double(usedBytes) / 1_073_741_824.0 }
+    public var usagePercent: Int { Int(usageRatio * 100.0) }
+    public var isHighPressure: Bool { usageRatio >= 0.90 }
+    public var canDeployParallelAgents: Bool { usageRatio < 0.75 && freeGB >= 4.0 }
+}
+
+public enum SystemRAMInspector {
+    public static func currentRAM() -> RAMMetrics {
+        var size = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+        var vmStats = vm_statistics64()
+        let hostPort = mach_host_self()
+        let result = withUnsafeMutablePointer(to: &vmStats) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(size)) {
+                host_statistics64(hostPort, HOST_VM_INFO64, $0, &size)
+            }
+        }
+        let totalBytes = ProcessInfo.processInfo.physicalMemory
+        guard result == KERN_SUCCESS else {
+            return RAMMetrics(totalBytes: totalBytes, freeBytes: totalBytes / 4, usedBytes: totalBytes * 3 / 4, usageRatio: 0.75)
+        }
+        let pageSize = UInt64(vm_kernel_page_size)
+        let freePages = UInt64(vmStats.free_count) + UInt64(vmStats.inactive_count)
+        let freeBytes = freePages * pageSize
+        let usedBytes = totalBytes > freeBytes ? (totalBytes - freeBytes) : 0
+        let ratio = totalBytes > 0 ? (Double(usedBytes) / Double(totalBytes)) : 0.5
+        return RAMMetrics(totalBytes: totalBytes, freeBytes: freeBytes, usedBytes: usedBytes, usageRatio: ratio)
+    }
+
+    public static func formattedReport() -> String {
+        let ram = currentRAM()
+        let freeStr = String(format: "%.1f", ram.freeGB)
+        let totalStr = String(format: "%.1f", ram.totalGB)
+        if ram.canDeployParallelAgents {
+            return "RAM status: \(ram.usagePercent)% used (\(freeStr) GB free of \(totalStr) GB). Memory is healthy — parallel agent tasks can run safely under the 90% threshold."
+        } else if ram.isHighPressure {
+            return "RAM status: \(ram.usagePercent)% used (\(freeStr) GB free of \(totalStr) GB). High memory pressure (>90%) — parallel tasks paused and context will be archived."
+        } else {
+            return "RAM status: \(ram.usagePercent)% used (\(freeStr) GB free of \(totalStr) GB)."
+        }
+    }
+}
+
+public final class ParallelAgentCoordinator: @unchecked Sendable {
+    public static let shared = ParallelAgentCoordinator()
+    private let lock = NSLock()
+    private var activeAgentTasks: [UUID: String] = [:]
+
+    public func canSpawnAgent() -> Bool {
+        let ram = SystemRAMInspector.currentRAM()
+        lock.lock()
+        let count = activeAgentTasks.count
+        lock.unlock()
+        return ram.canDeployParallelAgents && count < 4
+    }
+
+    public func registerAgent(id: UUID, label: String) -> Bool {
+        guard canSpawnAgent() else { return false }
+        lock.lock()
+        activeAgentTasks[id] = label
+        lock.unlock()
+        return true
+    }
+
+    public func unregisterAgent(id: UUID) {
+        lock.lock()
+        activeAgentTasks.removeValue(forKey: id)
+        lock.unlock()
+    }
+
+    public func activeAgentsSummary() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        if activeAgentTasks.isEmpty {
+            return "No background parallel agents currently active."
+        }
+        let labels = activeAgentTasks.values.joined(separator: ", ")
+        return "\(activeAgentTasks.count) parallel agent(s) active: \(labels)."
+    }
+}
+
+// MARK: - Dot Soul Manager (Archive, Clean, Export & Import)
+
+public final class DotSoulManager: @unchecked Sendable {
+    public static let shared = DotSoulManager()
+    private let lock = NSLock()
+
+    public var soulDirectory: URL {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let dir = support.appendingPathComponent("Dot/Soul")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    public func archiveCurrentState(reason: String = "routine") {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = Date()
+        let formatter = ISO8601DateFormatter()
+        let timestamp = formatter.string(from: now).replacingOccurrences(of: ":", with: "-")
+        let archiveFile = soulDirectory.appendingPathComponent("soul_archive_\(timestamp).json")
+
+        let brain = PersistentMemoryBrain.shared
+        let profile = brain.readProfile()
+        let volatile = brain.readVolatile()
+
+        let chatLogURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
+        let chatLogContent = (chatLogURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+
+        let payload: [String: Any] = [
+            "archivedAt": formatter.string(from: now),
+            "reason": reason,
+            "profileMarkdown": profile,
+            "volatileMarkdown": volatile,
+            "chatLogSnippet": String(chatLogContent.suffix(50_000))
+        ]
+
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: archiveFile)
+        }
+    }
+
+    public func exportSoul() -> (url: URL?, message: String) {
+        archiveCurrentState(reason: "user_export")
+        let now = Date()
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyyMMdd_HHmmss"
+        let filename = "Dot_Soul_\(fmt.string(from: now)).dotsoul"
+
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
+            return (nil, "Could not locate Downloads folder.")
+        }
+        let exportURL = downloads.appendingPathComponent(filename)
+
+        let brain = PersistentMemoryBrain.shared
+        let profile = brain.readProfile()
+        let volatile = brain.readVolatile()
+        let chatLogURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
+        let chatLogContent = (chatLogURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+
+        let soulExport: [String: Any] = [
+            "version": 1,
+            "exportDate": ISO8601DateFormatter().string(from: now),
+            "profile": profile,
+            "volatile": volatile,
+            "chatLog": String(chatLogContent.suffix(100_000))
+        ]
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: soulExport, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: exportURL)
+            return (exportURL, "Dot's soul exported successfully to \(exportURL.path). You can transfer this file to any Mac and import it.")
+        } catch {
+            return (nil, "Failed to export Dot's soul: \(error.localizedDescription)")
+        }
+    }
+
+    public func importSoul(from url: URL) -> (success: Bool, message: String) {
+        do {
+            let data = try Data(contentsOf: url)
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return (false, "Invalid .dotsoul archive format.")
+            }
+            if let profile = obj["profile"] as? String, !profile.isEmpty {
+                PersistentMemoryBrain.shared.writeProfile(profile)
+            }
+            if let volatile = obj["volatile"] as? String, !volatile.isEmpty {
+                PersistentMemoryBrain.shared.writeVolatile(volatile)
+            }
+            return (true, "Successfully imported Dot's soul! Profile preferences, learned rules, and session memory are restored.")
+        } catch {
+            return (false, "Failed to import soul: \(error.localizedDescription)")
+        }
+    }
+
+    public func cleanContextIfMemoryPressure(force: Bool = false) -> Bool {
+        let ram = SystemRAMInspector.currentRAM()
+        if ram.usageRatio >= 0.88 || force {
+            archiveCurrentState(reason: "ram_pressure_cleanup")
+            return true
+        }
+        return false
+    }
+}
+
+
 

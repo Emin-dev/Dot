@@ -292,6 +292,54 @@ final class ChatModel: ObservableObject {
                 }
             }
         }
+
+        // 6. Keyboard Shortcuts
+        if lower == "refresh this page" || lower == "refresh the page" || lower == "refresh page" ||
+           lower == "reload this page" || lower == "reload the page" || lower == "reload page" ||
+           lower == "refresh website" || lower == "refresh this website" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "R")
+        }
+        if lower == "new tab" || lower == "open new tab" || lower == "open a new tab" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "T")
+        }
+        if lower == "close tab" || lower == "close this tab" || lower == "close the tab" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "W")
+        }
+        if lower == "reopen tab" || lower == "reopen closed tab" || lower == "reopen the closed tab" {
+            return .sendShortcut(modifiers: ["Cmd", "Shift"], keys: "T")
+        }
+        if lower == "select all" || lower == "select all text" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "A")
+        }
+        if lower == "copy" || lower == "copy that" || lower == "copy this" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "C")
+        }
+        if lower == "paste" || lower == "paste that" || lower == "paste here" {
+            return .sendShortcut(modifiers: ["Cmd"], keys: "V")
+        }
+
+        // 7. Mouse Control & UI Element Clicking
+        if lower.hasPrefix("double click ") || lower.hasPrefix("double-click ") {
+            let desc = trimmed.components(separatedBy: " ").dropFirst(2).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+            return .clickElement(description: desc)
+        }
+        if lower.hasPrefix("click ") || lower.hasPrefix("click on ") || lower.hasPrefix("click the ") || lower.hasPrefix("click that ") {
+            var desc = trimmed.components(separatedBy: " ").dropFirst(1).joined(separator: " ")
+            if desc.lowercased().hasPrefix("on ") { desc = String(desc.dropFirst(3)) }
+            if desc.lowercased().hasPrefix("the ") { desc = String(desc.dropFirst(4)) }
+            if desc.lowercased().hasPrefix("that ") { desc = String(desc.dropFirst(5)) }
+            desc = desc.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !desc.isEmpty {
+                return .clickElement(description: desc)
+            }
+        }
+        if lower.hasPrefix("move mouse to ") || lower.hasPrefix("move cursor to ") {
+            let desc = lower.components(separatedBy: " ").dropFirst(3).joined(separator: " ")
+            if desc.contains("center") || desc.contains("middle") {
+                let frame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+                return .moveMouse(to: CGPoint(x: frame.midX, y: frame.midY))
+            }
+        }
         return nil
     }
 
@@ -1315,7 +1363,12 @@ final class ChatModel: ObservableObject {
         textHistory.append(role: .user, text: text, turn: id)
         textHistory.beginAssistant(turn: id)
         if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
-        if history.count > 12 { history.removeFirst(history.count - 12) }
+        if DotSoulManager.shared.cleanContextIfMemoryPressure() || history.count > ExpandedContextWindow.maxHistoryMessages {
+            DotSoulManager.shared.archiveCurrentState(reason: "history_compaction")
+            if history.count > ExpandedContextWindow.maxHistoryMessages {
+                history.removeFirst(history.count - ExpandedContextWindow.maxHistoryMessages)
+            }
+        }
 
         // Check In-Place App Typing & Key-Press first so "press right arrow" or "type 'hello' in that input" isn't mistaken for pet movement
         let typingCmd = InPlaceAppTyping.parseCommand(text)
@@ -1337,6 +1390,23 @@ final class ChatModel: ObservableObject {
             } else {
                 respondDirectly(outcome.confirmation, id: id)
             }
+            return
+        case .clickElement(let description):
+            Task { @MainActor [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                let outcome = await MouseControlEngine.clickElement(description: description)
+                self.respondDirectly(outcome.confirmation, id: id)
+            }
+            return
+        case .clickPoint(let x, let y, let button, let clicks):
+            let point = CGPoint(x: x, y: y)
+            let ok = MouseControlEngine.click(at: point, button: button, clicks: clicks)
+            let reply = ok ? "Clicked \(button.rawValue) button at (\(Int(x)), \(Int(y)))." : "Could not click at that point. Check Accessibility permissions."
+            respondDirectly(reply, id: id)
+            return
+        case .moveMouse(let description):
+            let outcome = MouseControlEngine.moveMouseRelative(description: description)
+            respondDirectly(outcome.confirmation, id: id)
             return
         case .none:
             break
@@ -1369,6 +1439,21 @@ final class ChatModel: ObservableObject {
         }
 
         let lowerClean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if lowerClean == "export soul" || lowerClean == "export my soul" || lowerClean == "export soul memory" || lowerClean == "backup memory" {
+            let (_, msg) = DotSoulManager.shared.exportSoul()
+            respondDirectly(msg, id: id)
+            return
+        }
+        if lowerClean == "check ram" || lowerClean == "ram status" || lowerClean == "how much ram" || lowerClean == "memory status" || lowerClean == "check memory" {
+            let report = SystemRAMInspector.formattedReport()
+            respondDirectly(report, id: id)
+            return
+        }
+        if lowerClean == "parallel agents" || lowerClean == "active agents" || lowerClean == "agent status" {
+            let summary = ParallelAgentCoordinator.shared.activeAgentsSummary()
+            respondDirectly(summary, id: id)
+            return
+        }
         if lowerClean == "self reflect" || lowerClean == "reflect on your logs" || lowerClean == "analyze your logs" || lowerClean == "suggest improvements to antigravity" {
             let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
             respondDirectly(report, id: id)
@@ -1439,6 +1524,13 @@ final class ChatModel: ObservableObject {
                     } else {
                         replyText = "Could not read file \(path)."
                     }
+                case .sendShortcut(let mods, let keys):
+                    let combo = (mods + [keys]).joined(separator: "+")
+                    replyText = result?.receipt.status == .succeeded ? "Pressed \(combo) in the focused app." : (result?.receipt.detail ?? "Could not send shortcut.")
+                case .moveMouse(let pt):
+                    replyText = result?.receipt.status == .succeeded ? "Moved mouse to (\(Int(pt.x)), \(Int(pt.y)))." : (result?.receipt.detail ?? "Could not move mouse.")
+                case .click, .clickElement:
+                    replyText = result?.receipt.status == .succeeded ? (result?.receipt.detail ?? "Clicked.") : (result?.receipt.detail ?? "Could not click element.")
                 default:
                     replyText = "Action completed."
                 }
@@ -1626,19 +1718,28 @@ final class ChatModel: ObservableObject {
                 if let effectivePromptOverride, let lastIdx = chatInput.indices.last {
                     chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: effectivePromptOverride)
                 }
-                let facts = await (try? self.ftsStore.searchMemories(query: text, limit: 3)) ?? []
-                let evidence = await (try? self.ftsStore.searchEvidence(query: text, limit: 2)) ?? []
-                var memoryContext: [String] = []
-                for f in facts { memoryContext.append("Memory: \(f.fact)") }
-                for e in evidence { memoryContext.append("Document [\(e.title)]: \(e.snippet)") }
                 let desktop = await MainActor.run { ActiveDesktopContext.current() }
-                if let snippet = desktop.promptContextSnippet {
-                    memoryContext.append(snippet)
-                }
-                if !memoryContext.isEmpty {
-                    let ctxText = "\n[Context: " + memoryContext.joined(separator: " | ") + "]"
+                if let assembledCtx = await PersistentMemoryBrain.shared.assembleTurnContext(
+                    query: text,
+                    ftsStore: self.ftsStore,
+                    activeDesktop: desktop
+                ) {
                     if let lastIdx = chatInput.indices.last {
-                        chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: chatInput[lastIdx].content + ctxText)
+                        chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: chatInput[lastIdx].content + assembledCtx)
+                    }
+                }
+                Task { [weak self] in
+                    guard let self else { return }
+                    let facts = PersistentMemoryBrain.extractImportantFacts(from: text)
+                    if !facts.isEmpty {
+                        PersistentMemoryBrain.shared.persistFacts(facts)
+                        for f in facts {
+                            _ = try? await self.ftsStore.saveMemory(
+                                category: f.isCorrection ? .userCorrection : (f.isVolatile ? .projectContext : .userPreference),
+                                fact: f.fact,
+                                isCorrection: f.isCorrection
+                            )
+                        }
                     }
                 }
                 let snapshot = chatInput
@@ -1661,6 +1762,22 @@ final class ChatModel: ObservableObject {
                         executedToolConfirmation = InPlaceAppTyping.performTypeText(textToType, checkPermission: true).confirmation
                     case .pressKey(let keyToPress):
                         executedToolConfirmation = InPlaceAppTyping.performPressKey(keyToPress, checkPermission: true).confirmation
+                    case .sendShortcut(let modifiers, let key):
+                        let combo = modifiers.isEmpty ? key : (modifiers + [key]).joined(separator: "+")
+                        executedToolConfirmation = InPlaceAppTyping.performPressKey(combo, checkPermission: true).confirmation
+                    case .clickElement(let description):
+                        let outcome = await MouseControlEngine.clickElement(description: description)
+                        executedToolConfirmation = outcome.confirmation
+                    case .moveMouse(let x, let y):
+                        let ok = MouseControlEngine.moveMouse(to: CGPoint(x: x, y: y))
+                        executedToolConfirmation = ok ? "Moved mouse to (\(Int(x)), \(Int(y)))." : "Could not move mouse."
+                    case .clickPoint(let x, let y, let btn, let clicks):
+                        let button = NativeMouseButton(rawValue: btn) ?? .left
+                        let ok = MouseControlEngine.click(at: CGPoint(x: x, y: y), button: button, clicks: clicks)
+                        executedToolConfirmation = ok ? "Clicked at (\(Int(x)), \(Int(y)))." : "Could not click."
+                    case .pointOnScreen(let x, let y, let label):
+                        ScreenGuideLaserOverlay.shared.showPointer(at: CGPoint(x: x, y: y), duration: 2.5)
+                        executedToolConfirmation = "Pointing at (\(Int(x)), \(Int(y)))\(label != nil ? " (" + label! + ")" : "")."
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }

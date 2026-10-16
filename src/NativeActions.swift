@@ -3,8 +3,11 @@ import AppKit
 import CryptoKit
 import Darwin
 
-/// These are typed operations supplied by the app's user-goal planner. There is deliberately
-/// no natural-language, webpage, document-command, AppleScript, or shell evaluator here.
+public enum NativeMouseButton: String, Codable, Equatable, Sendable {
+    case left, right, middle
+}
+
+/// These are typed operations supplied by the app's user-goal planner.
 enum NativeAction: Codable, Equatable, Sendable {
     case launchApplication(bundleID: String)
     case openWebURL(String)
@@ -14,6 +17,10 @@ enum NativeAction: Codable, Equatable, Sendable {
     case moveDocument(from: String, to: String, expectedSHA256: String)
     case createFolder(path: String)
     case undo(receiptID: UUID)
+    case sendShortcut(modifiers: [String], keys: String)
+    case moveMouse(to: CGPoint)
+    case click(at: CGPoint, button: NativeMouseButton, clicks: Int)
+    case clickElement(description: String)
 }
 
 struct NativeActionRequest: Sendable {
@@ -25,6 +32,7 @@ struct NativeActionRequest: Sendable {
 enum NativeActionStatus: String, Codable, Sendable { case started, succeeded, handedOff, failed, cancelled }
 enum NativeActionVerification: String, Codable, Sendable {
     case none, runningApplication, browserHandoff, textRead, contentHash, fileMoved, directoryCreated, undoVerified
+    case keyboardShortcut, mouseMoved, mouseClicked, elementClicked
 }
 
 struct NativeActionReceipt: Codable, Equatable, Identifiable, Sendable {
@@ -140,6 +148,7 @@ enum NativeActionError: Error, LocalizedError, Equatable {
     case invalidRequest, unsafePath, missingItem, alreadyExists, unsupportedText, limitReached
     case conflict, recoveryRequired(String), storageUnavailable, applicationUnavailable, workspaceRejected
     case unverifiedHandoff, cancelledHandoff, nothingToUndo, busy
+    case accessibilityRequired, elementNotFound
     var errorDescription: String? {
         switch self {
         case .invalidRequest: return "The action needs valid typed arguments."
@@ -157,6 +166,8 @@ enum NativeActionError: Error, LocalizedError, Equatable {
         case .cancelledHandoff: return "Cancelled waiting for macOS. Its dispatched request may still complete; it was not retried."
         case .nothingToUndo: return "That action has no available undo, or has already been undone."
         case .busy: return "Another native action is still completing."
+        case .accessibilityRequired: return "Accessibility permission is required for mouse and keyboard control. Please grant Dot access in System Settings > Privacy & Security > Accessibility."
+        case .elementNotFound: return "The requested screen element could not be found."
         }
     }
 }
@@ -348,6 +359,45 @@ actor NativeActionExecutor {
                 undo: NativeActionUndo(kind: .createdFolder, path: path, originalPath: nil, expectedSHA256: nil,
                     originalSHA256: nil, backupName: nil, device: UInt64(info.st_dev), inode: UInt64(info.st_ino)))
         case .undo(let receiptID): return try undo(receiptID: receiptID, actionID: id)
+        case .sendShortcut(let modifiers, let keys):
+            guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+                throw NativeActionError.accessibilityRequired
+            }
+            try Task.checkCancellation()
+            let combo = modifiers.isEmpty ? keys : (modifiers + [keys]).joined(separator: "+")
+            let ok = await MainActor.run {
+                InPlaceAppTyping.performPressKey(combo, checkPermission: false).succeeded
+            }
+            guard ok else { throw NativeActionError.invalidRequest }
+            return Output(verification: .keyboardShortcut, detail: "Sent keyboard shortcut \(combo) to the frontmost application.")
+        case .moveMouse(let point):
+            guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+                throw NativeActionError.accessibilityRequired
+            }
+            try Task.checkCancellation()
+            let ok = await MainActor.run {
+                MouseControlEngine.moveMouse(to: point)
+            }
+            guard ok else { throw NativeActionError.invalidRequest }
+            return Output(verification: .mouseMoved, detail: "Moved mouse to (\(Int(point.x)), \(Int(point.y))).")
+        case .click(let point, let button, let clicks):
+            guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+                throw NativeActionError.accessibilityRequired
+            }
+            try Task.checkCancellation()
+            let ok = await MainActor.run {
+                MouseControlEngine.click(at: point, button: button, clicks: clicks)
+            }
+            guard ok else { throw NativeActionError.invalidRequest }
+            return Output(verification: .mouseClicked, detail: "Clicked \(button.rawValue) button \(clicks) time(s) at (\(Int(point.x)), \(Int(point.y))).")
+        case .clickElement(let description):
+            guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+                throw NativeActionError.accessibilityRequired
+            }
+            try Task.checkCancellation()
+            let outcome = await MouseControlEngine.clickElement(description: description)
+            guard outcome.succeeded else { throw NativeActionError.elementNotFound }
+            return Output(verification: .elementClicked, detail: outcome.confirmation)
         }
     }
 
@@ -549,9 +599,20 @@ actor NativeActionExecutor {
         guard fsync(state) == 0 else { throw NativeActionError.storageUnavailable }
     }
     private static func name(_ action: NativeAction) -> String {
-        switch action { case .launchApplication: return "launchApplication"; case .openWebURL: return "openWebURL"
-        case .readText: return "readText"; case .createText: return "createText"; case .editText: return "editText"
-        case .moveDocument: return "moveDocument"; case .createFolder: return "createFolder"; case .undo: return "undo" }
+        switch action {
+        case .launchApplication: return "launchApplication"
+        case .openWebURL: return "openWebURL"
+        case .readText: return "readText"
+        case .createText: return "createText"
+        case .editText: return "editText"
+        case .moveDocument: return "moveDocument"
+        case .createFolder: return "createFolder"
+        case .undo: return "undo"
+        case .sendShortcut: return "sendShortcut"
+        case .moveMouse: return "moveMouse"
+        case .click: return "click"
+        case .clickElement: return "clickElement"
+        }
     }
     private static func target(_ action: NativeAction) -> String {
         let value: String
@@ -561,6 +622,10 @@ actor NativeActionExecutor {
         case .readText(let path), .createText(let path, _), .editText(let path, _, _), .createFolder(let path): value = path
         case .moveDocument(let from, let to, _): value = from + " → " + to
         case .undo(let id): value = id.uuidString
+        case .sendShortcut(let mods, let keys): value = (mods + [keys]).joined(separator: "+")
+        case .moveMouse(let point): value = "(\(Int(point.x)), \(Int(point.y)))"
+        case .click(let point, let button, let clicks): value = "\(button.rawValue)x\(clicks) at (\(Int(point.x)), \(Int(point.y)))"
+        case .clickElement(let desc): value = desc
         }
         return String(value.unicodeScalars.filter { $0.value >= 32 && $0.value != 127 }.prefix(1024))
     }
