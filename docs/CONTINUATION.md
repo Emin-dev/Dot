@@ -14,6 +14,10 @@
 `dot-search` and `dot-fetch`; and `scripts/audit_runtime_payload.py` accepts the owner's real
 Rust-only payload (34,004 files, exit 0).
 
+**Consecutive verified commits.** The session ended green on every gate, with the Xcode XCTest lane
+at 860 tests / 0 failures (it began at 11 failures), and the installed app's provenance matching HEAD
+via `scripts/install_local.sh`.
+
 **What this session changed.** The runtime is Rust-only for Dot-authored code: the Python voice
 helper, Python source fetcher and the whole Python SearXNG stack are deleted, their build gates now
 require the Rust binaries, and `build.sh` embeds the Whisper framework via `DOT_WHISPER_FRAMEWORK`
@@ -30,13 +34,15 @@ coordinates, and clicking during an answer not listening again. Five-tier memory
 write path wired (preferences → T5, corrections → core, one ageing pass at launch).
 
 **Remaining work, with leads.**
-1. *Memory read path.* `assembleTurnContext` (`src/InteractionCore.swift`, ~3328) still reads
-   `listPinnedMemories` / `searchMemories` and drops tier information; `MemoryTierStore` lives on
-   `ChatModel`, so tier-aware recall needs a callback or parameter threaded into that function.
-   `evictIfNeeded` is implemented and tested but not yet called from the RAM-pressure path
-   (`DotSoulManager.cleanContextIfMemoryPressure()`). `MemoryTierStore` also still opens a second
-   connection to `dot_records.sqlite`; a `withConnection` accessor on `LocalFTSStore` would remove
-   ~120 lines of duplicated connection setup.
+1. *Memory — done on all four paths; one cleanup left.* Writes reach the tiers (a stated preference
+   lands in T5 core, an explicit instruction as a core fact), recall is tier-aware
+   (`assembleTurnContext` now takes the `MemoryTierStore`, sources core records first and then tiered
+   recall, keeping the FTS reads only as a fallback), ageing runs once per launch, and eviction is
+   called from the real RAM-pressure path and frees a quarter of the corpus there. What remains is
+   mechanical: `MemoryTierStore` still opens a second connection to `dot_records.sqlite`, and a
+   `withConnection` accessor on `LocalFTSStore` would remove ~120 lines of duplicated connection
+   setup. Also open: ordinary conversation does not yet populate memory, because saving still
+   requires an explicit "remember that" style phrase, and the database showed 0 rows after real use.
 2. *Dead code.* An audit with per-item grep evidence lists **694 lines** removable with no behaviour
    change (largest: a 242-line paid-search provider subsystem only tests instantiate, `NativeTTSManager`
    52, `InteractiveWalkthroughManager` 82 — the last is now honestly marked unwired in the checklist).
