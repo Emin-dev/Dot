@@ -698,9 +698,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startIdleRoaming() {
         idleRoamTimer?.invalidate()
-        // The agreed cadence: Dot moves to a new clear spot every 12-18 seconds
-        // while idle, always choosing a safe zone that does not cover content.
-        let interval = Double.random(in: 12.0...18.0)
+        // The owner's cadence: Dot moves to a new clear spot every 2 minutes while
+        // idle. (It was 12-18 seconds until 2026-10-17, which moved far too often.)
+        let interval = 120.0
         let timer = Timer(timeInterval: interval, repeats: false) { [weak self] _ in
             Task { @MainActor in
                 self?.performIdleRoam()

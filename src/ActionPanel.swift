@@ -230,7 +230,6 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
     var onVisibility: ((Bool) -> Void)?
     private let host = UtilityPanelHost(size: NSSize(width: 640, height: 620), minSize: NSSize(width: 520, height: 500),
                                         title: "Dot · Native actions")
-    private var panel: NSPanel? { host.panel }
     private var presentation = UUID()
     private let pickerOverride: Picker?
     init(model: NativeActionPanelModel? = nil, picker: Picker? = nil) {
@@ -247,20 +246,20 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
         Task { await model.reloadReceipts() }
     }
     func stop() { invalidateSheets(); model.stop() }
-    func closeAdmissions() { invalidateSheets(); model.closeAdmissions(); panel?.close() }
+    func closeAdmissions() { invalidateSheets(); model.closeAdmissions(); host.panel?.close() }
     func windowWillClose(_ notification: Notification) { invalidateSheets(); model.close(); onVisibility?(false) }
     private func invalidateSheets() {
         presentation = UUID()
         host.endAttachedSheet()
     }
     func chooseFolder() {
-        guard !model.shuttingDown, !model.busy, let panel, panel.isVisible, panel.attachedSheet == nil else { return }
+        guard !model.shuttingDown, !model.busy, let panel = host.panel, panel.isVisible, panel.attachedSheet == nil else { return }
         presentation = UUID()
         let expected = presentation
         let receive: PickerReply = { [weak self, weak panel] url in
             guard let url else { return }
             Task { @MainActor [weak self, weak panel] in
-                guard let self, let panel, self.presentation == expected, self.panel === panel,
+                guard let self, let panel, self.presentation == expected, self.host.panel === panel,
                       panel.isVisible, !self.model.shuttingDown, !self.model.busy else { return }
                 _ = await self.model.selectFolder(url)
             }
@@ -272,13 +271,13 @@ final class NativeActionPanel: NSObject, NSWindowDelegate {
         picker.beginSheetModal(for: panel) { response in receive(response == .OK ? picker.url : nil) }
     }
     func chooseApplication() {
-        guard !model.shuttingDown, !model.busy, let panel, panel.isVisible, panel.attachedSheet == nil else { return }
+        guard !model.shuttingDown, !model.busy, let panel = host.panel, panel.isVisible, panel.attachedSheet == nil else { return }
         presentation = UUID()
         let expected = presentation
         let receive: PickerReply = { [weak self, weak panel] url in
             guard let url, let identifier = Bundle(url: url)?.bundleIdentifier else { return }
             Task { @MainActor [weak self, weak panel] in
-                guard let self, let panel, self.presentation == expected, self.panel === panel,
+                guard let self, let panel, self.presentation == expected, self.host.panel === panel,
                       panel.isVisible, !self.model.shuttingDown, !self.model.busy else { return }
                 self.model.bundleID = identifier
             }

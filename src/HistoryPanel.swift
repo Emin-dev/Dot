@@ -168,7 +168,6 @@ final class ConversationHistoryModel: ObservableObject {
 final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
     private let host = UtilityPanelHost(size: NSSize(width: 540, height: 500), minSize: NSSize(width: 400, height: 340),
                                         title: "Dot · Local text history")
-    private var panel: NSPanel? { host.panel }
     private weak var model: ConversationHistoryModel?
     private let confirmation: LocalRecordDeletionConfirmation
     init(confirmation: LocalRecordDeletionConfirmation? = nil) {
@@ -184,7 +183,7 @@ final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
                 delete: { [weak self] id in self?.requestDeletion(id: id) },
                 clear: { [weak self] in self?.requestDeletion(id: nil) }))
         }
-        if changedModel, let panel {
+        if changedModel, let panel = host.panel {
             panel.contentView = NSHostingView(rootView: ConversationHistoryView(model: model,
                 delete: { [weak self] id in self?.requestDeletion(id: id) },
                 clear: { [weak self] in self?.requestDeletion(id: nil) }))

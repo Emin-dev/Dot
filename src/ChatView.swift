@@ -593,7 +593,7 @@ final class ChatModel: ObservableObject {
 
         // 9. Inquiries about why Dot is not moving / staying in one spot
         if clean.contains("why") && (clean.contains("don't move") || clean.contains("dont move") || clean.contains("stay in the same place") || clean.contains("stay in one place") || clean.contains("aren't you moving") || clean.contains("not moving")) {
-            let policy = "I relocate to a clear safe zone every 5 seconds while I'm thinking, and when I'm idle I only move if a window or your cursor covers me."
+            let policy = "I move to a new clear spot every 2 minutes while I'm idle, and every 5 seconds while I'm thinking, always avoiding your windows and content."
             if let reply = self.onMove?(.random) {
                 return policy + " " + reply
             }

@@ -522,7 +522,7 @@ Requested 2026-10-16. All items below are implemented and verified in source and
 - [x] **Native window layout & snapping (`WindowLayoutManager`).** Snap the active external app window to Left Half, Right Half, Top Half, Bottom Half, Maximize or Center via macOS Accessibility (`AXUIElement`).
 - [x] **iOS Simulator & developer workflow control (`SimulatorControlSuite`).** List, boot and screenshot iOS Simulators via `xcrun simctl` from voice or typed commands.
 - [x] **Real-time Neural Diagnostics & Metrics Inspector (`NeuralMetricsInspector`).** Report live hardware/memory footprint, voice latency stages and engine readiness on demand.
-- [x] **Continuous autonomous roaming across full-screen and maximized desktop layouts (`RoamingCore`, `PlacementCapture`).** Exclude large workspace windows (`>= 50%` display area) from solid obstacle masks and add a Pass 3 least-overlap random desktop placement fallback so Dot reliably roams every 12–18 seconds when idle and evades cursor hover without getting stuck.
+- [x] **Continuous autonomous roaming across full-screen and maximized desktop layouts (`RoamingCore`, `PlacementCapture`).** Exclude large workspace windows (`>= 50%` display area) from solid obstacle masks and add a Pass 3 least-overlap random desktop placement fallback so Dot reliably roams every 2 minutes when idle and evades cursor hover without getting stuck.
 - [x] **Continuous proactive scheduler & readiness heartbeat (`ProactiveSchedule`, `ProactiveConversationEvidence`, `ChatModel`).** Automatically arm proactive scheduling as soon as `OfflinePreparation.shared.ready` finishes loading, prevent casual mouse hover over Dot from cancelling pending proactive timers, and renew proactive evidence after every proactive turn so Dot continues checking in every 1 minute (`High`), 4 minutes (`Normal`), or 10 minutes (`Low`) without deadlocking after the first turn.
 - [x] **Zero-permission background workspace observer & briefing agent (`AutonomousMacAgent`).** Continuously inspect the active macOS app, window title, selected text, recent `~/Downloads` files, and live error/URL signals in the background, maintain `autonomous_workspace_brief.md` automatically without waiting for user permission, and surface concrete observations and follow-up questions during proactive turns.
 
@@ -557,7 +557,7 @@ Recorded before implementation, per the standing documentation rule. These super
 
 **Proactive cadence.** Choices remain 10 / 4 / 1 minutes; the **default is Normal (4 minutes)**, changed from High.
 
-**Idle movement.** Dot roams to a new clear spot **every 12–18 seconds** while idle (3.2 s glide), and relocates every 5 seconds while thinking (0.28 s glide). It never covers protected windows, text regions or the cursor, and stays put while hovered, pinned, dragging, hidden or in a menu.
+**Idle movement.** Dot roams to a new clear spot **every 2 minutes** while idle (3.2 s glide), and relocates every 5 seconds while thinking (0.28 s glide). The idle cadence was 12–18 seconds until 2026-10-17, which was too frequent. It never covers protected windows, text regions or the cursor, and stays put while hovered, pinned, dragging, hidden or in a menu.
 
 **Skins and expressions.** All eleven skins share one warm expression set plus amplitude-driven speech. The "120 reviewed recipes per new skin" target (1,200 total) is **retired as a requirement** and must not be presented as delivered; accurate viseme/phoneme lip-sync remains a desirable improvement, not a completed feature.
 
