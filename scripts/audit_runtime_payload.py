@@ -9,7 +9,9 @@ from audit_offline_bundle import digest, relative
 
 REQUIRED = {
     'splash_runtime': ['Splash/python/bin/python3', 'Splash/install/launcher.py', 'Splash/engine/splash', 'Splash/engine/splash.metallib'],
-    'speech_synthesis': ['Voice/python/bin/python3', 'Voice/model/config.json', 'Voice/model/kokoro-v1_0.pth', 'Voice/model/voices/bf_isabella.pt'],
+    # The Rust dot-voice engine reads these model files directly; the deleted Python
+    # helper's interpreter is no longer part of a complete payload.
+    'speech_synthesis': ['Voice/model/config.json', 'Voice/model/kokoro-v1_0.pth', 'Voice/model/voices/bf_isabella.pt'],
     'speech_recognition': ['STT/ggml-base.en.bin'],
 }
 PINS = {

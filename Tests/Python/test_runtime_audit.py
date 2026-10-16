@@ -23,7 +23,10 @@ class RuntimeAuditTests(unittest.TestCase):
     def audit(self):
         (self.root / 'runtime-manifest.json').write_text(json.dumps(self.manifest))
         return audit_runtime(self.root, enforce_pins=False)
-    def test_complete_fixture(self): self.assertEqual(self.audit()['files'], 10)
+    def test_complete_fixture(self):
+        # The required set follows REQUIRED (the Python voice interpreter is no
+        # longer part of a complete payload), so count it rather than pinning it.
+        self.assertEqual(self.audit()['files'], len({n for g in REQUIRED.values() for n in g}) + 1)
     def test_unmanifested_code_rejected(self):
         (self.root / 'extra.py').write_bytes(b'bad')
         with self.assertRaises(ValueError): self.audit()
@@ -47,7 +50,9 @@ class RuntimeAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'wrong managed listener source'):
             audit_runtime(self.root)
     def test_tampering_rejected(self):
-        (self.root / 'Voice/python/bin/python3').write_bytes(b'changed')
+        # Tamper with a file the payload still requires; the deleted Python
+        # interpreter is no longer part of a Rust-only voice component.
+        (self.root / 'Voice/model/config.json').write_bytes(b'changed')
         with self.assertRaises(ValueError): self.audit()
     def test_external_manifest_symlink_rejected(self):
         self.audit()
