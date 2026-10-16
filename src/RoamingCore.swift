@@ -308,14 +308,14 @@ struct RoamingCore {
 
         // Pass 3: When screen is heavily covered with windows, prefer perimeter/corners with fewest hits
         var scoredCandidates: [(point: CGPoint, hits: Int)] = []
-        let allCandidates = perimeterCandidates + interiorCandidates
-        let effectiveMinDist = min(100, max(40, minDistance * 0.6))
+        let allCandidates = perimeterCandidates
+        let effectiveMinDist = min(80, max(30, minDistance * 0.5))
         for candidate in allCandidates {
             let clamped = clamp(candidate, to: bounds)
             let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
             guard distToOrigin >= effectiveMinDist else { continue }
             let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
-            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 50 else { continue }
+            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 40 else { continue }
             let testRect = CGRect(origin: clamped, size: frame.size)
             let hits = regions.reduce(into: 0) { count, region in
                 if testRect.intersects(region) { count += 1 }
@@ -329,7 +329,7 @@ struct RoamingCore {
             return bestCandidates.randomElement()?.point
         }
 
-        return perimeterCandidates.map { clamp($0, to: bounds) }.randomElement()
+        return perimeterCandidates.map { clamp($0, to: bounds) }.first
     }
     mutating func evadeToEmptySpace(frame: CGRect, visible: CGRect, cursor: CGPoint,
                                     now: Double, displayID: UInt32, snapshot: PlacementSnapshot) -> CGPoint {

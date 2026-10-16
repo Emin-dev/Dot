@@ -2171,7 +2171,7 @@ struct PetView: View {
     private var emotion: PetEmotion {
         if case .blocked = model.phase { return .puzzled }
         if model.issue != nil || preparation.state.isIssue { return .puzzled }
-        if model.taskHalo != .hidden || stt.transcribing || preparation.state == .checking || model.capturingScreen || model.placementCapturing {
+        if model.taskHalo != .hidden || stt.transcribing || preparation.state == .checking {
             return .working
         }
         switch model.phase {

@@ -598,9 +598,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let visible = screen.visibleFrame
         let now = ProcessInfo.processInfo.systemUptime
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: cursor,
-                               paused: !eligible || model.phase != .idle, now: now, displayID: displayID, snapshot: snapshot)
+                               paused: !eligible || model.phase != .idle || isAnimatingRoam, now: now, displayID: displayID, snapshot: snapshot)
         let moved = panel.frame.origin != origin
-        if moved { panel.setFrameOrigin(origin) }
+        if moved && !isAnimatingRoam { panel.setFrameOrigin(origin) }
         let pointerNearby = panel.frame.insetBy(dx: -40, dy: -40).contains(cursor)
         _ = model.updateIdleMotion(now: now, externallyPaused: paused, pointerNearby: pointerNearby,
                                    reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, moved: moved)
@@ -708,6 +708,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let currentOrigin = panel.frame.origin
         let currentFrame = panel.frame
 
+        // Screen awareness: only relocate during idle if an active window or cursor is covering Dot
+        let isCovered = !protectedRegions.isEmpty && !RoamingCore.clear(currentFrame, regions: protectedRegions)
+        let isCursorNear = currentFrame.insetBy(dx: -20, dy: -20).contains(cursor)
+        guard isCovered || isCursorNear else { return }
+
         guard let target = RoamingCore.findRandomEmptySpace(
             frame: currentFrame,
             bounds: bounds,
@@ -725,7 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let targetFrame = NSRect(origin: target, size: panel.frame.size)
 
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 2.8
+            context.duration = 3.2
             context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             panel.animator().setFrame(targetFrame, display: true)
         }, completionHandler: { [weak self] in

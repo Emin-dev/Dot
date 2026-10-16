@@ -2278,8 +2278,11 @@ public enum NeuralMetricsInspector {
         if kerr == KERN_SUCCESS {
             residentMB = Int(info.resident_size / (1024 * 1024))
         }
+        let ramSnap = SystemRAMInspector.currentRAM()
+        let memoryFactsCount = PersistentMemoryBrain.shared.readProfileBullets().count + PersistentMemoryBrain.shared.readVolatileBullets().count
         let axTrusted = InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: false)
-        return "Neural Diagnostics: Model Qwen 3.8 27B 4-bit (Splash) \(engineReady ? "Ready" : "Warming") | Voice Kokoro bf_isabella | App RAM: \(residentMB) MB on \(hw.chip) (\(hw.ramGB) GB Unified) | Accessibility: \(axTrusted ? "Granted" : "Not Granted") | Active Timers: \(activeTimersCount)."
+        let isMuted = SystemAudioState.isOutputMuted()
+        return "Neural Diagnostics: Model Qwen 3.8 27B 4-bit (Splash) \(engineReady ? "Ready" : "Warming") | Voice Kokoro bf_isabella | App RAM: \(residentMB) MB | Host Memory: \(ramSnap.usagePercent)% used (\(String(format: "%.1f", ramSnap.freeGB)) GB free of \(String(format: "%.1f", ramSnap.totalGB)) GB) on \(hw.chip) | Audio: \(isMuted ? "Muted" : "Active") | Memories: \(memoryFactsCount) facts stored | Accessibility: \(axTrusted ? "Granted" : "Not Granted") | Active Timers: \(activeTimersCount)."
     }
 }
 

@@ -167,10 +167,16 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 - [x] **Background Media & Audio Ducking (`SystemAudioDucker`):**
   - Automatically ducks/pauses active Apple Music or Spotify playback when Dot starts speaking.
   - Seamlessly restores media playback when Dot finishes speaking or is cancelled/stopped.
+- [x] **Real-Time Neural Diagnostics & Metrics Inspector HUD:**
+  - Live conversational metrics via `NeuralMetricsInspector` showing App RAM, Host Memory usage percent, free vs total GB, Apple Silicon chip specs, Splash Qwen 27B model state, Kokoro voice, audio mute state, memory facts count, and active timer counts.
+- [x] **Screen Awareness & Organic Friendly Movement Logic:**
+  - Dot only moves fast (0.28s) when `.thinking` (immediately after user speaks, getting out of the way before answering).
+  - During `.idle`, Dot stays calmly in its safe corner and NEVER wanders randomly or jumps.
+  - Only relocates during idle if an active window directly covers Dot or cursor touches it, gliding slowly and smoothly over 3.2s (`easeInEaseOut`).
+  - Screen awareness restricted to perimeter gutters/corners when screen is full of windows, never covering interior buttons, text, or active workflows.
+  - Removed internal background placement/screenshot captures from forcing `.working` emotion, keeping Dot in a warm, friendly, smiling, breathing, and blinking resting state.
 
 ### Upcoming & Next-to-Add Capabilities (Roadmap)
-- [ ] **1. Real-Time Neural Diagnostics & Metrics Inspector HUD:**
-  - Live HUD / status panel showing RAM consumption, active model tokens/second generation speed, KV-cache pressure, active audio route, and SQLite FTS5 database count.
 - [ ] **2. Audio Route Hot-Swapping:**
   - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
 - [ ] **3. Action Approval Cards & Non-Destructive Guard:**
