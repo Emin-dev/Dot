@@ -2257,7 +2257,20 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
 // MARK: - Self-Codebase Indexing & Live Source Reader
 
 public enum SelfCodebaseReader {
-    public static let defaultRootPath = "/Users/mac/.gemini/antigravity/scratch/Dot"
+    /// Where Dot reads its own source. Resolved when it is asked rather than pinned
+    /// to one machine: an explicit override wins, then the long-standing checkout if
+    /// it is really there, and otherwise nothing - so a machine without the source
+    /// reports no matches instead of searching a path that cannot exist.
+    public static var defaultRootPath: String {
+        if let override = ProcessInfo.processInfo.environment["DOT_SOURCE_ROOT"], !override.isEmpty {
+            return override
+        }
+        let historical = "/Users/mac/.gemini/antigravity/scratch/Dot"
+        if FileManager.default.fileExists(atPath: (historical as NSString).appendingPathComponent("src")) {
+            return historical
+        }
+        return ""
+    }
 
     public static func listSwiftFiles(rootPath: String = defaultRootPath) -> [String] {
         let srcPath = (rootPath as NSString).appendingPathComponent("src")
