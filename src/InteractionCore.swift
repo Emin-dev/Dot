@@ -2658,6 +2658,33 @@ public final class AutonomousMacAgent {
             autonomousActionNote: actionNote
         )
     }
+
+    @MainActor
+    public func generateProactiveTip(for desktop: ActiveDesktopContext) -> String? {
+        let app = (desktop.appName ?? NSWorkspace.shared.frontmostApplication?.localizedName ?? "").lowercased()
+        let win = (desktop.windowTitle ?? "").lowercased()
+        let ocr = (desktop.selectedText ?? "").lowercased()
+
+        if app.contains("xcode") {
+            if win.contains("error") || ocr.contains("error:") || ocr.contains("build failed") {
+                return "I noticed an Xcode build issue. Would you like me to inspect recent changes or run tests?"
+            }
+            return "Working in Xcode? You can tell me to 'build', 'run', or 'clean' anytime."
+        } else if app.contains("terminal") || app.contains("iterm") || app.contains("ghostty") {
+            if ocr.contains("error:") || ocr.contains("failed") {
+                return "I noticed an error in Terminal. Would you like me to check git status or inspect the log?"
+            }
+            return "Working in Terminal? You can tell me 'git status' or 'git diff' to check repository status."
+        } else if app.contains("safari") || app.contains("chrome") {
+            return "Browsing the web? You can tell me to toggle Reader Mode or copy this page link."
+        } else if app.contains("figma") {
+            return "Designing in Figma? You can tell me to 'zoom to fit' or 'toggle UI'."
+        } else if !lastIndexedDownload.isEmpty {
+            let download = lastIndexedDownload
+            return "I noticed a recent download '\(download)'. Would you like me to open it or move it to a project folder?"
+        }
+        return "I'm monitoring your workspace and ready to help. You can ask me to run shortcuts, click elements, or automate tasks."
+    }
     #endif
 }
 
@@ -4360,6 +4387,7 @@ public final class StuckTaskDetector {
     private struct ErrorRecord {
         let signature: String
         let firstSeenUptime: Double
+        var lastSeenUptime: Double
         let appName: String
         var alerted: Bool
     }
@@ -4372,24 +4400,29 @@ public final class StuckTaskDetector {
     public func evaluate(appName: String?, windowTitle: String?, ocrText: String?, now: Double) -> StuckErrorEvent? {
         let combined = [windowTitle ?? "", ocrText ?? ""].joined(separator: "\n")
         guard isErrorState(combined) else {
-            activeRecord = nil
+            if let active = activeRecord, (now - active.lastSeenUptime) > 30.0 {
+                activeRecord = nil
+            }
             return nil
         }
 
         let signature = extractSignature(combined)
         let resolvedApp = appName ?? "Active App"
 
-        if let existing = activeRecord, existing.signature == signature {
+        if var existing = activeRecord, existing.signature == signature {
+            existing.lastSeenUptime = now
             let elapsed = now - existing.firstSeenUptime
             if elapsed >= stuckThresholdSeconds && !existing.alerted && (now - lastGuidanceUptime >= cooldownSeconds) {
-                activeRecord?.alerted = true
+                existing.alerted = true
+                activeRecord = existing
                 lastGuidanceUptime = now
                 let guidance = formatGuidance(for: signature, app: resolvedApp)
                 DiagnosticChatLogger.recordEvent(category: "stuck_detection", message: "Stuck on error in \(resolvedApp) for \(Int(elapsed))s: \"\(signature)\"")
                 return StuckErrorEvent(appName: resolvedApp, errorSnippet: signature, guidance: guidance)
             }
+            activeRecord = existing
         } else {
-            activeRecord = ErrorRecord(signature: signature, firstSeenUptime: now, appName: resolvedApp, alerted: false)
+            activeRecord = ErrorRecord(signature: signature, firstSeenUptime: now, lastSeenUptime: now, appName: resolvedApp, alerted: false)
         }
         return nil
     }

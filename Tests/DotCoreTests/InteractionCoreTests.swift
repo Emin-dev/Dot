@@ -1391,6 +1391,35 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertEqual(event3?.appName, "Xcode")
         XCTAssertTrue(event3?.guidance.contains("Xcode build error") ?? false)
     }
+
+    @MainActor
+    func testStuckTaskDetectorGracePeriod() {
+        let detector = StuckTaskDetector()
+        detector.reset()
+
+        _ = detector.evaluate(appName: "Xcode", windowTitle: "Build failed", ocrText: "error: type error", now: 100)
+        // Temporary non-error frame at t=110 (within 30s)
+        _ = detector.evaluate(appName: "Xcode", windowTitle: "Editor", ocrText: "let x = 1", now: 110)
+        // Error seen again at t=120
+        _ = detector.evaluate(appName: "Xcode", windowTitle: "Build failed", ocrText: "error: type error", now: 120)
+        // At t=285 (>180s from initial 100), alert fires because record was preserved across grace period
+        let event = detector.evaluate(appName: "Xcode", windowTitle: "Build failed", ocrText: "error: type error", now: 285)
+        XCTAssertNotNil(event)
+    }
+
+    @MainActor
+    func testAutonomousMacAgentProactiveTips() {
+        let agent = AutonomousMacAgent.shared
+        let xcodeCtx = ActiveDesktopContext(appName: "Xcode", windowTitle: "MyProject", selectedText: "let a = 1")
+        let xcodeTip = agent.generateProactiveTip(for: xcodeCtx)
+        XCTAssertNotNil(xcodeTip)
+        XCTAssertTrue(xcodeTip?.contains("Xcode") ?? false)
+
+        let termCtx = ActiveDesktopContext(appName: "Terminal", windowTitle: "zsh", selectedText: "error: command failed")
+        let termTip = agent.generateProactiveTip(for: termCtx)
+        XCTAssertNotNil(termTip)
+        XCTAssertTrue(termTip?.contains("Terminal") ?? false)
+    }
 }
 
 final class IdleSelfReflectionAndAutonomyTests: XCTestCase {

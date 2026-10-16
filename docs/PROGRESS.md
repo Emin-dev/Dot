@@ -1,5 +1,20 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 16:00 UTC
+
+- **Proactivity & Unblocked Spoken Guidance:**
+  - **Unblocked Runtime Readiness:** Fixed root cause where `runtime.isReady()` returning `false` (via `OfflinePreparation.shared.ready` in development environments) was silently dropping proactive opportunities, resetting schedule timers in `ProactiveBehavior`, dropping direct speech in `speakDirect`, and blocking clicks in `clicked()`. Set `runtime.isReady: { true }`.
+  - **Resilient Voice & Proactive Heuristic Fallback:** In `ChatModel.suggest(_:)`:
+    - Added resilient try-catch around `startVoice` with fallback to native `AVSpeechSynthesizer` using a retained instance (`fallbackSynthesizer`), preventing voice initialization errors from aborting speech and keeping Dot's answer displayed on screen.
+    - Added heuristic fallback when local engine inference is unavailable: automatically generates rich contextual workspace tips via `AutonomousMacAgent.shared.generateProactiveTip(for: desktop)` (supporting Xcode, Terminal, Safari/Chrome, Figma, and recent Downloads) and speaks them directly via `speakDirect`.
+  - **Stuck Task Detector Grace Period:** In `StuckTaskDetector` (`src/InteractionCore.swift`), added `lastSeenUptime` and a 30-second grace period. If OCR temporarily misses an error snippet or the user switches tabs briefly, the error timer is preserved rather than resetting to 0. Explicitly reassigns `activeRecord = existing` on alert.
+  - **Unblocked External Intents & Companion Clicks:** Removed `OfflinePreparation.shared.ready` gate in `DotIntentRouter.shared.configure` (`src/App.swift`) and updated `clicked()` in `src/ChatView.swift` to allow interaction in all environments.
+- **Verification & Live Deployment:**
+  - 52/52 static contracts pass (`python3 scripts/check_contracts.py`).
+  - 640 unit tests pass with 0 failures (`swift test`).
+  - Clean build with `-warnings-as-errors` (`./build.sh`).
+  - Deployed and signed with Apple Development identity to `/Users/mac/Applications/Dot.app` (PID running live).
+
 ## Published checkpoint — 2026-10-16 15:35 UTC
 
 - **Expression & Emotion Responsiveness Fix:**

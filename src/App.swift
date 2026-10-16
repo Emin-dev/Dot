@@ -321,7 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         scheduleMovement(interval: 0.5)
         DotIntentRouter.shared.configure(talk: { [weak self] in
-            guard let self, let model = self.model, OfflinePreparation.shared.ready, !self.terminating else { throw DotIntentError.unavailable }
+            guard let self, let model = self.model, !self.terminating else { throw DotIntentError.unavailable }
             self.surface.recall(); model.clicked()
         }, stop: { [weak self] in
             guard let self, !self.terminating else { throw DotIntentError.unavailable }

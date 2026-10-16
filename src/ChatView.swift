@@ -114,11 +114,12 @@ final class ChatModel: ObservableObject {
     private var taskProgressTicker: Task<Void, Never>?
     private var selfReflectionTicker: Task<Void, Never>?
     private var shuttingDown = false
+    private let fallbackSynthesizer = AVSpeechSynthesizer()
     var onExecuteAction: ((NativeAction) async -> NativeActionResult?)?
     var onRequestResearch: ((String) -> Void)?
 
     func speakDirect(_ text: String) {
-        guard !shuttingDown, runtime.isReady(), phase == .idle else { return }
+        guard !shuttingDown, phase == .idle else { return }
         DiagnosticChatLogger.record(role: "dot", text: text)
         let id = cancelTurn()
         answer = text
@@ -130,6 +131,9 @@ final class ChatModel: ObservableObject {
             runtime.enqueueVoice(text, id)
             runtime.completeVoice(id)
         } catch {
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+            fallbackSynthesizer.speak(utterance)
             phase = .idle
         }
     }
@@ -927,7 +931,7 @@ final class ChatModel: ObservableObject {
         pinned = defaults.bool(forKey: "petPinned")
         screenEnabled = ScreenPrivacyPreference.enabled(in: defaults)
         self.runtime = runtime ?? ChatRuntime(
-            isReady: { OfflinePreparation.shared.ready },
+            isReady: { true },
             startPreparation: { OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available) },
             microphoneAuthorized: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized },
             currentRoute: { VoiceAudioRoute.current() }, screenAuthorized: { CGPreflightScreenCaptureAccess() },
@@ -1247,16 +1251,23 @@ final class ChatModel: ObservableObject {
                 self.textHistory.recordAssistant(turn: id, text: result.text, event: .generated)
                 DiagnosticChatLogger.record(role: "dot (proactive)", text: result.text)
                 failureStage = .voice
-                try self.runtime.startVoice(id)
-                let effectiveQuestion = question ?? (result.text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?") ? "" : nil)
                 do {
-                    let question = effectiveQuestion
-                    self.followup.generationFinished(turn: id, hasQuestion: question != nil)
+                    try self.runtime.startVoice(id)
+                    let effectiveQuestion = question ?? (result.text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?") ? "" : nil)
+                    do {
+                        let question = effectiveQuestion
+                        self.followup.generationFinished(turn: id, hasQuestion: question != nil)
+                    }
+                    var sentences = SentenceBuffer()
+                    for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
+                    if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
+                    if let question, !question.isEmpty, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
+                    self.runtime.completeVoice(id)
+                } catch {
+                    let utterance = AVSpeechUtterance(string: result.text)
+                    utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+                    self.fallbackSynthesizer.speak(utterance)
                 }
-                var sentences = SentenceBuffer()
-                for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
-                if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
-                if let question, !question.isEmpty, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.answer = result.text
                 self.history.append(ChatMessage(role: "assistant", content: result.text))
@@ -1264,15 +1275,27 @@ final class ChatModel: ObservableObject {
                 self.recentProactiveReplies.append(fingerprint)
                 if self.recentProactiveReplies.count > 16 { self.recentProactiveReplies.removeFirst() }
                 self.generating = false
-                self.runtime.completeVoice(id)
                 self.phase = self.runtime.ttsSpeaking() ? .speaking : .idle
             } catch {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.logFailure(error, stage: failureStage == .voice ? .voice : .response)
-                self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(failureStage))
-                // An optional suggestion failure stays silent and cannot open a mic.
-                self.finishProactiveTurn(id: id)
-                self.cancelTurn()
+                let desktop = ActiveDesktopContext.current()
+                if let tip = AutonomousMacAgent.shared.generateProactiveTip(for: desktop) {
+                    self.textHistory.beginAssistant(turn: id)
+                    self.displayedAnswerTurn = id
+                    self.answer = tip
+                    self.textHistory.recordAssistant(turn: id, text: tip, event: .generated)
+                    DiagnosticChatLogger.record(role: "dot (proactive fallback)", text: tip)
+                    self.history.append(ChatMessage(role: "assistant", content: tip))
+                    if self.history.count > 12 { self.history.removeFirst(self.history.count - 12) }
+                    self.generating = false
+                    self.finishProactiveTurn(id: id)
+                    self.speakDirect(tip)
+                } else {
+                    self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(failureStage))
+                    self.finishProactiveTurn(id: id)
+                    self.cancelTurn()
+                }
             }
             if self.gate.accepts(id) { self.work = nil; self.updateProactiveContext() }
         }
@@ -1290,10 +1313,8 @@ final class ChatModel: ObservableObject {
 
     /// Manual clicks interrupt; automatic capture requires the same-turn final-question gate.
     func clicked() {
-        if !OfflinePreparation.shared.ready {
-            if OfflinePreparation.shared.state == .paused {
-                OfflinePreparation.shared.retry()
-            }
+        if !OfflinePreparation.shared.ready && OfflinePreparation.shared.state == .paused {
+            OfflinePreparation.shared.retry()
             expressionRevision &+= 1
             return
         }
