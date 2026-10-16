@@ -48,10 +48,17 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
    52, `InteractiveWalkthroughManager` 82 — the last is now honestly marked unwired in the checklist).
    Keep the FTS delete/stale primitives (memory needs them) and the keyed search providers (the
    owner's resilience path).
-3. *Owner features not built.* Broad local-file access; the self-improvement loop writing to its own
-   file and offering a clipboard paste (it currently types into another app unprompted, which the
-   owner asked to change); and ordinary conversation producing memories — the database shows 0 rows
-   because saving only triggers on explicit "remember that" phrasing.
+3. *Owner features not built.* Broad local-file access, and the second half of the self-improvement
+   flow: Dot now writes the suggestion to its reflections file, copies it to the clipboard and says so
+   (it no longer activates another app or synthesizes keystrokes), but it does not yet **ask** whether
+   to paste it into whatever the owner is working in. That needs a pending-action state machine; the
+   cheapest correct route is to reuse the existing approval card (`ActionApprovalRequest` plus
+   `pendingApproval` and the spoken/clicked approve-deny path) with a distinct title such as
+   "Paste Suggestion", adding a new branch in `approvePendingAction` and **not** altering the
+   destructive-command branches, which guard shell execution and file deletion.
+   Ordinary conversation now does populate memory: the detector previously required the whole turn to
+   begin with one of five exact prefixes, so real speech was never stored; it now matches a
+   first-person or explicit cue anywhere in the turn, bounded to 240 characters, and lands in T5 core.
 4. *Latent issue.* `PlacementSnapshot.lifetime` is 10 s while the app validates on a ~10 s cadence, so
    every cycle's first validation is rejected by construction (`reason=expired elapsed=10475ms` in the
    live log) before a fresh capture. Fix it in the caller — refresh before validating — and **do not
