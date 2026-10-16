@@ -1,5 +1,32 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 15:00 UTC
+
+- **Action Approval Cards & Non-Destructive Guard (Milestone 2):**
+  - Added `ActionApprovalRequest` model and destructive command analysis (`ActionApprovalRequest.isPotentiallyDestructive`) guarding commands like `rm -rf`, `sudo`, `git reset --hard`, and `killall`.
+  - Built interactive inline `ActionApprovalOverlay` within `PetView` in `src/ChatView.swift` complying with Contract 51 (inline SwiftUI overlay, no modal sheets or popovers).
+  - Wired LLM tools `execute_command` and `delete_file` in `src/Engine.swift` and `src/InteractionCore.swift`.
+  - Added voice-controlled approval flow recognizing "approve", "confirm", "yes", "deny", "cancel", and "no" during conversational speech.
+- **Contextual Developer & Creative App Workflows (Milestone 3):**
+  - Added `ContextualWorkflowHelper` and `ContextualWorkflowApp` supporting targeted quick actions:
+    - Xcode: `build` (Cmd+B), `run` (Cmd+R), `clean` (Cmd+Shift+K), `stop` (Cmd+.), `previews` (Cmd+Option+P), `find` (Cmd+Shift+F).
+    - Terminal / Ghostty / iTerm: `git_status`, `git_diff`, `cancel_process` (Ctrl+C), `clear` (Cmd+K).
+    - Safari / Chrome: `reader_mode` (Cmd+Shift+R), `reload` (Cmd+R), `new_tab` (Cmd+T), `close_tab` (Cmd+W), `copy_url` (Cmd+L -> Cmd+C).
+    - Figma: `zoom_fit` (Shift+1), `zoom_selection` (Shift+2), `toggle_ui` (Cmd+\), `group` (Cmd+G), `export` (Cmd+Shift+E).
+  - Exposed `contextual_workflow` strict function tool schema to Qwen in `src/Engine.swift` and conversational fast-paths in `src/ChatView.swift`.
+- **Proactive Idle & Stuck Detection (Milestone 4):**
+  - Added `StuckTaskDetector` in `src/InteractionCore.swift` monitoring window titles and OCR for persistent compiler errors or terminal failures (>180 seconds).
+  - Hooked proactive guidance into idle background ticker in `src/ChatView.swift`, offering context-aware suggestions while respecting a 10-minute cooldown and meeting focus modes.
+- **Audio Route Hot-Swapping (Milestone 1):**
+  - Integrated `handleAudioRouteChange` on `.AVAudioEngineConfigurationChange` in `src/Speech.swift` to seamlessly re-attach input taps without interrupting capture or dropping speech turns.
+- **Smooth Screen-Aware Movement & Expression Tuning:**
+  - Enforced 45-second quiet intervals between wandering movements and smooth 2.5–3.8s ease-in-out glides.
+  - Short 0.6s / 0.28s glides reserved strictly for obstacle/window evasion and thinking state.
+  - Retained friendly smiling resting mouth and relaxed arched brows across all states.
+- **Verification & Contracts:**
+  - All 52 static contract guardrails pass (`python3 scripts/check_contracts.py`).
+  - Full test suite passes with 0 failures (636/636 tests passed).
+
 ## Published checkpoint — 2026-10-16 04:45 UTC
 
 - **Direct Unicode `type_text` & `press_key` Actions + LLM Tool Exposure:**

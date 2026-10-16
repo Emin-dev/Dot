@@ -116,15 +116,19 @@ struct RoamingCore {
     /// Overlap escape has its own short retry so content is cleared quickly without
     /// re-running a failed empty-space search on every tick.
     private var escapeRetryAt = 0.0
-    init(seed: UInt64, now: Double, initialWanderDelay: Double = 999999.0) {
+    init(seed: UInt64, now: Double, initialWanderDelay: Double = 45.0) {
         self.seed = seed
         self.nextDecision = now + 6
         self.nextWander = now + initialWanderDelay
     }
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
-        minimumRestUntil = now + 45
-        nextWander = now + 999999.0
+        if longRest {
+            minimumRestUntil = now + 45
+            nextWander = max(nextWander, now + 45)
+        } else {
+            nextWander = max(nextWander, now + 3)
+        }
         nextDecision = max(minimumRestUntil, now + 6)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
@@ -411,13 +415,13 @@ struct RoamingCore {
             }
             active.elapsed += dt
             let travelDist = hypot(active.target.x - active.start.x, active.target.y - active.start.y)
-            let travelDuration = max(2.5, min(3.8, travelDist / 50.0))
+            let travelDuration = active.isEscape ? 0.6 : max(2.5, min(3.8, travelDist / 50.0))
             let t = min(1, active.elapsed / travelDuration), eased = t * t * (3 - 2 * t)
             let result = CGPoint(x: active.start.x + (active.target.x - active.start.x) * eased,
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = now + 999999.0
+                nextWander = now + 45.0 + Double(seed % 20)
             } else {
                 trip = active
             }

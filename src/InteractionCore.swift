@@ -140,7 +140,7 @@ struct CapturedScreenImage: Sendable {
     let turn: UUID
     let acquiredAt: Double
     private let encodedDataURL: String
-    static let maximumAge: Double = 15
+    static let maximumAge: Double = 5
 
     fileprivate init(turn: UUID, acquiredAt: Double, dataURL: String) {
         self.turn = turn; self.acquiredAt = acquiredAt; encodedDataURL = dataURL
@@ -547,13 +547,16 @@ struct QuestionIntentStream {
         case pointOnScreen(x: Double, y: Double, label: String?)
         case scrollScreen(direction: String, amount: Int)
         case snapWindow(layout: String)
+        case executeCommand(command: String, explanation: String?)
+        case deleteFile(path: String, explanation: String?)
+        case contextualWorkflow(app: String, action: String)
     }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.
     private static let questionObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"question"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
     private static let allowedToolNames: Set<String> = [
-        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen", "snap_window"
+        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen", "snap_window", "execute_command", "delete_file", "contextual_workflow"
     ]
     private var callID: String?
     private var functionName: String?
@@ -688,6 +691,24 @@ struct QuestionIntentStream {
         case "snap_window":
             guard let layout = object["layout"] as? String, !layout.isEmpty else { throw Failure.invalid }
             return .snapWindow(layout: layout)
+        case "execute_command":
+            guard let cmd = object["command"] as? String else { throw Failure.invalid }
+            let trimmed = cmd.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 1000 else { throw Failure.invalid }
+            let exp = object["explanation"] as? String
+            return .executeCommand(command: trimmed, explanation: exp)
+        case "delete_file":
+            guard let path = object["path"] as? String else { throw Failure.invalid }
+            let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 1000 else { throw Failure.invalid }
+            let exp = object["explanation"] as? String
+            return .deleteFile(path: trimmed, explanation: exp)
+        case "contextual_workflow":
+            guard let app = object["app"] as? String, let action = object["action"] as? String else { throw Failure.invalid }
+            let trimmedApp = app.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedAction = action.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedApp.isEmpty, !trimmedAction.isEmpty else { throw Failure.invalid }
+            return .contextualWorkflow(app: trimmedApp, action: trimmedAction)
         default:
             return nil
         }
@@ -3235,10 +3256,10 @@ public enum MouseControlEngine {
             }
 
             if bestMatch == nil {
-                let targetTokens = Set(target.split(whereSeparator: \.isWhitespace).map { String($0) })
+                let targetTokens = Set(target.split(whereSeparator: { $0.isWhitespace }).map { String($0) })
                 var highestScore = 0
                 for line in lines {
-                    let lineTokens = Set(line.text.lowercased().split(whereSeparator: \.isWhitespace).map { String($0) })
+                    let lineTokens = Set(line.text.lowercased().split(whereSeparator: { $0.isWhitespace }).map { String($0) })
                     let common = targetTokens.intersection(lineTokens).count
                     if common > highestScore && common >= 1 {
                         highestScore = common
@@ -4081,6 +4102,324 @@ public final class InteractiveWalkthroughManager {
                 }
             } catch {}
         }
+    }
+}
+
+// MARK: - Diagnostic Chat Logger
+
+public enum DiagnosticChatLogger {
+    private static let lock = NSLock()
+    private static let logURL: URL? = {
+        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("dot_chat_log.txt")
+    }()
+    private static let formatter: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    public static func record(role: String, text: String) {
+        guard let url = logURL else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let timestamp = formatter.string(from: Date())
+        let line = "[\(timestamp)] [\(role.uppercased())] \(trimmed)\n"
+        guard let data = line.data(using: .utf8) else { return }
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        if FileManager.default.fileExists(atPath: url.path) {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                _ = try? handle.seekToEnd()
+                try? handle.write(contentsOf: data)
+                try? handle.close()
+            }
+        } else {
+            let header = "# Dot Conversation Diagnostic Log (Temporary)\n# Created: \(timestamp)\n# Records all user prompts and assistant actions/responses for debugging.\n\n"
+            var combined = header.data(using: .utf8) ?? Data()
+            combined.append(data)
+            try? combined.write(to: url, options: .atomic)
+        }
+    }
+
+    public static func recordFailure(task: String, reason: String, missingCapability: String, proposedFix: String) {
+        let msg = "TASK: \"\(task)\" | REASON: \(reason) | MISSING: \(missingCapability) | PROPOSED_FIX: \(proposedFix)"
+        record(role: "dot (self-improvement)", text: msg)
+    }
+
+    public static func recordTool(name: String, target: String, outcome: String, succeeded: Bool) {
+        let status = succeeded ? "SUCCESS" : "FAILED"
+        let msg = "TOOL: \(name) | TARGET: \"\(target)\" | OUTCOME: \(outcome) | STATUS: \(status)"
+        record(role: "tool", text: msg)
+    }
+
+    public static func recordScreen(app: String, ocrLineCount: Int, durationMs: Double) {
+        let msg = "ACTIVE_APP: \"\(app)\" | OCR_LINES: \(ocrLineCount) | LATENCY: \(String(format: "%.1f", durationMs))ms"
+        record(role: "screen", text: msg)
+    }
+
+    public static func recordVoice(stage: String, detail: String) {
+        let msg = "STAGE: \(stage) | DETAIL: \(detail)"
+        record(role: "voice", text: msg)
+    }
+
+    public static func recordEvent(category: String, message: String) {
+        record(role: category.lowercased(), text: message)
+    }
+}
+
+// MARK: - Action Approval Request (Milestone 2)
+
+public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let title: String
+    public let detail: String
+    public let target: String
+    public let isDestructive: Bool
+    public let command: String
+
+    public init(id: UUID = UUID(), title: String, detail: String, target: String, isDestructive: Bool, command: String) {
+        self.id = id
+        self.title = title
+        self.detail = detail
+        self.target = target
+        self.isDestructive = isDestructive
+        self.command = command
+    }
+
+    /// Evaluates whether a shell command or action is potentially destructive and requires approval.
+    public static func isPotentiallyDestructive(_ command: String) -> Bool {
+        let lower = command.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let dangerousPrefixes = [
+            "rm ", "rm\t", "rmdir", "srm",
+            "git reset", "git clean", "git checkout -f",
+            "kill ", "killall", "pkill",
+            "dd ", "mkfs", "fdisk", "diskutil",
+            "chmod", "chown", "sudo",
+            "mv ", "trash "
+        ]
+        return dangerousPrefixes.contains(where: { lower.hasPrefix($0) || lower.contains(" " + $0) || lower.contains("; " + $0) || lower.contains("&& " + $0) })
+    }
+}
+
+// MARK: - Contextual App Workflows (Milestone 3)
+
+public enum ContextualWorkflowApp: String, CaseIterable, Sendable {
+    case xcode
+    case terminal
+    case safari
+    case figma
+    case unknown
+
+    public static func identify(bundleID: String?, appName: String?) -> ContextualWorkflowApp {
+        let id = (bundleID ?? "").lowercased()
+        let name = (appName ?? "").lowercased()
+
+        if id.contains("apple.dt.xcode") || name.contains("xcode") {
+            return .xcode
+        } else if id.contains("terminal") || id.contains("iterm") || id.contains("ghostty") || id.contains("warp") || name.contains("terminal") || name.contains("iterm") || name.contains("ghostty") {
+            return .terminal
+        } else if id.contains("safari") || id.contains("chrome") || id.contains("browser") || name.contains("safari") || name.contains("chrome") || name.contains("arc") {
+            return .safari
+        } else if id.contains("figma") || name.contains("figma") {
+            return .figma
+        }
+        return .unknown
+    }
+}
+
+public struct ContextualWorkflowHelper {
+    @MainActor
+    public static func performAction(app: ContextualWorkflowApp, action: String) async -> (succeeded: Bool, message: String) {
+        let act = action.lowercased().replacingOccurrences(of: " ", with: "_")
+        switch app {
+        case .xcode:
+            switch act {
+            case "build", "build_project", "compile":
+                let res = InPlaceAppTyping.performPressKey("Cmd+B")
+                return (res.succeeded, res.succeeded ? "Building Xcode project (Cmd+B)." : "Could not trigger build.")
+            case "run", "run_project":
+                let res = InPlaceAppTyping.performPressKey("Cmd+R")
+                return (res.succeeded, res.succeeded ? "Running Xcode project (Cmd+R)." : "Could not trigger run.")
+            case "clean", "clean_build", "clean_project":
+                let res = InPlaceAppTyping.performPressKey("Cmd+Shift+K")
+                return (res.succeeded, res.succeeded ? "Cleaning build folder (Cmd+Shift+K)." : "Could not trigger clean.")
+            case "stop", "stop_running":
+                let res = InPlaceAppTyping.performPressKey("Cmd+.")
+                return (res.succeeded, res.succeeded ? "Stopped Xcode task (Cmd+.)." : "Could not trigger stop.")
+            case "previews", "canvas", "toggle_previews":
+                let res = InPlaceAppTyping.performPressKey("Cmd+Option+Enter")
+                return (res.succeeded, res.succeeded ? "Toggled Xcode canvas previews (Cmd+Option+Enter)." : "Could not toggle canvas.")
+            case "find", "find_in_project":
+                let res = InPlaceAppTyping.performPressKey("Cmd+Shift+F")
+                return (res.succeeded, res.succeeded ? "Opened Find in Project (Cmd+Shift+F)." : "Could not open search.")
+            default:
+                return (false, "Unknown Xcode action '\(action)'.")
+            }
+
+        case .terminal:
+            switch act {
+            case "git_status", "status":
+                let res = InPlaceAppTyping.performTypeText("git status\n")
+                return (res.succeeded, res.succeeded ? "Checked git status." : "Could not type git status.")
+            case "git_diff", "diff":
+                let res = InPlaceAppTyping.performTypeText("git diff\n")
+                return (res.succeeded, res.succeeded ? "Checked git diff." : "Could not type git diff.")
+            case "cancel", "cancel_process", "stop":
+                let res = InPlaceAppTyping.performTypeText("\u{03}")
+                return (res.succeeded, res.succeeded ? "Sent Ctrl+C to cancel current process." : "Could not send cancel signal.")
+            case "clear":
+                let res = InPlaceAppTyping.performPressKey("Cmd+K")
+                return (res.succeeded, res.succeeded ? "Cleared terminal screen." : "Could not clear terminal.")
+            default:
+                return (false, "Unknown terminal action '\(action)'.")
+            }
+
+        case .safari:
+            switch act {
+            case "reader", "reader_mode":
+                let res = InPlaceAppTyping.performPressKey("Cmd+Shift+R")
+                return (res.succeeded, res.succeeded ? "Toggled Safari reader mode (Cmd+Shift+R)." : "Could not toggle reader mode.")
+            case "reload", "refresh":
+                let res = InPlaceAppTyping.performPressKey("Cmd+R")
+                return (res.succeeded, res.succeeded ? "Reloaded webpage (Cmd+R)." : "Could not reload page.")
+            case "new_tab":
+                let res = InPlaceAppTyping.performPressKey("Cmd+T")
+                return (res.succeeded, res.succeeded ? "Opened new browser tab (Cmd+T)." : "Could not open tab.")
+            case "close_tab":
+                let res = InPlaceAppTyping.performPressKey("Cmd+W")
+                return (res.succeeded, res.succeeded ? "Closed browser tab (Cmd+W)." : "Could not close tab.")
+            case "copy_url":
+                let select = InPlaceAppTyping.performPressKey("Cmd+L")
+                try? await Task.sleep(nanoseconds: 100_000_000)
+                let copy = InPlaceAppTyping.performPressKey("Cmd+C")
+                return (select.succeeded && copy.succeeded, "Copied browser URL to clipboard.")
+            default:
+                return (false, "Unknown browser action '\(action)'.")
+            }
+
+        case .figma:
+            switch act {
+            case "zoom_fit", "fit":
+                let res = InPlaceAppTyping.performPressKey("Shift+1")
+                return (res.succeeded, res.succeeded ? "Zoomed to fit in Figma (Shift+1)." : "Could not zoom to fit.")
+            case "zoom_selection", "selection":
+                let res = InPlaceAppTyping.performPressKey("Shift+2")
+                return (res.succeeded, res.succeeded ? "Zoomed to selection in Figma (Shift+2)." : "Could not zoom to selection.")
+            case "toggle_ui":
+                let res = InPlaceAppTyping.performPressKey("Cmd+\\")
+                return (res.succeeded, res.succeeded ? "Toggled Figma UI visibility (Cmd+\\)." : "Could not toggle UI.")
+            case "group":
+                let res = InPlaceAppTyping.performPressKey("Cmd+G")
+                return (res.succeeded, res.succeeded ? "Grouped selection in Figma (Cmd+G)." : "Could not group selection.")
+            case "export":
+                let res = InPlaceAppTyping.performPressKey("Cmd+Shift+E")
+                return (res.succeeded, res.succeeded ? "Opened Figma export panel (Cmd+Shift+E)." : "Could not open export panel.")
+            default:
+                return (false, "Unknown Figma action '\(action)'.")
+            }
+
+        case .unknown:
+            return (false, "No contextual workflow available for this application.")
+        }
+    }
+}
+
+// MARK: - Proactive Idle & Stuck Detection (Milestone 4)
+
+public struct StuckErrorEvent: Equatable, Sendable {
+    public let appName: String
+    public let errorSnippet: String
+    public let guidance: String
+
+    public init(appName: String, errorSnippet: String, guidance: String) {
+        self.appName = appName
+        self.errorSnippet = errorSnippet
+        self.guidance = guidance
+    }
+}
+
+@MainActor
+public final class StuckTaskDetector {
+    public static let shared = StuckTaskDetector()
+
+    private struct ErrorRecord {
+        let signature: String
+        let firstSeenUptime: Double
+        let appName: String
+        var alerted: Bool
+    }
+
+    private var activeRecord: ErrorRecord?
+    private let stuckThresholdSeconds: Double = 180.0 // >3 minutes
+    private var lastGuidanceUptime: Double = -600.0
+    private let cooldownSeconds: Double = 600.0 // 10 minutes between proactive alerts
+
+    public func evaluate(appName: String?, windowTitle: String?, ocrText: String?, now: Double) -> StuckErrorEvent? {
+        let combined = [windowTitle ?? "", ocrText ?? ""].joined(separator: "\n")
+        guard isErrorState(combined) else {
+            activeRecord = nil
+            return nil
+        }
+
+        let signature = extractSignature(combined)
+        let resolvedApp = appName ?? "Active App"
+
+        if let existing = activeRecord, existing.signature == signature {
+            let elapsed = now - existing.firstSeenUptime
+            if elapsed >= stuckThresholdSeconds && !existing.alerted && (now - lastGuidanceUptime >= cooldownSeconds) {
+                activeRecord?.alerted = true
+                lastGuidanceUptime = now
+                let guidance = formatGuidance(for: signature, app: resolvedApp)
+                DiagnosticChatLogger.recordEvent(category: "stuck_detection", message: "Stuck on error in \(resolvedApp) for \(Int(elapsed))s: \"\(signature)\"")
+                return StuckErrorEvent(appName: resolvedApp, errorSnippet: signature, guidance: guidance)
+            }
+        } else {
+            activeRecord = ErrorRecord(signature: signature, firstSeenUptime: now, appName: resolvedApp, alerted: false)
+        }
+        return nil
+    }
+
+    private func isErrorState(_ text: String) -> Bool {
+        let lower = text.lowercased()
+        return lower.contains("build failed") ||
+               lower.contains("fatal error:") ||
+               lower.contains("traceback (most recent call last):") ||
+               lower.contains("syntaxerror:") ||
+               lower.contains("compile error") ||
+               lower.contains("failed with exit code") ||
+               lower.contains("failed (failures=") ||
+               lower.contains("assertion failed") ||
+               (lower.contains("error:") && (lower.contains(".swift:") || lower.contains(".rs:") || lower.contains(".py:")))
+    }
+
+    private func extractSignature(_ text: String) -> String {
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        for line in lines {
+            let lower = line.lowercased()
+            if lower.contains("error:") || lower.contains("build failed") || lower.contains("traceback") || lower.contains("fatal") {
+                return String(line.prefix(120))
+            }
+        }
+        return String(text.prefix(80))
+    }
+
+    private func formatGuidance(for signature: String, app: String) -> String {
+        let lowerApp = app.lowercased()
+        if lowerApp.contains("xcode") {
+            return "I noticed you've been working on this Xcode build error for a few minutes: \"\(signature)\". Would you like me to inspect the code or suggest a fix?"
+        } else if lowerApp.contains("terminal") || lowerApp.contains("iterm") || lowerApp.contains("ghostty") {
+            return "I noticed this command failed with an error: \"\(signature)\". Would you like me to check the stack trace or review recent changes?"
+        } else {
+            return "I noticed this persistent error: \"\(signature)\". Would you like me to help troubleshoot it?"
+        }
+    }
+
+    public func reset() {
+        activeRecord = nil
+        lastGuidanceUptime = -cooldownSeconds
     }
 }
 

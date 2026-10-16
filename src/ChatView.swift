@@ -43,70 +43,7 @@ enum TypedMessageValidation {
     }
 }
 
-/// Temporary diagnostic chat logger saving all messages to Downloads folder.
-/// Will be removed in final production release per user request.
-enum DiagnosticChatLogger {
-    private static let lock = NSLock()
-    private static let logURL: URL? = {
-        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("dot_chat_log.txt")
-    }()
-    private static let formatter: ISO8601DateFormatter = {
-        let f = ISO8601DateFormatter()
-        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return f
-    }()
 
-    static func record(role: String, text: String) {
-        guard let url = logURL else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let timestamp = formatter.string(from: Date())
-        let line = "[\(timestamp)] [\(role.uppercased())] \(trimmed)\n"
-        guard let data = line.data(using: .utf8) else { return }
-
-        lock.lock()
-        defer { lock.unlock() }
-
-        if FileManager.default.fileExists(atPath: url.path) {
-            if let handle = try? FileHandle(forWritingTo: url) {
-                _ = try? handle.seekToEnd()
-                try? handle.write(contentsOf: data)
-                try? handle.close()
-            }
-        } else {
-            let header = "# Dot Conversation Diagnostic Log (Temporary)\n# Created: \(timestamp)\n# Records all user prompts and assistant actions/responses for debugging.\n\n"
-            var combined = header.data(using: .utf8) ?? Data()
-            combined.append(data)
-            try? combined.write(to: url, options: .atomic)
-        }
-    }
-
-    static func recordFailure(task: String, reason: String, missingCapability: String, proposedFix: String) {
-        let msg = "TASK: \"\(task)\" | REASON: \(reason) | MISSING: \(missingCapability) | PROPOSED_FIX: \(proposedFix)"
-        record(role: "dot (self-improvement)", text: msg)
-    }
-
-    static func recordTool(name: String, target: String, outcome: String, succeeded: Bool) {
-        let status = succeeded ? "SUCCESS" : "FAILED"
-        let msg = "TOOL: \(name) | TARGET: \"\(target)\" | OUTCOME: \(outcome) | STATUS: \(status)"
-        record(role: "tool", text: msg)
-    }
-
-    static func recordScreen(app: String, ocrLineCount: Int, durationMs: Double) {
-        let msg = "ACTIVE_APP: \"\(app)\" | OCR_LINES: \(ocrLineCount) | LATENCY: \(String(format: "%.1f", durationMs))ms"
-        record(role: "screen", text: msg)
-    }
-
-    static func recordVoice(stage: String, detail: String) {
-        let msg = "STAGE: \(stage) | DETAIL: \(detail)"
-        record(role: "voice", text: msg)
-    }
-
-    static func recordEvent(category: String, message: String) {
-        record(role: category.lowercased(), text: message)
-    }
-}
 
 enum DotMovementCommand: String, Sendable {
     case left
@@ -141,6 +78,7 @@ final class ChatModel: ObservableObject {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
     @Published var hovered = false { didSet { if hovered { placementInvalidated?() }; updateProactiveContext() } }
+    @Published var pendingApproval: ActionApprovalRequest? = nil
     @Published var interactionPaused = false { didSet { if interactionPaused { placementInvalidated?(); cancelForInteraction() }; updateProactiveContext() } }
     var placementInvalidated: (() -> Void)?
     @Published var placementCapturing = false
@@ -192,6 +130,58 @@ final class ChatModel: ObservableObject {
             runtime.completeVoice(id)
         } catch {
             phase = .idle
+        }
+    }
+
+    func approvePendingAction() {
+        guard let req = pendingApproval else { return }
+        pendingApproval = nil
+        let target = req.target
+        let isDelete = req.title == "Delete File"
+        let cmd = req.command
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if isDelete {
+                do {
+                    try FileManager.default.removeItem(atPath: target)
+                    DiagnosticChatLogger.recordTool(name: "delete_file", target: target, outcome: "File deleted successfully", succeeded: true)
+                    self.speakDirect("Approved. File deleted.")
+                } catch {
+                    DiagnosticChatLogger.recordTool(name: "delete_file", target: target, outcome: error.localizedDescription, succeeded: false)
+                    self.speakDirect("Could not delete file: \(error.localizedDescription)")
+                }
+            } else {
+                let output = await Self.runShellCommand(cmd)
+                DiagnosticChatLogger.recordTool(name: "execute_command", target: cmd, outcome: output, succeeded: true)
+                let firstLine = output.components(separatedBy: .newlines).first ?? "Command finished"
+                self.speakDirect("Approved. \(firstLine)")
+            }
+        }
+    }
+
+    func denyPendingAction() {
+        guard let req = pendingApproval else { return }
+        pendingApproval = nil
+        DiagnosticChatLogger.recordTool(name: req.isDestructive ? "approval_denied" : "action_denied", target: req.command, outcome: "User rejected action", succeeded: false)
+        speakDirect("Action cancelled.")
+    }
+
+    static func runShellCommand(_ command: String) async -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-c", command]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            return output.isEmpty ? "(Exit code \(process.terminationStatus))" : output
+        } catch {
+            return "Failed to run command: \(error.localizedDescription)"
         }
     }
 
@@ -1100,6 +1090,14 @@ final class ChatModel: ObservableObject {
                         self.proactiveContextChangedAfterUser = true
                     }
                     self.updateProactiveContext()
+
+                    if !MeetingFocusAwareness.isMeetingActive() {
+                        let desktop = ActiveDesktopContext.current()
+                        if let stuckEvent = StuckTaskDetector.shared.evaluate(appName: desktop.appName, windowTitle: desktop.windowTitle, ocrText: desktop.selectedText, now: now) {
+                            self.speakDirect(stuckEvent.guidance)
+                            DiagnosticChatLogger.record(role: "dot (stuck-guidance)", text: stuckEvent.guidance)
+                        }
+                    }
                 }
                 guard self.visible, !self.proactive.paused, self.phase == .idle,
                       !self.generating, !self.runtime.ttsSpeaking(),
@@ -1442,6 +1440,18 @@ final class ChatModel: ObservableObject {
 
     private func submit(_ text: String, id: UUID, typed: Bool = false) {
         guard gate.accepts(id) else { return }
+
+        if pendingApproval != nil {
+            let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            if ["approve", "yes", "confirm", "run it", "do it", "proceed", "okay", "sure", "accept"].contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
+                approvePendingAction()
+                return
+            } else if ["deny", "no", "cancel", "stop", "don't do it", "reject", "nevermind", "abort"].contains(lower) || lower.hasPrefix("deny") || lower.hasPrefix("cancel") {
+                denyPendingAction()
+                return
+            }
+        }
+
         DiagnosticChatLogger.record(role: "user", text: text)
         timing(typed ? "text_submitted" : "final_transcript")
         lastAttemptedText = text
@@ -1459,6 +1469,75 @@ final class ChatModel: ObservableObject {
             DotSoulManager.shared.archiveCurrentState(reason: "history_compaction")
             if history.count > ExpandedContextWindow.maxHistoryMessages {
                 history.removeFirst(history.count - ExpandedContextWindow.maxHistoryMessages)
+            }
+        }
+
+        // Check Contextual Developer & App Workflows (Milestone 3)
+        let lowerContextualText = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let activeContext = ActiveDesktopContext.current()
+        let detectedApp = ContextualWorkflowApp.identify(bundleID: nil, appName: activeContext.appName)
+
+        if detectedApp == .xcode {
+            if ["build", "build project", "build app", "build the project"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .xcode, action: "build")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            } else if ["run", "run project", "run app", "run the app"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .xcode, action: "run")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            } else if ["clean", "clean build", "clean project"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .xcode, action: "clean")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            }
+        } else if detectedApp == .terminal {
+            if ["git status", "check git status", "check status"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .terminal, action: "git_status")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            } else if ["git diff", "check git diff", "show diff"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .terminal, action: "git_diff")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            } else if ["cancel command", "stop process", "stop command", "ctrl c"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .terminal, action: "cancel")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            }
+        } else if detectedApp == .safari {
+            if ["reader mode", "toggle reader mode", "turn on reader mode"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .safari, action: "reader_mode")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            }
+        } else if detectedApp == .figma {
+            if ["zoom to fit", "fit to screen"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .figma, action: "zoom_fit")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
+            } else if ["zoom to selection", "zoom selection"].contains(lowerContextualText) {
+                Task { @MainActor [weak self] in
+                    let res = await ContextualWorkflowHelper.performAction(app: .figma, action: "zoom_selection")
+                    self?.respondDirectly(res.message, id: id)
+                }
+                return
             }
         }
 
@@ -1932,6 +2011,27 @@ final class ChatModel: ObservableObject {
                             executedToolConfirmation = "Unknown layout '\(layout)'."
                             DiagnosticChatLogger.recordTool(name: "snap_window", target: layout, outcome: executedToolConfirmation ?? "", succeeded: false)
                         }
+                    case .executeCommand(let command, let explanation):
+                        if ActionApprovalRequest.isPotentiallyDestructive(command) {
+                            let req = ActionApprovalRequest(title: "Execute Command", detail: explanation ?? "Terminal command requires approval", target: command, isDestructive: true, command: command)
+                            self.pendingApproval = req
+                            executedToolConfirmation = "This command requires your approval. Click Approve or say 'Approve' to run: \(command)."
+                            DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: "Awaiting user approval", succeeded: true)
+                        } else {
+                            let output = await Self.runShellCommand(command)
+                            executedToolConfirmation = "Executed command:\n\(output)"
+                            DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: output, succeeded: true)
+                        }
+                    case .deleteFile(let path, let explanation):
+                        let req = ActionApprovalRequest(title: "Delete File", detail: explanation ?? "File deletion requires approval", target: path, isDestructive: true, command: "rm -rf '\(path)'")
+                        self.pendingApproval = req
+                        executedToolConfirmation = "Deleting this file requires your approval. Click Approve or say 'Approve' to delete: \(path)."
+                        DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: "Awaiting user approval", succeeded: true)
+                    case .contextualWorkflow(let app, let action):
+                        let workflowApp = ContextualWorkflowApp(rawValue: app.lowercased()) ?? .unknown
+                        let res = await ContextualWorkflowHelper.performAction(app: workflowApp, action: action)
+                        executedToolConfirmation = res.message
+                        DiagnosticChatLogger.recordTool(name: "contextual_workflow", target: "\(app):\(action)", outcome: res.message, succeeded: res.succeeded)
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
@@ -2184,11 +2284,21 @@ struct PetView: View {
     }
 
     var body: some View {
-        character
-            .onHover { model.hovered = $0 }
-            .padding(PetLayout.edgePadding)
-            .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
-            .onExitCommand { stop() }
+        ZStack {
+            character
+                .onHover { model.hovered = $0 }
+                .padding(PetLayout.edgePadding)
+                .frame(width: PetLayout.panelSize.width, height: PetLayout.panelSize.height)
+                .onExitCommand { stop() }
+
+            if let request = model.pendingApproval {
+                ActionApprovalOverlay(request: request, onApprove: {
+                    model.approvePendingAction()
+                }, onDeny: {
+                    model.denyPendingAction()
+                })
+            }
+        }
     }
 
     private var character: some View {
@@ -2348,3 +2458,73 @@ enum CompanionStatusText {
         }
     }
 }
+
+// MARK: - Action Approval Overlay (Milestone 2)
+
+struct ActionApprovalOverlay: View {
+    let request: ActionApprovalRequest
+    let onApprove: () -> Void
+    let onDeny: () -> Void
+
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 3) {
+                Image(systemName: "exclamationmark.shield.fill")
+                    .foregroundColor(.orange)
+                    .font(.system(size: 11, weight: .bold))
+                Text("Confirm Action")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            Text(request.command)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.white.opacity(0.85))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 4)
+            HStack(spacing: 6) {
+                Button(action: onApprove) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 7, weight: .bold))
+                        Text("Approve")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.green.opacity(0.85))
+                    .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onDeny) {
+                    HStack(spacing: 2) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 7, weight: .bold))
+                        Text("Deny")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.red.opacity(0.85))
+                    .cornerRadius(4)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(6)
+        .background(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(Color.black.opacity(0.90))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(Color.orange.opacity(0.7), lineWidth: 1)
+                )
+        )
+        .frame(width: 128)
+        .offset(y: 28)
+    }
+}
+

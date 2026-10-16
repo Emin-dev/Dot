@@ -1324,6 +1324,65 @@ final class InPlaceAppTypingTests: XCTestCase {
         try keyStream.feed("data: [DONE]")
         XCTAssertNil(try keyStream.completed())
         XCTAssertEqual(try keyStream.completedToolAction(), .pressKey("Cmd+V"))
+
+        var cmdStream = QuestionIntentStream()
+        try cmdStream.feed(toolFrame(name: "execute_command", arguments: #"{"command":"git status","explanation":"Check working tree"}"#))
+        try cmdStream.feed(finishFrame)
+        try cmdStream.feed("data: [DONE]")
+        XCTAssertNil(try cmdStream.completed())
+        XCTAssertEqual(try cmdStream.completedToolAction(), .executeCommand(command: "git status", explanation: "Check working tree"))
+
+        var delStream = QuestionIntentStream()
+        try delStream.feed(toolFrame(name: "delete_file", arguments: #"{"path":"/tmp/test.txt"}"#))
+        try delStream.feed(finishFrame)
+        try delStream.feed("data: [DONE]")
+        XCTAssertNil(try delStream.completed())
+        XCTAssertEqual(try delStream.completedToolAction(), .deleteFile(path: "/tmp/test.txt", explanation: nil))
+
+        var workflowStream = QuestionIntentStream()
+        try workflowStream.feed(toolFrame(name: "contextual_workflow", arguments: #"{"app":"xcode","action":"build"}"#))
+        try workflowStream.feed(finishFrame)
+        try workflowStream.feed("data: [DONE]")
+        XCTAssertNil(try workflowStream.completed())
+        XCTAssertEqual(try workflowStream.completedToolAction(), .contextualWorkflow(app: "xcode", action: "build"))
+    }
+
+    func testActionApprovalRequestDestructiveGuard() {
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("rm -rf /tmp/test"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("sudo make install"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("git reset --hard HEAD~1"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("killall Dot"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("git status"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("ls -la"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("cargo test"))
+    }
+
+    func testContextualWorkflowAppIdentification() {
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.apple.dt.Xcode", appName: "Xcode"), .xcode)
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.apple.Terminal", appName: "Terminal"), .terminal)
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.apple.Safari", appName: "Safari"), .safari)
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.figma.Desktop", appName: "Figma"), .figma)
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.random.app", appName: "Notes"), .unknown)
+    }
+
+    @MainActor
+    func testStuckTaskDetectorEvaluation() {
+        let detector = StuckTaskDetector()
+        detector.reset()
+
+        // Initially seeing an error should record observation but not alert immediately (< 180s)
+        let event1 = detector.evaluate(appName: "Xcode", windowTitle: "Build failed with 2 errors", ocrText: "error: cannot find type in scope", now: 100)
+        XCTAssertNil(event1)
+
+        // After 60 seconds, still not threshold
+        let event2 = detector.evaluate(appName: "Xcode", windowTitle: "Build failed with 2 errors", ocrText: "error: cannot find type in scope", now: 160)
+        XCTAssertNil(event2)
+
+        // After 181 seconds, threshold exceeded: triggers alert!
+        let event3 = detector.evaluate(appName: "Xcode", windowTitle: "Build failed with 2 errors", ocrText: "error: cannot find type in scope", now: 285)
+        XCTAssertNotNil(event3)
+        XCTAssertEqual(event3?.appName, "Xcode")
+        XCTAssertTrue(event3?.guidance.contains("Xcode build error") ?? false)
     }
 }
 
