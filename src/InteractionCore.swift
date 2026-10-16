@@ -3321,18 +3321,30 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
     func assembleTurnContext(
         query: String,
         ftsStore: LocalFTSStore?,
-        activeDesktop: ActiveDesktopContext?
+        activeDesktop: ActiveDesktopContext?,
+        memory: MemoryTierStore? = nil
     ) async -> String? {
         var queryMems: [String] = []
         var pastTurns: [String] = []
         var docEvidence: [String] = []
         var pinnedMems: [String] = []
 
+        if let memory {
+            // Tiered recall: core records are identity, preferences and corrected
+            // facts, so they lead; the rest follow by tier through the same store, so
+            // promotion and supersession are respected instead of being invisible.
+            if let core = try? await memory.records(tier: .core, limit: 15, includeSuperseded: false) {
+                pinnedMems = core.map(\.text)
+            }
+            if let recalled = try? await memory.recall(query: query, limit: 10, now: Date()) {
+                queryMems = recalled.map(\.text)
+            }
+        }
         if let fts = ftsStore {
-            if let pinned = try? await fts.listPinnedMemories(limit: 15) {
+            if pinnedMems.isEmpty, let pinned = try? await fts.listPinnedMemories(limit: 15) {
                 pinnedMems = pinned.map { $0.fact }
             }
-            if let searched = try? await fts.searchMemories(query: query, limit: 10) {
+            if queryMems.isEmpty, let searched = try? await fts.searchMemories(query: query, limit: 10) {
                 queryMems = searched.map { $0.fact }
             }
             if let past = try? await fts.searchConversations(query: query, limit: 5) {

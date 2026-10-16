@@ -2073,7 +2073,8 @@ final class ChatModel: ObservableObject {
                 if let assembledCtx = await PersistentMemoryBrain.shared.assembleTurnContext(
                     query: text,
                     ftsStore: self.ftsStore,
-                    activeDesktop: desktop
+                    activeDesktop: desktop,
+                    memory: self.memory
                 ) {
                     if let lastIdx = chatInput.indices.last {
                         chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: chatInput[lastIdx].content + assembledCtx)
