@@ -2363,3 +2363,150 @@ private final class LaserBoxView: NSView {
 }
 #endif
 
+// MARK: - Autonomous Mac Agent & Workspace Observer
+
+public struct AutonomousWorkspaceSnapshot: Equatable, Sendable {
+    public let activeApp: String
+    public let windowTitle: String?
+    public let selectedText: String?
+    public let recentDownloadFile: String?
+    public let clipboardSignal: String?
+    public let autonomousActionNote: String?
+
+    public init(
+        activeApp: String,
+        windowTitle: String?,
+        selectedText: String?,
+        recentDownloadFile: String?,
+        clipboardSignal: String?,
+        autonomousActionNote: String?
+    ) {
+        self.activeApp = activeApp
+        self.windowTitle = windowTitle
+        self.selectedText = selectedText
+        self.recentDownloadFile = recentDownloadFile
+        self.clipboardSignal = clipboardSignal
+        self.autonomousActionNote = autonomousActionNote
+    }
+
+    public var promptSummary: String {
+        var lines: [String] = []
+        if let title = windowTitle, !title.isEmpty {
+            lines.append("Active Application: \(activeApp) — Window: \"\(title)\"")
+        } else {
+            lines.append("Active Application: \(activeApp)")
+        }
+        if let selected = selectedText, !selected.isEmpty {
+            let clean = selected.count > 400 ? String(selected.prefix(400)) + "…" : selected
+            lines.append("Highlighted Selection: \"\(clean)\"")
+        }
+        if let download = recentDownloadFile {
+            lines.append("Recent File in Downloads: \(download)")
+        }
+        if let clip = clipboardSignal {
+            lines.append("Clipboard Signal: \(clip)")
+        }
+        if let note = autonomousActionNote {
+            lines.append("Autonomous Background Action Completed: \(note)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+public final class AutonomousMacAgent {
+    public static let shared = AutonomousMacAgent()
+    private var lastObservedApp: String = ""
+    private var lastObservedWindow: String = ""
+    private var lastIndexedDownload: String = ""
+
+    private init() {}
+
+    #if canImport(AppKit)
+    @MainActor
+    public func observeAndMaintainWorkspace() -> AutonomousWorkspaceSnapshot {
+        let desktop = ActiveDesktopContext.current()
+        let appName = desktop.appName ?? NSWorkspace.shared.frontmostApplication?.localizedName ?? "macOS Desktop"
+        let winTitle = desktop.windowTitle
+
+        // 1. Check most recent file in ~/Downloads modified within the last 15 minutes
+        var recentDownload: String? = nil
+        if let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+           let items = try? FileManager.default.contentsOfDirectory(
+               at: downloadsURL,
+               includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
+               options: [.skipsHiddenFiles]
+           ) {
+            let cutoff = Date().addingTimeInterval(-900)
+            var newest: (name: String, date: Date)? = nil
+            for url in items where url.lastPathComponent != "dot_chat_log.txt" {
+                if let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
+                   vals.isRegularFile == true,
+                   let modDate = vals.contentModificationDate,
+                   modDate >= cutoff {
+                    if newest == nil || modDate > newest!.date {
+                        newest = (url.lastPathComponent, modDate)
+                    }
+                }
+            }
+            recentDownload = newest?.name
+        }
+
+        // 2. Inspect highlighted selection or window title for errors, stack traces, or URLs
+        var clipboardSignal: String? = nil
+        let candidateText = (desktop.selectedText ?? winTitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !candidateText.isEmpty {
+            let lower = candidateText.lowercased()
+            if lower.contains("error:") || lower.contains("fatal error") || lower.contains("exception") || lower.contains("traceback") || lower.contains("failed") {
+                let snippet = String(candidateText.prefix(220)).replacingOccurrences(of: "\n", with: " ")
+                clipboardSignal = "Error/Diagnostic detected: \"\(snippet)\""
+            } else if candidateText.hasPrefix("https://") || candidateText.hasPrefix("http://") {
+                clipboardSignal = "Active URL detected: \(String(candidateText.prefix(160)))"
+            }
+        }
+
+        // 3. Autonomous background action: maintain live workspace brief in Application Support/Dot/Documents
+        var actionNote: String? = nil
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        if let docDir = support?.appendingPathComponent("Dot/Documents", isDirectory: true) {
+            try? FileManager.default.createDirectory(at: docDir, withIntermediateDirectories: true)
+            let briefURL = docDir.appendingPathComponent("autonomous_workspace_brief.md")
+            let timestamp = ISO8601DateFormatter().string(from: Date())
+            var entry = "- [\(timestamp)] App: **\(appName)**"
+            if let winTitle, !winTitle.isEmpty {
+                entry += " (`\(winTitle)`)"
+            }
+            if let recentDownload, recentDownload != lastIndexedDownload {
+                lastIndexedDownload = recentDownload
+                entry += " | Noted recent download: `\(recentDownload)`"
+                actionNote = "Logged new download '\(recentDownload)' and updated workspace brief"
+            } else if appName != lastObservedApp || (winTitle ?? "") != lastObservedWindow {
+                actionNote = "Updated autonomous workspace brief for \(appName)"
+            }
+            lastObservedApp = appName
+            lastObservedWindow = winTitle ?? ""
+            entry += "\n"
+            if let data = entry.data(using: .utf8) {
+                if FileManager.default.fileExists(atPath: briefURL.path),
+                   let handle = try? FileHandle(forWritingTo: briefURL) {
+                    _ = try? handle.seekToEnd()
+                    try? handle.write(contentsOf: data)
+                    try? handle.close()
+                } else {
+                    let header = "# Dot Autonomous Workspace Brief\n\n"
+                    try? (header + entry).write(to: briefURL, atomically: true, encoding: .utf8)
+                }
+            }
+        }
+
+        return AutonomousWorkspaceSnapshot(
+            activeApp: appName,
+            windowTitle: winTitle,
+            selectedText: desktop.selectedText,
+            recentDownloadFile: recentDownload,
+            clipboardSignal: clipboardSignal,
+            autonomousActionNote: actionNote
+        )
+    }
+    #endif
+}
+

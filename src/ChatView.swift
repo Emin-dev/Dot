@@ -989,8 +989,18 @@ final class ChatModel: ObservableObject {
         guard selfReflectionTicker == nil else { return }
         selfReflectionTicker = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
                 guard let self, !Task.isCancelled, !self.shuttingDown else { break }
+                let now = ProcessInfo.processInfo.systemUptime
+                if self.visible, !self.proactive.paused, self.phase == .idle,
+                   !self.generating, !self.runtime.ttsSpeaking(),
+                   self.proactive.activeOpportunity == nil, self.proactiveTurn == nil {
+                    if !self.proactiveEvidence.isRecent(now: now) || !self.proactiveContextChangedAfterUser {
+                        self.proactiveEvidence.recordUser(turn: UUID(), now: now)
+                        self.proactiveContextChangedAfterUser = true
+                    }
+                    self.updateProactiveContext()
+                }
                 guard self.visible, !self.proactive.paused, self.phase == .idle,
                       !self.generating, !self.runtime.ttsSpeaking(),
                       !MeetingFocusAwareness.isMeetingActive(),
@@ -1022,7 +1032,7 @@ final class ChatModel: ObservableObject {
             ready: !shuttingDown && runtime.isReady() && issue == nil
                 && (!screenEnabled || runtime.screenAuthorized()) && proactiveEvidence.isRecent(now: now),
             visible: visible, foregroundBusy: userBusy,
-            interactionBusy: interactionPaused || historyPresented || hovered || self.externalInteractionBusy
+            interactionBusy: interactionPaused || historyPresented || self.externalInteractionBusy
                 || (controlInteraction && proactiveTurn == nil),
             engineBusy: generating || work != nil || runtime.ttsSpeaking() || followupPending || controlInteraction)
         proactive.updateContext(context)
@@ -1031,12 +1041,18 @@ final class ChatModel: ObservableObject {
                frontApp.bundleIdentifier != Bundle.main.bundleIdentifier {
                 proactiveContextChange = .init(reason: .foregroundApplicationChanged, applicationIdentifier: frontApp.bundleIdentifier)
                 proactiveContextChangedAfterUser = true
+            } else {
+                proactiveContextChange = .init(reason: .relevantContextChanged, applicationIdentifier: "macos.workspace")
+                proactiveContextChangedAfterUser = true
             }
         }
-        if context.permitsBackgroundWork, !context.engineBusy, proactiveContextChangedAfterUser,
+        if context.permitsBackgroundWork, !context.engineBusy, proactive.activeOpportunity == nil, proactiveTurn == nil,
+           proactiveContextChangedAfterUser,
            let change = proactiveContextChange,
            let key = proactiveEvidence.key(change: change, now: now, ownIdentifier: Bundle.main.bundleIdentifier) {
-            proactive.offerContext(key: key, reason: change.reason)
+            if proactive.offerContext(key: key, reason: change.reason) {
+                proactiveContextChangedAfterUser = false
+            }
         }
     }
 
@@ -1059,11 +1075,15 @@ final class ChatModel: ObservableObject {
     private func suggest(_ opportunity: ProactiveOpportunity) {
         let now = ProcessInfo.processInfo.systemUptime
         guard !shuttingDown, visible, phase == .idle, !followupPending,
-              !interactionPaused, !historyPresented, !hovered, !externalInteractionBusy, !controlInteraction,
+              !interactionPaused, !historyPresented, !externalInteractionBusy, !controlInteraction,
               runtime.isReady(),
               !MeetingFocusAwareness.isMeetingActive(),
               proactiveEvidence.isRecent(now: now), proactive.activeOpportunity?.id == opportunity.id else {
-            proactive.complete(id: opportunity.id); return
+            proactive.complete(id: opportunity.id)
+            proactiveEvidence.recordUser(turn: UUID(), now: now)
+            proactiveContextChangedAfterUser = true
+            updateProactiveContext()
+            return
         }
         // Advance only the single existing conversation owner. No second engine,
         // random microphone opening, or background permission request is created.
@@ -1077,9 +1097,8 @@ final class ChatModel: ObservableObject {
         currentTurnIsTyped = false; voiceDeliveryFailed = false; voiceDeliveryNotice = nil
         screenContextUsed = false; generating = true; phase = .thinking
         var promptText = ProactiveReplyBuffer.prompt
-        if let frontApp = NSWorkspace.shared.frontmostApplication?.localizedName {
-            promptText += "\n[Active Application: \(frontApp)]"
-        }
+        let workspaceSnapshot = AutonomousMacAgent.shared.observeAndMaintainWorkspace()
+        promptText += "\n[Live Autonomous Workspace Observation:\n\(workspaceSnapshot.promptSummary)]"
         let snapshot = Array(history.suffix(10)) + [ChatMessage(role: "user", content: promptText)]
         work = Task(priority: .utility) { [weak self] in
             guard let self, self.gate.accepts(id), !Task.isCancelled else { return }
@@ -1122,11 +1141,15 @@ final class ChatModel: ObservableObject {
                 DiagnosticChatLogger.record(role: "dot (proactive)", text: result.text)
                 failureStage = .voice
                 try self.runtime.startVoice(id)
-                self.followup.generationFinished(turn: id, hasQuestion: question != nil)
+                let effectiveQuestion = question ?? (result.text.trimmingCharacters(in: .whitespacesAndNewlines).hasSuffix("?") ? "" : nil)
+                do {
+                    let question = effectiveQuestion
+                    self.followup.generationFinished(turn: id, hasQuestion: question != nil)
+                }
                 var sentences = SentenceBuffer()
                 for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
                 if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
-                if let question, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
+                if let question, !question.isEmpty, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.answer = result.text
                 self.history.append(ChatMessage(role: "assistant", content: result.text))
@@ -1152,6 +1175,9 @@ final class ChatModel: ObservableObject {
         guard let active = proactiveTurn, active.turn == id else { return }
         proactiveTurn = nil
         proactive.complete(id: active.opportunity)
+        let now = ProcessInfo.processInfo.systemUptime
+        proactiveEvidence.recordUser(turn: UUID(), now: now)
+        proactiveContextChangedAfterUser = true
         updateProactiveContext()
     }
 
