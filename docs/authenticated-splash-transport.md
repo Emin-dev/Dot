@@ -1,6 +1,6 @@
 # Authenticated bundled Splash transport
 
-Status: implemented source and model-free cloud tests; native acceptance is still required. This does not establish a complete voice dependency closure or an offline working app.
+Status: implemented source and model-free cloud tests; native acceptance is still required. The Splash supervisor/TLS relay is the remaining Dot-authored Python on the runtime path (`Resources/Runtime/dot_*.py`, stdlib-only); speech/search/source reading are now the Rust `dot-voice`, `dot-search` and `dot-fetch` binaries ([Rust runtime](rust-runtime.md)). This document does not establish a complete offline runtime payload or an offline working app.
 
 ## Threat and ownership
 

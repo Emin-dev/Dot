@@ -82,7 +82,7 @@ describes current behaviour: [offline voice assembly](offline-voice-assembly.md)
 [search proxy canaries](verification/search-proxy-canaries.md),
 [search proxy canary CI](verification/search-proxy-canary-ci.md),
 [research recovery](verification/research-recovery.md), the [team handover](verification/DOT_TEAM_HANDOVER.md),
-[profile bootstrap](PROFILE_BOOTSTRAP.md), the [plain-text checklist](BUILD_CHECKLIST.txt) and
+[profile bootstrap](../PROFILE_BOOTSTRAP.md), the [plain-text checklist](BUILD_CHECKLIST.txt) and
 [continuation handoff](CONTINUATION.md). [Runtime reconstruction](runtime-reconstruction.md) is partly
 superseded: its tool contract still exists, but its native voice gates still describe the deleted
 Python voice closure. The Python-era half of

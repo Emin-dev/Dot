@@ -2,8 +2,9 @@
 > source fetcher and SearXNG search stack as pending work, and no longer exists in that form. See
 > [the Rust-only runtime](rust-runtime.md) and the current
 > [canonical checklist](BUILD_CHECKLIST.md#owner-decisions--2026-10-17-rust-only-runtime-and-accepted-corrections)
-> for the current direction, where SearXNG is retired and the runtime is Rust-only. Requirement text
-> and checkbox state below are the 2026-10-14 snapshot and are preserved unchanged.
+> for the current direction, where SearXNG is retired, the runtime is Rust-only and the "120 reviewed
+> recipes per new skin" expression target is retired. Requirement text, including that target, and
+> checkbox state below are the 2026-10-14 snapshot and are preserved unchanged.
 
 # dot: product roadmap and build checklist
 

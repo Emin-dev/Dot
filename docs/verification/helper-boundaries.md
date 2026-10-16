@@ -21,8 +21,10 @@ of what was run at the time.
   capability and the bounded protocol, not OS policy. Contract: [search runtime](../search-helper.md).
 - **`dot-voice` (speech).** An owned child launched with two pipes and `PATH=/usr/bin:/bin` only, from
   a private 0700 temporary directory that is removed on shutdown. There is **no Seatbelt profile for
-  `dot-voice`** (the retired `Resources/Voice/voice.sb` was deleted) and it has network access like any
-  other process; it never contacts the network itself. Contract: [voice bridge](../voice-bridge.md).
+  `dot-voice`** (the retired `Resources/Voice/voice.sb` was deleted), so it is not OS-restricted. Its
+  binary links no runtime HTTP client: `cargo tree -p dot-voice -e normal` contains no `reqwest`, and
+  the `any-tts` Hugging Face downloader is behind a `download` feature that `crates/dot-voice/Cargo.toml`
+  does not enable. Contract: [voice bridge](../voice-bridge.md).
 - **Splash supervisor/TLS relay (retained Python).** `Resources/Runtime/dot_runtime.py`,
   `dot_process.py`, `dot_tls.py` under `Resources/Runtime/splash.sb`. The supervisor keeps the bound
   listener descriptor open across the sandboxed Splash child, permits only its exact IPv4 TCP

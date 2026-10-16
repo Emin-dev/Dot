@@ -2,6 +2,8 @@
 
 Checkpoint: **2026-10-14 16:16 UTC**. Scope: documentation and four approved requirement closures only. R04 covers the dated reviewed all-row reconciliation; this is not a fresh full semantic source audit, runtime build, device acceptance or release receipt. Continue reconciliation as work proceeds.
 
+**Update (2026-10-17):** the "120 reviewed meaningful recipes per new identity" acceptance target mentioned below is retired by the owner's [2026-10-17 decisions](../BUILD_CHECKLIST.md#owner-decisions--2026-10-17-rust-only-runtime-and-accepted-corrections): all eleven skins share one warm expression set plus amplitude-driven speech. The dated counts below are unchanged.
+
 ## Published and expanded source remain distinct
 
 The integration owner verified the published parent as `21fb1c24d2d061bd46995d7cfcd7e6a4c8c40432`, tree `dc737d2237170e50675a6b0187f3feb0c1c92065`. This status update independently reconstructed that exact tree from all 238 supplied parent source files. Before this tranche its canonical Markdown/text companions have 0 checked current requirements and 97 open, plus five checked historical milestones.

@@ -4,7 +4,7 @@
 
 This checkpoint records work verified on this machine, not intentions. Everything below was run and observed.
 
-**Older checkpoints in this file are historical.** Entries dated before 2026-10-17 describe the retired Python voice helper, Python source fetcher and SearXNG search stack. Their dates, run counts and receipts are kept unchanged as records of what was run at the time and do not describe the current runtime; see [the Rust runtime reference](rust-runtime.md).
+**Older checkpoints in this file are historical.** Entries dated before 2026-10-17 describe the retired Python voice helper, Python source fetcher and SearXNG search stack, and the retired "120 reviewed recipes per new skin" expression target. Their dates, run counts and receipts are kept unchanged as records of what was run at the time and do not describe the current runtime; see [the Rust runtime reference](rust-runtime.md).
 
 **Repository gates (all four independently re-run and green):**
 
@@ -366,6 +366,8 @@ Parallel source work is preserved: authored expressions, durable history, proact
 - There is no generally validated complete public installer yet. `build.sh` and ordinary CI produce a clearly incomplete UI/development DMG without the neural payload. Do not offer that artifact as a working AI companion.
 
 ## Installed baseline — implemented and verified
+
+This section describes the app installed on 2026-10-13 (`b26a145`), which used the retired Python voice helper; it is kept as the record of that installed build. The current source tree replaces that helper with the Rust `dot-voice` runtime ([Rust runtime](rust-runtime.md)).
 
 - [x] Native SwiftUI/AppKit floating companion, one character-sized panel, small right-click menu, no Settings/Connection/chat windows or persistent caption.
 - [x] Manual dragging with a six-point threshold and no accidental microphone activation; pin, menu-bar recall, keyboard/accessibility options and Escape/Stop.
