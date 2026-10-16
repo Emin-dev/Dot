@@ -2360,7 +2360,13 @@ final class ChatModel: ObservableObject {
     @discardableResult
     func cancelTurn(preserveFollowup: Bool = false) -> UUID {
         captureOutcomeTask?.cancel(); captureOutcomeTask = nil; captureOutcome = nil
-        textHistory.recordAssistant(turn: gate.current, text: answer, event: .interrupted)
+        // Only an unfinished delivery is interrupted. This runs whenever a turn is
+        // replaced, including when a follow-up listening turn begins after the answer
+        // and its audio have finished, and downgrading that already-completed
+        // delivery to "interrupted" misreported history.
+        if generating || runtime.ttsSpeaking() || phase == .speaking || phase == .thinking {
+            textHistory.recordAssistant(turn: gate.current, text: answer, event: .interrupted)
+        }
         proactiveContextChangedAfterUser = false
         let priorProactive = proactiveTurn; proactiveTurn = nil
         if let priorProactive { proactive.complete(id: priorProactive.opportunity) }
