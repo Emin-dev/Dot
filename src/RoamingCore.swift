@@ -421,7 +421,7 @@ struct RoamingCore {
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = now + 45.0 + Double(seed % 20)
+                nextWander = max(nextWander, now + 45.0 + Double(seed % 20))
             } else {
                 trip = active
             }
@@ -498,7 +498,7 @@ struct RoamingCore {
                   Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
             trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
-            nextWander = now + 14.0 + Double(seed % 8)
+            nextWander = max(nextWander, now + 14.0 + Double(seed % 8))
             return origin
         }
 
@@ -507,7 +507,7 @@ struct RoamingCore {
                                                 regions: regions, minDistance: 50.0) {
             trip = Trip(start: origin, target: emptySpace, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
-            nextWander = now + 14.0 + Double(seed % 8)
+            nextWander = max(nextWander, now + 14.0 + Double(seed % 8))
             return origin
         }
 
@@ -528,10 +528,10 @@ struct RoamingCore {
             guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 70 else { continue }
             trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
             isTravelling = true
-            nextWander = now + 14.0 + Double(seed % 8)
+            nextWander = max(nextWander, now + 14.0 + Double(seed % 8))
             return origin
         }
-        nextWander = now + 5.0
+        nextWander = max(nextWander, now + 5.0)
         return origin
     }
 }

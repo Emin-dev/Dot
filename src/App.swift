@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isAnimatingRoam = false
     private var lastRoamRelocationAt: Double = 0
     private var statusItem: NSStatusItem?
-    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 8.0)
+    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: 999999.0)
     private var menuTracking = 0
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
@@ -598,6 +598,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if eligible && currentSnapshot == nil { placement.request(screen: screen, eligible: eligible) }
         let visible = screen.visibleFrame
         let now = ProcessInfo.processInfo.systemUptime
+
+        let checkRegions = snapshot?.protected ?? []
+        let isCovered = !checkRegions.isEmpty && !RoamingCore.clear(panel.frame, regions: checkRegions)
+        let isCursorNear = panel.frame.insetBy(dx: -24, dy: -24).contains(cursor)
+        if eligible && (isCovered || isCursorNear) && !isAnimatingRoam && model.phase == .idle {
+            performIdleRoam()
+            return
+        }
+
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: cursor,
                                paused: !eligible || model.phase != .idle || isAnimatingRoam, now: now, displayID: displayID, snapshot: snapshot)
         let moved = panel.frame.origin != origin

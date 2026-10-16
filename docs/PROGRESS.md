@@ -1,5 +1,20 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 15:35 UTC
+
+- **Expression & Emotion Responsiveness Fix:**
+  - Fixed logic issue in `PetView.emotion` (`src/ChatView.swift`): removed `preparation.state.isIssue` and `preparation.state == .checking` overrides that previously locked Dot permanently into `.puzzled` or `.working`.
+  - Dot's facial emotion now accurately reflects its active phase (`.idle`, `.listening`, `.thinking`, `.speaking`, `.blocked`) with warm friendly smiling resting face in idle, attentive listening, thoughtful gaze in thinking, and animated speaking mouth cadence.
+- **Screen-Aware Smooth Roaming & Evasion Calibration:**
+  - Removed unprompted periodic wander during idle (`initialWanderDelay: 999999.0` in `src/App.swift`, preserved `max(nextWander, ...)` in `src/RoamingCore.swift`). Dot stays peaceful and resting in safe screen gutters/corners.
+  - Added smooth coverage detection in `updateMovement()` (`src/App.swift`). If an active window or cursor covers Dot while idle, `performIdleRoam()` glides Dot slowly and smoothly (3.2s `easeInEaseOut`) to a safe perimeter/gutter pocket.
+  - Fast movement (0.28s) is strictly confined to `.thinking` (`relocateDuringThinking`), quickly clearing out of the user's workspace after the user speaks and before Dot answers.
+  - Dot never wanders into the center of the screen or covers active text, buttons, or useful content.
+- **Verification & Contracts:**
+  - All 52 static contracts passed (`python3 scripts/check_contracts.py`).
+  - All 638 unit tests passed with 0 failures (`swift test`).
+  - Deployed, signed, and running live at `/Users/mac/Applications/Dot.app`.
+
 ## Published checkpoint — 2026-10-16 15:15 UTC
 
 - **Native EventKit Calendar & Meeting Preparation (`CalendarMeetingAssistant`):**
