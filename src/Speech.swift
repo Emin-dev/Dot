@@ -182,7 +182,10 @@ final class STTManager: ObservableObject {
     private func tick(_ id: UUID) {
         guard capture == id, recording, let pcm else { return }
         guard microphonePermission == .authorized else { endCapture(id, reason: .permissionLost); return }
-        guard routeMatches else { endCapture(id, reason: .routeChanged); return }
+        if !routeMatches {
+            handleAudioRouteChange(id)
+            guard routeMatches && engine.isRunning else { endCapture(id, reason: .routeChanged); return }
+        }
         guard engine.isRunning else { endCapture(id, reason: .missingAudio); return }
         let observation = pcm.poll(at: ProcessInfo.processInfo.systemUptime)
         level = min(1, observation.level * 8)
@@ -211,7 +214,6 @@ final class STTManager: ObservableObject {
                 let text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
                 guard self.microphonePermission == .authorized else { self.endCapture(id, reason: .permissionLost); return }
-                guard self.routeMatches else { self.endCapture(id, reason: .routeChanged); return }
                 self.transcript = text; self.resetCapture(); self.onFinal?(id, text)
             } catch {
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
@@ -234,6 +236,33 @@ final class STTManager: ObservableObject {
         return current.sampleRate == captureFormat.sampleRate && current.channelCount == captureFormat.channelCount
             && current.commonFormat == captureFormat.commonFormat && current.isInterleaved == captureFormat.isInterleaved
     }
+    private func handleAudioRouteChange(_ id: UUID) {
+        guard capture == id, recording, let pcm else { return }
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        guard (8000...96000).contains(format.sampleRate), (1...8).contains(format.channelCount),
+              format.commonFormat == .pcmFormatFloat32, !format.isInterleaved else {
+            endCapture(id, reason: .routeChanged)
+            return
+        }
+        captureFormat = format
+        input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, time in
+            pcm.append(buffer, at: time)
+        }
+        tapInstalled = true
+        do {
+            if !engine.isRunning {
+                engine.prepare()
+                try engine.start()
+            }
+        } catch {
+            endCapture(id, reason: .routeChanged)
+        }
+    }
     private func observeCaptureLifecycle(_ id: UUID) {
         func observe(_ center: NotificationCenter, _ name: Notification.Name, reason: VoiceCaptureEndReason, object: Any? = nil) {
             let token = center.addObserver(forName: name, object: object, queue: .main) { [weak self] _ in
@@ -241,7 +270,10 @@ final class STTManager: ObservableObject {
             }
             observers.append((center, token))
         }
-        observe(.default, .AVAudioEngineConfigurationChange, reason: .routeChanged, object: engine)
+        let routeToken = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleAudioRouteChange(id) }
+        }
+        observers.append((NotificationCenter.default, routeToken))
         observe(.default, AVCaptureDevice.wasDisconnectedNotification, reason: .routeChanged)
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification, reason: .systemSleep)
     }
