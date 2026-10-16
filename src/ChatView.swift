@@ -2029,7 +2029,16 @@ final class ChatModel: ObservableObject {
         }
 
         let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if lower.hasPrefix("remember that ") || lower.hasPrefix("remember ") || lower.hasPrefix("my name is ") || lower.hasPrefix("i prefer ") || lower.hasPrefix("i like ") {
+        // Detect a stated preference or correction anywhere in the turn, not only at
+        // its start: the owner's real speech ("I really prefer...", "always use...",
+        // "can you remember that...") never matched a prefix test, and the database
+        // showed nothing had ever been remembered. Cues are first-person or explicit,
+        // and a long turn is not a preference, so it is not stored.
+        let preferenceCues = ["remember that", "remember this", "remember:", "my name is", "call me ",
+                              "i prefer", "i like", "i don't like", "i dont like", "i hate",
+                              "from now on", "always use", "never use", "always do", "never do"]
+        let statesPreference = lower.count <= 240 && preferenceCues.contains { lower.contains($0) }
+        if statesPreference {
             var fact = text
             if let range = fact.range(of: "(?i)^remember that\\s+", options: .regularExpression) {
                 fact.removeSubrange(range)
