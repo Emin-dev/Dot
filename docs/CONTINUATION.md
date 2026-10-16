@@ -5,6 +5,68 @@
 > its Search/voice lanes, its "120 reviewed recipes per new skin" expression target and its next steps
 > no longer describe the repository.
 
+## Current handoff — 2026-10-17 (every repository gate green)
+
+**State.** `main` is the only branch. Every gate the repository owns passes on this tree: the
+`xcodebuild` app build **SUCCEEDED**; the Xcode XCTest lane (the one `verify_macos.sh` runs)
+**860 tests, 0 failures, TEST SUCCEEDED**; `swift test` **546 / 0**; the Python suite
+**604 passed / 4 skipped**; **53** static guardrails; `cargo build --release` produces `dot-voice`,
+`dot-search` and `dot-fetch`; and `scripts/audit_runtime_payload.py` accepts the owner's real
+Rust-only payload (34,004 files, exit 0).
+
+**What this session changed.** The runtime is Rust-only for Dot-authored code: the Python voice
+helper, Python source fetcher and the whole Python SearXNG stack are deleted, their build gates now
+require the Rust binaries, and `build.sh` embeds the Whisper framework via `DOT_WHISPER_FRAMEWORK`
+because the recognizer is a compile-time branch — without it the app could never listen. Verified
+live: `dot-voice` synthesises `bf_isabella` audio offline; `dot-search` returns real results over its
+capability-gated loopback endpoint; `dot-fetch` is the pinned reader. Defects fixed with regression
+tests include: click-to-listen (with an honest refusal instead of silence when not ready), a
+subprocess deadlock on >64 KiB output, the microphone being armed on punctuation and again on an
+intermediate audio-queue drain (it now arms only after final playback), lip-sync articulating with no
+audio, the Dew preference reverting on relaunch, an unclickable approval card and its bypassable
+destructive-command gate, unclamped tool numerics, a hardcoded readiness gate, 5 s→15 s screen
+freshness, the macOS 27 / 48 GB launch gate, stuck-task detection reading the wrong input, laser
+coordinates, and clicking during an answer not listening again. Five-tier memory was added and its
+write path wired (preferences → T5, corrections → core, one ageing pass at launch).
+
+**Remaining work, with leads.**
+1. *Memory read path.* `assembleTurnContext` (`src/InteractionCore.swift`, ~3328) still reads
+   `listPinnedMemories` / `searchMemories` and drops tier information; `MemoryTierStore` lives on
+   `ChatModel`, so tier-aware recall needs a callback or parameter threaded into that function.
+   `evictIfNeeded` is implemented and tested but not yet called from the RAM-pressure path
+   (`DotSoulManager.cleanContextIfMemoryPressure()`). `MemoryTierStore` also still opens a second
+   connection to `dot_records.sqlite`; a `withConnection` accessor on `LocalFTSStore` would remove
+   ~120 lines of duplicated connection setup.
+2. *Dead code.* An audit with per-item grep evidence lists **694 lines** removable with no behaviour
+   change (largest: a 242-line paid-search provider subsystem only tests instantiate, `NativeTTSManager`
+   52, `InteractiveWalkthroughManager` 82 — the last is now honestly marked unwired in the checklist).
+   Keep the FTS delete/stale primitives (memory needs them) and the keyed search providers (the
+   owner's resilience path).
+3. *Owner features not built.* Broad local-file access; the self-improvement loop writing to its own
+   file and offering a clipboard paste (it currently types into another app unprompted, which the
+   owner asked to change); and ordinary conversation producing memories — the database shows 0 rows
+   because saving only triggers on explicit "remember that" phrasing.
+4. *Latent issue.* `PlacementSnapshot.lifetime` is 10 s while the app validates on a ~10 s cadence, so
+   every cycle's first validation is rejected by construction (`reason=expired elapsed=10475ms` in the
+   live log) before a fresh capture. Fix it in the caller — refresh before validating — and **do not
+   raise the lifetime**: `RoamingTests` correctly guards the 10 s fail-closed rule.
+5. *Last Dot-authored Python.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`, `dot_tls.py`
+   (Splash supervisor and TLS relay, 640 lines, stdlib-only). Splash itself and its interpreter are
+   deliberately retained: the owner chose Qwen 3.8 27B Q4 on Splash as the fastest engine.
+
+**Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
+`/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`
+scratch path (SwiftPM) or `xattr -cr` before `codesign`, because the File Provider re-applies
+attributes. Installing over `~/Applications/Dot.app` requires cloning the payload
+(`cp -c -R Offline OfflineModels`), embedding `whisper.framework`, signing with
+"Apple Development: Emin Ismayilov (7M2G5ULAUF)" and correcting `build-provenance.json`; a script that
+does this reliably is not yet committed and would be worth adding.
+
+**Still unverified by the owner.** No microphone, screen-permission, acoustic or device acceptance has
+been observed on the current build: the diagnostic log holds no entries from it, and repeated
+re-signing resets the macOS microphone grant, so that permission must be re-granted before
+click-to-talk can be confirmed.
+
 # dot: current continuation handoff
 
 ## Published checkpoint — 2026-10-14 22:25 UTC
