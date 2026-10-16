@@ -1509,6 +1509,27 @@ final class ChatModel: ObservableObject {
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
         let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // "What do you remember" must show the stored core facts. The old parser for
+        // this existed but had no caller, so the question fell through to the model,
+        // which cannot see the memory store.
+        if pendingApproval == nil,
+           ["what do you remember", "what do you know about me", "show your memory",
+            "list your memories", "show your memories", "what have you remembered"].contains(copyPhrase) {
+            Task { [weak self] in
+                guard let self else { return }
+                var lines: [String] = []
+                if let memory = self.memory,
+                   let core = try? await memory.records(tier: .core, limit: 15, includeSuperseded: false) {
+                    lines = core.map(\.text)
+                }
+                let message = lines.isEmpty
+                    ? "I have not been told anything to remember yet. Tell me a preference and I will keep it."
+                    : "I remember:" + lines.prefix(10).map { "\n• \($0)" }.joined()
+                self.respondDirectly(message, id: id)
+            }
+            return
+        }
+
         // A request to read what Dot said must actually show it: the compact pet
         // carries no text, so this opens the readable history surface.
         if pendingApproval == nil,
