@@ -135,11 +135,14 @@ final class ScreenContext {
         let acquiredAt = ProcessInfo.processInfo.systemUptime
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         Task.detached(priority: .utility) {
+            let start = ProcessInfo.processInfo.systemUptime
             let request = VNRecognizeTextRequest { req, _ in
                 guard let observations = req.results as? [VNRecognizedTextObservation] else { return }
                 let text = observations.compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
                 let app = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Active App"
                 PreviousScreenMemory.shared.recordScreen(appName: app, windowTitle: "", ocrText: text)
+                let elapsedMs = (ProcessInfo.processInfo.systemUptime - start) * 1000.0
+                DiagnosticChatLogger.recordScreen(app: app, ocrLineCount: observations.count, durationMs: elapsedMs)
             }
             request.recognitionLevel = .fast
             let handler = VNImageRequestHandler(cgImage: image, options: [:])

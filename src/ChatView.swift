@@ -86,6 +86,26 @@ enum DiagnosticChatLogger {
         let msg = "TASK: \"\(task)\" | REASON: \(reason) | MISSING: \(missingCapability) | PROPOSED_FIX: \(proposedFix)"
         record(role: "dot (self-improvement)", text: msg)
     }
+
+    static func recordTool(name: String, target: String, outcome: String, succeeded: Bool) {
+        let status = succeeded ? "SUCCESS" : "FAILED"
+        let msg = "TOOL: \(name) | TARGET: \"\(target)\" | OUTCOME: \(outcome) | STATUS: \(status)"
+        record(role: "tool", text: msg)
+    }
+
+    static func recordScreen(app: String, ocrLineCount: Int, durationMs: Double) {
+        let msg = "ACTIVE_APP: \"\(app)\" | OCR_LINES: \(ocrLineCount) | LATENCY: \(String(format: "%.1f", durationMs))ms"
+        record(role: "screen", text: msg)
+    }
+
+    static func recordVoice(stage: String, detail: String) {
+        let msg = "STAGE: \(stage) | DETAIL: \(detail)"
+        record(role: "voice", text: msg)
+    }
+
+    static func recordEvent(category: String, message: String) {
+        record(role: category.lowercased(), text: message)
+    }
 }
 
 enum DotMovementCommand: String, Sendable {
@@ -1864,29 +1884,40 @@ final class ChatModel: ObservableObject {
                     guard let self, self.gate.accepts(id) else { return }
                     switch toolAction {
                     case .typeText(let textToType):
-                        executedToolConfirmation = InPlaceAppTyping.performTypeText(textToType, checkPermission: true).confirmation
+                        let res = InPlaceAppTyping.performTypeText(textToType, checkPermission: true)
+                        executedToolConfirmation = res.confirmation
+                        DiagnosticChatLogger.recordTool(name: "type_text", target: textToType, outcome: res.confirmation, succeeded: res.succeeded)
                     case .pressKey(let keyToPress):
-                        executedToolConfirmation = InPlaceAppTyping.performPressKey(keyToPress, checkPermission: true).confirmation
+                        let res = InPlaceAppTyping.performPressKey(keyToPress, checkPermission: true)
+                        executedToolConfirmation = res.confirmation
+                        DiagnosticChatLogger.recordTool(name: "press_key", target: keyToPress, outcome: res.confirmation, succeeded: res.succeeded)
                     case .sendShortcut(let modifiers, let key):
                         let combo = modifiers.isEmpty ? key : (modifiers + [key]).joined(separator: "+")
-                        executedToolConfirmation = InPlaceAppTyping.performPressKey(combo, checkPermission: true).confirmation
+                        let res = InPlaceAppTyping.performPressKey(combo, checkPermission: true)
+                        executedToolConfirmation = res.confirmation
+                        DiagnosticChatLogger.recordTool(name: "send_shortcut", target: combo, outcome: res.confirmation, succeeded: res.succeeded)
                     case .clickElement(let description):
                         let outcome = await MouseControlEngine.clickElement(description: description)
                         executedToolConfirmation = outcome.confirmation
+                        DiagnosticChatLogger.recordTool(name: "click_element", target: description, outcome: outcome.confirmation, succeeded: outcome.succeeded)
                     case .moveMouse(let x, let y):
                         let ok = MouseControlEngine.moveMouse(to: CGPoint(x: x, y: y))
                         executedToolConfirmation = ok ? "Moved mouse to (\(Int(x)), \(Int(y)))." : "Could not move mouse."
+                        DiagnosticChatLogger.recordTool(name: "move_mouse", target: "(\(Int(x)), \(Int(y)))", outcome: executedToolConfirmation ?? "", succeeded: ok)
                     case .clickPoint(let x, let y, let btn, let clicks):
                         let button = NativeMouseButton(rawValue: btn) ?? .left
                         let ok = MouseControlEngine.click(at: CGPoint(x: x, y: y), button: button, clicks: clicks)
                         executedToolConfirmation = ok ? "Clicked at (\(Int(x)), \(Int(y)))." : "Could not click."
+                        DiagnosticChatLogger.recordTool(name: "click_point", target: "\(btn)-click at (\(Int(x)), \(Int(y)))", outcome: executedToolConfirmation ?? "", succeeded: ok)
                     case .pointOnScreen(let x, let y, let label):
                         ScreenGuideLaserOverlay.shared.showPointer(at: CGPoint(x: x, y: y), duration: 2.5)
                         executedToolConfirmation = "Pointing at (\(Int(x)), \(Int(y)))\(label != nil ? " (" + label! + ")" : "")."
+                        DiagnosticChatLogger.recordTool(name: "point_on_screen", target: "(\(Int(x)), \(Int(y)))", outcome: executedToolConfirmation ?? "", succeeded: true)
                     case .scrollScreen(let direction, let amount):
                         let dir = ScrollDirection(rawValue: direction.lowercased()) ?? .down
                         let ok = ScrollControlEngine.scroll(direction: dir, amount: amount)
                         executedToolConfirmation = ok ? "Scrolled \(direction)." : "Could not scroll \(direction)."
+                        DiagnosticChatLogger.recordTool(name: "scroll_screen", target: direction, outcome: executedToolConfirmation ?? "", succeeded: ok)
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
