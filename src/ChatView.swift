@@ -1559,10 +1559,23 @@ final class ChatModel: ObservableObject {
         textHistory.append(role: .user, text: text, turn: id)
         textHistory.beginAssistant(turn: id)
         if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
-        if DotSoulManager.shared.cleanContextIfMemoryPressure() || history.count > ExpandedContextWindow.maxHistoryMessages {
+        let underMemoryPressure = DotSoulManager.shared.cleanContextIfMemoryPressure()
+        if underMemoryPressure || history.count > ExpandedContextWindow.maxHistoryMessages {
             DotSoulManager.shared.archiveCurrentState(reason: "history_compaction")
             if history.count > ExpandedContextWindow.maxHistoryMessages {
                 history.removeFirst(history.count - ExpandedContextWindow.maxHistoryMessages)
+            }
+            // Genuine memory pressure is the only condition under which tiered memory
+            // may delete anything. Shed a quarter of the corpus, oldest session first
+            // and then oldest working records; core, long-term and key-point records
+            // are never candidates, and a pinned record is never taken.
+            if underMemoryPressure, let memory {
+                Task {
+                    guard let used = try? await memory.usedBytes(), used > 0 else { return }
+                    _ = try? await memory.evictIfNeeded(
+                        pressure: MemoryPressure(budgetBytes: used - used / 4, currentBytes: used),
+                        now: Date())
+                }
             }
         }
 
