@@ -1048,7 +1048,10 @@ final class ChatModel: ObservableObject {
             }
             guard self.gate.accepts(id), !self.voiceDeliveryFailed else { return }
             self.phase = self.generating ? .thinking : .idle
-            if !self.generating { self.followup.playbackFinished(turn: id) }
+            // The follow-up microphone is armed by onFinalPlayback, not here: a queue
+            // drain is not the end of the answer's audio, and arming on it both opened
+            // the microphone early and consumed the turn before its final playback
+            // could be recorded as completed.
         }
         proactive.onOpportunity = { [weak self] in self?.suggest($0) }
         proactive.onCancel = { [weak self] opportunity in
