@@ -1414,6 +1414,12 @@ final class ChatModel: ObservableObject {
         _ = submitTyped("I dropped the file '\(filename)'. Please let me know how you can help me with it.")
     }
 
+    func handleCircleToAsk(region: CGRect) {
+        onForegroundInteraction?()
+        let prompt = "I circled a specific region on my screen with my mouse (bounding size: \(Int(region.width))x\(Int(region.height))). Please inspect this area and tell me what you see or how you can assist with it."
+        _ = submitTyped(prompt)
+    }
+
     private func submit(_ text: String, id: UUID, typed: Bool = false) {
         guard gate.accepts(id) else { return }
         DiagnosticChatLogger.record(role: "user", text: text)
@@ -1526,6 +1532,26 @@ final class ChatModel: ObservableObject {
         if lowerClean == "check ram" || lowerClean == "ram status" || lowerClean == "how much ram" || lowerClean == "memory status" || lowerClean == "check memory" {
             let report = SystemRAMInspector.formattedReport()
             respondDirectly(report, id: id)
+            return
+        }
+        if lowerClean == "mute" || lowerClean == "mute volume" || lowerClean == "mute audio" || lowerClean == "mute sound" {
+            let ok = SystemAudioState.setMuted(true)
+            respondDirectly(ok ? "System audio muted." : "Could not mute audio.", id: id)
+            return
+        }
+        if lowerClean == "unmute" || lowerClean == "unmute volume" || lowerClean == "unmute audio" || lowerClean == "unmute sound" {
+            let ok = SystemAudioState.setMuted(false)
+            respondDirectly(ok ? "System audio unmuted." : "Could not unmute audio.", id: id)
+            return
+        }
+        if lowerClean == "volume up" || lowerClean == "increase volume" || lowerClean == "turn it up" {
+            let v = SystemAudioState.adjustVolume(by: 15)
+            respondDirectly("Volume increased to \(v)%.", id: id)
+            return
+        }
+        if lowerClean == "volume down" || lowerClean == "decrease volume" || lowerClean == "turn it down" {
+            let v = SystemAudioState.adjustVolume(by: -15)
+            respondDirectly("Volume decreased to \(v)%.", id: id)
             return
         }
         if lowerClean == "parallel agents" || lowerClean == "active agents" || lowerClean == "agent status" {
@@ -1914,8 +1940,24 @@ final class ChatModel: ObservableObject {
                 DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
                 Task { [weak self] in await self?.screen.captureSilentScreenSnapshot() }
 
-                // Auto-copy drafted prompts to clipboard
+                // Auto-copy to clipboard if system speaker is muted
+                if SystemAudioState.isOutputMuted() {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(finalAnswer, forType: .string)
+                    DiagnosticChatLogger.record(role: "system", text: "[AUDIO] Copied Dot's reply to clipboard because system output volume is muted.")
+                }
+
                 let lowerTask = text.lowercased()
+
+                // Ramble-to-Draft direct voice typing
+                let lowerTaskClean = lowerTask.trimmingCharacters(in: .whitespacesAndNewlines)
+                if lowerTaskClean.hasPrefix("reply saying ") || lowerTaskClean.hasPrefix("reply to this saying ") ||
+                   lowerTaskClean.hasPrefix("reply to this email saying ") || lowerTaskClean.hasPrefix("reply to this message saying ") ||
+                   lowerTaskClean.hasPrefix("draft a reply saying ") || lowerTaskClean.hasPrefix("type a response saying ") {
+                    _ = InPlaceAppTyping.performTypeText(finalAnswer, checkPermission: true)
+                }
+
+                // Auto-copy drafted prompts to clipboard
                 if lowerTask.contains("create prompt") || lowerTask.contains("write prompt") || lowerTask.contains("draft prompt") || lowerTask.contains("copy paste that prompt") || lowerTask.contains("copy prompt") {
                     var promptToCopy = finalAnswer
                     if let start = finalAnswer.range(of: "```"), let end = finalAnswer.range(of: "```", range: start.upperBound..<finalAnswer.endIndex) {

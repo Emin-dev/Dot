@@ -3788,6 +3788,123 @@ public final class PreviousScreenMemory: @unchecked Sendable {
     }
 }
 
+// MARK: - System Audio State & Volume Control
 
+public enum SystemAudioState {
+    public static func isOutputMuted() -> Bool {
+        var error: NSDictionary?
+        if let script = NSAppleScript(source: "output muted of (get volume settings)") {
+            let result = script.executeAndReturnError(&error)
+            if error == nil {
+                return result.booleanValue
+            }
+        }
+        return false
+    }
 
+    public static func setMuted(_ muted: Bool) -> Bool {
+        let scriptSource = muted ? "set volume with output muted" : "set volume without output muted"
+        var error: NSDictionary?
+        if let script = NSAppleScript(source: scriptSource) {
+            script.executeAndReturnError(&error)
+            return error == nil
+        }
+        return false
+    }
 
+    public static func currentVolume() -> Int {
+        var error: NSDictionary?
+        if let script = NSAppleScript(source: "output volume of (get volume settings)") {
+            let result = script.executeAndReturnError(&error)
+            if error == nil {
+                return Int(result.int32Value)
+            }
+        }
+        return 50
+    }
+
+    public static func setVolume(_ percent: Int) -> Bool {
+        let bounded = max(0, min(100, percent))
+        var error: NSDictionary?
+        if let script = NSAppleScript(source: "set volume output volume \(bounded)") {
+            script.executeAndReturnError(&error)
+            return error == nil
+        }
+        return false
+    }
+
+    public static func adjustVolume(by delta: Int) -> Int {
+        let current = currentVolume()
+        let newVol = max(0, min(100, current + delta))
+        _ = setVolume(newVol)
+        return newVol
+    }
+}
+
+// MARK: - User Spatial Scribble / Circle-to-Ask Gesture
+
+public final class ScreenScribbleTracker: @unchecked Sendable {
+    public static let shared = ScreenScribbleTracker()
+    private var flagsMonitor: Any?
+    private var mouseMonitor: Any?
+    private var isTracking = false
+    private var points: [CGPoint] = []
+    private var onCircleCompleted: (@MainActor (CGRect) -> Void)?
+
+    public func startMonitoring(onCircleCompleted: @escaping @MainActor (CGRect) -> Void) {
+        self.onCircleCompleted = onCircleCompleted
+        flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            let isCtrlOpt = event.modifierFlags.contains([.control, .option])
+            if isCtrlOpt && !(self?.isTracking ?? false) {
+                self?.isTracking = true
+                self?.points = [NSEvent.mouseLocation]
+            } else if !isCtrlOpt && (self?.isTracking ?? false) {
+                self?.finishTracking()
+            }
+        }
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+            guard let self, self.isTracking else { return }
+            self.points.append(NSEvent.mouseLocation)
+            if self.points.count > 1, let minX = self.points.map(\.x).min(),
+               let maxX = self.points.map(\.x).max(),
+               let minY = self.points.map(\.y).min(),
+               let maxY = self.points.map(\.y).max(),
+               (maxX - minX) > 30, (maxY - minY) > 30 {
+                let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+                Task { @MainActor in
+                    ScreenGuideLaserOverlay.shared.highlightRect(rect, duration: 0.6)
+                }
+            }
+        }
+    }
+
+    public func stopMonitoring() {
+        if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        flagsMonitor = nil
+        mouseMonitor = nil
+        isTracking = false
+        points.removeAll()
+    }
+
+    private func finishTracking() {
+        isTracking = false
+        guard points.count >= 4,
+              let minX = points.map(\.x).min(),
+              let maxX = points.map(\.x).max(),
+              let minY = points.map(\.y).min(),
+              let maxY = points.map(\.y).max() else {
+            points.removeAll()
+            return
+        }
+        let width = maxX - minX
+        let height = maxY - minY
+        points.removeAll()
+        guard width >= 40 && height >= 40 else { return }
+        let box = CGRect(x: minX, y: minY, width: width, height: height)
+        Task { @MainActor [weak self] in
+            ScreenGuideLaserOverlay.shared.highlightRect(box, duration: 3.0)
+            self?.onCircleCompleted?(box)
+        }
+    }
+}

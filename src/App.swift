@@ -340,6 +340,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         startIdleRoaming()
         setupPushToTalk()
         setupScreenshotAutoHide()
+        ScreenScribbleTracker.shared.startMonitoring { [weak model] region in
+            model?.handleCircleToAsk(region: region)
+        }
     }
 
     private func setupScreenshotAutoHide() {
@@ -761,6 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let flagsMonitorGlobal { NSEvent.removeMonitor(flagsMonitorGlobal) }
         if let flagsMonitorLocal { NSEvent.removeMonitor(flagsMonitorLocal) }
         if let screenshotMonitorGlobal { NSEvent.removeMonitor(screenshotMonitorGlobal) }
+        ScreenScribbleTracker.shared.stopMonitoring()
         // No pkill, process-name matching, or shutdown of borrowed services.
     }
 }
