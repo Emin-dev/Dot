@@ -52,8 +52,10 @@ func trimConversationalPunctuation(_ text: String) -> String {
     text.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
 }
 
-/// The one read-to-EOF subprocess shape: launch, wait for exit, then drain the pipe. Callers keep
-/// their own decoding, trimming, limits and error text so no reply string changes.
+/// The one read-to-EOF subprocess shape: launch, drain the pipe, then wait for exit. The order
+/// matters: waiting for exit before draining deadlocks as soon as the child writes more than the
+/// pipe buffer (about 64 KiB on macOS), because the child blocks on write and never exits.
+/// Callers keep their own decoding, trimming, limits and error text so no reply string changes.
 enum SubprocessRunner {
     static func run(executable: String, arguments: [String], mergeStandardError: Bool = false) throws -> (data: Data, status: Int32) {
         let process = Process()
@@ -63,8 +65,10 @@ enum SubprocessRunner {
         process.standardOutput = pipe
         if mergeStandardError { process.standardError = pipe }
         try process.run()
+        // readDataToEndOfFile returns when the child closes stdout, i.e. as it exits.
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
-        return (pipe.fileHandleForReading.readDataToEndOfFile(), process.terminationStatus)
+        return (data, process.terminationStatus)
     }
 }
 
