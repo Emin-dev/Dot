@@ -1,5 +1,17 @@
 # Dot: implementation and next steps
 
+## Published checkpoint — 2026-10-16 15:15 UTC
+
+- **Native EventKit Calendar & Meeting Preparation (`CalendarMeetingAssistant`):**
+  - Integrated Apple's `EventKit.framework` with `CalendarMeetingAssistant` and `CalendarMeetingItem`.
+  - Added permissions description `NSCalendarsFullAccessUsageDescription` to `Resources/Info.plist`.
+  - Added natural language fast-paths for today's schedule, meeting briefs, and event creation ("what meetings do I have today", "calendar today", "prepare for my next meeting").
+  - Auto-extracts video call links (Zoom, Google Meet, Microsoft Teams, Webex, Chime) from location, notes, and URLs.
+  - Added LLM tool `calendar_schedule` in `src/Engine.swift` allowing Qwen to inspect calendar schedules and prepare meeting briefs.
+  - Added proactive 5-minute meeting alert to idle background ticker in `src/ChatView.swift` when Dot is idle and no meeting is currently in session.
+  - Activated `WatchedDocumentWorker` on application startup in `src/App.swift`.
+  - Added unit test suite `CalendarMeetingAssistantTests` and tool parsing test in `InPlaceAppTypingTests`.
+
 ## Published checkpoint — 2026-10-16 15:00 UTC
 
 - **Action Approval Cards & Non-Destructive Guard (Milestone 2):**

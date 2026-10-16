@@ -3,6 +3,9 @@ import CoreFoundation
 #if canImport(AppKit)
 import AppKit
 #endif
+#if canImport(EventKit)
+import EventKit
+#endif
 
 /// Pure, deterministic rules shared by the app and its XCTest target.
 struct TurnGate {
@@ -550,13 +553,14 @@ struct QuestionIntentStream {
         case executeCommand(command: String, explanation: String?)
         case deleteFile(path: String, explanation: String?)
         case contextualWorkflow(app: String, action: String)
+        case calendarSchedule(action: String, title: String?, startTime: String?, durationMinutes: Int?)
     }
     enum Failure: Error { case invalid }
     // The one-field tool argument object uses strict JSON punctuation before Foundation decoding.
     // This prevents duplicate keys/trailing commas from being normalized into a valid dictionary.
     private static let questionObjectPattern = #"\A[ \t\r\n]*\{[ \t\r\n]*"question"[ \t\r\n]*:[ \t\r\n]*"(?:[^"\\\x00-\x1F]|\\["\\/bfnrt]|\\u[0-9a-fA-F]{4})*"[ \t\r\n]*\}[ \t\r\n]*\z"#
     private static let allowedToolNames: Set<String> = [
-        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen", "snap_window", "execute_command", "delete_file", "contextual_workflow"
+        "ask_user", "type_text", "press_key", "send_shortcut", "click_element", "move_mouse", "click_point", "point_on_screen", "scroll_screen", "snap_window", "execute_command", "delete_file", "contextual_workflow", "calendar_schedule"
     ]
     private var callID: String?
     private var functionName: String?
@@ -709,6 +713,14 @@ struct QuestionIntentStream {
             let trimmedAction = action.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmedApp.isEmpty, !trimmedAction.isEmpty else { throw Failure.invalid }
             return .contextualWorkflow(app: trimmedApp, action: trimmedAction)
+        case "calendar_schedule":
+            guard let action = object["action"] as? String else { throw Failure.invalid }
+            let trimmedAction = action.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedAction.isEmpty else { throw Failure.invalid }
+            let title = object["title"] as? String
+            let start = object["start_time_iso"] as? String
+            let duration = (object["duration_minutes"] as? NSNumber)?.intValue
+            return .calendarSchedule(action: trimmedAction, title: title, startTime: start, durationMinutes: duration)
         default:
             return nil
         }
@@ -4420,6 +4432,254 @@ public final class StuckTaskDetector {
     public func reset() {
         activeRecord = nil
         lastGuidanceUptime = -cooldownSeconds
+    }
+}
+
+// MARK: - Calendar & Meeting Preparation (EventKit)
+
+public struct CalendarMeetingItem: Equatable, Sendable {
+    public let id: String
+    public let title: String
+    public let startDate: Date
+    public let endDate: Date
+    public let isAllDay: Bool
+    public let location: String?
+    public let notes: String?
+    public let url: URL?
+    public let attendees: [String]
+    public let meetingLink: String?
+
+    public init(
+        id: String,
+        title: String,
+        startDate: Date,
+        endDate: Date,
+        isAllDay: Bool = false,
+        location: String? = nil,
+        notes: String? = nil,
+        url: URL? = nil,
+        attendees: [String] = [],
+        meetingLink: String? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.startDate = startDate
+        self.endDate = endDate
+        self.isAllDay = isAllDay
+        self.location = location
+        self.notes = notes
+        self.url = url
+        self.attendees = attendees
+        self.meetingLink = meetingLink ?? Self.detectMeetingLink(location: location, notes: notes, url: url)
+    }
+
+    public static func detectMeetingLink(location: String?, notes: String?, url: URL?) -> String? {
+        if let u = url?.absoluteString, isVideoMeetingURL(u) { return u }
+        if let loc = location, let link = extractFirstVideoURL(from: loc) { return link }
+        if let n = notes, let link = extractFirstVideoURL(from: n) { return link }
+        return nil
+    }
+
+    public static func isVideoMeetingURL(_ str: String) -> Bool {
+        let lower = str.lowercased()
+        return lower.contains("zoom.us/j/") || lower.contains("meet.google.com/") ||
+               lower.contains("teams.microsoft.com/") || lower.contains("webex.com/") ||
+               lower.contains("chime.aws/")
+    }
+
+    public static func extractFirstVideoURL(from text: String) -> String? {
+        let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+        let matches = detector?.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count)) ?? []
+        for match in matches {
+            if let matchURL = match.url?.absoluteString, isVideoMeetingURL(matchURL) {
+                return matchURL
+            }
+        }
+        return nil
+    }
+}
+
+public enum CalendarCommand: Equatable, Sendable {
+    case todaySchedule
+    case nextMeetingBrief
+    case schedule(title: String, date: Date, durationMinutes: Int)
+    case none
+}
+
+@MainActor
+public final class CalendarMeetingAssistant {
+    public static let shared = CalendarMeetingAssistant()
+
+    #if canImport(EventKit)
+    private let eventStore = EKEventStore()
+    #endif
+
+    public func hasAccess() -> Bool {
+        #if canImport(EventKit)
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if #available(macOS 14.0, *) {
+            return status == .fullAccess
+        } else {
+            return status == .authorized
+        }
+        #else
+        return false
+        #endif
+    }
+
+    public func requestAccess() async -> Bool {
+        #if canImport(EventKit)
+        let status = EKEventStore.authorizationStatus(for: .event)
+        if #available(macOS 14.0, *) {
+            if status == .fullAccess { return true }
+            if status == .denied || status == .restricted { return false }
+            do {
+                return try await eventStore.requestFullAccessToEvents()
+            } catch {
+                return false
+            }
+        } else {
+            if status == .authorized { return true }
+            if status == .denied || status == .restricted { return false }
+            return await withCheckedContinuation { continuation in
+                eventStore.requestAccess(to: .event) { granted, _ in
+                    continuation.resume(returning: granted)
+                }
+            }
+        }
+        #else
+        return false
+        #endif
+    }
+
+    public func fetchEvents(from start: Date, to end: Date) -> [CalendarMeetingItem] {
+        #if canImport(EventKit)
+        guard hasAccess() else { return [] }
+        let predicate = eventStore.predicateForEvents(withStart: start, end: end, calendars: nil)
+        let ekEvents = eventStore.events(matching: predicate)
+        return ekEvents.map { ek in
+            let attendees = ek.attendees?.compactMap { $0.name ?? $0.url.absoluteString } ?? []
+            return CalendarMeetingItem(
+                id: ek.eventIdentifier ?? UUID().uuidString,
+                title: ek.title ?? "Untitled Meeting",
+                startDate: ek.startDate,
+                endDate: ek.endDate,
+                isAllDay: ek.isAllDay,
+                location: ek.location,
+                notes: ek.notes,
+                url: ek.url,
+                attendees: attendees
+            )
+        }.sorted { $0.startDate < $1.startDate }
+        #else
+        return []
+        #endif
+    }
+
+    public func fetchTodaySchedule(calendar: Calendar = .current, now: Date = Date()) -> [CalendarMeetingItem] {
+        let startOfDay = calendar.startOfDay(for: now)
+        guard let endOfDay = calendar.date(byAdding: .day, value: 1, to: startOfDay) else { return [] }
+        return fetchEvents(from: startOfDay, to: endOfDay)
+    }
+
+    public func fetchNextMeeting(now: Date = Date()) -> CalendarMeetingItem? {
+        let calendar = Calendar.current
+        guard let oneDayLater = calendar.date(byAdding: .hour, value: 24, to: now) else { return nil }
+        let upcoming = fetchEvents(from: now, to: oneDayLater).filter { $0.endDate > now && !$0.isAllDay }
+        return upcoming.first
+    }
+
+    public func formatTodaySchedule(now: Date = Date()) -> String {
+        guard hasAccess() else {
+            return "Calendar access is not granted. You can allow access in System Settings > Privacy & Security > Calendars so I can read your meetings."
+        }
+        let items = fetchTodaySchedule(now: now)
+        guard !items.isEmpty else {
+            return "You have no meetings scheduled for today."
+        }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        var result = "You have \(items.count) meeting\(items.count == 1 ? "" : "s") today:\n"
+        for (idx, item) in items.enumerated() {
+            let timeStr = item.isAllDay ? "All Day" : formatter.string(from: item.startDate)
+            let platform = item.meetingLink != nil ? " · [Video Link]" : ""
+            result += "\(idx + 1). \(item.title) at \(timeStr)\(platform)\n"
+        }
+        return result.trimmingCharacters(in: .newlines)
+    }
+
+    public func prepareNextMeetingBrief(now: Date = Date()) -> String {
+        guard hasAccess() else {
+            return "Calendar access is not granted. Enable Calendar access in System Settings to view meeting briefs."
+        }
+        guard let next = fetchNextMeeting(now: now) else {
+            return "You have no upcoming meetings in the next 24 hours."
+        }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let durationMin = max(1, Int(next.endDate.timeIntervalSince(next.startDate) / 60))
+        var brief = "Next Meeting Brief:\n• \(next.title)\n• Time: \(formatter.string(from: next.startDate)) (\(durationMin) min)"
+        if let link = next.meetingLink {
+            brief += "\n• Video Link: \(link)"
+        } else if let loc = next.location, !loc.isEmpty {
+            brief += "\n• Location: \(loc)"
+        }
+        if !next.attendees.isEmpty {
+            brief += "\n• Attendees: \(next.attendees.prefix(4).joined(separator: ", "))"
+        }
+        if let notes = next.notes, !notes.isEmpty {
+            let snippet = notes.prefix(120).replacingOccurrences(of: "\n", with: " ")
+            brief += "\n• Agenda/Notes: \"\(snippet)...\""
+        }
+        return brief
+    }
+
+    public func createEvent(title: String, startDate: Date, durationMinutes: Int, notes: String? = nil) -> (success: Bool, message: String) {
+        #if canImport(EventKit)
+        guard hasAccess() else {
+            return (false, "Calendar access is required to create events. Please grant access in System Settings.")
+        }
+        let event = EKEvent(eventStore: eventStore)
+        event.title = title
+        event.startDate = startDate
+        event.endDate = startDate.addingTimeInterval(Double(durationMinutes * 60))
+        event.notes = notes
+        event.calendar = eventStore.defaultCalendarForNewEvents
+        do {
+            try eventStore.save(event, span: .thisEvent, commit: true)
+            let fmt = DateFormatter()
+            fmt.dateStyle = .short
+            fmt.timeStyle = .short
+            return (true, "Scheduled '\(title)' for \(fmt.string(from: startDate)) (\(durationMinutes) min).")
+        } catch {
+            return (false, "Could not save event: \(error.localizedDescription)")
+        }
+        #else
+        return (false, "EventKit is not available on this platform.")
+        #endif
+    }
+
+    public nonisolated static func parseCommand(_ text: String) -> CalendarCommand {
+        let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if lower.contains("what meetings do i have today") ||
+           lower == "meetings today" ||
+           lower == "calendar today" ||
+           lower == "schedule today" ||
+           lower == "my meetings" ||
+           lower == "today's meetings" ||
+           lower == "upcoming meetings" ||
+           lower == "what's on my schedule" ||
+           lower == "check my calendar" {
+            return .todaySchedule
+        }
+        if lower.contains("next meeting brief") ||
+           lower.contains("prepare for my next meeting") ||
+           lower.contains("brief for my next meeting") ||
+           lower == "next meeting" ||
+           lower == "what is my next meeting" {
+            return .nextMeetingBrief
+        }
+        return .none
     }
 }
 

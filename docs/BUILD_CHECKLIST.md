@@ -175,16 +175,25 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - Only relocates during idle if an active window directly covers Dot or cursor touches it, gliding slowly and smoothly over 3.2s (`easeInEaseOut`).
   - Screen awareness restricted to perimeter gutters/corners when screen is full of windows, never covering interior buttons, text, or active workflows.
   - Removed internal background placement/screenshot captures from forcing `.working` emotion, keeping Dot in a warm, friendly, smiling, breathing, and blinking resting state.
+- [x] **Audio Route Hot-Swapping:**
+  - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns (`handleAudioRouteChange` on `.AVAudioEngineConfigurationChange`).
+- [x] **Action Approval Cards & Non-Destructive Guard:**
+  - Interactive confirmation cards for destructive or external actions (file deletion, terminal commands, external communications) with clear parameter previews and 1-click Approve / Deny.
+  - Comply with Contract 51 using inline SwiftUI overlay on PetView; wired with `execute_command` and `delete_file` tools.
+- [x] **Proactive Idle & Stuck Detection:**
+  - Intelligently recognizes when the user has encountered a persistent compiler/terminal error or has been idle on a task for >3 minutes, offering helpful guidance.
+- [x] **Contextual App Workflows & Automations:**
+  - Contextual awareness of active developer/creative tools (Xcode, Safari, Terminal, Figma) providing app-specific quick assists and automations via `contextual_workflow` tool and natural language shortcuts.
 
 ### Upcoming & Next-to-Add Capabilities (Roadmap)
-- [ ] **2. Audio Route Hot-Swapping:**
-  - Smooth audio input/output migration when AirPods or headphones connect/disconnect without dropping turns.
-- [ ] **3. Action Approval Cards & Non-Destructive Guard:**
-  - Interactive confirmation cards for destructive or external actions (file deletion, terminal commands, external communications) with clear parameter previews and 1-click Approve / Deny.
-- [ ] **4. Proactive Idle & Stuck Detection:**
-  - Intelligently recognizes when the user has encountered a persistent error or has been idle on a task for >3 minutes, offering helpful guidance.
-- [ ] **5. Contextual App Workflows & Automations:**
-  - Contextual awareness of active developer/creative tools (Xcode, Safari, Terminal, Figma) providing app-specific quick assists and automations.
+- [ ] **1. Tiny Local Idle-Motion Fallback & Organic Breathing Pulse:**
+  - Dot never stays completely static for >60 seconds: when no room exists to wander safely without covering content, performs a subtle organic breathing/gaze oscillation within its safe footprint.
+- [ ] **2. Drag-and-Drop File Delegation onto Pet Surface:**
+  - Dragging files (PDFs, code, images, documents) directly onto Dot's floating window automatically attaches them for explanation, summarization, or structured analysis.
+- [ ] **3. EventKit Calendar & Meeting Preparation:**
+  - Native EventKit integration for reading upcoming meetings, preparing 1-minute briefs before calls, and turning meeting notes into action items.
+- [ ] **4. Resumable Multi-Step Task Journal & Halo Progress:**
+  - Visual halo progress indicator on Dot's perimeter (`LongTaskProgress.Halo`) reflecting multi-step progress, estimate ranges, and persistence across app restarts.
 
 These short-list and roadmap boxes describe the full target capability. The candidate ledger below may mark narrower source/check milestones without claiming installation or full product completion.
 

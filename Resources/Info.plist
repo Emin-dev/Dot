@@ -28,6 +28,8 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Click Dot to speak. Dot records only during that capture and uses its bundled offline English recognizer.</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Dot uses your calendar to prepare meeting briefs and remind you of upcoming events.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -79,6 +79,7 @@ final class ChatModel: ObservableObject {
     }
     @Published var hovered = false { didSet { if hovered { placementInvalidated?() }; updateProactiveContext() } }
     @Published var pendingApproval: ActionApprovalRequest? = nil
+    private var lastNotifiedMeetingID: String? = nil
     @Published var interactionPaused = false { didSet { if interactionPaused { placementInvalidated?(); cancelForInteraction() }; updateProactiveContext() } }
     var placementInvalidated: (() -> Void)?
     @Published var placementCapturing = false
@@ -1096,6 +1097,14 @@ final class ChatModel: ObservableObject {
                         if let stuckEvent = StuckTaskDetector.shared.evaluate(appName: desktop.appName, windowTitle: desktop.windowTitle, ocrText: desktop.selectedText, now: now) {
                             self.speakDirect(stuckEvent.guidance)
                             DiagnosticChatLogger.record(role: "dot (stuck-guidance)", text: stuckEvent.guidance)
+                        } else if let next = CalendarMeetingAssistant.shared.fetchNextMeeting() {
+                            let interval = next.startDate.timeIntervalSinceNow
+                            if interval >= 240 && interval <= 330 && self.lastNotifiedMeetingID != next.id {
+                                self.lastNotifiedMeetingID = next.id
+                                let alert = "Heads up! You have '\(next.title)' starting in 5 minutes."
+                                self.speakDirect(alert)
+                                DiagnosticChatLogger.record(role: "dot (meeting-reminder)", text: alert)
+                            }
                         }
                     }
                 }
@@ -1770,6 +1779,40 @@ final class ChatModel: ObservableObject {
             return
         }
 
+        // Calendar & Meeting Preparation
+        let calCmd = CalendarMeetingAssistant.parseCommand(text)
+        switch calCmd {
+        case .todaySchedule:
+            work = Task { [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                _ = await CalendarMeetingAssistant.shared.requestAccess()
+                let schedule = CalendarMeetingAssistant.shared.formatTodaySchedule()
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.respondDirectly(schedule, id: id)
+            }
+            return
+        case .nextMeetingBrief:
+            work = Task { [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                _ = await CalendarMeetingAssistant.shared.requestAccess()
+                let brief = CalendarMeetingAssistant.shared.prepareNextMeetingBrief()
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.respondDirectly(brief, id: id)
+            }
+            return
+        case .schedule(let title, let date, let duration):
+            work = Task { [weak self] in
+                guard let self, self.gate.accepts(id) else { return }
+                _ = await CalendarMeetingAssistant.shared.requestAccess()
+                let res = CalendarMeetingAssistant.shared.createEvent(title: title, startDate: date, durationMinutes: duration)
+                guard self.gate.accepts(id), !Task.isCancelled else { return }
+                self.respondDirectly(res.message, id: id)
+            }
+            return
+        case .none:
+            break
+        }
+
         // On-Screen Laser Pointer & Guidance
         let laserCmd = LaserPointerParser.parse(text)
         switch laserCmd {
@@ -2032,6 +2075,33 @@ final class ChatModel: ObservableObject {
                         let res = await ContextualWorkflowHelper.performAction(app: workflowApp, action: action)
                         executedToolConfirmation = res.message
                         DiagnosticChatLogger.recordTool(name: "contextual_workflow", target: "\(app):\(action)", outcome: res.message, succeeded: res.succeeded)
+                    case .calendarSchedule(let action, let title, let startTime, let durationMinutes):
+                        _ = await CalendarMeetingAssistant.shared.requestAccess()
+                        switch action {
+                        case "today_schedule":
+                            let schedule = CalendarMeetingAssistant.shared.formatTodaySchedule()
+                            executedToolConfirmation = schedule
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action, outcome: schedule, succeeded: true)
+                        case "next_meeting_brief":
+                            let brief = CalendarMeetingAssistant.shared.prepareNextMeetingBrief()
+                            executedToolConfirmation = brief
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action, outcome: brief, succeeded: true)
+                        case "create_event":
+                            let eventTitle = title ?? "New Meeting"
+                            let duration = durationMinutes ?? 30
+                            let date: Date
+                            if let startTime, let parsed = ISO8601DateFormatter().date(from: startTime) {
+                                date = parsed
+                            } else {
+                                date = Date().addingTimeInterval(3600)
+                            }
+                            let res = CalendarMeetingAssistant.shared.createEvent(title: eventTitle, startDate: date, durationMinutes: duration)
+                            executedToolConfirmation = res.message
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: "create_event:\(eventTitle)", outcome: res.message, succeeded: res.success)
+                        default:
+                            executedToolConfirmation = "Unknown calendar action '\(action)'."
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action, outcome: executedToolConfirmation ?? "", succeeded: false)
+                        }
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }

@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let model = ChatModel(); self.model = model
         let docWorker = WatchedDocumentWorker(ftsStore: model.ftsStore)
         self.documentWorker = docWorker
+        docWorker.start()
         let searchProvider = LocalDotSearchProvider()
         let webResearch = WebResearchPanel(model: WebResearchModel(provider: searchProvider, reader: OfflinePayload.sourceReader(), synthesize: { [weak model] session in
             guard let model else { throw CancellationError() }

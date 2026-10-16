@@ -699,6 +699,15 @@ final class EngineManager: ObservableObject {
                         "app": ["type": "string", "enum": ["xcode", "terminal", "safari", "figma"]],
                         "action": ["type": "string", "minLength": 1, "maxLength": 50]
                     ], "required": ["app", "action"], "additionalProperties": false]
+                ]],
+                ["type": "function", "function": [
+                    "name": "calendar_schedule", "description": "Inspect today's calendar schedule, prepare a meeting brief, or schedule a new event on macOS.",
+                    "strict": true, "parameters": ["type": "object", "properties": [
+                        "action": ["type": "string", "enum": ["today_schedule", "next_meeting_brief", "create_event"]],
+                        "title": ["type": "string", "maxLength": 200],
+                        "start_time_iso": ["type": "string", "maxLength": 50],
+                        "duration_minutes": ["type": "integer"]
+                    ], "required": ["action"], "additionalProperties": false]
                 ]]
             ], "tool_choice": "auto", "parallel_tool_calls": false,
             "chat_template_kwargs": ["enable_thinking": true, "reasoning_effort": "low"]

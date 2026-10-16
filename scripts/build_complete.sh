@@ -37,7 +37,7 @@ xcrun swiftc -O -warnings-as-errors -module-name Dot -D DOT_COMPLETE_BUNDLE -tar
   -output-file-map "$INTENTS_BUILD/output-map.json" \
   -F "$FRAMEWORK_PARENT" -framework whisper -Xlinker -rpath -Xlinker @executable_path/../Frameworks \
   -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \
-  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit
+  -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit -framework EventKit
 # This is an actual native-library reference check, not a canImport fallback build.
 nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
 /usr/bin/ditto "$VERIFIED_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/whisper.framework"

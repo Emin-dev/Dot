@@ -1345,6 +1345,13 @@ final class InPlaceAppTypingTests: XCTestCase {
         try workflowStream.feed("data: [DONE]")
         XCTAssertNil(try workflowStream.completed())
         XCTAssertEqual(try workflowStream.completedToolAction(), .contextualWorkflow(app: "xcode", action: "build"))
+
+        var calStream = QuestionIntentStream()
+        try calStream.feed(toolFrame(name: "calendar_schedule", arguments: #"{"action":"today_schedule"}"#))
+        try calStream.feed(finishFrame)
+        try calStream.feed("data: [DONE]")
+        XCTAssertNil(try calStream.completed())
+        XCTAssertEqual(try calStream.completedToolAction(), .calendarSchedule(action: "today_schedule", title: nil, startTime: nil, durationMinutes: nil))
     }
 
     func testActionApprovalRequestDestructiveGuard() {
@@ -1476,4 +1483,47 @@ final class SystemControlSuiteTests: XCTestCase {
         XCTAssertEqual(SystemControlSuite.parseCommand("what time is it"), .none)
     }
 }
+
+final class CalendarMeetingAssistantTests: XCTestCase {
+    func testCalendarCommandParsing() {
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("what meetings do I have today"), .todaySchedule)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("calendar today"), .todaySchedule)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("upcoming meetings"), .todaySchedule)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("my meetings"), .todaySchedule)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("prepare for my next meeting"), .nextMeetingBrief)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("next meeting brief"), .nextMeetingBrief)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("what is my next meeting"), .nextMeetingBrief)
+        XCTAssertEqual(CalendarMeetingAssistant.parseCommand("play some music"), .none)
+    }
+
+    func testMeetingItemVideoLinkDetection() {
+        let zoomItem = CalendarMeetingItem(
+            id: "1",
+            title: "Sprint Planning",
+            startDate: Date(),
+            endDate: Date().addingTimeInterval(1800),
+            location: "https://zoom.us/j/123456789"
+        )
+        XCTAssertEqual(zoomItem.meetingLink, "https://zoom.us/j/123456789")
+
+        let meetItem = CalendarMeetingItem(
+            id: "2",
+            title: "Design Sync",
+            startDate: Date(),
+            endDate: Date().addingTimeInterval(3600),
+            notes: "Please join via https://meet.google.com/abc-defg-hij on time"
+        )
+        XCTAssertEqual(meetItem.meetingLink, "https://meet.google.com/abc-defg-hij")
+
+        let inPersonItem = CalendarMeetingItem(
+            id: "3",
+            title: "Lunch with Team",
+            startDate: Date(),
+            endDate: Date().addingTimeInterval(3600),
+            location: "Cafeteria Building 4"
+        )
+        XCTAssertNil(inPersonItem.meetingLink)
+    }
+}
+
 
