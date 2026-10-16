@@ -563,6 +563,14 @@ Recorded before implementation, per the standing documentation rule. These super
 long-standing Original default. An explicit stored choice still wins and nothing is written when
 the user has never chosen, so this default can change again without touching anyone's selection.
 
+**Tool catalogue on a conversational turn (2026-10-17).** A voice/typed turn carries the whole action
+catalogue (fourteen function schemas) rather than `ask_user` alone, so Dot can act on any request
+immediately. This is deliberate: capability was chosen over the smaller prompt, and the engine test
+that required exactly one tool was updated to assert the `ask_user` contract instead of its
+exclusivity. The tradeoff is a larger prompt on every turn; if responsiveness ever suffers, the
+catalogue should be trimmed to an always-on subset with the rest offered on demand, and that test
+tightened to the chosen set.
+
 **No movement while the owner is interacting.** Dot must not relocate while its own context menu is
 open, while the pointer is on it, or while a mouse button is held: thinking relocation, idle roaming
 and reactive evasion all honour that rule.
