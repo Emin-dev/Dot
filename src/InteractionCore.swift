@@ -2246,23 +2246,11 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
             }
         }
 
-        #if canImport(AppKit)
-        // If Accessibility is trusted, focus Antigravity ONLY and type the suggestion into its input
-        if InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: false) {
-            let running = NSWorkspace.shared.runningApplications
-            if let antigravityApp = running.first(where: {
-                let name = ($0.localizedName ?? "").lowercased()
-                let bundle = ($0.bundleIdentifier ?? "").lowercased()
-                return name == "antigravity" || name.contains("antigravity") || bundle.contains("antigravity")
-            }) {
-                antigravityApp.activate()
-                usleep(100_000)
-                _ = InPlaceAppTyping.type(text: suggestion)
-                return "Typed self-improvement suggestion into Antigravity: \"\(suggestion)\""
-            }
-        }
-        #endif
-        return "Recorded self-improvement suggestion: \"\(suggestion)\""
+        // The owner asked for this: never type into another application unprompted.
+        // The suggestion is written to its own file above and copied to the clipboard
+        // so it can be pasted deliberately, and Dot states that instead of acting.
+        ClipboardIntelligence.write(suggestion)
+        return "Wrote a self-improvement suggestion to my reflections file and copied it to the clipboard: \"\(suggestion)\""
     }
 }
 
