@@ -316,30 +316,8 @@ struct RoamingCore {
             return chosen
         }
 
-        // Pass 3: When screen is heavily covered with windows, prefer perimeter/corners with fewest hits
-        var scoredCandidates: [(point: CGPoint, hits: Int)] = []
-        let allCandidates = perimeterCandidates
-        let effectiveMinDist = min(80, max(30, minDistance * 0.5))
-        for candidate in allCandidates {
-            let clamped = clamp(candidate, to: bounds)
-            let distToOrigin = hypot(clamped.x - origin.x, clamped.y - origin.y)
-            guard distToOrigin >= effectiveMinDist else { continue }
-            let center = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
-            guard hypot(cursor.x - center.x, cursor.y - center.y) >= 40 else { continue }
-            let testRect = CGRect(origin: clamped, size: frame.size)
-            let hits = regions.reduce(into: 0) { count, region in
-                if testRect.intersects(region) { count += 1 }
-            }
-            scoredCandidates.append((clamped, hits))
-        }
-        if !scoredCandidates.isEmpty {
-            scoredCandidates.sort { $0.hits < $1.hits }
-            let minHits = scoredCandidates.first?.hits ?? 0
-            let bestCandidates = scoredCandidates.filter { $0.hits == minHits }
-            return bestCandidates.randomElement()?.point
-        }
-
-        return perimeterCandidates.map { clamp($0, to: bounds) }.first
+        // No clear pocket exists: stay rather than covering content.
+        return nil
     }
     mutating func evadeToEmptySpace(frame: CGRect, visible: CGRect, cursor: CGPoint,
                                     now: Double, displayID: UInt32, snapshot: PlacementSnapshot) -> CGPoint {
@@ -353,21 +331,26 @@ struct RoamingCore {
                                        regions: snapshot.protected, preferredNear: frame.origin) else {
             return frame.origin
         }
+        guard Self.safePath(from: frame, to: target, regions: snapshot.protected) else { return frame.origin }
         let origin = frame.origin
         trip = Trip(start: origin, target: target, snapshot: snapshot, isEscape: true)
         isTravelling = true
         nextDecision = now + 4.0
         return origin
     }
-    /// Axis-only motion permits escape from existing overlap without increasing it or crossing new content.
+    /// The swept bounds must not cross content the pet does not already overlap. Axis
+    /// moves are exact; a diagonal uses the conservative union of start and end.
     static func safePath(from frame: CGRect, to target: CGPoint, regions: [CGRect]) -> Bool {
         let dx = target.x - frame.minX, dy = target.y - frame.minY
-        guard (dx == 0) != (dy == 0) else { return false }
+        guard dx != 0 || dy != 0 else { return true }
         let end = CGRect(origin: target, size: frame.size)
         guard clear(end, regions: regions) else { return false }
         let swept = frame.union(end)
         for rect in regions where swept.intersects(rect) {
+            // Content the pet already overlaps is allowed only while escaping; content
+            // newly crossed by the swept path is never allowed.
             guard frame.intersects(rect) else { return false }
+            if dx != 0 && dy != 0 { continue }
             if dx > 0 && frame.minX < rect.minX && frame.maxX < rect.maxX { return false }
             if dx < 0 && frame.maxX > rect.maxX && frame.minX > rect.minX { return false }
             if dy > 0 && frame.minY < rect.minY && frame.maxY < rect.maxY { return false }
@@ -405,15 +388,8 @@ struct RoamingCore {
             guard let snap = validSnapshot else {
                 cancel(now: now); return origin
             }
-            let isSingleAxis = (active.target.x == frame.minX) != (active.target.y == frame.minY)
-            if isSingleAxis {
-                guard Self.safePath(from: frame, to: active.target, regions: snap.protected) else {
-                    cancel(now: now); return origin
-                }
-            } else {
-                guard Self.clear(CGRect(origin: active.target, size: frame.size), regions: snap.protected) else {
-                    cancel(now: now); return origin
-                }
+            guard Self.safePath(from: frame, to: active.target, regions: snap.protected) else {
+                cancel(now: now); return origin
             }
             guard Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY),
                     CGPoint(x: active.target.x + frame.width / 2, y: active.target.y + frame.height / 2)) >= 50 else {
@@ -462,7 +438,8 @@ struct RoamingCore {
                     chosenTarget = Self.findEmptySpace(frame: frame, bounds: bounds, cursor: cursor,
                                                        regions: checkRegions, preferredNear: origin)
                 }
-                if let target = chosenTarget {
+                if let target = chosenTarget,
+                   Self.safePath(from: frame, to: target, regions: checkRegions) {
                     trip = Trip(start: origin, target: target, snapshot: validSnapshot, isEscape: true)
                     isTravelling = true
                     nextDecision = now + 4.0

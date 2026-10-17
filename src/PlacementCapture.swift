@@ -176,11 +176,9 @@ final class PlacementCapture {
                   let mapped = PlacementSnapshot.quartzRect(rect, primaryTop: primaryTop) else { throw PlacementFailure.windowMetadata }
             if mapped.intersects(display) {
                 guard mapped.width >= 60 && mapped.height >= 60 else { continue }
-                if mapped.width >= display.width * 0.85 && mapped.height >= display.height * 0.85 {
-                    regions.append(mapped.insetBy(dx: 48, dy: 48))
-                } else {
-                    regions.append(mapped.insetBy(dx: -8, dy: -8))
-                }
+                // A large window's edge band can hold toolbars, tabs and buttons; protect
+                // the whole window. If that leaves no empty desktop, Dot stays put.
+                regions.append(mapped.insetBy(dx: -8, dy: -8))
             }
         }
         return regions

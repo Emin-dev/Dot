@@ -195,6 +195,13 @@ final class ScreenContext {
         }
     }
     func extractVisibleScreenText() async throws -> [ScreenOCRLine] {
+        try await extractVisibleScreenTextAndScreen().lines
+    }
+
+    /// The captured screen is returned with its lines: OCR boxes are normalized to
+    /// that display, so callers must convert them using the same screen, never
+    /// `NSScreen.main` (which may be a different monitor).
+    func extractVisibleScreenTextAndScreen() async throws -> (lines: [ScreenOCRLine], screen: NSScreen?) {
         guard Self.hasScreenAccess() else { throw ScreenFailure.permission }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -209,9 +216,13 @@ final class ScreenContext {
         configuration.capturesAudio = false
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         #if canImport(Vision) && canImport(CoreGraphics)
-        return await NativeScreenOCR.recognizeText(in: image)
+        let lines = await NativeScreenOCR.recognizeText(in: image)
+        let screen = NSScreen.screens.first { screen in
+            (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+        } ?? selected
+        return (lines, screen)
         #else
-        return []
+        return ([], selected)
         #endif
     }
     /// R8: a cheap 32x24 grayscale fingerprint used to decide whether the screen is

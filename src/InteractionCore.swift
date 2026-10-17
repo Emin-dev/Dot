@@ -4045,35 +4045,20 @@ public enum MouseControlEngine {
 
         do {
             let screenContext = ScreenContext()
-            let lines = try await screenContext.extractVisibleScreenText()
-            let target = trimmedDesc.lowercased()
+            let capture = try await screenContext.extractVisibleScreenTextAndScreen()
+            let target = clickMatchTarget(trimmedDesc)
 
             var bestMatch: ScreenOCRLine?
-            for line in lines {
-                let textLower = line.text.lowercased()
-                if textLower == target || textLower.contains(target) || target.contains(textLower) {
-                    bestMatch = line
-                    break
-                }
-            }
-
-            if bestMatch == nil {
-                let targetTokens = Set(target.split(whereSeparator: { $0.isWhitespace }).map { String($0) })
-                var highestScore = 0
-                for line in lines {
-                    let lineTokens = Set(line.text.lowercased().split(whereSeparator: { $0.isWhitespace }).map { String($0) })
-                    let common = targetTokens.intersection(lineTokens).count
-                    if common > highestScore && common >= 1 {
-                        highestScore = common
-                        bestMatch = line
-                    }
-                }
+            var bestScore = 0
+            for line in capture.lines {
+                guard let score = clickMatchScore(line: line, target: target) else { continue }
+                if score > bestScore { bestScore = score; bestMatch = line }
             }
 
             if let matched = bestMatch {
-                let screen = NSScreen.main ?? NSScreen.screens.first
-                // Vision boxes are normalized to the captured display; scaling yields pixels local
-                // to that display, and the display's top-left origin makes them CG global.
+                // Normalized Vision boxes belong to the display that was actually
+                // captured, never an unrelated NSScreen.main.
+                let screen = capture.screen ?? NSScreen.main ?? NSScreen.screens.first
                 let space = ScreenCoordinateSpace.current(for: screen)
                 let localCenter = space.screenLocalPoint(
                     fromVisionNormalized: CGPoint(x: matched.boundingBox.midX, y: matched.boundingBox.midY)
@@ -4081,6 +4066,9 @@ public enum MouseControlEngine {
                 let origin = space.screenBoundsInTopLeft.origin
                 let clickPoint = CGPoint(x: origin.x + localCenter.x, y: origin.y + localCenter.y)
 
+                // A click into an inactive window only activates it. Bring the window
+                // under the point forward first, then dispatch the click.
+                activateWindow(at: clickPoint)
                 let ok = click(at: clickPoint, button: .left, clicks: 1)
                 if ok {
                     return (true, "Clicked \"\(matched.text)\" at (\(Int(clickPoint.x)), \(Int(clickPoint.y))).")
@@ -4093,6 +4081,7 @@ public enum MouseControlEngine {
         }
 
         if let axMatch = findElementViaAX(description: trimmedDesc) {
+            activateWindow(at: axMatch.center)
             let ok = click(at: axMatch.center, button: .left, clicks: 1)
             if ok {
                 return (true, "Clicked element \"\(axMatch.title)\" at (\(Int(axMatch.center.x)), \(Int(axMatch.center.y))).")
@@ -4100,6 +4089,58 @@ public enum MouseControlEngine {
         }
 
         return (false, "Could not find \"\(trimmedDesc)\" on screen. Please make sure it is visible.")
+    }
+
+    private static func clickMatchTarget(_ description: String) -> String {
+        var target = description.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        if target.hasPrefix("click ") { target = String(target.dropFirst(6)) }
+        if target.hasSuffix(" button") { target = String(target.dropLast(7)) }
+        if target.hasSuffix(" link") { target = String(target.dropLast(5)) }
+        return target.isEmpty ? description.lowercased() : target
+    }
+
+    /// Prefer an exact, short element label over a paragraph that merely contains the
+    /// words. Returns nil for lines too long to be a single control.
+    static func clickMatchScore(line: ScreenOCRLine, target: String) -> Int? {
+        let text = line.text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 240, !target.isEmpty else { return nil }
+        let confidence = Int((max(0, min(1, line.confidence)) * 40).rounded())
+        if text == target { return 10_000 + confidence }
+        let targetTokens = target.split(whereSeparator: \.isWhitespace).map(String.init)
+        let textTokens = Set(text.split(whereSeparator: \.isWhitespace).map(String.init))
+        if !targetTokens.isEmpty, targetTokens.allSatisfy({ textTokens.contains($0) }) {
+            return 6_000 - min(1_500, text.count) + confidence
+        }
+        if text.hasPrefix(target) || text.hasSuffix(target) {
+            return 5_000 - min(1_500, text.count) + confidence
+        }
+        if text.contains(target) {
+            return 4_000 - min(1_500, text.count) + confidence
+        }
+        let common = targetTokens.filter { textTokens.contains($0) }.count
+        guard common > 0 else { return nil }
+        if targetTokens.count > 1, common < max(2, targetTokens.count / 2) { return nil }
+        return 1_000 + common * 150 - min(500, text.count / 4)
+    }
+
+    /// The window under the point (front-to-back order) is activated so the click is
+    /// delivered to a control, not merely used to raise its window.
+    static func activateWindow(at point: CGPoint) {
+        guard let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        for window in windows {
+            guard let pid = (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value, pid != ownPID,
+                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let alpha = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha > 0,
+                  let values = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: values as CFDictionary),
+                  rect.contains(point) else { continue }
+            if let app = NSRunningApplication(processIdentifier: pid_t(pid)) {
+                app.activate(options: [.activateAllWindows])
+                usleep(140_000)
+            }
+            return
+        }
     }
 
     private struct AXElementMatch {

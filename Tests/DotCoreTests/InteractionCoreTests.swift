@@ -187,7 +187,10 @@ final class RoamingTests: XCTestCase {
         XCTAssertFalse(RoamingCore.safePath(from: frame, to: target, regions: [obstacle, CGRect(x: -640, y: 200, width: 1, height: 1)]))
         let start = CGRect(x: 0, y: 0, width: 10, height: 10)
         XCTAssertFalse(RoamingCore.safePath(from: start, to: CGPoint(x: 40, y: 0), regions: [CGRect(x: 20, y: 1, width: 2, height: 2)]))
-        XCTAssertFalse(RoamingCore.safePath(from: start, to: CGPoint(x: 40, y: 40), regions: []))
+        XCTAssertTrue(RoamingCore.safePath(from: start, to: CGPoint(x: 40, y: 40), regions: []))
+        XCTAssertFalse(RoamingCore.safePath(from: start, to: CGPoint(x: 40, y: 40),
+                                            regions: [CGRect(x: 22, y: 22, width: 4, height: 4)]),
+                       "A diagonal swept box may not cross content")
     }
     func testNoClearAreaHasNoFallback() {
         var planner = RoamingCore(seed: 1, now: 0)
@@ -256,20 +259,18 @@ final class RoamingTests: XCTestCase {
         XCTAssertTrue(moved)
         XCTAssertNotEqual(currentFrame.origin, frame.origin)
     }
-    func testFindRandomEmptySpaceAlwaysFindsSpotEvenWithMaximizedWindowRegions() {
+    func testFindRandomEmptySpaceNeverReturnsAnOverlappingSpot() {
         let bounds = RoamingCore.originBounds(window: frame.size, visible: visible)!
+        XCTAssertNil(RoamingCore.findRandomEmptySpace(
+            frame: frame, bounds: bounds, cursor: cursor, regions: [visible], minDistance: 120),
+            "A fully covered screen has no legal target; staying is the only option")
         var seen: Set<String> = []
         for _ in 0..<12 {
             let target = RoamingCore.findRandomEmptySpace(
-                frame: frame,
-                bounds: bounds,
-                cursor: cursor,
-                regions: [visible],
-                minDistance: 120
-            )
-            XCTAssertNotNil(target)
+                frame: frame, bounds: bounds, cursor: cursor,
+                regions: [CGRect(x: bounds.midX, y: bounds.midY, width: 200, height: 200)],
+                minDistance: 120)
             if let target {
-                XCTAssertNotEqual(target, frame.origin)
                 XCTAssertTrue(bounds.contains(target))
                 seen.insert("\(Int(target.x)),\(Int(target.y))")
             }
@@ -2248,5 +2249,28 @@ final class MicrophoneModeTests: XCTestCase {
         XCTAssertEqual(MicrophoneMode.displayName(for: .standard), "Standard")
         XCTAssertEqual(MicrophoneMode.displayName(for: .wideSpectrum), "Wide Spectrum")
         XCTAssertEqual(MicrophoneMode.displayName(for: .voiceIsolation), "Voice Isolation")
+    }
+}
+
+@MainActor
+final class ClickMatchingTests: XCTestCase {
+    private func line(_ text: String, confidence: Float = 0.9) -> ScreenOCRLine {
+        ScreenOCRLine(text: text, confidence: confidence, boundingBox: CGRect(x: 0, y: 0, width: 0.1, height: 0.02))
+    }
+
+    func testExactShortLabelBeatsParagraphAndLongerLabel() throws {
+        let exact = try XCTUnwrap(MouseControlEngine.clickMatchScore(line: line("Save"), target: "save"))
+        let longer = try XCTUnwrap(MouseControlEngine.clickMatchScore(line: line("Save and close"), target: "save"))
+        let paragraph = try XCTUnwrap(MouseControlEngine.clickMatchScore(
+            line: line("Save your changes before quitting so nothing is lost"), target: "save"))
+        XCTAssertGreaterThan(exact, longer)
+        XCTAssertGreaterThan(longer, paragraph)
+        XCTAssertNil(MouseControlEngine.clickMatchScore(line: line(String(repeating: "x", count: 300)), target: "save"))
+    }
+
+    func testFillerWordsAreNotRequiredToMatchExactly() throws {
+        let score = try XCTUnwrap(MouseControlEngine.clickMatchScore(line: line("Open Settings"), target: "open settings"))
+        XCTAssertGreaterThan(score, 1_000)
+        XCTAssertNil(MouseControlEngine.clickMatchScore(line: line("Cancel"), target: "save"))
     }
 }

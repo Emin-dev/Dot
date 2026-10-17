@@ -79,6 +79,10 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   opens the microphone; quoted/explanatory question marks do not arm it. Permission loss cancels.
 - **Listening and sleep.** A turn listens for up to 5 minutes, then answers what was heard and says
   the cap was reached; a Mac wake clears the sleep block, re-arms proactivity and says "I'm back."
+- **Movement and clicks.** Placement protects full window bounds, returns no fallback when every
+  pocket is covered (Dot stays), and validates the swept path so a trip cannot cross text/buttons.
+  OCR clicks use the captured display's coordinate space, prefer exact short control labels and raise
+  the window under the point before clicking.
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the
   owner on 2026-10-17 after Dot moved nonstop through a cold model load; Dot now stays put during a
   turn. Coverage escapes and snapshot evasions are rate-limited to the same cadence, so a persistently

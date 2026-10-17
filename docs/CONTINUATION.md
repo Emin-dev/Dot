@@ -185,6 +185,16 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Placement and click accuracy — 2026-10-17 (owner report).** Three real causes fixed.
+(1) `findRandomEmptySpace` had a Pass-3 "fewest hits" fallback that returned a spot even when it
+overlapped a window/text; it now returns nil and Dot stays put. (2) A diagonal trip only checked its
+destination, so the pet could cross text/buttons; every trip now passes `safePath`, and a diagonal's
+swept bounds may not contain content the pet did not already overlap. (3) Large windows were protected
+only inside a 48 pt inset, leaving a band of toolbars/tabs/buttons; the whole window is protected now.
+Clicks now use the **screen that was actually OCR'd** (not `NSScreen.main`), score exact/short control
+labels over paragraphs, and activate the window under the click point before dispatching so a
+background click is not consumed as a window-raise. Full lane 903/0, `swift test` 580/0.
+
 **Answer length — tuned 2026-10-17.** The main system prompt now matches length to the request
 instead of asking for blanket brevity: simple factual/yes-no/single-step questions get one short
 sentence or phrase; complex questions and multi-step tasks get the detail, steps and caveats needed to

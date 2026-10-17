@@ -561,6 +561,10 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Placement/click accuracy (2026-10-17):** no overlapping fallback target, full-window protected
+bounds, swept-path validation for diagonal trips, captured-display OCR coordinates and
+raise-before-click. Remaining: no motion planner beyond conservative 60–140 pt moves.
+
 **Answer length (2026-10-17):** the main prompt scales from one short sentence for simple questions to
 full task detail for complex work, with no hard word limit and no padding.
 
