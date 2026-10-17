@@ -3174,7 +3174,9 @@ struct PetView: View {
         return model.phase.caption
     }
     private var shortStatus: String {
-        if preparation.state == .checking { return "Checking \(Int(preparation.progress * 100))%" }
+        if preparation.state == .checking {
+            return "\(preparation.detail ?? "Checking files") \(Int(preparation.progress * 100))%"
+        }
         if !preparation.ready { return preparation.state == .paused ? "Paused" : "Check files" }
         if case .blocked = model.phase { return CompanionStatusText.issue(model.issue) }
         if let stage = model.engineStage { return stage }

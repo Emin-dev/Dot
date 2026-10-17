@@ -550,3 +550,18 @@ final class PlacementPixelTests: XCTestCase {
     }
 }
 #endif
+
+
+#if !SWIFT_PACKAGE
+final class ModelProvisionerTests: XCTestCase {
+    func testManifestPathsMapToTheReviewedRepositories() throws {
+        let target = try ModelProvisioner.remoteURL(for: "llm-target/config.json")
+        XCTAssertEqual(target.absoluteString,
+                       "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/resolve/main/config.json")
+        let draft = try ModelProvisioner.remoteURL(for: "llm-draft/model.safetensors")
+        XCTAssertEqual(draft.absoluteString,
+                       "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/resolve/main/model.safetensors")
+        XCTAssertThrowsError(try ModelProvisioner.remoteURL(for: "other/file"))
+    }
+}
+#endif

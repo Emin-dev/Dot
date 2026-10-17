@@ -185,6 +185,17 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Public download — prepared 2026-10-17.** The README now carries a Download button and a one-line
+installer. `scripts/package_public_release.sh` builds a **785 MB runtime-only `Dot.zip`** (complete
+`Offline` runtime, no 19.9 GB models; Apple Development signed after stripping the sealed models).
+On first launch, `ModelProvisioner` downloads the exact 15 manifest files from
+`mlx-community/Qwen3.8-27B-4bit` and `incoai/Qwen3.8-27B-DFlash2` into Application Support, verifying
+each SHA-256 against `bundled-models.json`; the menu shows "Downloading model, N%". The downloader is
+implemented in `OfflinePreparation.swift`, not a separate unbounded transfer path. `scripts/publish_public_release.sh`
+uploads `Dot.zip` and its checksum with `GITHUB_TOKEN`. **Not yet exercised:** the real 20 GB first-launch
+download and the upload (no token); the package itself was built and signature-verified. Notarisation
+remains open, so macOS may warn.
+
 **Follow-up listening — fixed 2026-10-17 (owner report).** Two causes. First, the controller
 polled once 0.4 s after final playback and **revoked the invitation on any transient not-ready
 state** (TTS teardown, route settle, brief interaction), so the microphone never opened. It now retries

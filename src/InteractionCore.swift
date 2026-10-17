@@ -574,11 +574,11 @@ enum CompanionIssue: CaseIterable, Equatable {
     }
 
     static func menuHeader(readiness: CompanionReadiness, issue: Self?, progress: Double,
-                           engineStage: String? = nil) -> String? {
+                           engineStage: String? = nil, detail: String? = nil) -> String? {
         switch readiness {
         case .checking:
             let value = progress.isFinite ? min(1, max(0, progress)) : 0
-            return "Checking files, \(Int(value * 100))%"
+            return "\(detail ?? "Checking files"), \(Int(value * 100))%"
         case .paused: return "File check paused"
         case .unavailable: return Self.files.title
         case .ready: return engineStage ?? issue?.title

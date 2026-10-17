@@ -9,13 +9,18 @@ struct BundledModelIndex: Decodable {
     let files: [Asset]
 }
 
-/// Reads only the signed application's own payload. There is no downloader or external-folder discovery.
+/// Reads the signed application's own payload. When the public (model-less) app has
+/// no bundled models, the exact manifest files are downloaded to Application Support
+/// and verified against the signed hashes; no external folder or substitute is used.
 @MainActor
 final class OfflinePreparation: ObservableObject {
     static let shared = OfflinePreparation()
     private static let log = Logger(subsystem: "app.dot", category: "timing")
     @Published private(set) var state: CompanionReadiness = .checking
     @Published private(set) var progress = 0.0
+    /// Visible cold-start detail ("Downloading model") so a 20 GB first launch is
+    /// not misreported as a file check.
+    @Published private(set) var detail: String?
     var ready: Bool { state == .ready }
     private(set) var root: URL?
     private let resources: URL?
@@ -35,7 +40,7 @@ final class OfflinePreparation: ObservableObject {
             state = .unavailable("This app is missing its bundled speech recognizer. A complete build is required."); return
         }
         guard work == nil, !ready else { return }
-        state = .checking; progress = 0
+        state = .checking; progress = 0; detail = nil
         let token = UUID(); generation = token
         let began = ProcessInfo.processInfo.systemUptime
         Self.log.notice("DOT_PREPARATION stage=payload event=started")
@@ -54,9 +59,10 @@ final class OfflinePreparation: ObservableObject {
                 })
                 try Task.checkCancellation()
                 guard self.generation == token else { return }
-                self.root = folder; self.progress = 1; self.state = .ready
+                self.root = folder; self.progress = 1; self.detail = nil; self.state = .ready
             } catch {
                 guard !Task.isCancelled, self.generation == token else { return }
+                self.detail = nil
                 self.state = .unavailable((error as? PreparationFailure ?? .integrity).localizedDescription)
             }
         }
@@ -73,17 +79,55 @@ final class OfflinePreparation: ObservableObject {
               plan.files.allSatisfy({ (1...25_000_000_000).contains($0.bytes) && $0.sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil }),
               plan.total_bytes == plan.files.reduce(0, { $0 + $1.bytes }), plan.total_bytes <= 25_000_000_000,
               Set(plan.files.map { $0.path.precomposedStringWithCanonicalMapping.lowercased() }).count == plan.files.count else { throw PreparationFailure.integrity }
-        let folder = resources.appendingPathComponent("OfflineModels", isDirectory: true)
-        let folderValues = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-        guard folderValues.isDirectory == true, folderValues.isSymbolicLink != true,
-              folder.resolvingSymlinksInPath().deletingLastPathComponent().path == resources.resolvingSymlinksInPath().path else { throw PreparationFailure.models }
+        let bundled = resources.appendingPathComponent("OfflineModels", isDirectory: true)
+        let bundledValues = try? bundled.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        let useBundled = bundledValues?.isDirectory == true && bundledValues?.isSymbolicLink != true
+        let folder: URL
+        if useBundled {
+            guard bundled.resolvingSymlinksInPath().deletingLastPathComponent().path == resources.resolvingSymlinksInPath().path else {
+                throw PreparationFailure.models
+            }
+            folder = bundled
+        } else {
+            // A public app ships without the 19.9 GB model. Fetch the exact manifest
+            // files from Hugging Face into Application Support; every file is verified
+            // against the signed manifest before it is used.
+            guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                throw PreparationFailure.models
+            }
+            folder = support.appendingPathComponent("Dot", isDirectory: true)
+                .appendingPathComponent("Models", isDirectory: true)
+            detail = "Downloading model"
+            do {
+                try await ModelProvisioner.shared.ensureModels(at: folder, plan: plan) { [weak self] fraction in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.generation == token else { return }
+                        self.progress = 0.05 + 0.90 * fraction
+                    }
+                }
+            } catch {
+                detail = nil
+                throw error
+            }
+            detail = nil
+        }
         let closure = Task.detached(priority: .utility) { try Self.verifyClosure(folder, names: Set(plan.files.map(\.path))) }
         try await withTaskCancellationHandler(operation: { try await closure.value }, onCancel: { closure.cancel() })
         var completed: Int64 = 0
         for asset in plan.files {
             try Task.checkCancellation()
             let path = try OfflinePayload.safePath(asset.path, root: folder)
-            try await OfflinePayload.verifyHash(path, bytes: asset.bytes, expected: asset.sha256)
+            do {
+                try await OfflinePayload.verifyHash(path, bytes: asset.bytes, expected: asset.sha256)
+            } catch {
+                if !useBundled {
+                    // A downloaded file with a correct size but a bad hash is
+                    // discarded so the menu's Retry can fetch it again.
+                    try? FileManager.default.removeItem(at: path)
+                    throw PreparationFailure.download("A downloaded model file failed verification. Retry the download.")
+                }
+                throw error
+            }
             try Task.checkCancellation()
             guard generation == token else { throw CancellationError() }
             completed += asset.bytes; progress = 0.95 * Double(completed) / Double(plan.total_bytes)
@@ -127,13 +171,108 @@ final class OfflinePreparation: ObservableObject {
 
 enum PreparationFailure: LocalizedError {
     case runtime, models, integrity
+    case download(String)
     var errorDescription: String? {
         switch self {
         case .runtime: return "The bundled voice runtime is missing or damaged. A complete build is required."
-        case .models: return "The bundled local model is missing. A complete build is required."
+        case .models: return "The local model is missing and could not be prepared."
         case .integrity: return "Bundled files could not be verified. This app needs a repaired complete build."
+        case .download(let reason): return "Downloading the local model failed: \(reason). Check your connection and free disk space, then retry from the menu."
         }
     }
+}
+
+/// Downloads the exact signed-manifest model files from their public Hugging Face
+/// repositories. Byte identity is preserved by verifying each file's SHA-256 against
+/// `bundled-models.json`; no substitute model is ever accepted.
+actor ModelProvisioner {
+    static let shared = ModelProvisioner()
+    private let session: URLSession
+
+    init(session: URLSession? = nil) {
+        if let session { self.session = session }
+        else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForRequest = 60
+            configuration.timeoutIntervalForResource = 3_600
+            configuration.waitsForConnectivity = true
+            self.session = URLSession(configuration: configuration)
+        }
+    }
+
+    static func remoteURL(for path: String) throws -> URL {
+        let prefix: String
+        let base: String
+        if path.hasPrefix("llm-target/") {
+            prefix = "llm-target/"; base = "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/resolve/main/"
+        } else if path.hasPrefix("llm-draft/") {
+            prefix = "llm-draft/"; base = "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/resolve/main/"
+        } else {
+            throw PreparationFailure.download("Unknown model path '\(path)'.")
+        }
+        let rest = String(path.dropFirst(prefix.count))
+        guard let encoded = rest.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let url = URL(string: base + encoded) else {
+            throw PreparationFailure.download("Invalid model path '\(path)'.")
+        }
+        return url
+    }
+
+    func ensureModels(at folder: URL, plan: BundledModelIndex,
+                      progress: @escaping @Sendable (Double) -> Void) async throws {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        var completed: Int64 = 0
+        for asset in plan.files {
+            try Task.checkCancellation()
+            let destination = try OfflinePayload.safePath(asset.path, root: folder)
+            try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+            if let size = try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+               Int64(size) == asset.bytes {
+                completed += asset.bytes
+                progress(Double(completed) / Double(plan.total_bytes))
+                continue
+            }
+            try? FileManager.default.removeItem(at: destination)
+            let remote = try Self.remoteURL(for: asset.path)
+            let base = completed
+            let reporter = ModelDownloadProgress { written, _ in
+                progress(Double(base + min(written, asset.bytes)) / Double(plan.total_bytes))
+            }
+            let (temporary, response) = try await session.download(from: remote, delegate: reporter)
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                throw PreparationFailure.download("The model server returned an unexpected response.")
+            }
+            let size = (try? temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            guard Int64(size) == asset.bytes else {
+                throw PreparationFailure.download("'\(asset.path)' was incomplete.")
+            }
+            try await OfflinePayload.verifyHash(temporary, bytes: asset.bytes, expected: asset.sha256)
+            try Task.checkCancellation()
+            try FileManager.default.moveItem(at: temporary, to: destination)
+            completed += asset.bytes
+            progress(Double(completed) / Double(plan.total_bytes))
+        }
+    }
+}
+
+private final class ModelDownloadProgress: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let onProgress: @Sendable (Int64, Int64) -> Void
+    init(_ onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
+        self.onProgress = onProgress
+    }
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        onProgress(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+    // The async `download(from:delegate:)` owns the temporary file; observing the
+    // finish is required by the protocol but no move happens here.
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {}
 }
 
 /// Exactly two full verification streams. Any failure cancels and drains the sibling.

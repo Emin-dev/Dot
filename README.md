@@ -1,5 +1,33 @@
 # dot — floating local companion
 
+## Install Dot
+
+[![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
+
+**Download `Dot.zip` from the latest release, move `Dot.app` to Applications, and open it.** The app
+verifies its signed runtime, then downloads the exact 19.9 GB local model from Hugging Face on first
+launch, checking every file's SHA-256 against the bundled manifest. Allow about 25 GB of free disk and
+a stable connection; the progress appears in the menu bar and context menu.
+
+One-line install:
+
+```bash
+curl -L -o /tmp/Dot.zip https://github.com/Emin-dev/Dot/releases/latest/download/Dot.zip \
+  && ditto -x -k /tmp/Dot.zip /Applications \
+  && xattr -dr com.apple.quarantine /Applications/Dot.app \
+  && open /Applications/Dot.app
+```
+
+The public build is **Apple Development signed, not notarised yet**, so macOS may warn on first open;
+the command clears the quarantine flag. The button resolves once the `Dot.zip` asset is uploaded to a
+release (`GITHUB_TOKEN=… bash scripts/publish_public_release.sh` or upload it manually).
+
+Developers with an existing complete payload can build from source:
+
+```bash
+git clone https://github.com/Emin-dev/Dot.git && cd Dot && bash scripts/install_local.sh
+```
+
 **[Product roadmap and build checklist](docs/BUILD_CHECKLIST.md)** — full stack, ranked workflows, configurable timing/activity and accepted design direction. **[View the final-lineup v3 concept board](docs/design/dot-face-directions-v3.png)** · **[interactive motion study](docs/design/dot-face-motion-directions.html)** ([download HTML](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-face-motion-directions.html); save and open in a browser) · [prototype validation](docs/design/dot-face-motion-validation.md) · [artifact index](docs/design/README.md) · [plain-text checklist](docs/BUILD_CHECKLIST.txt). [Verified progress](docs/PROGRESS.md) separates source, tests, installation and unpublished work. [Current continuation handoff](docs/CONTINUATION.md) records active ownership, recovery and next steps, with meaningful checkpoints approximately every ten minutes during implementation.
 
 **Checklist implementation is authorized in tested stages.** After design review, the user explicitly said “yes build app based on our checklist.” The listening/question-follow-up loop is the first milestone, alongside a separate reviewable native skin/settings batch; it is no longer the overall scope limit. Do not repeat settled start/theme questions. Keep the working app and fixed Splash/Qwen/British Kokoro baseline intact; installation remains a separate step.
@@ -20,9 +48,9 @@ A native macOS floating companion. Click to talk; click during an answer to inte
 
 The installed baseline implements a single floating dot with a small right-click menu. That installed build has no app settings, setup, folder-selection or chat windows, or persistent text label below the dot; the newer timer/appearance options are merged source, not installed behavior. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
 
-**The complete personal build at [`b26a145`](https://github.com/Emin-dev/Dot/commit/b26a14505bd2bc8e57264f1dfc934f778a8bd781) was installed and opened on the owner’s Mac on 2026-10-13; a generally validated public installer is not available yet.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
+**The complete personal build was installed and opened on the owner’s Mac; a runtime-only public package with first-launch model download is prepared, but the signed/notarised release and uploaded `Dot.zip` asset remain gates.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
 
-The current complete personal build contains Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. There is currently no first-launch downloader, external folder picker, borrowed Python installation or server discovery. The future public variant adds verified first-launch provisioning; the owner bundle remains complete and offline-capable. At launch, Dot verifies the embedded payload, with pause/retry in its context menu. Missing or damaged files remain a visible error; the app never downloads a repair. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
+The current complete personal build contains Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. Unified provisioning: the owner bundle remains complete and offline-capable; the public runtime-only download fetches the same manifest-verified 19,930,313,310-byte model files on first launch. At launch, Dot verifies the embedded runtime and (when present) the embedded models, with pause/retry in its context menu. A failed download is a visible error; no substitute model or external folder is ever accepted. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
 
 ## Installed interaction and privacy
 
@@ -35,7 +63,7 @@ The current complete personal build contains Splash 1.3.1, English Whisper base.
 - Random roaming is disabled. Conservative local placement protects other windows, text and visually occupied regions; missing/stale/uncertain screen analysis means staying still. Short clear escape paths pause for interaction, speech, pinning and Reduce Motion. Manual drag works without screen access. Reduce Transparency provides an opaque body.
 - File, browser and autonomous computer actions are not implemented. Dot does not execute instructions from screen content.
 
-Conversation state stays in memory and disappears on quit. No analytics or conversation upload. The app has no model provisioning network path. Its owned Splash endpoint is loopback-only; the voice helper denies network access. The [future research/context contract](docs/BUILD_CHECKLIST.md#screen-files-and-online-research) adds online retrieval and explicitly authorized use of relevant screen/file data in web requests while retaining local AI, speech and memory.
+Conversation state stays in memory and disappears on quit. No analytics or conversation upload. The public app's only provisioning network path is the manifest-verified model download from the two reviewed Hugging Face repositories. Its owned Splash endpoint is loopback-only; the voice helper denies network access. The [future research/context contract](docs/BUILD_CHECKLIST.md#screen-files-and-online-research) adds online retrieval and explicitly authorized use of relevant screen/file data in web requests while retaining local AI, speech and memory.
 
 ## Development and verification
 

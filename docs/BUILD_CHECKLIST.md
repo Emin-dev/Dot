@@ -561,6 +561,11 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Public download (2026-10-17):** README Download button + one-line installer; `scripts/package_public_release.sh`
+builds a runtime-only `Dot.zip` and `scripts/publish_public_release.sh` uploads it. First launch downloads
+the exact manifest-verified model files from Hugging Face. The live 20 GB download, actual GitHub asset
+upload and notarisation remain acceptance gates.
+
 **Follow-up listening fix (2026-10-17):** after a direct final question, retry transient readiness
 inside the 8 s invitation window instead of revoking at the first 0.4 s poll; a spoken final question
 is a fallback for a missing `ask_user` call. `DOT_FOLLOWUP` notices expose the state transitions.

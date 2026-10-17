@@ -53,7 +53,14 @@ checks = {
     'shared Xcode scheme exists': (root / 'Dot.xcodeproj/xcshareddata/xcschemes/Dot.xcscheme').exists(),
     'native options remain in compact companion menu': not any(token in read('src/App.swift') + chat for token in ['Settings {', 'WindowGroup', '.popover(', '.sheet(', 'NSOpenPanel', 'ConnectionView']),
     'one reusable companion surface': 'CompanionSurface()' in read('src/App.swift') and 'if let panel { window = panel }' in read('src/CompanionPanel.swift'),
-    'no production model downloader': not (root / 'src/ModelDownload.swift').exists() and 'URLSession' not in read('src/OfflinePreparation.swift') and 'AssetTransfer' not in read('src/OfflinePreparation.swift'),
+    'production model downloader is manifest-verified': (
+        'ModelProvisioner' in read('src/OfflinePreparation.swift')
+        and 'huggingface.co/mlx-community/Qwen3.8-27B-4bit' in read('src/OfflinePreparation.swift')
+        and 'huggingface.co/incoai/Qwen3.8-27B-DFlash2' in read('src/OfflinePreparation.swift')
+        and 'OfflinePayload.verifyHash' in read('src/OfflinePreparation.swift')
+        and 'safePath' in read('src/OfflinePreparation.swift')
+        and 'getDownloadURL' not in read('src/OfflinePreparation.swift')
+    ),
     'bundled model index has no download URLs': 'https://' not in read('Resources/bundled-models.json'),
     'complete assembly requires all models': '${DOT_MODEL_PAYLOAD:?' in read('scripts/build_complete.sh') and 'MODEL_DOWNLOAD=true' not in read('scripts/build_complete.sh'),
     'voice errors never request external setup': all(x not in read('src/BionicVoice.swift') for x in ['existing Python packages', 'Check the local voice setup']),

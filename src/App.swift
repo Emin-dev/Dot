@@ -556,7 +556,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hasDetails = readiness.detail != nil || model.issue != nil
         if let header = CompanionIssue.menuHeader(readiness: readiness, issue: model.issue,
                                                    progress: OfflinePreparation.shared.progress,
-                                                   engineStage: model.engineStage) {
+                                                   engineStage: model.engineStage,
+                                                   detail: OfflinePreparation.shared.detail) {
             let item = NSMenuItem(title: header, action: nil, keyEquivalent: "")
             item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
         }

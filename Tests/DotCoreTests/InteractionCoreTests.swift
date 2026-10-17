@@ -819,6 +819,8 @@ final class CompactIssueTests: XCTestCase {
         XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: .nan), "Checking files, 0%")
         XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: 10), "Checking files, 100%")
         XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: -1), "Checking files, 0%")
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: 0.42,
+                                                 detail: "Downloading model"), "Downloading model, 42%")
     }
     func testDetailsActionOnlyAppearsWhenNeededAndQuitStaysLast() {
         for state in [CompanionReadiness.checking, .paused, .ready, .unavailable("detail")] {
