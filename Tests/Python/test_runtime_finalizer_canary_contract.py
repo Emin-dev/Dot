@@ -344,7 +344,10 @@ exit 0
     def test_failed_canary_keeps_status_runs_independent_lanes_and_blocks_packaging(self):
         result, trace = self.run_verification_shell_fixture(5, warning=True)
         self.assertEqual(result.returncode, 5, result.stdout + result.stderr)
-        self.assertTrue(any(line == 'swift test' for line in trace))
+        # The lane must run the SwiftPM suite. It is allowed to carry build-location
+        # flags so the suite can build outside a cloud-synced checkout, where codesign
+        # rejects test bundles carrying File Provider attributes.
+        self.assertTrue(any(line.startswith('swift test') for line in trace), trace)
         self.assertTrue(any('-configuration Debug' in line for line in trace))
         self.assertTrue(any('-configuration Release' in line for line in trace))
         self.assertFalse(any(line == 'bash build.sh' for line in trace))

@@ -25,7 +25,14 @@ if [ "$RUNTIME_FINALIZER_STATUS" -ne 0 ]; then
   echo "FAIL: runtime finalizer canary exited $RUNTIME_FINALIZER_STATUS; continuing independent Swift/Xcode checks"
 fi
 python3 -B scripts/check_contracts.py
-swift test 2>&1 | tee "$LOGS/swift.log"
+# Build the SwiftPM suite outside the checkout: a cloud-synced working copy (iCloud
+# Drive, Dropbox, a File Provider) re-applies com.apple.FinderInfo to build products,
+# and codesign then rejects the test bundle with "resource fork, Finder information,
+# or similar detritus not allowed". A scratch path under the log directory avoids it
+# and changes nothing on an ordinary checkout.
+swift test --scratch-path "$LOGS/swiftpm" --cache-path "$LOGS/swiftpm-cache" \
+  --config-path "$LOGS/swiftpm-config" --security-path "$LOGS/swiftpm-security" \
+  2>&1 | tee "$LOGS/swift.log"
 xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \
   -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$LOGS/Debug" \
   DOT_TEST_PYTHON="$TEST_PYTHON" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$LOGS/test.log"
