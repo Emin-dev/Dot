@@ -4,11 +4,11 @@
 > release scripts, later commits are docs. Reinstall so provenance matches HEAD. 904 XCTest/0 (1 skipped), 580
 > `swift test`/0, 604 Python/4 skipped, 53 guardrails. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded),
 > R11, R12, R13 (create/edit/move), R14, R15 are implemented; **R4 blocked on the payload decision**,
-> **R9 not built**, **R10 partial**. Read [AI_HANDOFF.md](AI_HANDOFF.md) for current state, blockers,
-> commands and the next plan. The "4 of 97" and older run counts below are **2026-10-14 historical
+> **R9 not built**, **R10 partial**. Published release **`public-f6cc73d`** contains Dot.dmg/Dot.zip. Read
+> [AI_HANDOFF.md](AI_HANDOFF.md) for current state, blockers, commands and the next plan. The "4 of 97" and older run counts below are **2026-10-14 historical
 > checkpoints**, not current completion.
 
-Agreed direction, updated 2026-10-14. **This is the canonical future-product checklist.** [PROGRESS](PROGRESS.md) records verified source, tests and installation; agreement here does not mean a feature is built. Roadmap capability boxes remain unchecked until their stated scope is verified; the separate candidate ledger below records narrower source and automated-check milestones. This documentation delta changes no application code; the preview review is complete and checklist implementation is authorized in tested stages. Voice is the first milestone, with a separate reviewable native skin/settings batch; installation remains a separate step. **Runtime direction was superseded on 2026-10-17:** the runtime is Rust-only and the owner decisions below are authoritative; see [the Rust runtime reference](rust-runtime.md).
+Agreed direction, updated 2026-10-14. **This is the canonical future-product checklist.** [PROGRESS](PROGRESS.md) records verified source, tests and installation; agreement here does not mean a feature is built. Roadmap capability boxes remain unchecked until their stated scope is verified; the separate candidate ledger below records narrower source and automated-check milestones. This documentation delta changes no application code; the preview review is complete and checklist implementation is authorized in tested stages. Voice is the first milestone, with a separate reviewable native skin/settings batch; installation remains a separate step. **Runtime direction:** the runtime direction is Rust-only; the Splash supervisor/TLS relay is still Python until `crates/dot-runtime` slices 2–5 land. The owner decisions below are authoritative; see [the Rust runtime reference](rust-runtime.md).
 
 dot is a very fast, voice-first, Apple-native macOS AI companion. **Speed comes first; a warm, calm, high-quality British female voice generated locally comes second.** It should understand relevant work, research facts, act helpfully and feel alive. Prefer Apple-native solutions and frameworks for every subsystem; use custom components where necessary or demonstrably better under these requirements. This principle preserves the fixed Splash/Qwen LLM and the required British voice.
 
@@ -109,15 +109,15 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 ## 2026-10-16 Autonomous Desktop Companion & New Capabilities Checklist
 
 ### Completed Capabilities (Verified & Deployed)
-- [x] **Permission Preflight & Once-Only Caching:** Screen Recording permission checked before requesting, asked at most once, and cached persistently without prompt loops.
+- [x] **Permission Preflight & Re-ask After Denial:** Screen Recording permission is preflighted before any request and asked only on need. A denial is **re-asked** on a later interaction (the offer marker is cleared while access is still ungranted, so it never suppresses a future prompt); a grant is honoured without prompt loops. Persist-once-after-denial was considered and **not taken** — it is a policy change needing owner sign-off.
 - [x] **Full Background Autonomy:** Dot keeps working when clicking into other applications; turns are only interrupted if user explicitly clicks Stop in Dot's window or says "stop".
 - [x] **Safe-Zone 5-Second Random Movement — retired 2026-10-17.** While thinking, Dot used to relocate every 5 seconds to a safe empty zone detected via `PlacementCapture` and `RoamingCore`. The owner observed Dot moving nonstop through long model loads and retired the cadence: Dot now keeps its position through a turn and moves only on the 2-minute idle roam (plus a necessary escape when covered). The safe-zone calculation remains.
 - [x] **Self-Improvement & Failure Logging:** Automatically logs task failure reason, missing capability, and proposed fix via `DiagnosticChatLogger.recordFailure` and indexes corrections in local FTS5 store.
 - [x] **Live GitHub Repository Integration:** Built-in menu items and conversational inquiries to inspect, copy, and open Dot's repository (`https://github.com/Emin-dev/Dot`) and read local source code directly.
-- [x] **Hardware Specification Launch Gate:** Production App Store ready launch gate enforcing Apple Silicon M4 Pro, M5 or newer, 48 GB Unified Memory, and macOS 27+:
+- [x] **Hardware Specification Launch Gate:** launch gate with an **Apple Silicon / 36 GB Unified Memory / macOS 26.4** minimum floor; **48 GB and macOS 27+ are advisory recommendations** and never block a launch:
   - *Technically Impossible* (Intel, RAM < 24 GB, or macOS < 15): Informative critical alert with single "Quit" button.
-  - *Below Minimum* (24–47 GB RAM, base M4 / M1–M3, macOS < 27): Warning alert with "Stop" (default) or "Run Anyway" buttons.
-  - *Meets Specification* (M4 Pro / M5+, 48 GB RAM, macOS 27+): Direct launch without interruption.
+  - *Below Minimum* (chip below M4 Pro/M5, RAM < 36 GB, or macOS < 26.4): Warning alert with **"Run Anyway" as the default** (Return-key) button and "Stop" secondary; shown once per acknowledgement.
+  - *Meets Specification* (Apple Silicon, 36 GB RAM, macOS 26.4+): Direct launch without interruption.
 - [x] **Smart Local Timers & Reminders with macOS Notifications:**
   - Natural language timer parsing ("set a timer for 10 minutes", "timer 5 min", "remind me in 30 seconds to stretch", "cancel timer", "show timers") via `SmartTimerScheduler` and `SmartTimerParser`.
   - Asynchronous local scheduling with audio chime and voice completion alert. A `UNUserNotificationCenter` banner is **not** implemented: no notification permission is requested, so timers alert by sound and speech only.

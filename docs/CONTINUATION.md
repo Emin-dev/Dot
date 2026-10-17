@@ -9,9 +9,8 @@
 provenance matches HEAD. Automated gates:
 **904 XCTest / 0** (1 opt-in live test skipped), **580 `swift test` / 0**, **604 Python / 4 skipped**,
 **53 guardrails**. Last full `verify_macos.sh` (at `e0fb2a7`) was clean except its by-design
-runtime-finalizer canary; rerun after the latest placement/screen-off changes. A **1.0 GB
-`build-public/Dot.dmg`** and 785 MB zip are built and verified but **not uploaded**; no release asset,
-no Developer ID/notarisation.
+runtime-finalizer canary; rerun after the latest placement/screen-off changes. Published GitHub release **`public-f6cc73d`** (latest) has the **1.0 GB `Dot.dmg`** and 785 MB zip
+plus SHA-256 files (remote digests match); no Developer ID/notarisation yet.
 
 **Latest work (2026-10-17/18):** R1 5-minute listening; R5/R6 key-point memory; R7 file autonomy and
 recent-file proactive awareness; R8 bounded adaptive screen watching; R11 cold-start progress/prewarm;

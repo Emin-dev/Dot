@@ -5,9 +5,9 @@
 App source last changed at **`8afab50`** (screen-off/lock pause); `f03d608` added release scripts and
 later commits are docs. Run `scripts/install_local.sh` so installed provenance matches HEAD. Current automated gates: **904 XCTest / 0**
 (1 live test skipped), **580 `swift test` / 0**, **604 Python passed / 4 skipped**, **53 guardrails**;
-the last full `verify_macos.sh` run was clean apart from its by-design finalizer canary. A **1.0 GB
-`Dot.dmg`** and 785 MB `Dot.zip` are built and verified but **not uploaded**; the app is Apple
-Development signed, not notarised.
+the last full `verify_macos.sh` run was clean apart from its by-design finalizer canary. The **1.0 GB
+`Dot.dmg`** and 785 MB `Dot.zip` are published in release **`public-f6cc73d`** (remote digests match);
+the app is Apple Development signed, not notarised.
 
 ## Verified working (each with the evidence that was actually gathered)
 
@@ -58,11 +58,11 @@ Development signed, not notarised.
   preferences go to core. Capture from natural speech, tier-aware recall with an FTS fallback,
   "what do you remember", bounded explicit "forget about X", ageing that promotes T1→T2→T3→T4 and
   never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).
-- **Public download.** README has a Download button and one-line installer, with a **1.0 GB
-  `Dot.dmg`** (drag to Applications) and a zip equivalent. `scripts/package_public_release.sh`
-  produces a ~785 MB runtime-only `Dot.zip`; first launch downloads the exact 15 model files from the
-  two reviewed Hugging Face repositories and verifies their SHA-256 against the signed manifest. The
-  20 GB live download and notarisation are not yet exercised.
+- **Public download.** Published as release **`public-f6cc73d`** (latest) with a **1.0 GB `Dot.dmg`**
+  and 785 MB `Dot.zip` plus SHA-256 files; remote asset digests match. README has the download button
+  and one-line installers. First launch downloads the exact 15 model files from the two reviewed
+  Hugging Face repositories and verifies their SHA-256 against the signed manifest. The 20 GB live
+  download on a clean Mac and notarisation are not yet exercised.
 - **Cold start.** The menu-bar title shows "Preparing N%" during the payload check and "Loading
   model…" during Splash readiness; the menu header and accessibility value carry the full stage.
   Tools & History offers optional prewarm at launch (off by default).

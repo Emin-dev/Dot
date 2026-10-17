@@ -5,6 +5,21 @@ The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R1
 older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, `CONTINUATION.md` and
 `BUILD_CHECKLIST.md` contain history that is partly superseded; their top notes point here.
 
+## ⚠️ Uncommitted work in the tree (2026-10-18)
+
+At the time this handoff was written, the working tree contains an **uncommitted, in-progress
+refactor** by another worker:
+- `MemoryTierStore.init(facts:)` (MS-1) and related `LocalFTSStore` busy-timeout/step logging,
+  web-research changes, stricter `package_public_release.sh`/`verify_macos.sh` scripts.
+- `ChatView` and `MemoryTierTests` still call `MemoryTierStore(directory:)`, so **`swift test` does not
+  currently compile** until that refactor is finished. This broken state is **not** in the published
+  release and was not committed by the documentation pass.
+- Do not revert or overwrite these files. Coordinate with the other worker, finish the initializer
+  call sites, then run the full gates and `install_local.sh`.
+- The published `Dot.dmg`/`Dot.zip` were built before this refactor, with an **Apple Development**
+  signature. The in-progress packaging script now refuses Apple Development for public distribution;
+  notarisation with a Developer ID remains required for a proper release.
+
 ## Current build and gates
 
 - Repo: `/Users/mac/Documents/deepseek-harness/default-workspace/Dot`, branch **main only**.
@@ -17,11 +32,12 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
   builds. The full `verify_macos.sh` run at `e0fb2a7` was clean apart from its **by-design
   runtime-finalizer canary**; rerun it after the latest placement/screen-off changes (the full XCTest
   and SwiftPM lanes are green, but the complete script has not been rerun since `8afab50`).
-- Public package built but **not published**: `build-public/Dot.dmg` (~1.0 GB) and
-  `build-public/Dot.zip` (~785 MB), built from the installed complete app (provenance is recorded inside). They contain the runtime, no `OfflineModels`,
-  and the manifest-verified downloader. No GitHub release asset exists (no token/upload), and the build
-  is **Apple Development signed, not notarised** (no Developer ID Application identity or notary
-  credentials on this Mac).
+- Public package **published** as GitHub release **`public-f6cc73d`** (latest, non-prerelease):
+  `Dot.dmg` (~1.0 GB) and `Dot.zip` (~785 MB) plus SHA-256 files. Remote GitHub asset digests match
+  the local SHA-256 exactly. The assets were built at app-source `850fa98` (same binary as `f6cc73d`);
+  the README latest-download links resolve. They contain the runtime, no `OfflineModels`, and the
+  manifest-verified downloader. The build is **Apple Development signed, not notarised** (no Developer
+  ID Application identity or notary credentials on this Mac).
 - The full 19.9 GB first-launch model download has **not** been run end to end; a gated live test
   downloaded and SHA-verified one real file from Hugging Face through the same code path.
 
@@ -66,28 +82,23 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
 - **R4 voice picker** — only `bf_isabella.pt` ships; blocked on the payload decision.
 - **B8** dead-code deletions (~540 audited lines).
 - **Splash supervisor port slices 2–5** in `crates/dot-runtime`; supervisor/TLS still Python.
-- **Public release**: release asset upload, notarisation, licence closure, clean second-Mac acceptance.
+- **Public release**: notarisation, licence closure, clean second-Mac acceptance (the asset upload is done).
 - **Owner acceptance session after the latest changes** (the only unautomated proof).
 
 ## Decisions needed before those can finish
 
-1. **Release upload**: either upload `build-public/Dot.dmg`/`Dot.zip` manually to a GitHub release, or
-   create a classic PAT (`repo`) / fine-grained Contents-write token and run
-   `bash scripts/store_github_token.sh` once. Then `bash scripts/publish_public_release.sh` publishes
-   without device logins. The DMG is 1 GB; normal git push cannot carry it (100 MB file limit; release
-   assets need the API).
-2. **R4**: keep the payload fixed (defer the picker) or explicitly approve adding
+1. **R4**: keep the payload fixed (defer the picker) or explicitly approve adding
    `bf_emma.pt`/`bf_alice.pt` (a payload revision).
-3. **R9**: recommended writable plugin/config layer + snapshots/self-test/rollback + Rust watchdog
+2. **R9**: recommended writable plugin/config layer + snapshots/self-test/rollback + Rust watchdog
    (compatible with the signed bundle); alternative is an unsigned self-modifying build that breaks the
    notarised release.
-4. **Notarisation**: requires a Developer ID Application certificate and App Store Connect notary
+3. **Notarisation**: requires a Developer ID Application certificate and App Store Connect notary
    credentials; the current Mac has only an Apple Development identity.
 
 ## Suggested next order
 
-1. Publish the DMG (above), then clean-Mac test: format/second Mac → download → drag to Applications →
-   first-launch 20 GB model download → voice turn.
+1. Clean-Mac test of the published release: download `Dot.dmg` → drag to Applications → first-launch
+   20 GB model download → voice turn.
 2. Owner acceptance session: voice, follow-up, cap, file op, calendar card, video silence, screen-off
    pause, screen watching, battery/timer.
 3. R9 decision and implementation (plugin layer + watchdog).
