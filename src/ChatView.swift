@@ -1359,6 +1359,17 @@ final class ChatModel: ObservableObject {
         beginListening(continuation: nil)
     }
 
+    /// The path from an explicit "read file ..." request, or nil when the turn is not
+    /// one. A bare "read file" asks for a path instead of guessing.
+    private static func fileReadRequest(from phrase: String) -> String? {
+        for prefix in ["read file ", "read the file ", "open file ", "show file ", "read my file "]
+        where phrase.hasPrefix(prefix) {
+            let path = String(phrase.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return path.isEmpty ? nil : path
+        }
+        return nil
+    }
+
     /// After a reflection, offer to paste the suggestion where the owner is working.
     /// It is already on the clipboard; pasting is their decision, so this only asks,
     /// and it never touches the destructive approval branches.
@@ -1567,6 +1578,36 @@ final class ChatModel: ObservableObject {
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
         let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Reading a named local file. The owner authorised broad local access, so this
+        // is bounded and honest: UTF-8 text only, a hard size cap, and a clear refusal
+        // for anything missing, binary or oversized. The system still enforces its own
+        // protected locations.
+        if pendingApproval == nil, let path = Self.fileReadRequest(from: copyPhrase) {
+            Task { [weak self] in
+                guard let self else { return }
+                let expanded = (path as NSString).expandingTildeInPath
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
+                      !isDirectory.boolValue else {
+                    self.respondDirectly("I cannot find a file at \(expanded).", id: id)
+                    return
+                }
+                guard let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),
+                      let size = attributes[.size] as? Int, size <= 262_144 else {
+                    self.respondDirectly("That file is larger than 256 KB, so I will not read it in one go.", id: id)
+                    return
+                }
+                guard let data = FileManager.default.contents(atPath: expanded),
+                      !data.contains(0), let text = String(data: data, encoding: .utf8) else {
+                    self.respondDirectly("That file is not readable text, so I left it alone.", id: id)
+                    return
+                }
+                let clipped = text.count > 4_000 ? String(text.prefix(4_000)) + "\n… (truncated)" : text
+                self.respondDirectly("Contents of \(expanded):\n\(clipped)", id: id)
+            }
+            return
+        }
+
         // Explicit, user-initiated forgetting. Automatic deletion stays confined to real
         // memory pressure; this is the owner asking, so it is bounded and reported, and
         // it refuses a vague subject rather than guessing what to remove.
