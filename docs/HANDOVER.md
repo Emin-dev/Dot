@@ -18,6 +18,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   its capability-gated loopback endpoint, and now survives a client that splits head and body across
   TCP segments (the shipped binary previously answered 400). `dot-fetch` is the pinned HTTPS reader
   with a verified sandbox canary (inherited socket only, `connect()` denied).
+- **Answer length.** Simple questions get one short sentence; complex tasks get the detail and steps
+  they need. There is no fixed word limit.
 - **Click to listen.** Whisper is compiled in and embedded by `build.sh` via `DOT_WHISPER_FRAMEWORK`;
   a refused click now says why; **the app now asks for the microphone and Screen Recording on the
   first click or hold-Fn, before any readiness gate** (it previously only checked status, which is why

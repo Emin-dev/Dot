@@ -561,6 +561,9 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Answer length (2026-10-17):** the main prompt scales from one short sentence for simple questions to
+full task detail for complex work, with no hard word limit and no padding.
+
 **Microphone mode (2026-10-17):** Dot reads the macOS mic mode, shows it in the menu with the system
 selector, captions the first non-wide listen and nudges once on first launch; there is no public API to
 force Wide Spectrum, so the owner chooses it once.
