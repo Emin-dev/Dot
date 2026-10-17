@@ -171,8 +171,30 @@ actor LocalFTSStore {
             text,
             tokenize='porter unicode61'
         );
+
+        CREATE TABLE IF NOT EXISTS memory_tier_state (
+            id TEXT PRIMARY KEY,
+            tier INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            created_at REAL NOT NULL,
+            updated_at REAL NOT NULL,
+            last_accessed_at REAL NOT NULL,
+            superseded_by TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0,
+            represents_count INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE INDEX IF NOT EXISTS memory_tier_state_tier ON memory_tier_state (tier, created_at);
         """
         try execute(db: db, sql: schema)
+    }
+
+    /// R5/B4: the tier store shares this single connection so one database has one
+    /// owner. The closure runs on this actor's executor, so tier writes serialize
+    /// with fact writes instead of racing a second handle.
+    func withMemoryConnection<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
+        guard let db else { throw LocalFTSError.closed }
+        return try body(db)
     }
 
     // MARK: - Conversation Indexing & Retrieval

@@ -169,6 +169,12 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**B4 single memory connection — fixed 2026-10-17.** `MemoryTierStore` no longer opens a second
+SQLite handle. `LocalFTSStore` creates `memory_tier_state` in its schema and exposes
+`withMemoryConnection`, and every tier read/write runs on that one owner connection (so tier writes
+serialize with fact writes). The tier SQL helpers became static with an explicit handle; the public
+methods are async. `MemoryTierTests` 13/0, full lane 886/0, `swift test` 566/0.
+
 **R10 news provider — implemented 2026-10-17 (partial).** `dot-search` now enriches results with Google
 News RSS (`news.google.com/rss/search`, no key): up to three deduplicated items with title, link,
 description and `published_date`, appended after DuckDuckGo and before the Wikipedia fallback, still

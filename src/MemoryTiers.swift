@@ -151,61 +151,16 @@ actor MemoryTierStore {
     /// The underlying fact store, shared with the rest of the app.
     let facts: LocalFTSStore
 
-    private var db: OpaquePointer?
-    private let metadataURL: URL
-
-    /// Same directory and file name as `LocalFTSStore`, so both share one database file.
-    private static let defaultDirectoryName = "Records"
-    private static let defaultFileName = "dot_records.sqlite"
-
     /// Concatenated summaries are bounded; a longer group splits into several summaries.
     static let maxSummaryCharacters = 1200
 
     private static let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
+    /// One SQLite owner for both facts and tier state: `LocalFTSStore` creates the
+    /// `memory_tier_state` table in its schema, and every read/write here runs inside
+    /// `facts.withMemoryConnection`.
     init(directory: URL? = nil) throws {
         facts = try LocalFTSStore(directory: directory)
-        if let directory {
-            metadataURL = directory.appendingPathComponent(Self.defaultFileName)
-        } else {
-            guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
-                throw LocalFTSError.openFailed("Application Support directory unavailable")
-            }
-            let directory = support.appendingPathComponent("Dot", isDirectory: true)
-                .appendingPathComponent(Self.defaultDirectoryName, isDirectory: true)
-            metadataURL = directory.appendingPathComponent(Self.defaultFileName)
-        }
-        var opened: OpaquePointer?
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
-        guard sqlite3_open_v2(metadataURL.path, &opened, flags, nil) == SQLITE_OK else {
-            throw LocalFTSError.openFailed("Failed to open tier metadata at \(metadataURL.path)")
-        }
-        db = opened
-        guard let handle = db else { throw LocalFTSError.closed }
-        // Same file and same locking approach as LocalFTSStore (WAL journal, serialized
-        // handle); this connection only ever creates and writes the side table below.
-        try Self.execute(db: handle, sql: "PRAGMA busy_timeout = 2000;")
-        try Self.execute(db: handle, sql: """
-        CREATE TABLE IF NOT EXISTS memory_tier_state (
-            id TEXT PRIMARY KEY,
-            tier INTEGER NOT NULL,
-            source TEXT NOT NULL,
-            created_at REAL NOT NULL,
-            updated_at REAL NOT NULL,
-            last_accessed_at REAL NOT NULL,
-            superseded_by TEXT,
-            pinned INTEGER NOT NULL DEFAULT 0,
-            represents_count INTEGER NOT NULL DEFAULT 1
-        );
-
-        CREATE INDEX IF NOT EXISTS memory_tier_state_tier ON memory_tier_state (tier, created_at);
-        """)
-    }
-
-    deinit {
-        if let handle = db {
-            sqlite3_close_v2(handle)
-        }
     }
 
     // MARK: - User-facing API
@@ -227,11 +182,13 @@ actor MemoryTierStore {
         )
         let created = MemoryRecord(id: fact.id, tier: isCore ? .core : tier, text: trimmed, source: source,
                                    createdAt: now, updatedAt: now, lastAccessedAt: now, pinned: pinned)
-        try writeMetadata(created)
-        if let supersedes {
-            try markSuperseded(id: supersedes, by: fact.id, now: now)
+        return try await facts.withMemoryConnection { db in
+            try Self.writeMetadata(created, db: db)
+            if let supersedes {
+                try Self.markSuperseded(id: supersedes, by: fact.id, now: now, db: db)
+            }
+            return try Self.record(id: fact.id, db: db) ?? created
         }
-        return try record(id: fact.id) ?? created
     }
 
     /// Full-text recall. Superseded records are excluded and every hit is touched so the
@@ -239,83 +196,100 @@ actor MemoryTierStore {
     func recall(query: String, limit: Int = 20, now: Date) async throws -> [MemoryRecord] {
         let hits = try await facts.searchMemories(query: query, limit: max(1, limit))
         guard !hits.isEmpty else { return [] }
-        for hit in hits {
-            try ensureMetadata(id: hit.id, now: now)
-        }
-        let touch = try prepare("UPDATE memory_tier_state SET last_accessed_at = ? WHERE id = ?;",
-                                "Failed to prepare access time update")
-        defer { sqlite3_finalize(touch) }
-        for hit in hits {
-            sqlite3_reset(touch)
-            sqlite3_clear_bindings(touch)
-            sqlite3_bind_double(touch, 1, now.timeIntervalSince1970)
-            sqlite3_bind_text(touch, 2, hit.id.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(touch)
-        }
-        let stored = Dictionary(uniqueKeysWithValues: try fetchRecords().map { ($0.id, $0) })
-        return hits.compactMap { hit in
-            // The FTS stale flag and the tier-state supersession are separate rows;
-            // a corrected fact must never reappear because only one of them says so.
-            guard var found = stored[hit.id], !found.isSuperseded else { return nil }
-            found.lastAccessedAt = now
-            return found
+        return try await facts.withMemoryConnection { db in
+            for hit in hits {
+                try Self.ensureMetadata(id: hit.id, now: now, db: db)
+            }
+            let touch = try Self.prepare("UPDATE memory_tier_state SET last_accessed_at = ? WHERE id = ?;",
+                                         "Failed to prepare access time update", db: db)
+            defer { sqlite3_finalize(touch) }
+            for hit in hits {
+                sqlite3_reset(touch)
+                sqlite3_clear_bindings(touch)
+                sqlite3_bind_double(touch, 1, now.timeIntervalSince1970)
+                sqlite3_bind_text(touch, 2, hit.id.uuidString, -1, Self.SQLITE_TRANSIENT)
+                _ = sqlite3_step(touch)
+            }
+            let stored = Dictionary(uniqueKeysWithValues: try Self.fetchRecords(db: db).map { ($0.id, $0) })
+            return hits.compactMap { hit in
+                // The FTS stale flag and the tier-state supersession are separate rows;
+                // a corrected fact must never reappear because only one of them says so.
+                guard var found = stored[hit.id], !found.isSuperseded else { return nil }
+                found.lastAccessedAt = now
+                return found
+            }
         }
     }
 
     /// Explicit user delete (Read / Copy / Delete). Removes the fact and its tier state.
     @discardableResult
     func forget(id: UUID) async throws -> Bool {
-        guard try record(id: id) != nil else { return false }
-        let stmt = try prepare("DELETE FROM memory_tier_state WHERE id = ?;", "Failed to prepare tier delete")
-        defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
-        _ = sqlite3_step(stmt)
+        let existed = try await facts.withMemoryConnection { db -> Bool in
+            guard try Self.record(id: id, db: db) != nil else { return false }
+            let stmt = try Self.prepare("DELETE FROM memory_tier_state WHERE id = ?;",
+                                        "Failed to prepare tier delete", db: db)
+            defer { sqlite3_finalize(stmt) }
+            sqlite3_bind_text(stmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+            _ = sqlite3_step(stmt)
+            return true
+        }
+        guard existed else { return false }
         try await facts.deleteMemory(id: id)
         return true
     }
 
     /// Records are user-editable, including their tier.
     @discardableResult
-    func setTier(id: UUID, tier: MemoryTier, now: Date) throws -> MemoryRecord? {
-        guard var stored = try record(id: id) else { return nil }
-        stored.tier = tier
-        stored.updatedAt = now
-        try writeMetadata(stored)
-        return stored
+    func setTier(id: UUID, tier: MemoryTier, now: Date) async throws -> MemoryRecord? {
+        try await facts.withMemoryConnection { db in
+            guard var stored = try Self.record(id: id, db: db) else { return nil }
+            stored.tier = tier
+            stored.updatedAt = now
+            try Self.writeMetadata(stored, db: db)
+            return stored
+        }
     }
 
     /// A pinned record is kept out of automatic eviction.
     @discardableResult
-    func setPinned(id: UUID, pinned: Bool, now: Date) throws -> MemoryRecord? {
-        guard var stored = try record(id: id) else { return nil }
-        stored.pinned = pinned
-        stored.updatedAt = now
-        try writeMetadata(stored)
-        return stored
+    func setPinned(id: UUID, pinned: Bool, now: Date) async throws -> MemoryRecord? {
+        try await facts.withMemoryConnection { db in
+            guard var stored = try Self.record(id: id, db: db) else { return nil }
+            stored.pinned = pinned
+            stored.updatedAt = now
+            try Self.writeMetadata(stored, db: db)
+            return stored
+        }
     }
 
     /// Oldest first. Superseded archive rows are included only when asked for explicitly.
-    func records(tier: MemoryTier? = nil, limit: Int = 200, includeSuperseded: Bool = false) throws -> [MemoryRecord] {
-        let filtered = try fetchRecords().filter { stored in
-            guard includeSuperseded || !stored.isSuperseded else { return false }
-            guard let tier else { return true }
-            return stored.tier == tier
+    func records(tier: MemoryTier? = nil, limit: Int = 200, includeSuperseded: Bool = false) async throws -> [MemoryRecord] {
+        try await facts.withMemoryConnection { db in
+            let filtered = try Self.fetchRecords(db: db).filter { stored in
+                guard includeSuperseded || !stored.isSuperseded else { return false }
+                guard let tier else { return true }
+                return stored.tier == tier
+            }
+            return Array(filtered.prefix(max(0, limit)))
         }
-        return Array(filtered.prefix(max(0, limit)))
     }
 
     /// Live (non-superseded) records per tier; every tier is present, zero included.
-    func tierCounts() throws -> [MemoryTier: Int] {
-        var counts = Dictionary(uniqueKeysWithValues: MemoryTier.allCases.map { ($0, 0) })
-        for stored in try fetchRecords() where !stored.isSuperseded {
-            counts[stored.tier, default: 0] += 1
+    func tierCounts() async throws -> [MemoryTier: Int] {
+        try await facts.withMemoryConnection { db in
+            var counts = Dictionary(uniqueKeysWithValues: MemoryTier.allCases.map { ($0, 0) })
+            for stored in try Self.fetchRecords(db: db) where !stored.isSuperseded {
+                counts[stored.tier, default: 0] += 1
+            }
+            return counts
         }
-        return counts
     }
 
     /// Bytes the stored corpus occupies, including superseded archive rows.
-    func usedBytes() throws -> Int {
-        try fetchRecords().reduce(0) { $0 + $1.byteCost }
+    func usedBytes() async throws -> Int {
+        try await facts.withMemoryConnection { db in
+            try Self.fetchRecords(db: db).reduce(0) { $0 + $1.byteCost }
+        }
     }
 
     // MARK: - Ageing: compress and promote, never delete
@@ -329,10 +303,12 @@ actor MemoryTierStore {
         for tier in MemoryTier.allCases {
             guard let next = tier.next, let nominalAge = tier.nominalAge else { break }
             let cutoff = now.addingTimeInterval(-nominalAge)
-            let due = try fetchRecords().filter { $0.tier == tier && !$0.isSuperseded && $0.createdAt <= cutoff }
+            let due = try await facts.withMemoryConnection { db in
+                try Self.fetchRecords(db: db).filter { $0.tier == tier && !$0.isSuperseded && $0.createdAt <= cutoff }
+            }
             guard !due.isEmpty else { continue }
             for pinned in due where pinned.pinned {
-                if let promoted = try promote(id: pinned.id, to: next, now: now) {
+                if let promoted = try await promote(id: pinned.id, to: next, now: now) {
                     changed.append(promoted)
                 }
             }
@@ -340,7 +316,7 @@ actor MemoryTierStore {
                 let group = due.filter { !$0.pinned && $0.source == source }
                 for chunk in Self.summaryChunks(of: group) {
                     if chunk.count == 1, let only = chunk.first {
-                        if let promoted = try promote(id: only.id, to: next, now: now) {
+                        if let promoted = try await promote(id: only.id, to: next, now: now) {
                             changed.append(promoted)
                         }
                     } else {
@@ -372,12 +348,14 @@ actor MemoryTierStore {
         return chunks
     }
 
-    private func promote(id: UUID, to tier: MemoryTier, now: Date) throws -> MemoryRecord? {
-        guard var stored = try record(id: id) else { return nil }
-        stored.tier = tier
-        stored.updatedAt = now
-        try writeMetadata(stored)
-        return stored
+    private func promote(id: UUID, to tier: MemoryTier, now: Date) async throws -> MemoryRecord? {
+        try await facts.withMemoryConnection { db in
+            guard var stored = try Self.record(id: id, db: db) else { return nil }
+            stored.tier = tier
+            stored.updatedAt = now
+            try Self.writeMetadata(stored, db: db)
+            return stored
+        }
     }
 
     /// Compression concatenates a group into one summary that records how many records it
@@ -392,15 +370,19 @@ actor MemoryTierStore {
                                    createdAt: members.map(\.createdAt).min() ?? now,
                                    updatedAt: now, lastAccessedAt: now,
                                    representsCount: members.reduce(0) { $0 + $1.representsCount })
-        try writeMetadata(summary)
-        for var member in members {
+        for member in members {
             try await facts.markMemoryStale(id: member.id)
-            member.tier = tier
-            member.supersededBy = summary.id
-            member.updatedAt = now
-            try writeMetadata(member)
         }
-        return try record(id: summary.id) ?? summary
+        return try await facts.withMemoryConnection { db in
+            try Self.writeMetadata(summary, db: db)
+            for var member in members {
+                member.tier = tier
+                member.supersededBy = summary.id
+                member.updatedAt = now
+                try Self.writeMetadata(member, db: db)
+            }
+            return try Self.record(id: summary.id, db: db) ?? summary
+        }
     }
 
     // MARK: - Eviction: the only path that deletes
@@ -408,13 +390,17 @@ actor MemoryTierStore {
     /// Deletes oldest T1 first, then oldest T2, and stops the moment the budget is met.
     /// Pinned records, T3, T4 and T5 are never deleted by this path.
     func evictIfNeeded(pressure: MemoryPressure, now: Date) async throws -> [MemoryRecord] {
-        var used = try pressure.currentBytes ?? usedBytes()
+        let initial = pressure.currentBytes
+        var used: Int
+        if let initial { used = initial } else { used = try await usedBytes() }
         guard used > pressure.budgetBytes else { return [] }
         var deleted: [MemoryRecord] = []
         for tier in MemoryTier.allCases where tier.isAutoEvictable {
             while used > pressure.budgetBytes {
-                let candidates = try fetchRecords().filter {
-                    $0.tier == tier && !$0.pinned && $0.createdAt <= now
+                let candidates = try await facts.withMemoryConnection { db in
+                    try Self.fetchRecords(db: db).filter {
+                        $0.tier == tier && !$0.pinned && $0.createdAt <= now
+                    }
                 }
                 guard let victim = candidates.first else { break }
                 try await forget(id: victim.id)
@@ -427,7 +413,7 @@ actor MemoryTierStore {
 
     // MARK: - Tier metadata storage
 
-    private func fetchRecords() throws -> [MemoryRecord] {
+    private static func fetchRecords(db: OpaquePointer) throws -> [MemoryRecord] {
         let sql = """
         SELECT f.id, f.category, f.fact, s.tier, s.source,
                COALESCE(s.created_at, f.created_at), COALESCE(s.updated_at, f.updated_at),
@@ -437,7 +423,7 @@ actor MemoryTierStore {
         LEFT JOIN memory_tier_state s ON s.id = f.id
         ORDER BY COALESCE(s.created_at, f.created_at) ASC, f.id ASC;
         """
-        let stmt = try prepare(sql, "Failed to prepare memory listing")
+        let stmt = try prepare(sql, "Failed to prepare memory listing", db: db)
         defer { sqlite3_finalize(stmt) }
         var results: [MemoryRecord] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
@@ -467,17 +453,17 @@ actor MemoryTierStore {
         return results
     }
 
-    private func record(id: UUID) throws -> MemoryRecord? {
-        try fetchRecords().first { $0.id == id }
+    private static func record(id: UUID, db: OpaquePointer) throws -> MemoryRecord? {
+        try fetchRecords(db: db).first { $0.id == id }
     }
 
     /// Facts written by the rest of the app get their tier state materialised on first use.
-    private func ensureMetadata(id: UUID, now: Date) throws {
-        guard try !hasMetadata(id: id) else { return }
+    private static func ensureMetadata(id: UUID, now: Date, db: OpaquePointer) throws {
+        guard try !hasMetadata(id: id, db: db) else { return }
         let sql = "SELECT category, fact, created_at, updated_at FROM memory_facts WHERE id = ?;"
-        let stmt = try prepare(sql, "Failed to prepare fact lookup")
+        let stmt = try prepare(sql, "Failed to prepare fact lookup", db: db)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, id.uuidString, -1, SQLITE_TRANSIENT)
         guard sqlite3_step(stmt) == SQLITE_ROW,
               let categoryText = sqlite3_column_text(stmt, 0),
               let factText = sqlite3_column_text(stmt, 1),
@@ -487,32 +473,32 @@ actor MemoryTierStore {
         try writeMetadata(MemoryRecord(id: id, tier: source.defaultTier, text: String(cString: factText),
                                        source: source, createdAt: createdAt,
                                        updatedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 3)),
-                                       lastAccessedAt: now))
+                                       lastAccessedAt: now), db: db)
     }
 
-    private func markSuperseded(id: UUID, by newID: UUID, now: Date) throws {
-        try ensureMetadata(id: id, now: now)
+    private static func markSuperseded(id: UUID, by newID: UUID, now: Date, db: OpaquePointer) throws {
+        try ensureMetadata(id: id, now: now, db: db)
         let stmt = try prepare("UPDATE memory_tier_state SET superseded_by = ?, updated_at = ? WHERE id = ?;",
-                               "Failed to prepare supersede update")
+                               "Failed to prepare supersede update", db: db)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, newID.uuidString, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, newID.uuidString, -1, SQLITE_TRANSIENT)
         sqlite3_bind_double(stmt, 2, now.timeIntervalSince1970)
-        sqlite3_bind_text(stmt, 3, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, id.uuidString, -1, SQLITE_TRANSIENT)
         guard sqlite3_step(stmt) == SQLITE_DONE else {
             throw LocalFTSError.executionFailed("Supersede update failed")
         }
     }
 
-    private func hasMetadata(id: UUID) throws -> Bool {
-        let stmt = try prepare("SELECT 1 FROM memory_tier_state WHERE id = ? LIMIT 1;", "Failed to prepare tier lookup")
+    private static func hasMetadata(id: UUID, db: OpaquePointer) throws -> Bool {
+        let stmt = try prepare("SELECT 1 FROM memory_tier_state WHERE id = ? LIMIT 1;", "Failed to prepare tier lookup", db: db)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, id.uuidString, -1, SQLITE_TRANSIENT)
         return sqlite3_step(stmt) == SQLITE_ROW
     }
 
     /// Tier state is upserted; `created_at` is preserved so ageing always measures the age
     /// of the memory itself, never the age of the last edit.
-    private func writeMetadata(_ record: MemoryRecord) throws {
+    private static func writeMetadata(_ record: MemoryRecord, db: OpaquePointer) throws {
         let sql = """
         INSERT INTO memory_tier_state (id, tier, source, created_at, updated_at, last_accessed_at, superseded_by, pinned, represents_count)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -525,16 +511,16 @@ actor MemoryTierStore {
             pinned = excluded.pinned,
             represents_count = excluded.represents_count;
         """
-        let stmt = try prepare(sql, "Failed to prepare tier state write")
+        let stmt = try prepare(sql, "Failed to prepare tier state write", db: db)
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, record.id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, record.id.uuidString, -1, SQLITE_TRANSIENT)
         sqlite3_bind_int(stmt, 2, Int32(record.tier.rawValue))
-        sqlite3_bind_text(stmt, 3, record.source.rawValue, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 3, record.source.rawValue, -1, SQLITE_TRANSIENT)
         sqlite3_bind_double(stmt, 4, record.createdAt.timeIntervalSince1970)
         sqlite3_bind_double(stmt, 5, record.updatedAt.timeIntervalSince1970)
         sqlite3_bind_double(stmt, 6, record.lastAccessedAt.timeIntervalSince1970)
         if let supersededBy = record.supersededBy {
-            sqlite3_bind_text(stmt, 7, supersededBy.uuidString, -1, Self.SQLITE_TRANSIENT)
+            sqlite3_bind_text(stmt, 7, supersededBy.uuidString, -1, SQLITE_TRANSIENT)
         } else {
             sqlite3_bind_null(stmt, 7)
         }
@@ -545,18 +531,7 @@ actor MemoryTierStore {
         }
     }
 
-    private static func execute(db: OpaquePointer?, sql: String) throws {
-        guard let db else { throw LocalFTSError.closed }
-        var errorMessage: UnsafeMutablePointer<CChar>?
-        if sqlite3_exec(db, sql, nil, nil, &errorMessage) != SQLITE_OK {
-            let message = errorMessage.map { String(cString: $0) } ?? "Unknown error"
-            sqlite3_free(errorMessage)
-            throw LocalFTSError.executionFailed(message)
-        }
-    }
-
-    private func prepare(_ sql: String, _ message: String) throws -> OpaquePointer {
-        guard let db else { throw LocalFTSError.closed }
+    private static func prepare(_ sql: String, _ message: String, db: OpaquePointer) throws -> OpaquePointer {
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK, let stmt else {
             throw LocalFTSError.prepareFailed(message)
