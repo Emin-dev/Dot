@@ -20,7 +20,7 @@ COMMIT="$(git rev-parse HEAD)"
 body=$(cat <<JSON
 {"tag_name":"$TAG","target_commitish":"$COMMIT","name":"Dot $TAG",
  "body":"Runtime-only Dot app. On first launch it downloads the exact signed-manifest Qwen3.8-27B model from Hugging Face and verifies every SHA-256. Apple Development signed; not notarised yet. Run scripts/package_public_release.sh to reproduce the asset.",
- "draft":false,"prerelease":true}
+ "draft":false,"prerelease":false}
 JSON
 )
 release=$(curl -fsS -X POST \

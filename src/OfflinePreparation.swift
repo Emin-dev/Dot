@@ -199,7 +199,7 @@ actor ModelProvisioner {
         else {
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForRequest = 60
-            configuration.timeoutIntervalForResource = 3_600
+            configuration.timeoutIntervalForResource = 86_400
             configuration.waitsForConnectivity = true
             self.session = URLSession(configuration: configuration)
         }
