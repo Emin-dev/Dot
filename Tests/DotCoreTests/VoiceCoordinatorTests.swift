@@ -177,7 +177,8 @@ private final class CoordinatorFixture {
                                                protocolClasses: [CoordinatorURLProtocol.self]),
                           textHistory: history, defaults: defaults, followup: followup,
                           proactive: ProactiveBehavior(defaults: defaults, clock: { clock.now },
-                                                       automaticScheduling: false, observeWorkspace: false), runtime: runtime)
+                                                       automaticScheduling: false, observeWorkspace: false),
+                          runtime: runtime, videoPlayback: { false })
     }
     var completedTurns: [UUID] { voiceEvents.compactMap { if case .complete(let id) = $0 { return id }; return nil } }
     func enqueued(for id: UUID) -> [String] {

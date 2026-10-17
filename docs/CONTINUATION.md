@@ -185,6 +185,15 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Release gate — rerun 2026-10-17 after R1–R15 work.** `verify_macos.sh` completed every stage:
+Python **604 passed / 4 skipped**, Splash sandbox PASS, 53 guardrails, SwiftPM **576/0**, XCTest
+**896/0**, Debug and Release builds succeeded. Its only failure is the documented by-design runtime
+finalizer canary (hosted toolchain), which stops packaging as intended; there were no other failures
+and no non-by-design warning (the one AppKit/SwiftUI QoS advisory remains under the narrow filter).
+The run also caught two real regressions that were fixed: the admission contract now accounts for the
+memory-summary background call, and video detection is injectable so tests cannot depend on whether a
+video happens to be playing on the host.
+
 **R8 adaptive screen watching — implemented 2026-10-17 (bounded).** `ScreenWatchState` drives a
 three-minute idle fingerprint (32×24 grayscale, cursor excluded), and a real mouse move or a changed
 fingerprint starts a 10–50 s watch that extends while the screen keeps changing and stops after 4 s

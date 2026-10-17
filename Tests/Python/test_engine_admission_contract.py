@@ -166,10 +166,17 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertNotIn('skipVerification', self.engine)
         self.assertNotIn('ObservedInferenceDelegate', self.tls)
 
-    def test_optional_suggestion_explicitly_uses_background_without_prompt_priority(self):
+    def test_optional_work_explicitly_uses_background_without_prompt_priority(self):
         passive = section(self.chat, 'private func suggest(', 'private func ')  # next private operation
         self.assertIn('self.engine.chat(history: snapshot, purpose: .background', passive)
-        self.assertEqual(self.chat.count('purpose: .background'), 1)
+        summary = section(self.chat, 'private func summariseConversationIntoKeyPoints',
+                          'func startProactivity')
+        self.assertIn('purpose: .background', summary)
+        self.assertIn('onDelta: { delta in output += delta }', summary)
+        self.assertNotIn('purpose: .foreground', summary)
+        # Two optional background jobs exist: the proactive suggestion and the
+        # conversation key-point summary. Neither may take foreground priority.
+        self.assertEqual(self.chat.count('purpose: .background'), 2)
         self.assertEqual(self.chat.count('self.engine.chat(history: snapshot, onDelta:'), 1)
 
     def test_existing_stream_terminal_budgets_and_delivery_remain(self):

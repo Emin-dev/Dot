@@ -78,6 +78,7 @@ final class ChatModel: ObservableObject {
     private var captureReachedLimit = false
     private var videoSpeechChecked = false
     private var videoSpeechMuted = false
+    private let videoPlayback: @MainActor () -> Bool
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
     private var memorySummaryTask: Task<Void, Never>?
@@ -145,7 +146,7 @@ final class ChatModel: ObservableObject {
     func speakDirect(_ text: String) {
         guard !shuttingDown, phase == .idle else { return }
         // The owner asked Dot not to talk over video. Keep the text visible instead.
-        if VideoPlaybackDetector.isWatchingVideo() {
+        if videoPlayback() {
             DiagnosticChatLogger.record(role: "dot (silent)", text: text)
             let id = cancelTurn()
             answer = text
@@ -989,12 +990,14 @@ final class ChatModel: ObservableObject {
 
     init(engine: EngineManager? = nil, textHistory: ConversationHistoryModel? = nil,
          defaults: UserDefaults = .standard, followup: VoiceFollowup? = nil,
-         proactive: ProactiveBehavior? = nil, runtime: ChatRuntime? = nil) {
+         proactive: ProactiveBehavior? = nil, runtime: ChatRuntime? = nil,
+         videoPlayback: @escaping @MainActor () -> Bool = { VideoPlaybackDetector.isWatchingVideo() }) {
         // Self-reflection is scoped to the current app session, so old test runs and
         // yesterday's unrelated conversation cannot drive today's suggestion.
         DiagnosticChatLogger.record(role: "system", text: "App session started")
         let stt = STTManager(), tts = TTSManager()
         self.stt = stt; self.tts = tts
+        self.videoPlayback = videoPlayback
         self.engine = engine ?? EngineManager()
         self.textHistory = textHistory ?? ConversationHistoryModel()
         self.ftsStore = (try? LocalFTSStore()) ?? (try! LocalFTSStore(inMemory: true))
@@ -1032,7 +1035,7 @@ final class ChatModel: ObservableObject {
         }
         followup.onInvite = { [weak self] previous, continuation in
             guard let self, self.gate.accepts(previous), self.visible, !self.interactionPaused,
-                  !self.controlInteraction, !VideoPlaybackDetector.isWatchingVideo() else { return }
+                  !self.controlInteraction, !videoPlayback() else { return }
             self.beginListening(continuation: continuation)
         }
         stt.onCaptureEnded = { [weak self] id, reason in
@@ -1198,7 +1201,7 @@ final class ChatModel: ObservableObject {
                 let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
                 let enabled = self.screenEnabled && self.screen.enabled && CGPreflightScreenCaptureAccess()
                 let idle = self.visible && self.phase == .idle && !self.generating
-                    && !self.runtime.ttsSpeaking() && !VideoPlaybackDetector.isWatchingVideo()
+                    && !self.runtime.ttsSpeaking() && !videoPlayback()
                 let action = state.tick(now: now, enabled: enabled, idle: idle, changed: pendingChange,
                                         inputActive: moved, batteryOK: !lowPower)
                 pendingChange = false
@@ -1272,7 +1275,7 @@ final class ChatModel: ObservableObject {
                 let now = ProcessInfo.processInfo.systemUptime
                 if self.visible, !self.proactive.paused, self.phase == .idle,
                    !self.generating, !self.runtime.ttsSpeaking(),
-                   !VideoPlaybackDetector.isWatchingVideo(),
+                   !videoPlayback(),
                    self.proactive.activeOpportunity == nil, self.proactiveTurn == nil {
                     if self.checkBatteryAlerts() { continue }
                     if !self.proactiveEvidence.isRecent(now: now) || !self.proactiveContextChangedAfterUser {
@@ -2910,7 +2913,7 @@ final class ChatModel: ObservableObject {
         // running state cannot make Dot suppress itself. A text answer still appears.
         if !videoSpeechChecked {
             videoSpeechChecked = true
-            videoSpeechMuted = VideoPlaybackDetector.isWatchingVideo()
+            videoSpeechMuted = videoPlayback()
             if videoSpeechMuted {
                 voiceDeliveryNotice = "Video playing — Dot is staying quiet. This reply is text only."
                 runtime.stopVoice()

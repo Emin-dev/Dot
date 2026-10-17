@@ -102,7 +102,8 @@ private final class TypedFixture {
             recording: { false }, transcribing: { false })
         model = ChatModel(engine: EngineManager(endpoint: "http://127.0.0.1:\(transport.port)", model: "fixture/model", protocolClasses: [TypedFixtureProtocol.self]),
             textHistory: history, defaults: defaults, followup: VoiceFollowup(automaticScheduling: false),
-            proactive: ProactiveBehavior(defaults: defaults, automaticScheduling: false, observeWorkspace: false), runtime: runtime)
+            proactive: ProactiveBehavior(defaults: defaults, automaticScheduling: false, observeWorkspace: false),
+            runtime: runtime, videoPlayback: { false })
     }
     func close() async {
         model?.cancelTurn(); model?.stopProactivity(); await history.flush()

@@ -159,6 +159,11 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 2. Supervisor slices 2 → 3 → 4 → 5, with `splash.sb` and the 53 guardrails green at each step.
 3. Memory second-connection cleanup; then dead-code batches; then file indexing.
 
+Release gate rerun on 2026-10-17 after the R1–R15 work: Python 604 passed / 4 skipped, Splash sandbox
+PASS, 53 guardrails, SwiftPM 576/0, XCTest 896/0, Debug and Release builds succeeded; the only failure
+is the by-design runtime-finalizer canary. Video detection is injectable for tests so an incidentally
+playing video on the host cannot change test outcomes.
+
 Already closed on 2026-10-17: the turn task's `.userInitiated` priority (the advisory itself is an
 AppKit/SwiftUI inversion, documented above), the search fixture's readiness and bounded accept wait,
 and the placement refresh-before-validation cycle. `verify_macos.sh` still exits nonzero only for the
