@@ -246,6 +246,30 @@ enum AppearanceOptionsMenu {
 }
 
 @MainActor
+enum TrustedAppsMenu {
+    static func make(store: TrustedAppStore, frontmost: String?, target: AnyObject,
+                     trust: Selector, removeAll: Selector) -> NSMenuItem {
+        let root = NSMenuItem(title: "Trusted apps", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        let hint = NSMenuItem(title: "App actions for trusted apps skip the card", action: nil, keyEquivalent: "")
+        hint.isEnabled = false; menu.addItem(hint); menu.addItem(.separator())
+        if let frontmost, !frontmost.isEmpty {
+            let item = NSMenuItem(title: frontmost, action: trust, keyEquivalent: "")
+            item.target = target; item.representedObject = frontmost
+            item.state = store.isTrusted(frontmost) ? .on : .off
+            menu.addItem(item)
+        }
+        if !store.names.isEmpty {
+            menu.addItem(.separator())
+            let clear = NSMenuItem(title: "Remove all trusted apps", action: removeAll, keyEquivalent: "")
+            clear.target = target; menu.addItem(clear)
+        }
+        root.submenu = menu
+        return root
+    }
+}
+
+@MainActor
 enum BatteryOptionsMenu {
     static func make(settings: BatteryAlertSettings, target: AnyObject, toggle: Selector,
                      threshold: Selector, charging: Selector) -> NSMenuItem {

@@ -34,7 +34,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   intermediate audio-queue drain.
 - **Approvals.** Destructive detection is tokenized (paths, wrappers, `-exec/-delete`, unquoted
   redirects); the card is clickable; a plain "yes" is accepted only for the non-destructive paste
-  offer, so the destructive wording stays strict.
+  offer, so the destructive wording stays strict. Contextual app actions are carded unless the app is
+  in the **Trusted apps** list, which toggles the frontmost app; calendar create/move also card.
 - **Memory (five tiers).** Capture from natural speech, tier-aware recall with an FTS fallback,
   "what do you remember", bounded explicit "forget about X", ageing that promotes T1→T2→T3→T4 and
   never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).

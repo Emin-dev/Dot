@@ -2015,3 +2015,28 @@ final class BatteryAlertTests: XCTestCase {
                                        lowThreshold: 20, chargingAlerts: true), .low(5))
     }
 }
+
+final class TrustedAppTests: XCTestCase {
+    func testTrustedAppsAreEmptyByDefaultAndNormalizeNames() {
+        let suite = "app.dot.tests.trusted." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = TrustedAppStore(defaults: defaults)
+        XCTAssertTrue(store.names.isEmpty)
+        XCTAssertFalse(store.isTrusted("Xcode"))
+        store.trust("  Xcode ")
+        XCTAssertTrue(store.isTrusted("xcode"))
+        XCTAssertEqual(store.names, ["xcode"])
+        store.untrust("XCODE")
+        XCTAssertFalse(store.isTrusted("xcode"))
+        store.trust("Safari"); store.trust("Notes"); store.removeAll()
+        XCTAssertTrue(store.names.isEmpty)
+    }
+
+    func testCardCarriesTheUntrustedAppAction() {
+        let request = ActionApprovalRequest(title: "Allow App Action", detail: "test", target: "Xcode",
+            isDestructive: false, command: "build", appAction: AppActionDraft(app: "Xcode", action: "build"))
+        XCTAssertEqual(request.appAction, AppActionDraft(app: "Xcode", action: "build"))
+        XCTAssertNil(request.calendarDraft)
+    }
+}

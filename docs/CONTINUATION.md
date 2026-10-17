@@ -169,6 +169,12 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R15 trusted-app allowlist — implemented 2026-10-17.** Contextual app actions now check
+`TrustedAppStore` (UserDefaults, empty by default). An untrusted app's action presents an
+`Allow App Action` card carrying an `AppActionDraft`; approval runs the workflow and reports the result.
+Trusted apps skip the card. The new **Trusted apps** menu toggles the frontmost app and offers "Remove
+all trusted apps". Tests cover the store's defaults/normalization and the card payload.
+
 **R11 cold-start progress and prewarm — implemented 2026-10-17.** `EngineManager` reports
 "Starting local engine", "Loading local model" and clears the stage on every exit; `ChatModel` publishes
 it and the menu-bar title now reads "Preparing N%" during the payload check and "Loading model…" during

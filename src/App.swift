@@ -523,6 +523,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return }
         model.proactive.setPaused(!model.proactive.paused)
     }
+    @objc private func toggleTrustedFrontmost(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        let store = TrustedAppStore()
+        if store.isTrusted(name) { store.untrust(name) } else { store.trust(name) }
+    }
+    @objc private func removeTrustedApps() { TrustedAppStore().removeAll() }
     @objc private func togglePrewarm() {
         let key = ChatModel.prewarmDefaultsKey
         let next = !UserDefaults.standard.bool(forKey: key)
@@ -586,6 +592,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(BatteryOptionsMenu.make(settings: model.batteryAlerts, target: self,
             toggle: #selector(toggleBatteryAlerts), threshold: #selector(setBatteryThreshold(_:)),
             charging: #selector(toggleChargingAlerts)))
+        let front = NSWorkspace.shared.frontmostApplication
+        let frontName = front?.bundleIdentifier == Bundle.main.bundleIdentifier ? nil : front?.localizedName
+        menu.addItem(TrustedAppsMenu.make(store: TrustedAppStore(), frontmost: frontName, target: self,
+            trust: #selector(toggleTrustedFrontmost(_:)), removeAll: #selector(removeTrustedApps)))
 
         let toolsItem = NSMenuItem(title: "Tools & History", action: nil, keyEquivalent: "")
         let toolsMenu = NSMenu()

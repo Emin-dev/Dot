@@ -172,6 +172,18 @@ final class ChatModel: ObservableObject {
             respondDirectly("Pasted my suggestion into the app you are using.", id: cancelTurn())
             return
         }
+        if let appAction = req.appAction {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                let workflowApp = ContextualWorkflowApp(rawValue: appAction.app.lowercased()) ?? .unknown
+                let result = await ContextualWorkflowHelper.performAction(app: workflowApp, action: appAction.action)
+                DiagnosticChatLogger.recordTool(name: "contextual_workflow",
+                                                target: "\(appAction.app):\(appAction.action)",
+                                                outcome: result.message, succeeded: result.succeeded)
+                self.speakDirect(result.message)
+            }
+            return
+        }
         if let draft = req.calendarDraft {
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -2543,10 +2555,20 @@ final class ChatModel: ObservableObject {
                         executedToolConfirmation = "Deleting this file requires your approval. Click Approve or say 'Approve' to delete: \(path)."
                         DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: "Awaiting user approval", succeeded: true)
                     case .contextualWorkflow(let app, let action):
-                        let workflowApp = ContextualWorkflowApp(rawValue: app.lowercased()) ?? .unknown
-                        let res = await ContextualWorkflowHelper.performAction(app: workflowApp, action: action)
-                        executedToolConfirmation = res.message
-                        DiagnosticChatLogger.recordTool(name: "contextual_workflow", target: "\(app):\(action)", outcome: res.message, succeeded: res.succeeded)
+                        if TrustedAppStore(defaults: self.defaults).isTrusted(app) {
+                            let workflowApp = ContextualWorkflowApp(rawValue: app.lowercased()) ?? .unknown
+                            let res = await ContextualWorkflowHelper.performAction(app: workflowApp, action: action)
+                            executedToolConfirmation = res.message
+                            DiagnosticChatLogger.recordTool(name: "contextual_workflow", target: "\(app):\(action)", outcome: res.message, succeeded: res.succeeded)
+                        } else {
+                            self.pendingApproval = ActionApprovalRequest(
+                                title: "Allow App Action",
+                                detail: "'\(app)' is not in your trusted apps. Allow '\(action)' in \(app)?",
+                                target: app, isDestructive: false, command: action,
+                                appAction: AppActionDraft(app: app, action: action))
+                            executedToolConfirmation = "I need your confirmation to \(action) in \(app)."
+                            DiagnosticChatLogger.recordTool(name: "contextual_workflow", target: "\(app):\(action)", outcome: "awaiting confirmation", succeeded: true)
+                        }
                     case .calendarSchedule(let action, let title, let startTime, let durationMinutes):
                         _ = await CalendarMeetingAssistant.shared.requestAccess()
                         switch action {

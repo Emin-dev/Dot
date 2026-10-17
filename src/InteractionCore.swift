@@ -4718,6 +4718,38 @@ public struct CalendarDraft: Equatable, Sendable {
     }
 }
 
+public struct AppActionDraft: Equatable, Sendable {
+    public let app: String
+    public let action: String
+    public init(app: String, action: String) { self.app = app; self.action = action }
+}
+
+/// R15: owner-managed app names whose contextual actions skip the card. Empty by
+/// default, so every app action is confirmed until the owner trusts an app.
+public struct TrustedAppStore {
+    public static let defaultsKey = "dot.trustedAppNames"
+    private let defaults: UserDefaults
+    public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    public var names: Set<String> { Set(defaults.stringArray(forKey: Self.defaultsKey) ?? []) }
+    public func isTrusted(_ app: String) -> Bool {
+        names.contains(Self.normalized(app))
+    }
+    public func trust(_ app: String) {
+        let name = Self.normalized(app)
+        guard !name.isEmpty else { return }
+        var updated = names; updated.insert(name)
+        defaults.set(updated.sorted(), forKey: Self.defaultsKey)
+    }
+    public func untrust(_ app: String) {
+        var updated = names; updated.remove(Self.normalized(app))
+        defaults.set(updated.sorted(), forKey: Self.defaultsKey)
+    }
+    public func removeAll() { defaults.removeObject(forKey: Self.defaultsKey) }
+    private static func normalized(_ app: String) -> String {
+        app.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let title: String
@@ -4728,9 +4760,11 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     /// A calendar action is confirmed on the card and executed by the approval
     /// branch, never by the shell-command branches below it.
     public let calendarDraft: CalendarDraft?
+    /// R15: a contextual app action awaiting confirmation for an untrusted app.
+    public let appAction: AppActionDraft?
 
     public init(id: UUID = UUID(), title: String, detail: String, target: String, isDestructive: Bool, command: String,
-                calendarDraft: CalendarDraft? = nil) {
+                calendarDraft: CalendarDraft? = nil, appAction: AppActionDraft? = nil) {
         self.id = id
         self.title = title
         self.detail = detail
@@ -4738,6 +4772,7 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
         self.isDestructive = isDestructive
         self.command = command
         self.calendarDraft = calendarDraft
+        self.appAction = appAction
     }
 
     /// Executables whose invocation can destroy data or take over the machine. Matching is by
