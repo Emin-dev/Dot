@@ -140,6 +140,17 @@ least-overlap fallback always returned a target. Every autonomous relocation now
 `RoamingCore.autonomousMoveAllowed` with a **115 s** minimum, so a still-covered map can request at
 most one move per cadence. A `AutonomousMoveCadenceTests` regression covers the limit.
 
+**Audit defects A1–A5 — fixed 2026-10-17.** A1 the paste offer is now built through a guard that
+returns any existing pending approval unchanged, so a reflection cannot replace a destructive card.
+A2 the `remember` instruction is stripped wherever it occurs; "can you remember that I like tea"
+stores "I like tea". A3 recall filters a fact whose tier state says superseded even when the FTS stale
+flag has drifted. A4 `.restricted` microphone access is reported like `.denied`, with a Screen
+Time/device-management-specific message. A5 an explicit "read this page/document" request now reads
+the front app through `WholeContextExtractor` and, when it returns nil, states whether Accessibility
+is missing or the app exposes no readable text; calendar denials already surfaced through the honest
+formatters. New unit tests cover A1–A3 and the page-request parser; full lane 870/0 and `swift test`
+553/0 after the batch.
+
 **Self-reflection data and truthfulness — fixed 2026-10-17.** The XCTest lane wrote its fixture turns
 into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate run), so the 10-minute
 reflection could analyse test text as conversation. Test processes now write to a temporary log

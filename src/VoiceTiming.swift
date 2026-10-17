@@ -62,7 +62,7 @@ enum VoiceCaptureEndReason: String, CaseIterable, Equatable, Sendable {
         switch self {
         case .intentionalCancellation, .noSpeech, .forcedFinish: return nil
         case .routeChanged: return "The microphone or speaker changed. Click me to start again with the current devices."
-        case .permissionLost: return "Microphone access is off. Enable Dot in System Settings → Privacy & Security → Microphone, then click me."
+        case .permissionLost: return "Microphone access is off or restricted by Screen Time. Enable Dot in System Settings → Privacy & Security → Microphone, or check Screen Time restrictions, then click me."
         case .invalidAudio: return "The microphone audio was interrupted or unreadable. Check your input device, then click me to try again."
         case .missingAudio: return "The microphone stopped sending audio. Check your input device, then click me to try again."
         case .maximumDuration: return "Listening ended after one minute. Click me to start a new turn."

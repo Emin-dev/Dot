@@ -264,6 +264,19 @@ final class MemoryTierTests: XCTestCase {
         XCTAssertEqual(hits.map(\.id), [newer.id])
     }
 
+    func testRecallNeverReturnsAFactWhoseTierStateIsSuperseded() async throws {
+        let store = try makeStore()
+        let older = try await store.remember(text: "the user prefers the isabella voice", source: .preference, now: at(0))
+        let newer = try await store.remember(text: "the user now prefers the kokoro voice", source: .preference,
+                                             supersedes: older.id, now: at(1))
+        // Simulate drifted data where the FTS stale flag was cleared but the tier
+        // state still records the supersession. Recall must trust the tier state.
+        _ = try await store.facts.saveMemory(id: older.id, category: .userPreference, fact: older.text)
+        let hits = try await store.recall(query: "voice", now: at(2))
+        XCTAssertFalse(hits.contains { $0.id == older.id })
+        XCTAssertTrue(hits.contains { $0.id == newer.id })
+    }
+
     func testTierCountsAndManualTierEditAreUserEditable() async throws {
         let store = try makeStore()
         let record = try await store.remember(text: "promote me by hand", source: .observed, now: at(0))

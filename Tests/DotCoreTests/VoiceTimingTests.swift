@@ -687,3 +687,11 @@ final class CapturedPCMTimingTests: XCTestCase {
     }
 }
 #endif
+
+final class VoicePermissionMessageTests: XCTestCase {
+    func testPermissionLostMessageCoversRestrictedMicrophone() {
+        let message = VoiceCaptureEndReason.permissionLost.recoveryMessage ?? ""
+        XCTAssertTrue(message.contains("restricted"))
+        XCTAssertTrue(message.contains("Screen Time"))
+    }
+}

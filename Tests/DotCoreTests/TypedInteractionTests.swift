@@ -388,5 +388,30 @@ final class TypedInteractionTests: XCTestCase {
         f.model.clicked(); XCTAssertEqual(callbacks, 2)
         try await eventually { f.captureAttempts == 1 }
     }
+
+    @MainActor func testPasteOfferNeverReplacesAPendingApproval() {
+        let destructive = ActionApprovalRequest(title: "Delete File", detail: "delete", target: "/tmp/x",
+                                                isDestructive: true, command: "rm -rf /tmp/x")
+        XCTAssertEqual(ChatModel.pendingPasteOffer(existing: destructive, suggestion: "try this"), destructive)
+        let offer = ChatModel.pendingPasteOffer(existing: nil, suggestion: "try this")
+        XCTAssertEqual(offer?.title, "Paste Suggestion")
+        XCTAssertFalse(offer?.isDestructive ?? true)
+        XCTAssertNil(ChatModel.pendingPasteOffer(existing: nil, suggestion: "  "))
+    }
+
+    @MainActor func testMemoryStorageStripsRememberCueAnywhere() {
+        XCTAssertEqual(ChatModel.factToRemember(from: "can you remember that I like tea"), "I like tea")
+        XCTAssertEqual(ChatModel.factToRemember(from: "Please remember: my name is Bob"), "my name is Bob")
+        XCTAssertEqual(ChatModel.factToRemember(from: "I prefer oat milk"), "I prefer oat milk")
+        XCTAssertNil(ChatModel.factToRemember(from: "what is the weather"))
+        XCTAssertNil(ChatModel.factToRemember(from: String(repeating: "a", count: 241) + " I like tea"))
+    }
+
+    @MainActor func testPageReadRequestIsExactAndDoesNotStealOrdinaryTurns() {
+        XCTAssertTrue(ChatModel.isPageReadRequest("summarize this page"))
+        XCTAssertTrue(ChatModel.isPageReadRequest(" read this document "))
+        XCTAssertFalse(ChatModel.isPageReadRequest("read this page later and tell me"))
+        XCTAssertFalse(ChatModel.isPageReadRequest("what is on the screen"))
+    }
 }
 #endif

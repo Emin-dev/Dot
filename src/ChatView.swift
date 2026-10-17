@@ -1399,18 +1399,56 @@ final class ChatModel: ObservableObject {
         return nil
     }
 
+    /// An explicit request to read the front app's page/document. Kept to exact
+    /// phrases so ordinary sentences still go to the model.
+    static func isPageReadRequest(_ phrase: String) -> Bool {
+        let value = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ["read my current page", "read this page", "read the page", "read my page",
+                "summarize this page", "summarise this page", "summarize the page", "summarise the page",
+                "read my current document", "read this document", "read the document",
+                "summarize this document", "summarise this document",
+                "what does this page say", "what does this document say"].contains(value)
+    }
+
     /// After a reflection, offer to paste the suggestion where the owner is working.
     /// It is already on the clipboard; pasting is their decision, so this only asks,
-    /// and it never touches the destructive approval branches.
+    /// and it never touches the destructive approval branches. A pending approval —
+    /// especially a destructive one — is never replaced by this offer.
     private func offerPasteIfAvailable() {
-        guard let suggestion = IdleSelfReflectionEngine.shared.lastSuggestion,
-              !suggestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        pendingApproval = ActionApprovalRequest(
+        pendingApproval = Self.pendingPasteOffer(existing: pendingApproval,
+                                                 suggestion: IdleSelfReflectionEngine.shared.lastSuggestion)
+    }
+
+    static func pendingPasteOffer(existing: ActionApprovalRequest?,
+                                  suggestion: String?) -> ActionApprovalRequest? {
+        guard existing == nil, let suggestion,
+              !suggestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return existing }
+        return ActionApprovalRequest(
             title: "Paste Suggestion",
             detail: "Paste my suggestion into the app you are using?",
             target: suggestion,
             isDestructive: false,
             command: suggestion)
+    }
+
+    /// The fact to store, or nil when the turn is not a stated preference. The
+    /// `remember` instruction is stripped wherever it occurs, so
+    /// "can you remember that I like tea" stores "I like tea", not the instruction.
+    static func factToRemember(from text: String) -> String? {
+        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cues = ["remember that", "remember this", "remember:", "my name is", "call me ",
+                    "i prefer", "i like", "i don't like", "i dont like", "i hate",
+                    "from now on", "always use", "never use", "always do", "never do"]
+        guard lower.count <= 240, cues.contains(where: { lower.contains($0) }) else { return nil }
+        var fact = text
+        for marker in ["remember that", "remember this", "remember:"] {
+            if let range = fact.range(of: marker, options: .caseInsensitive) {
+                fact = String(fact[range.upperBound...])
+                break
+            }
+        }
+        let trimmed = fact.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 
     /// The subject of an explicit "forget ..." request, or nil when the turn is not one.
@@ -1457,9 +1495,15 @@ final class ChatModel: ObservableObject {
     /// appearing to do nothing: this is the honest counterpart of the readiness gate.
     private func reportNotReady() {
         // If the microphone is the actual blocker, say so and link straight to the pane
-        // instead of reporting a files problem that no longer applies.
-        if AVCaptureDevice.authorizationStatus(for: .audio) == .denied {
-            block("Microphone access is off. Enable Dot in System Settings > Privacy & Security > Microphone, then click me again.", issue: .speech)
+        // instead of reporting a files problem that no longer applies. A Screen Time or
+        // device-management restriction can never be granted from this app's prompt, so
+        // it needs its own words rather than the normal denial hint.
+        let microphone = AVCaptureDevice.authorizationStatus(for: .audio)
+        if microphone == .denied || microphone == .restricted {
+            block(microphone == .restricted
+                ? "Microphone access is restricted by Screen Time or a device-management profile. Ask the Mac's administrator to allow Dot, then click me again."
+                : "Microphone access is off. Enable Dot in System Settings > Privacy & Security > Microphone, then click me again.",
+                issue: .speech)
             return
         }
         let state = OfflinePreparation.shared.state
@@ -1671,6 +1715,22 @@ final class ChatModel: ObservableObject {
                 }
                 let clipped = text.count > 4_000 ? String(text.prefix(4_000)) + "\n… (truncated)" : text
                 self.respondDirectly("Contents of \(expanded):\n\(clipped)", id: id)
+            }
+            return
+        }
+
+        // Reading the front app's page/document. The extractor returns nil for a
+        // missing Accessibility/Automation grant or an app that exposes no readable
+        // text; neither may look like a successful empty answer.
+        if pendingApproval == nil, Self.isPageReadRequest(copyPhrase) {
+            if let page = WholeContextExtractor.shared.extractActiveDocumentOrWebpageText() {
+                let clipped = page.content.count > 4_000
+                    ? String(page.content.prefix(4_000)) + "\n… (truncated)" : page.content
+                respondDirectly("\(page.source):\n\(clipped)", id: id)
+            } else if !InPlaceAppTyping.isAccessibilityTrusted() {
+                respondDirectly("I could not read the active page because Accessibility access is off. Enable Dot in System Settings > Privacy & Security > Accessibility, then ask again.", id: id)
+            } else {
+                respondDirectly("I could not read the front app's document or page. It may need Automation access, or it may not expose readable text. Try a Safari or Chrome tab, a TextEdit document, or another document-based app.", id: id)
             }
             return
         }
@@ -2251,29 +2311,16 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        let lower = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         // Detect a stated preference or correction anywhere in the turn, not only at
         // its start: the owner's real speech ("I really prefer...", "always use...",
         // "can you remember that...") never matched a prefix test, and the database
         // showed nothing had ever been remembered. Cues are first-person or explicit,
-        // and a long turn is not a preference, so it is not stored.
-        let preferenceCues = ["remember that", "remember this", "remember:", "my name is", "call me ",
-                              "i prefer", "i like", "i don't like", "i dont like", "i hate",
-                              "from now on", "always use", "never use", "always do", "never do"]
-        let statesPreference = lower.count <= 240 && preferenceCues.contains { lower.contains($0) }
-        if statesPreference {
-            var fact = text
-            if let range = fact.range(of: "(?i)^remember that\\s+", options: .regularExpression) {
-                fact.removeSubrange(range)
-            } else if let range = fact.range(of: "(?i)^remember:?\\s+", options: .regularExpression) {
-                fact.removeSubrange(range)
-            }
-            let factToSave = fact.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !factToSave.isEmpty {
-                Task { [weak self] in
-                    _ = try? await self?.ftsStore.saveMemory(category: .userPreference, fact: factToSave, isCorrection: false)
-                    _ = try? await self?.memory?.remember(text: factToSave, source: .preference, now: Date())
-                }
+        // and a long turn is not a preference, so it is not stored. The instruction
+        // phrasing is stripped wherever it occurs, not only at the start.
+        if let factToSave = Self.factToRemember(from: text) {
+            Task { [weak self] in
+                _ = try? await self?.ftsStore.saveMemory(category: .userPreference, fact: factToSave, isCorrection: false)
+                _ = try? await self?.memory?.remember(text: factToSave, source: .preference, now: Date())
             }
         }
 

@@ -254,7 +254,9 @@ actor MemoryTierStore {
         }
         let stored = Dictionary(uniqueKeysWithValues: try fetchRecords().map { ($0.id, $0) })
         return hits.compactMap { hit in
-            guard var found = stored[hit.id] else { return nil }
+            // The FTS stale flag and the tier-state supersession are separate rows;
+            // a corrected fact must never reappear because only one of them says so.
+            guard var found = stored[hit.id], !found.isSuperseded else { return nil }
             found.lastAccessedAt = now
             return found
         }
