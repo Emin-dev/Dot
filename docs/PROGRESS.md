@@ -21,7 +21,11 @@ guardrails pass. The installed Rust-only payload audits clean with `scripts/audi
 (**34,004 files, 1,594,205,216 bytes, exit 0**), so the earlier note that the auditor still required
 the deleted Python voice closure is superseded; only
 `packaging/runtime/reconstruction-policy.json` retains that archive as inert `supported: false`
-context. `scripts/verify_macos.sh` now fails only the documented runtime-finalizer canary.
+context. `scripts/verify_macos.sh` now fails only the documented runtime-finalizer canary. Also on this
+revision: the dead first-use hint now renders in the context menu, and the global Fn/screenshot/gesture
+monitors, which deliver nothing without Accessibility, have a reachable request under Tools & History.
+The installed app reached cold engine readiness in 70.9 s and completed a proactive turn at 15:37:41;
+no owner speech or audible acceptance has been observed.
 
 The Xcode app target previously could not build at all: it hard-wired `SWIFT_ACTIVE_COMPILATION_CONDITIONS = DOT_COMPLETE_BUNDLE`, `-framework whisper` and a `build-complete/` framework search path that is gitignored and absent, so `src/WhisperRecognizer.swift:2` raised `#error` on a clean checkout and `scripts/verify_macos.sh` could never pass. The target now builds the development configuration; complete bundles remain with the `swiftc`-based scripts that pass the define themselves. Separately, `scripts/verify_macos.sh` selected a Python ≥3.11 interpreter and then ran the suite with bare `python3`; it now uses the interpreter it validated, and the Portable Search contracts gate pull requests as well as main pushes.
 

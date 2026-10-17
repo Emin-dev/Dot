@@ -17,10 +17,17 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   TCP segments (the shipped binary previously answered 400). `dot-fetch` is the pinned HTTPS reader
   with a verified sandbox canary (inherited socket only, `connect()` denied).
 - **Click to listen.** Whisper is compiled in and embedded by `build.sh` via `DOT_WHISPER_FRAMEWORK`;
-  readiness reaches `outcome=ready` in ~15 s; a refused click now says why; **the app now asks for the
-  microphone and Screen Recording on the first click or hold-Fn, before any readiness gate** (it
-  previously only checked status, which is why the log held sixteen "microphone access is off"
-  messages and the app never prompted).
+  a refused click now says why; **the app now asks for the microphone and Screen Recording on the
+  first click or hold-Fn, before any readiness gate** (it previously only checked status, which is why
+  the log held sixteen "microphone access is off" messages and the app never prompted). Measured on
+  the installed build (`bb658bf`, 2026-10-17): payload preparation 17.1 s; the first cold engine
+  readiness from supervisor start to `pipeline=readiness outcome=ready` was **70.9 s**, after which a
+  proactive turn generated and logged an answer. Warm turns share that resident engine; readiness does
+  not mean answer latency.
+- **Global shortcut discovery.** Hold-Fn, screenshot auto-hide and Ctrl+Option circle-to-ask are
+  global monitors; macOS delivers no events to them until Dot is trusted for Accessibility. That grant
+  now has a reachable request: the first-use menu says so, and Tools & History offers "Enable hold-Fn
+  and global gestures (Accessibility)…" while untrusted.
 - **Microphone discipline.** It arms only after final playback: not from a question mark, not from an
   intermediate audio-queue drain.
 - **Approvals.** Destructive detection is tokenized (paths, wrappers, `-exec/-delete`, unquoted
@@ -42,10 +49,12 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 
 ## Not fully working, or not stable
 
-1. **No real session has ever been observed.** No microphone, screen-permission, acoustic or device
-   acceptance exists for any current build: the diagnostic log contains no entries from them. Every
-   claim above is structural (tests, typechecks, logs from the app booting) rather than a recorded
-   conversation.
+1. **No owner conversation has been observed.** No microphone, screen-permission, acoustic or device
+   acceptance exists for any current build: the diagnostic log contains no entries from an owner turn.
+   One current-build generation *was* observed on 2026-10-17: the installed app reached engine
+   readiness cold in 70.9 s, captured the screen, and completed a proactive turn
+   (`[DOT (PROACTIVE)]` in `~/Downloads/dot_chat_log.txt` at 15:37:41). That proves the real payload,
+   supervisor and generation path, not owner speech, permissions or audible output.
 2. **`verify_macos.sh` still exits nonzero** for the mandatory runtime-finalizer canary, which fails on
    a hosted toolchain image (`unsupported hosted toolchain image`) by design and blocks packaging.
    The former flaky search case was fixed on 2026-10-17: the fixture's readiness line now uses shell

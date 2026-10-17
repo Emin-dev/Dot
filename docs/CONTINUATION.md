@@ -114,6 +114,17 @@ uses built-in parameter expansion only, and the fixture's wait for a client is b
 case that never connects cannot pin a dispatch thread for the rest of the process. `startupSeconds` is
 unchanged. Evidence: the class passes 7/7 in ~7.4 s and the full lane passed 860/0 afterwards.
 
+**Discovery and global shortcuts — fixed 2026-10-17.** The `firstUseHint` state existed but no view read
+it, and the only code that could have shown it (opening the context menu) dismissed it first, so it
+could never fire. It now renders as the top item of the context menu until the first real interaction.
+The same audit found a second unreachable permission: macOS delivers no global `flagsChanged`/key
+events to hold-Fn, screenshot auto-hide or Ctrl+Option circle-to-ask until Dot is trusted for
+Accessibility, and nothing in the app ever asked for that grant. Tools & History now shows “Enable
+hold-Fn and global gestures (Accessibility)…” while untrusted, and the first-use hint says so.
+Evidence from the installed build: payload preparation 17.1 s, first cold engine readiness **70.9 s**,
+then a proactive turn completed (`[DOT (PROACTIVE)]` at 15:37:41) — the first current-build generation
+observed. Owner speech, permissions and audible output remain unverified.
+
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`
 scratch path (SwiftPM) or `xattr -cr` before `codesign`, because the File Provider re-applies

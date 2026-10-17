@@ -455,6 +455,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func checkHardware() {
         HardwareCompatibility.showStatusAlert()
     }
+    /// The one reachable request for the grant global key/gesture monitors need.
+    @objc private func requestAccessibilityAccess() {
+        _ = InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true)
+    }
     @objc private func retryPreparation() { OfflinePreparation.shared.retry() }
     @objc private func togglePin() { model?.pinned.toggle() }
     @objc private func toggleScreen() { model?.screenEnabled.toggle() }
@@ -493,8 +497,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func showOptions() {
         guard let panel, let view = panel.contentView, let model else { return }
-        model.dismissFirstUseHint(); model.cancelForInteraction(); panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
+        model.cancelForInteraction(); panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
         let menu = NSMenu()
+        if model.firstUseHint {
+            // The hint must survive opening this menu: that was the only surface that
+            // could show it, and the old code dismissed it on the way in.
+            let hint = NSMenuItem(title: InPlaceAppTyping.isAccessibilityTrusted()
+                ? "Click Dot to talk, or hold Fn anywhere."
+                : "Click Dot to talk. Hold Fn needs Accessibility (see Tools & History).",
+                action: nil, keyEquivalent: "")
+            hint.isEnabled = false; menu.addItem(hint); menu.addItem(.separator())
+        }
         let readiness = OfflinePreparation.shared.state
         let hasDetails = readiness.detail != nil || model.issue != nil
         if let header = CompanionIssue.menuHeader(readiness: readiness, issue: model.issue,
@@ -547,6 +560,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         source.target = self; toolsMenu.addItem(source)
         let hardwareCheck = NSMenuItem(title: "Hardware compatibility check…", action: #selector(checkHardware), keyEquivalent: "")
         hardwareCheck.target = self; toolsMenu.addItem(hardwareCheck)
+        // Global Fn/screenshot/circle-to-ask monitoring delivers no events at all
+        // without Accessibility, and no user action can reveal that dead monitor.
+        // This is the reachable request for the grant those features depend on.
+        if !InPlaceAppTyping.isAccessibilityTrusted() {
+            toolsMenu.addItem(.separator())
+            let accessibility = NSMenuItem(title: "Enable hold-Fn and global gestures (Accessibility)…",
+                                           action: #selector(requestAccessibilityAccess), keyEquivalent: "")
+            accessibility.target = self; toolsMenu.addItem(accessibility)
+        }
         let repoSubItem = NSMenuItem(title: "GitHub repository (latest code)…", action: #selector(openRepository), keyEquivalent: "")
         repoSubItem.target = self; toolsMenu.addItem(repoSubItem)
         toolsItem.submenu = toolsMenu
