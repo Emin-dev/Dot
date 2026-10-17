@@ -1585,7 +1585,9 @@ final class ChatModel: ObservableObject {
         firstReasoning = false; firstAnswer = false; firstAudio = false
         speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""; displayedAnswerTurn = nil; lastAttemptedText = value
         do {
-            try screen.prepare(turn: id, requestPermission: false)
+            // Typed input is a real owner interaction, so it follows the same
+            // ask-on-need rule as a click; proactive turns never prompt.
+            try screen.prepare(turn: id, requestPermission: true)
         } catch {
             // A refused screen permission is the owner's business, not a log line: the
             // screen features are silently dead otherwise, which is how the microphone

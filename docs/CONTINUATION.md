@@ -169,6 +169,11 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**B3 screen ask-on-need — fixed 2026-10-17.** A typed submission is a real owner interaction, so it
+now uses the same screen-preparation policy as a click (`requestPermission: true`) and reports a
+refusal with the Settings pane; automatic follow-up invitations and proactive turns still never
+prompt. The screen was previously requestable only from the click path.
+
 **Audit defects A9–A10 — fixed 2026-10-17.** A9 timers use `Task.sleep`, which does not advance
 through Mac sleep, so a deadline missed during sleep fired late by the sleep duration. `SmartTimerScheduler.handleWake(now:)`
 now fires each missed timer exactly once at wake (the existing spoken timer alert is the note),
