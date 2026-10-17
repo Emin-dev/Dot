@@ -34,15 +34,17 @@ coordinates, and clicking during an answer not listening again. Five-tier memory
 write path wired (preferences → T5, corrections → core, one ageing pass at launch).
 
 **Remaining work, with leads.**
-1. *Memory — done on all four paths; one cleanup left.* Writes reach the tiers (a stated preference
-   lands in T5 core, an explicit instruction as a core fact), recall is tier-aware
-   (`assembleTurnContext` now takes the `MemoryTierStore`, sources core records first and then tiered
-   recall, keeping the FTS reads only as a fallback), ageing runs once per launch, and eviction is
-   called from the real RAM-pressure path and frees a quarter of the corpus there. What remains is
-   mechanical: `MemoryTierStore` still opens a second connection to `dot_records.sqlite`, and a
-   `withConnection` accessor on `LocalFTSStore` would remove ~120 lines of duplicated connection
-   setup. Also open: ordinary conversation does not yet populate memory, because saving still
-   requires an explicit "remember that" style phrase, and the database showed 0 rows after real use.
+1. *Memory — complete as a user-facing loop; one cleanup left.* Capture: a stated preference or
+   correction anywhere in a bounded turn lands in T5 core (the detector previously demanded one of five
+   exact prefixes, which is why the owner's database held 0 rows). Recall: `assembleTurnContext` takes
+   the `MemoryTierStore`, sources core records first then tiered recall, FTS only as a fallback.
+   Inspect: "what do you remember" lists up to ten core facts. Forget: "forget that I ..." / "forget
+   about X" / "delete memory X" deletes up to five matches through the store's own forget path and
+   reports the count, refusing a vague subject rather than guessing. Ageing promotes T1->T2->T3->T4 and
+   never deletes; eviction runs from the real RAM-pressure path, frees a quarter, and never takes T3,
+   T4, T5 or a pinned record. What remains is mechanical: `MemoryTierStore` still opens a second
+   connection to `dot_records.sqlite`, and a `withConnection` accessor on `LocalFTSStore` would remove
+   ~120 lines of duplicated connection setup.
 2. *Dead code.* An audit with per-item grep evidence lists **694 lines** removable with no behaviour
    change (largest: a 242-line paid-search provider subsystem only tests instantiate, `NativeTTSManager`
    52, `InteractiveWalkthroughManager` 82 — the last is now honestly marked unwired in the checklist).
@@ -66,6 +68,13 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
 5. *Last Dot-authored Python.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`, `dot_tls.py`
    (Splash supervisor and TLS relay, 640 lines, stdlib-only). Splash itself and its interpreter are
    deliberately retained: the owner chose Qwen 3.8 27B Q4 on Splash as the fastest engine.
+
+**Small owner requests closed this session.** Copying Dot's answer, showing it on screen, reporting
+battery level from IOKit, and reading its own source from a resolved path (a `DOT_SOURCE_ROOT`
+override, then the known checkout if present, otherwise an honest empty result instead of a pinned
+absolute path that only existed on one machine). The self-improvement loop no longer activates another
+application or synthesizes keystrokes: it writes to its reflections file, copies the suggestion to the
+clipboard and says so.
 
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`
