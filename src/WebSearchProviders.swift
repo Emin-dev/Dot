@@ -256,6 +256,78 @@ private struct PerplexityResponse: Decodable {
 /// `POST /search` must present in `X-Dot-Search-Capability`. DuckDuckGo HTML results
 /// with a Wikipedia fallback are produced inside the runtime; this side bounds,
 /// validates and normalizes what comes back, and no child outlives its search.
+/// A bounded on-disk cache for keyless search results. A fresh hit is returned
+/// without launching the runtime; stale/corrupt entries are ignored. Best-effort
+/// persistence: a cache failure never fails a search.
+actor SearchResultCache {
+    struct Entry: Codable {
+        let results: [WebSearchResult]
+        let coverage: WebSearchCoverage
+        let unavailableEngineIDs: [String]
+        let storedAt: Date
+    }
+    static let shared = SearchResultCache()
+    private let fileURL: URL?
+    private let ttl: TimeInterval
+    private let maximumEntries: Int
+    private var entries: [String: Entry] = [:]
+    private var loaded = false
+
+    init(fileURL: URL? = nil, ttl: TimeInterval = 6 * 3600, maximumEntries: Int = 50,
+         inMemory: Bool = false) {
+        self.ttl = ttl
+        self.maximumEntries = max(1, maximumEntries)
+        if inMemory { self.fileURL = nil }
+        else if let fileURL { self.fileURL = fileURL }
+        else {
+            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            self.fileURL = support?.appendingPathComponent("Dot", isDirectory: true)
+                .appendingPathComponent("SearchCache.json")
+        }
+    }
+
+    func lookup(query: String, limit: Int, now: Date = Date()) -> WebSearchResponse? {
+        loadIfNeeded()
+        guard let entry = entries[key(query: query, limit: limit)] else { return nil }
+        guard now.timeIntervalSince(entry.storedAt) <= ttl else { return nil }
+        return WebSearchResponse(results: entry.results, coverage: entry.coverage,
+                                 unavailableEngineIDs: entry.unavailableEngineIDs)
+    }
+
+    func store(query: String, limit: Int, response: WebSearchResponse, now: Date = Date()) {
+        loadIfNeeded()
+        entries[key(query: query, limit: limit)] = Entry(results: response.results,
+            coverage: response.coverage, unavailableEngineIDs: response.unavailableEngineIDs, storedAt: now)
+        while entries.count > maximumEntries,
+              let oldest = entries.min(by: { $0.value.storedAt < $1.value.storedAt })?.key {
+            entries.removeValue(forKey: oldest)
+        }
+        save()
+    }
+
+    private func key(query: String, limit: Int) -> String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() + "|" + String(limit)
+    }
+
+    private func loadIfNeeded() {
+        guard !loaded else { return }
+        loaded = true
+        guard let fileURL, let data = try? Data(contentsOf: fileURL),
+              let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) else { return }
+        entries = decoded
+    }
+
+    private func save() {
+        guard let fileURL else { return }
+        let directory = fileURL.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        guard (try? data.write(to: fileURL, options: [.atomic])) != nil else { return }
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+    }
+}
+
 final class LocalDotSearchProvider: WebSearchProvider, Sendable {
     static let maximumQueryBytes = 2_048
     static let maximumResponseBytes = 1_048_576
@@ -264,15 +336,18 @@ final class LocalDotSearchProvider: WebSearchProvider, Sendable {
     let providerID = "local-dot-search"
     let permitsResultPersistence = true
     private let runner: LocalDotSearchRunner
+    private let cache: SearchResultCache
 
     /// `configuration` is retained so existing call sites keep compiling unchanged.
     /// The loopback transport is now a direct socket to the bundled runtime, which
     /// inherits no URLSession cache, cookie, credential or proxy state at all, so no
     /// `URLSessionConfiguration` applies to this path any more. `executableURL` is the
     /// launch seam used by tests and canaries.
-    init(configuration: URLSessionConfiguration = .ephemeral, executableURL: URL? = nil) {
+    init(configuration: URLSessionConfiguration = .ephemeral, executableURL: URL? = nil,
+         cache: SearchResultCache = .shared) {
         _ = configuration
         runner = LocalDotSearchRunner(executable: executableURL)
+        self.cache = cache
     }
 
     func search(query: String, limit: Int) async throws -> [WebSearchResult] {
@@ -284,7 +359,15 @@ final class LocalDotSearchProvider: WebSearchProvider, Sendable {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.utf8.count <= Self.maximumQueryBytes,
               !trimmed.contains("\u{0}"), (1...8).contains(limit) else { throw SearchRuntimeFailure.invalidQuery }
-        return try await runner.search(query: trimmed, limit: limit)
+        let now = Date()
+        if let cached = await cache.lookup(query: trimmed, limit: limit, now: now) {
+            return cached
+        }
+        let response = try await runner.search(query: trimmed, limit: limit)
+        if permitsResultPersistence {
+            await cache.store(query: trimmed, limit: limit, response: response, now: Date())
+        }
+        return response
     }
 
     /// The app and its runtime are one bundle: the binary is a sibling of the app

@@ -169,6 +169,14 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R10 local result cache — implemented 2026-10-17 (partial).** `SearchResultCache` keeps up to 50
+query/limit results for six hours in `~/Library/Application Support/Dot/SearchCache.json` (0700
+directory, 0600 file, atomic writes). A fresh hit returns without launching `dot-search`, so repeated
+queries are instant and keep working briefly offline; stale or corrupt entries are ignored and a
+cache failure never fails a search. Tests cover round-trip, expiry, disk persistence, keying by
+limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
+providers remain open.
+
 **R8 adaptive screen watching — implemented 2026-10-17 (bounded).** `ScreenWatchState` drives a
 three-minute idle fingerprint (32×24 grayscale, cursor excluded), and a real mouse move or a changed
 fingerprint starts a 10–50 s watch that extends while the screen keeps changing and stops after 4 s

@@ -466,7 +466,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
     }
 
     func testMissingBundledRuntimeFailsHonestlyWithoutAnotherSearchPath() async {
-        let provider = LocalDotSearchProvider(executableURL: URL(fileURLWithPath: "/nonexistent/dot-search"))
+        let provider = LocalDotSearchProvider(executableURL: URL(fileURLWithPath: "/nonexistent/dot-search"),
+                                              cache: SearchResultCache(inMemory: true))
         do { _ = try await provider.search(query: "anything", limit: 3); XCTFail("Missing runtime searched anyway") }
         catch { XCTAssertEqual(error as? SearchRuntimeFailure, .runtimeMissing) }
     }
@@ -484,7 +485,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: runtime.fixture.executable.deletingLastPathComponent()) }
         runtime.server.configure { $0.payload = payload }
         runtime.server.serveOne()
-        let provider = LocalDotSearchProvider(executableURL: runtime.fixture.executable)
+        let provider = LocalDotSearchProvider(executableURL: runtime.fixture.executable,
+                                              cache: SearchResultCache(inMemory: true))
         let response = try await provider.searchResponse(query: "café & rust", limit: 3)
         let request = runtime.server.observedRequest
         let body = FixtureFraming.body(request)
@@ -512,7 +514,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: runtime.fixture.executable.deletingLastPathComponent()) }
         runtime.server.configure { $0.payload = payload }
         runtime.server.serveOne()
-        let provider = LocalDotSearchProvider(executableURL: runtime.fixture.executable)
+        let provider = LocalDotSearchProvider(executableURL: runtime.fixture.executable,
+                                              cache: SearchResultCache(inMemory: true))
         _ = try await provider.search(query: "first", limit: 1)
         let observedFirst = await LocalDotSearchProviderFixture.spawnedPID(runtime.fixture.pidFile)
         let first = try XCTUnwrap(observedFirst)
@@ -535,7 +538,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
         // surviving grandchild cannot delay the cancellation receipt.
         let fixture = try LocalDotSearchProviderFixture.make(port: 1, body: "exec sleep 30")
         defer { try? FileManager.default.removeItem(at: fixture.executable.deletingLastPathComponent()) }
-        let provider = LocalDotSearchProvider(executableURL: fixture.executable)
+        let provider = LocalDotSearchProvider(executableURL: fixture.executable,
+                                           cache: SearchResultCache(inMemory: true))
         let task = Task { try await provider.search(query: "cancelled", limit: 1) }
         let observed = await LocalDotSearchProviderFixture.spawnedPID(fixture.pidFile)
         let pid = try XCTUnwrap(observed)
@@ -560,7 +564,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
         for entry in cases {
             let fixture = try LocalDotSearchProviderFixture.make(port: 1, body: entry.body)
             defer { try? FileManager.default.removeItem(at: fixture.executable.deletingLastPathComponent()) }
-            let provider = LocalDotSearchProvider(executableURL: fixture.executable)
+            let provider = LocalDotSearchProvider(executableURL: fixture.executable,
+                                           cache: SearchResultCache(inMemory: true))
             do { _ = try await provider.search(query: "anything", limit: 1); XCTFail("Invalid ready line accepted: \(entry.body)") }
             catch { XCTAssertEqual(error as? SearchRuntimeFailure, entry.expected, entry.body) }
             let observed = await LocalDotSearchProviderFixture.spawnedPID(fixture.pidFile)
@@ -587,7 +592,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
                                                                 body: LocalDotSearchProviderFixture.readyLine(port: server.port))
             addTeardownBlock { try? FileManager.default.removeItem(at: fixture.executable.deletingLastPathComponent()) }
             server.serveOne()
-            return LocalDotSearchProvider(executableURL: fixture.executable)
+            return LocalDotSearchProvider(executableURL: fixture.executable,
+                                           cache: SearchResultCache(inMemory: true))
         }
         // A rejected capability is its own failure, never an empty result set.
         let forbidden = try runtime(payload: Data(), status: 403, validPayload: valid)
@@ -630,7 +636,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
     func testQueryLimitsPrecedeAnyRuntimeLaunch() async throws {
         let fixture = try LocalDotSearchProviderFixture.make(port: 1, body: LocalDotSearchProviderFixture.readyLine(port: 1))
         defer { try? FileManager.default.removeItem(at: fixture.executable.deletingLastPathComponent()) }
-        let provider = LocalDotSearchProvider(executableURL: fixture.executable)
+        let provider = LocalDotSearchProvider(executableURL: fixture.executable,
+                                           cache: SearchResultCache(inMemory: true))
         for (query, limit) in [("   ", 1), (String(repeating: "a", count: 2_049), 1), ("ok\u{0}bad", 1), ("fine", 0), ("fine", 9)] {
             do { _ = try await provider.search(query: query, limit: limit); XCTFail("Invalid input accepted") }
             catch { XCTAssertEqual(error as? SearchRuntimeFailure, .invalidQuery) }
@@ -641,3 +648,51 @@ final class LocalDotSearchProviderTests: XCTestCase {
 }
 
 
+
+final class SearchResultCacheTests: XCTestCase {
+    private func response(_ name: String) -> WebSearchResponse {
+        WebSearchResponse(results: [WebSearchResult(url: URL(string: "https://example.com/\(name)")!,
+            title: name, snippet: "snippet", publicationDateHint: nil)],
+            coverage: .complete, unavailableEngineIDs: [])
+    }
+
+    func testCacheRoundTripsExpiresAndPersistsOnDisk() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dot-cache-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("cache.json")
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let cache = SearchResultCache(fileURL: file, ttl: 60, maximumEntries: 4)
+        await cache.store(query: "Swift", limit: 3, response: response("a"), now: now)
+        let fresh = await cache.lookup(query: "swift", limit: 3, now: now.addingTimeInterval(30))
+        XCTAssertEqual(fresh, response("a"))
+        let expired = await cache.lookup(query: "swift", limit: 3, now: now.addingTimeInterval(61))
+        XCTAssertNil(expired)
+
+        let reopened = SearchResultCache(fileURL: file, ttl: 3_600, maximumEntries: 4)
+        let persisted = await reopened.lookup(query: "SWIFT", limit: 3, now: now.addingTimeInterval(30))
+        XCTAssertEqual(persisted, response("a"))
+    }
+
+    func testLimitIsPartOfTheKeyAndTheOldestEntryIsEvicted() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dot-cache-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let cache = SearchResultCache(fileURL: directory.appendingPathComponent("cache.json"),
+                                      ttl: 3_600, maximumEntries: 2)
+        await cache.store(query: "q", limit: 2, response: response("q"), now: now)
+        let otherLimit = await cache.lookup(query: "q", limit: 3, now: now)
+        XCTAssertNil(otherLimit)
+        await cache.store(query: "a", limit: 1, response: response("a"), now: now.addingTimeInterval(1))
+        await cache.store(query: "b", limit: 1, response: response("b"), now: now.addingTimeInterval(2))
+        let evicted = await cache.lookup(query: "q", limit: 2, now: now.addingTimeInterval(3))
+        XCTAssertNil(evicted)
+        let first = await cache.lookup(query: "a", limit: 1, now: now.addingTimeInterval(3))
+        let second = await cache.lookup(query: "b", limit: 1, now: now.addingTimeInterval(3))
+        XCTAssertEqual(first, response("a"))
+        XCTAssertEqual(second, response("b"))
+    }
+}
