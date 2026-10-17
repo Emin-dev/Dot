@@ -74,9 +74,23 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
    every cycle's first validation is rejected by construction (`reason=expired elapsed=10475ms` in the
    live log) before a fresh capture. Fix it in the caller — refresh before validating — and **do not
    raise the lifetime**: `RoamingTests` correctly guards the 10 s fail-closed rule.
-6. *Last Dot-authored Python.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`, `dot_tls.py`
-   (Splash supervisor and TLS relay, 640 lines, stdlib-only). Splash itself and its interpreter are
-   deliberately retained: the owner chose Qwen 3.8 27B Q4 on Splash as the fastest engine.
+6. *Last Dot-authored Python — port in progress.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`
+   and `dot_tls.py` (Splash supervisor, child observation and TLS relay; 640 lines, stdlib-only) are the
+   only Python that is Dot's own. Splash itself and its interpreter are deliberately retained: the owner
+   confirmed Qwen 3.8 27B Q4 on Splash is the fastest engine they have, so the target is "Rust app,
+   vendored Python engine", not "no Python process".
+   **Slice 1 is committed:** `crates/dot-runtime` holds the stdout wire contract in Rust (the `started`
+   and `failed` events the Swift side parses, byte-shape tested, plus the 64-character lowercase hex api
+   key with generation and validation). The binary currently prints
+   `{"event":"failed","protocol":1,"stage":"supervisor","reason":"not-implemented"}` and exits, so it
+   cannot be mistaken for a working supervisor.
+   Remaining slices, in order: (2) spawn and own the Splash child in its own session, relay stdin EOF as
+   the shutdown signal, and emit `started` with the real pid and ports; (3) port `dot_tls.py`, the
+   bounded TLS relay with per-launch certificate pinning and the api-key bearer check; (4) the socket
+   handoff to the sandboxed child (`--backend-fd/--tls-fd` and the environment the Python sets);
+   (5) switch `BundledSplash.swift` to launch `Contents/MacOS/dot-runtime` and delete the three Python
+   files plus their pins. Each slice must keep `Resources/Runtime/splash.sb` and the repo's static
+   guardrails satisfied.
 
 **Small owner requests closed this session.** Copying Dot's answer, showing it on screen, reporting
 battery level from IOKit, and reading its own source from a resolved path (a `DOT_SOURCE_ROOT`
