@@ -169,6 +169,16 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**Video silence — implemented 2026-10-17 (owner request).** Dot must not speak while the owner is
+watching a video. `VideoPlaybackDetector` treats a known video app, a browser whose window title names
+a video service, or audio playing in a browser/video app as playback (muted videos in background
+windows are undetectable with public APIs and are not guessed). App activations are recorded so the
+video app is still identifiable after Dot takes focus. While detected: `speakDirect` stays silent
+(logged as `dot (silent)`, 3 s caption), a turn's voice is skipped for the whole turn with a "Video
+playing — staying quiet" text notice, automatic follow-up listening is cancelled, and the proactive
+ticker does not generate or speak. The text answer still appears. Unit tests cover video apps,
+video-shaped browser titles, browser audio and non-video audio. Full lane 888/0, `swift test` 568/0.
+
 **B4 single memory connection — fixed 2026-10-17.** `MemoryTierStore` no longer opens a second
 SQLite handle. `LocalFTSStore` creates `memory_tier_state` in its schema and exposes
 `withMemoryConnection`, and every tier read/write runs on that one owner connection (so tier writes

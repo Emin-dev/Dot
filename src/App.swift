@@ -262,6 +262,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = CompanionStatusMenu.make(target: self, show: #selector(showPet), quit: #selector(quit),
             options: #selector(openOptions), type: #selector(typeMessage))
         statusItem = item
+        VideoPlaybackDetector.recordFrontmostApp()
         let preparation = OfflinePreparation.shared
         statusObservations.append(preparation.$progress.receive(on: RunLoop.main).sink { [weak self] _ in
             Task { @MainActor in self?.updateStatusTitle(engineStage: self?.model?.engineStage) }
@@ -647,6 +648,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleWindowOrAppChange() {
+        VideoPlaybackDetector.recordFrontmostApp()
         guard !isAnimatingRoam, let panel, let model, model.screenEnabled, !model.pinned, model.phase == .idle else { return }
         guard let screen = panel.screen else { return }
 

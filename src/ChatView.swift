@@ -76,6 +76,8 @@ final class ChatModel: ObservableObject {
     /// Set when the five-minute capture cap closed this turn with speech; the
     /// answer then carries a spoken notice that the cap was reached.
     private var captureReachedLimit = false
+    private var videoSpeechChecked = false
+    private var videoSpeechMuted = false
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
     private var memorySummaryTask: Task<Void, Never>?
@@ -139,6 +141,12 @@ final class ChatModel: ObservableObject {
 
     func speakDirect(_ text: String) {
         guard !shuttingDown, phase == .idle else { return }
+        // The owner asked Dot not to talk over video. Keep the text visible instead.
+        if VideoPlaybackDetector.isWatchingVideo() {
+            DiagnosticChatLogger.record(role: "dot (silent)", text: text)
+            showCaptureOutcome("Video playing — staying quiet.")
+            return
+        }
         DiagnosticChatLogger.record(role: "dot", text: text)
         let id = cancelTurn()
         answer = text
@@ -1017,7 +1025,8 @@ final class ChatModel: ObservableObject {
                 interacting: self.interactionPaused || self.historyPresented || self.controlInteraction)
         }
         followup.onInvite = { [weak self] previous, continuation in
-            guard let self, self.gate.accepts(previous), self.visible, !self.interactionPaused, !self.controlInteraction else { return }
+            guard let self, self.gate.accepts(previous), self.visible, !self.interactionPaused,
+                  !self.controlInteraction, !VideoPlaybackDetector.isWatchingVideo() else { return }
             self.beginListening(continuation: continuation)
         }
         stt.onCaptureEnded = { [weak self] id, reason in
@@ -1214,6 +1223,7 @@ final class ChatModel: ObservableObject {
                 let now = ProcessInfo.processInfo.systemUptime
                 if self.visible, !self.proactive.paused, self.phase == .idle,
                    !self.generating, !self.runtime.ttsSpeaking(),
+                   !VideoPlaybackDetector.isWatchingVideo(),
                    self.proactive.activeOpportunity == nil, self.proactiveTurn == nil {
                     if self.checkBatteryAlerts() { continue }
                     if !self.proactiveEvidence.isRecent(now: now) || !self.proactiveContextChangedAfterUser {
@@ -2708,7 +2718,7 @@ final class ChatModel: ObservableObject {
                 // Only a validated question intent may arm the microphone. A reply that
                 // merely ends in a question mark is ordinary punctuation, not consent to listen.
                 let hasQ = question != nil
-                let shouldFollowup = !self.voiceDeliveryFailed && hasQ
+                let shouldFollowup = !self.voiceDeliveryFailed && !self.videoSpeechMuted && hasQ
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
                     let qTrimmed = question.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2832,6 +2842,18 @@ final class ChatModel: ObservableObject {
 
     private func enqueueVoice(_ text: String, id: UUID) {
         guard gate.accepts(id), !voiceDeliveryFailed else { return }
+        // Check once per turn, before Dot's own audio starts, so the audio device's
+        // running state cannot make Dot suppress itself. A text answer still appears.
+        if !videoSpeechChecked {
+            videoSpeechChecked = true
+            videoSpeechMuted = VideoPlaybackDetector.isWatchingVideo()
+            if videoSpeechMuted {
+                voiceDeliveryNotice = "Video playing — Dot is staying quiet. This reply is text only."
+                runtime.stopVoice()
+                followup.cancel(); automaticReply = false
+            }
+        }
+        guard !videoSpeechMuted else { return }
         runtime.enqueueVoice(text, id)
     }
     /// Audio failure is terminal for this turn's audio, not for explicitly typed
@@ -2868,6 +2890,7 @@ final class ChatModel: ObservableObject {
         work?.cancel(); work = nil; warmup.cancel()
         runtime.stopCapture(); runtime.stopVoice(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
         currentTurnIsTyped = false; voiceDeliveryFailed = false; captureReachedLimit = false
+        videoSpeechChecked = false; videoSpeechMuted = false
         memorySummaryTask?.cancel(); memorySummaryTask = nil
         if let speechID = activeSpeechUpdateID {
             activeSpeechUpdateID = nil

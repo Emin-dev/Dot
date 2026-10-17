@@ -561,6 +561,10 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Additional owner rule (2026-10-17):** Dot must not speak while the owner is watching a video in any
+app or browser; keep the reply as text and suppress proactive/follow-up speech. Implemented with
+`VideoPlaybackDetector` (video apps, video-shaped browser titles, browser/video audio).
+
 **Owner answers — 2026-10-17 audit (authoritative; see `docs/DEV_TEAM_PROMPT.md` R1–R15).**
 - Listening: up to **5 minutes** per turn, then answer and say the cap was reached (was 60 s).
 - **No wake word** — click or hold-Fn only. **English only, always.**

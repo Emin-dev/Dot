@@ -2103,3 +2103,32 @@ final class FileOperationPolicyTests: XCTestCase {
         XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("rm -rf /tmp/test"))
     }
 }
+
+final class VideoPlaybackDetectorTests: XCTestCase {
+    func testKnownVideoAppsAndVideoShapedBrowserTitlesAreDetectedWithoutAudio() {
+        XCTAssertTrue(VideoPlaybackDetector.isVideoContext(
+            appName: "QuickTime Player", bundleID: "com.apple.QuickTimePlayerX",
+            windowTitle: nil, audioPlaying: false))
+        XCTAssertTrue(VideoPlaybackDetector.isVideoContext(
+            appName: "Google Chrome", bundleID: "com.google.Chrome",
+            windowTitle: "Cats - YouTube", audioPlaying: false))
+        XCTAssertTrue(VideoPlaybackDetector.isVideoContext(
+            appName: "Safari", bundleID: "com.apple.Safari",
+            windowTitle: "Netflix", audioPlaying: false))
+    }
+
+    func testBrowserAudioCountsButOtherAudioDoesNot() {
+        XCTAssertTrue(VideoPlaybackDetector.isVideoContext(
+            appName: "Safari", bundleID: "com.apple.Safari",
+            windowTitle: "Inbox", audioPlaying: true))
+        XCTAssertFalse(VideoPlaybackDetector.isVideoContext(
+            appName: "Spotify", bundleID: "com.spotify.client",
+            windowTitle: "Song", audioPlaying: true))
+        XCTAssertFalse(VideoPlaybackDetector.isVideoContext(
+            appName: "TextEdit", bundleID: "com.apple.TextEdit",
+            windowTitle: "Notes", audioPlaying: true))
+        XCTAssertFalse(VideoPlaybackDetector.isVideoContext(
+            appName: "Safari", bundleID: "com.apple.Safari",
+            windowTitle: "Inbox", audioPlaying: false))
+    }
+}

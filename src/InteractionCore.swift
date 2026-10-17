@@ -1,6 +1,9 @@
 import Foundation
 import CoreFoundation
 import CryptoKit
+#if canImport(CoreAudio)
+import CoreAudio
+#endif
 #if canImport(AppKit)
 import AppKit
 #endif
@@ -2741,6 +2744,112 @@ public enum MeetingFocusAwareness {
     public static func activeMeetingApp() -> String? { nil }
     public static func isMeetingActive() -> Bool { false }
     #endif
+}
+
+// MARK: - Video playback silence
+
+/// Dot stays quiet while the owner is watching a video. Detection is deliberately
+/// conservative about *not* speaking: a known video app, a browser with a video-shaped
+/// window title, or audio playing in a browser/video app all count. Muted videos in a
+/// background window are undetectable with public APIs and are not guessed.
+public enum VideoPlaybackDetector {
+    public static let videoAppSignatures = [
+        "com.apple.quicktimeplayerx", "com.apple.tv", "com.apple.photos", "com.apple.dvdplayer",
+        "org.videolan.vlc", "com.colliderli.iina", "io.mpv", "com.plexapp.plex", "tv.kodi.kodi",
+        "com.elmediaplayer", "com.movistplayer", "com.5kplayer", "com.infuseapp.infuse"
+    ]
+    public static let browserSignatures = [
+        "com.apple.safari", "com.google.chrome", "org.mozilla.firefox", "company.thebrowser.browser",
+        "com.microsoft.edgemac", "com.brave.browser", "com.operasoftware.opera", "com.vivaldi.vivaldi",
+        "com.kagi.kagimini", "com.orionbrowser.orion"
+    ]
+    public static let videoTitleHints = [
+        "youtube", "netflix", "prime video", "disney+", "hulu", "vimeo", "twitch", "hbo max",
+        "max.com", "paramount+", "peacock", "plex", "apple tv", "video", "watch", "lecture",
+        "course", "webinar"
+    ]
+
+    public static func isVideoContext(appName: String?, bundleID: String?, windowTitle: String?,
+                                      audioPlaying: Bool) -> Bool {
+        let id = (bundleID ?? "").lowercased()
+        let name = (appName ?? "").lowercased()
+        let title = (windowTitle ?? "").lowercased()
+        let videoApp = videoAppSignatures.contains { id.contains($0) || name.contains($0) }
+        let browser = browserSignatures.contains { id.contains($0) || name.contains($0) }
+        let shapedTitle = videoTitleHints.contains { title.contains($0) }
+        if videoApp { return true }
+        if browser && shapedTitle { return true }
+        if audioPlaying && (browser || videoApp) { return true }
+        return false
+    }
+
+    #if canImport(AppKit)
+    private struct ForeignContext {
+        let name: String?
+        let bundleID: String?
+        let title: String?
+        let at: Double
+    }
+    @MainActor private static var recentForeign: [ForeignContext] = []
+    @MainActor private static var lastRecorded: (String?, Double) = (nil, -1)
+
+    /// Called on app activation changes, before Dot itself takes focus, so a video app
+    /// remains identifiable while the owner has clicked Dot.
+    @MainActor public static func recordFrontmostApp() {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if let last = lastRecorded.0, last == front.bundleIdentifier, now - lastRecorded.1 < 5 { return }
+        let context = ActiveDesktopContext.current()
+        lastRecorded = (front.bundleIdentifier, now)
+        recentForeign.append(ForeignContext(name: context.appName, bundleID: front.bundleIdentifier,
+                                            title: context.windowTitle, at: now))
+        recentForeign.removeAll { $0.at < now - 600 }
+        if recentForeign.count > 6 { recentForeign.removeFirst(recentForeign.count - 6) }
+    }
+
+    @MainActor public static func isWatchingVideo() -> Bool {
+        let front = NSWorkspace.shared.frontmostApplication
+        let isSelf = front?.bundleIdentifier == Bundle.main.bundleIdentifier
+        if !isSelf { recordFrontmostApp() }
+        let audio = isAudioPlaying()
+        if !isSelf {
+            let context = ActiveDesktopContext.current()
+            if isVideoContext(appName: context.appName, bundleID: front?.bundleIdentifier,
+                              windowTitle: context.windowTitle, audioPlaying: audio) { return true }
+        } else if audio {
+            let cutoff = ProcessInfo.processInfo.systemUptime - 600
+            for entry in recentForeign where entry.at >= cutoff {
+                if isVideoContext(appName: entry.name, bundleID: entry.bundleID,
+                                  windowTitle: entry.title, audioPlaying: true) { return true }
+            }
+        }
+        return false
+    }
+    #endif
+
+    /// Public CoreAudio: whether any client is using the default output device. Dot
+    /// checks this before its own audio starts, so its voice cannot suppress itself.
+    public static func isAudioPlaying() -> Bool {
+        #if canImport(CoreAudio)
+        var device = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+                                                 mScope: kAudioObjectPropertyScopeGlobal,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+                                         &size, &device) == noErr, device != 0 else { return false }
+        var running: UInt32 = 0
+        var runningSize = UInt32(MemoryLayout<UInt32>.size)
+        var runningAddress = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+                                                        mScope: kAudioObjectPropertyScopeGlobal,
+                                                        mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectGetPropertyData(device, &runningAddress, 0, nil, &runningSize, &running) == noErr else { return false }
+        return running != 0
+        #else
+        return false
+        #endif
+    }
 }
 
 // MARK: - On-Screen Visual Guidance & Laser Pointer Overlay
