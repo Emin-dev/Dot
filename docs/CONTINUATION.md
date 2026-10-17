@@ -125,7 +125,20 @@ Accessibility, and nothing in the app ever asked for that grant. Tools & History
 hold-Fn and global gestures (Accessibility)…” while untrusted, and the first-use hint says so.
 Evidence from the installed build: payload preparation 17.1 s, first cold engine readiness **70.9 s**,
 then a proactive turn completed (`[DOT (PROACTIVE)]` at 15:37:41) — the first current-build generation
-observed. Owner speech, permissions and audible output remain unverified.
+observed. Later on 2026-10-17 the owner completed a real voice turn on the installed build:
+`capture_started`, the selected 3 s silence, `final_transcript` at 8.4 s, screen capture, generation
+and `final_playback_complete`, with Dot executing the command the turn requested. That is the owner
+session the completion gate required; acoustic onset, device routes and a clean second Mac are still
+unmeasured.
+
+**Movement cadence — fixed 2026-10-17 after the owner reported nonstop motion.** A window-location
+trace of the installed app showed the panel moving every ~5 s through a 62 s cold engine readiness: a
+repeating 5 s timer ran for the whole `.thinking` phase. That timer, its relocation function and its
+phase-change wiring were deleted. A second trace of that deployment still showed continuous idle
+movement: a covered placement map re-called `performIdleRoam` on every 0.5 s movement tick, and the
+least-overlap fallback always returned a target. Every autonomous relocation now goes through
+`RoamingCore.autonomousMoveAllowed` with a **115 s** minimum, so a still-covered map can request at
+most one move per cadence. A `AutonomousMoveCadenceTests` regression covers the limit.
 
 **Self-reflection data and truthfulness — fixed 2026-10-17.** The XCTest lane wrote its fixture turns
 into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate run), so the 10-minute

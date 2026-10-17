@@ -43,7 +43,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   offers a paste; read a named text file; Spotlight **content** search.
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the
   owner on 2026-10-17 after Dot moved nonstop through a cold model load; Dot now stays put during a
-  turn, and still never moves while the menu is open, the pointer is on Dot, or a mouse button is held.
+  turn. Coverage escapes and snapshot evasions are rate-limited to the same cadence, so a persistently
+  covered map cannot restart the 0.5 s move loop. It still never moves while the menu is open, the
+  pointer is on Dot, or a mouse button is held.
 - **Appearance.** Dew is the default; an explicit choice persists (the interim migration that
   reverted an explicit Dew choice is gone).
 - **Install.** `bash scripts/install_local.sh` builds with the recognizer, clones the payload
@@ -52,12 +54,13 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 
 ## Not fully working, or not stable
 
-1. **No owner conversation has been observed.** No microphone, screen-permission, acoustic or device
-   acceptance exists for any current build: the diagnostic log contains no entries from an owner turn.
-   One current-build generation *was* observed on 2026-10-17: the installed app reached engine
-   readiness cold in 70.9 s, captured the screen, and completed a proactive turn
-   (`[DOT (PROACTIVE)]` in `~/Downloads/dot_chat_log.txt` at 15:37:41). That proves the real payload,
-   supervisor and generation path, not owner speech, permissions or audible output.
+1. **Owner voice turn observed on 2026-10-17; acoustic/device acceptance is not measured.** On the
+   installed build the log records an owner capture (`capture_started`), the selected 3 s silence,
+   `final_transcript` at 8.4 s, screen capture, generation and `final_playback_complete`; Dot executed
+   the command the turn requested. This is a real voice turn end-to-end, but loudness/onset, device
+   routes, headphones/Bluetooth, echo and a clean second Mac are still unverified. Earlier the same
+   build reached engine readiness cold in 70.9 s, captured the screen, and completed a proactive turn
+   (`[DOT (PROACTIVE)]` at 15:37:41), proving the payload, supervisor and generation path.
 2. **`verify_macos.sh` still exits nonzero** for the mandatory runtime-finalizer canary, which fails on
    a hosted toolchain image (`unsupported hosted toolchain image`) by design and blocks packaging.
    The former flaky search case was fixed on 2026-10-17: the fixture's readiness line now uses shell

@@ -1910,3 +1910,16 @@ final class SelfReflectionOutcomeTests: XCTestCase {
         XCTAssertTrue(failed.contains("add a fast path"))
     }
 }
+
+final class AutonomousMoveCadenceTests: XCTestCase {
+    /// A covered map used to restart the roam loop on every 0.5 s movement tick.
+    /// Every autonomous relocation now goes through this two-minute rate limit.
+    func testAutonomousMoveIsRateLimitedToTheTwoMinuteCadence() {
+        XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: 100, lastMoveAt: 0))
+        XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: 114.9, lastMoveAt: 0))
+        XCTAssertTrue(RoamingCore.autonomousMoveAllowed(now: 115, lastMoveAt: 0))
+        XCTAssertTrue(RoamingCore.autonomousMoveAllowed(now: 240, lastMoveAt: 120))
+        XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: .nan, lastMoveAt: 0))
+        XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: 100, lastMoveAt: .infinity))
+    }
+}

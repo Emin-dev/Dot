@@ -311,18 +311,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   !model.hovered, model.menuIsOpen == false,
                   NSEvent.pressedMouseButtons == 0 else { return }
             let now = ProcessInfo.processInfo.systemUptime
-            guard now - self.lastRoamRelocationAt > 12.0 else { return }
+            guard RoamingCore.autonomousMoveAllowed(now: now, lastMoveAt: self.lastRoamRelocationAt) else { return }
             guard let screen = panel.screen else { return }
             let frame = panel.frame
             if !RoamingCore.clear(frame, regions: snapshot.protected) {
-                let origin = self.roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
-                                                         cursor: NSEvent.mouseLocation,
-                                                         now: now,
-                                                         displayID: snapshot.displayID,
-                                                         snapshot: snapshot)
-                if origin != frame.origin {
-                    panel.setFrameOrigin(origin)
-                }
+                self.lastRoamRelocationAt = now
+                _ = self.roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
+                                                cursor: NSEvent.mouseLocation,
+                                                now: now,
+                                                displayID: snapshot.displayID,
+                                                snapshot: snapshot)
                 self.scheduleMovement(interval: 1.0 / 60)
             }
         }
@@ -683,6 +681,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard model.phase == .idle, !model.pinned, !model.hovered,
               !model.interactionPaused, panel.isVisible, menuTracking == 0,
               NSEvent.pressedMouseButtons == 0 else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard RoamingCore.autonomousMoveAllowed(now: now, lastMoveAt: lastRoamRelocationAt) else { return }
         guard let screen = panel.screen ?? NSScreen.main else { return }
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
@@ -705,7 +705,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         guard target != currentOrigin else { return }
 
-        let now = ProcessInfo.processInfo.systemUptime
         self.isAnimatingRoam = true
         self.lastRoamRelocationAt = now
         self.roam.cancel(now: now, longRest: true)

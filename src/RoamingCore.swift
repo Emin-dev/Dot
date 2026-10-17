@@ -97,6 +97,13 @@ struct PlacementSnapshot: Equatable {
 
 /// Conservative short relocations; no random or unsensed fallback. Manual dragging is separate.
 struct RoamingCore {
+    /// The only autonomous movement cadence the owner allows is two minutes. A
+    /// covered map used to trigger a relocation on every movement tick, and the
+    /// least-overlap fallback always found a target, so Dot moved nonstop.
+    static let minimumAutonomousMoveInterval = 115.0
+    static func autonomousMoveAllowed(now: Double, lastMoveAt: Double) -> Bool {
+        now.isFinite && lastMoveAt.isFinite && now - lastMoveAt >= minimumAutonomousMoveInterval
+    }
     private struct Trip {
         let start: CGPoint
         let target: CGPoint
