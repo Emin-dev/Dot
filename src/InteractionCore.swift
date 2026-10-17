@@ -559,14 +559,26 @@ enum CompanionIssue: CaseIterable, Equatable {
         }
         return "Dot diagnostic summary\nPreparation: \(preparation)\nIssue: \(issue?.title ?? (readiness.isIssue ? Self.files.title : "None"))"
     }
-    static func menuHeader(readiness: CompanionReadiness, issue: Self?, progress: Double) -> String? {
+    /// R11: the menu-bar title is the always-visible cold-start surface. Kept short
+    /// so it never crowds the menu bar, and nil when nothing is starting.
+    static func statusTitle(preparing: Bool, progress: Double, engineStage: String?) -> String? {
+        if let engineStage {
+            return engineStage.localizedCaseInsensitiveContains("loading") ? "Loading model…" : "Starting Dot…"
+        }
+        guard preparing else { return nil }
+        let value = progress.isFinite ? min(1, max(0, progress)) : 0
+        return "Preparing \(Int(value * 100))%"
+    }
+
+    static func menuHeader(readiness: CompanionReadiness, issue: Self?, progress: Double,
+                           engineStage: String? = nil) -> String? {
         switch readiness {
         case .checking:
             let value = progress.isFinite ? min(1, max(0, progress)) : 0
             return "Checking files, \(Int(value * 100))%"
         case .paused: return "File check paused"
         case .unavailable: return Self.files.title
-        case .ready: return issue?.title
+        case .ready: return engineStage ?? issue?.title
         }
     }
 }

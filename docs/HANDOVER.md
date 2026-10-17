@@ -38,6 +38,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **Memory (five tiers).** Capture from natural speech, tier-aware recall with an FTS fallback,
   "what do you remember", bounded explicit "forget about X", ageing that promotes T1→T2→T3→T4 and
   never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).
+- **Cold start.** The menu-bar title shows "Preparing N%" during the payload check and "Loading
+  model…" during Splash readiness; the menu header and accessibility value carry the full stage.
+  Tools & History offers optional prewarm at launch (off by default).
 - **Calendar.** Briefs and schedule reads work; creating an event and moving the next meeting now
   present a confirmation card and execute only after approval. Arbitrary event editing is not exposed.
 - **Small owner requests.** Copy Dot's answer to the clipboard; "show that" opens the readable

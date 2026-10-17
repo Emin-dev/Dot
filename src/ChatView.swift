@@ -77,6 +77,8 @@ final class ChatModel: ObservableObject {
     /// answer then carries a spoken notice that the cap was reached.
     private var captureReachedLimit = false
     private var batteryPolicy = BatteryAlertPolicy()
+    private var prewarmTask: Task<Void, Never>?
+    static let prewarmDefaultsKey = "dot.prewarmAtLogin"
     @Published var pinned: Bool {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
@@ -121,6 +123,7 @@ final class ChatModel: ObservableObject {
     @Published private(set) var taskHalo: LongTaskProgress.Halo = .hidden
     @Published private(set) var taskStage: String?
     @Published private(set) var taskStatusText: String?
+    @Published private(set) var engineStage: String?
     private var taskProgress = ResearchTaskProgress()
     private var activeSpeechUpdateID: UUID?
     private var taskProgressTicker: Task<Void, Never>?
@@ -1124,7 +1127,26 @@ final class ChatModel: ObservableObject {
             self.proactiveContextChangedAfterUser = true
             self.updateProactiveContext()
         }
+        self.engine.onReadinessStage = { [weak self] stage in self?.engineStage = stage }
+        startPrewarmIfEnabled()
     }
+
+    /// R11: optional prewarm. Off by default; when enabled, waits for the payload
+    /// check and starts the engine while Dot is idle so the first turn is warm.
+    private func startPrewarmIfEnabled() {
+        prewarmTask?.cancel(); prewarmTask = nil
+        guard defaults.bool(forKey: Self.prewarmDefaultsKey) else { return }
+        prewarmTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                if OfflinePreparation.shared.ready { break }
+                if case .unavailable = OfflinePreparation.shared.state { return }
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+            guard !Task.isCancelled, let self, !self.shuttingDown, self.phase == .idle else { return }
+            _ = try? await self.engine.verifyConnection()
+        }
+    }
+    func prewarmIfEnabled() { startPrewarmIfEnabled() }
 
     func startProactivity() {
         proactive.start()
@@ -2829,7 +2851,7 @@ final class ChatModel: ObservableObject {
         speakDirect("I'm back.")
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
-    func beginShutdown() { shuttingDown = true; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
+    func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
     func shutdown() { stopProactivity(); cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 
@@ -2895,7 +2917,7 @@ struct PetView: View {
         .buttonStyle(.plain)
         .contentShape(Ellipse())
         .accessibilityLabel("Dot companion")
-        .accessibilityValue(model.taskStatusText ?? emotion.caption)
+        .accessibilityValue(model.engineStage ?? model.taskStatusText ?? emotion.caption)
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click for options. Escape stops.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
         .background(accessibilityContractIndicators)
@@ -2962,6 +2984,7 @@ struct PetView: View {
         if preparation.state == .checking { return "Checking \(Int(preparation.progress * 100))%" }
         if !preparation.ready { return preparation.state == .paused ? "Paused" : "Check files" }
         if case .blocked = model.phase { return CompanionStatusText.issue(model.issue) }
+        if let stage = model.engineStage { return stage }
         if model.phase == .idle, let outcome = model.captureOutcome { return outcome }
         if model.phase == .idle, let stage = model.taskStage { return stage }
         if stt.transcribing { return "Transcribing" }

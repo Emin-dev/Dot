@@ -577,7 +577,7 @@ owner decision, not an implementation detail.
   snapshots; a fixed Rust watcher worker; a sealed last-known-good fallback; an emergency canary flag.
 - Research: **all and more** providers (news, optional keyed) plus local solutions (own index, cached
   results, optional offline encyclopedia snapshot).
-- Cold start: live stage-by-stage progress + optional prewarm at login. Sleep/wake: auto re-arm and say
+- Cold start: live stage-by-stage progress + optional prewarm at login (implemented 2026-10-17: menu-bar title, menu header/accessibility stage, prewarm toggle off by default). Sleep/wake: auto re-arm and say
   so. Calendar: briefs + create/edit with a confirmation card (implemented 2026-10-17: create and move-next-meeting actions card + approve; arbitrary event selection/edit still open). Battery: optional threshold alerts, off
   by default (implemented 2026-10-17: context-menu switch, 10/15/20/30% low threshold, charging-start
   toggle, one spoken notice per event).

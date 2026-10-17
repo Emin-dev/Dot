@@ -806,6 +806,14 @@ final class CompactIssueTests: XCTestCase {
         let long = String(repeating: "private detail ", count: 10000)
         XCTAssertEqual(CompanionIssue.menuHeader(readiness: .unavailable(long), issue: nil, progress: 0), "App files need repair")
         XCTAssertEqual(CompanionIssue.menuHeader(readiness: .ready, issue: .screenPermission, progress: 1), "Screen access needed")
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .ready, issue: nil, progress: 1,
+                                                 engineStage: "Loading local model"), "Loading local model")
+        XCTAssertEqual(CompanionIssue.menuHeader(readiness: .ready, issue: .screenPermission, progress: 1,
+                                                 engineStage: nil), "Screen access needed")
+        XCTAssertEqual(CompanionIssue.statusTitle(preparing: true, progress: 0.42, engineStage: nil), "Preparing 42%")
+        XCTAssertEqual(CompanionIssue.statusTitle(preparing: false, progress: 1, engineStage: "Loading local model"), "Loading model…")
+        XCTAssertEqual(CompanionIssue.statusTitle(preparing: false, progress: 1, engineStage: "Starting local engine"), "Starting Dot…")
+        XCTAssertNil(CompanionIssue.statusTitle(preparing: false, progress: 1, engineStage: nil))
     }
     func testCheckingProgressIsFiniteAndClamped() {
         XCTAssertEqual(CompanionIssue.menuHeader(readiness: .checking, issue: nil, progress: .nan), "Checking files, 0%")

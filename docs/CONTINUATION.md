@@ -169,6 +169,14 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R11 cold-start progress and prewarm — implemented 2026-10-17.** `EngineManager` reports
+"Starting local engine", "Loading local model" and clears the stage on every exit; `ChatModel` publishes
+it and the menu-bar title now reads "Preparing N%" during the payload check and "Loading model…" during
+model load (then returns to the pawprint). The menu header and the pet's accessibility value carry the
+full stage. Tools & History has an optional **Prewarm local model at launch** toggle, off by default,
+which waits for the payload check and starts readiness while Dot is idle. Tests cover the menu header
+and the status-title mapping.
+
 **R13 calendar confirmation — implemented 2026-10-17.** Calendar creation and the new
 `move_next_meeting` tool action now build a `CalendarDraft` and show the approval card instead of
 writing to EventKit immediately. Approval calls `CalendarMeetingAssistant.createEvent` or the new

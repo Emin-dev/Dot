@@ -386,6 +386,10 @@ enum EngineError: LocalizedError, Equatable {
 
 @MainActor
 final class EngineManager: ObservableObject {
+    /// R11: the owner can see which cold-start phase is running. Called on the main
+    /// actor and cleared on every exit, including cancellation and failure.
+    var onReadinessStage: (@MainActor (String?) -> Void)?
+
     /// Semantic admission purpose, independent of scheduler priority or prompts.
     enum InferencePurpose: Equatable { case foreground, background }
     private struct ActiveInference {
@@ -523,7 +527,9 @@ final class EngineManager: ObservableObject {
         // supervisor all looked identical in the log.
         var outcome = "cancelled"
         Self.log.notice("DOT_READINESS event=started")
+        onReadinessStage?("Starting local engine")
         defer {
+            onReadinessStage?(nil)
             let milliseconds = Int((ProcessInfo.processInfo.systemUptime - began) * 1000)
             Self.log.notice("DOT_READINESS event=ended outcome=\(outcome, privacy: .public) elapsed=\(milliseconds)ms")
         }
@@ -534,7 +540,9 @@ final class EngineManager: ObservableObject {
                 throw EngineError.configuration
             }
             base = url; model = selected; ownedPID = nil; identityPort = url.port ?? 0
+            onReadinessStage?("Checking local engine")
         } else {
+            onReadinessStage?("Starting local engine")
             let connection = try await BundledSplash.shared.connection()
             try Task.checkCancellation()
             guard !inferenceClosed else { throw CancellationError() }
@@ -544,6 +552,7 @@ final class EngineManager: ObservableObject {
                 certificateSHA256 = connection.certificateSHA256
             }
         }
+        onReadinessStage?("Loading local model")
         let attempts = ownedPID == nil ? 1 : 900
         let readinessDeadline = ProcessInfo.processInfo.systemUptime + 180
         for attempt in 0..<attempts {

@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import QuartzCore
+import Combine
 
 @main
 struct DotApp {
@@ -32,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isAnimatingRoam = false
     private var lastRoamRelocationAt: Double = 0
     private var statusItem: NSStatusItem?
+    private var statusObservations: [AnyCancellable] = []
     /// Random wandering is deliberately disabled: Dot stays in its safe spot while
     /// idle and only glides away when a window or the cursor actually covers it.
     /// RoamingCore is still used for those escape trips (`performIdleRoam`).
@@ -260,6 +262,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.menu = CompanionStatusMenu.make(target: self, show: #selector(showPet), quit: #selector(quit),
             options: #selector(openOptions), type: #selector(typeMessage))
         statusItem = item
+        let preparation = OfflinePreparation.shared
+        statusObservations.append(preparation.$progress.receive(on: RunLoop.main).sink { [weak self] _ in
+            Task { @MainActor in self?.updateStatusTitle(engineStage: self?.model?.engineStage) }
+        })
+        statusObservations.append(preparation.$state.receive(on: RunLoop.main).sink { [weak self] _ in
+            Task { @MainActor in self?.updateStatusTitle(engineStage: self?.model?.engineStage) }
+        })
+        statusObservations.append(model.$engineStage.receive(on: RunLoop.main).sink { [weak self] stage in
+            Task { @MainActor in self?.updateStatusTitle(engineStage: stage) }
+        })
         observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }; self.model?.cancelForInteraction(); self.menuTracking += 1; self.moveGently()
@@ -424,6 +436,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func cancelMovement() { placement.invalidate(); roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
 
+    private func updateStatusTitle(engineStage: String?) {
+        guard let item = statusItem else { return }
+        let preparation = OfflinePreparation.shared
+        let title = CompanionIssue.statusTitle(preparing: preparation.state == .checking,
+                                               progress: preparation.progress,
+                                               engineStage: engineStage)
+        item.button?.title = title ?? ""
+        item.length = title == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
+        item.button?.toolTip = title.map { "Dot: \($0)" } ?? "Dot: Show, Options, Type or Quit"
+    }
+
     @objc private func showPet() { model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
     @objc private func quit() { NSApp.terminate(nil) }
 
@@ -500,6 +523,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return }
         model.proactive.setPaused(!model.proactive.paused)
     }
+    @objc private func togglePrewarm() {
+        let key = ChatModel.prewarmDefaultsKey
+        let next = !UserDefaults.standard.bool(forKey: key)
+        UserDefaults.standard.set(next, forKey: key)
+        model?.prewarmIfEnabled()
+    }
     @objc private func toggleBatteryAlerts() { model?.batteryAlerts.enabled.toggle() }
     @objc private func setBatteryThreshold(_ sender: NSMenuItem) { model?.batteryAlerts.lowThreshold = sender.tag }
     @objc private func toggleChargingAlerts() { model?.batteryAlerts.chargingAlerts.toggle() }
@@ -519,7 +548,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let readiness = OfflinePreparation.shared.state
         let hasDetails = readiness.detail != nil || model.issue != nil
         if let header = CompanionIssue.menuHeader(readiness: readiness, issue: model.issue,
-                                                   progress: OfflinePreparation.shared.progress) {
+                                                   progress: OfflinePreparation.shared.progress,
+                                                   engineStage: model.engineStage) {
             let item = NSMenuItem(title: header, action: nil, keyEquivalent: "")
             item.isEnabled = false; menu.addItem(item); menu.addItem(.separator())
         }
@@ -580,6 +610,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                            action: #selector(requestAccessibilityAccess), keyEquivalent: "")
             accessibility.target = self; toolsMenu.addItem(accessibility)
         }
+        let prewarm = NSMenuItem(title: "Prewarm local model at launch",
+                                 action: #selector(togglePrewarm), keyEquivalent: "")
+        prewarm.target = self
+        prewarm.state = UserDefaults.standard.bool(forKey: ChatModel.prewarmDefaultsKey) ? .on : .off
+        toolsMenu.addItem(prewarm)
         let repoSubItem = NSMenuItem(title: "GitHub repository (latest code)…", action: #selector(openRepository), keyEquivalent: "")
         repoSubItem.target = self; toolsMenu.addItem(repoSubItem)
         toolsItem.submenu = toolsMenu
