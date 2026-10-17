@@ -1035,7 +1035,11 @@ final class ChatModel: ObservableObject {
         }
         followup.onInvite = { [weak self] previous, continuation in
             guard let self, self.gate.accepts(previous), self.visible, !self.interactionPaused,
-                  !self.controlInteraction, !videoPlayback() else { return }
+                  !self.controlInteraction, !videoPlayback() else {
+                Self.runtimeLog.notice("DOT_FOLLOWUP event=invite_blocked")
+                return
+            }
+            Self.runtimeLog.notice("DOT_FOLLOWUP event=invite_accepted")
             self.beginListening(continuation: continuation)
         }
         stt.onCaptureEnded = { [weak self] id, reason in
@@ -1579,6 +1583,37 @@ final class ChatModel: ObservableObject {
         return nil
     }
 
+    /// A final spoken question is a reply invitation even when the local model
+    /// omitted the preferred `ask_user` tool call. Requires a real sentence, not a
+    /// bare "?" or a one-word interjection.
+    static func endsWithSpokenQuestion(_ text: String) -> Bool {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let closers = "\"'”’)]}"
+        while let last = trimmed.last, closers.contains(last) {
+            trimmed.removeLast()
+            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard trimmed.hasSuffix("?") else { return false }
+        var sentence = String(trimmed.dropLast())
+        let boundaries: Set<Character> = [".", "!", "?", "\n"]
+        if let last = sentence.lastIndex(where: { boundaries.contains($0) }) {
+            sentence = String(sentence[sentence.index(after: last)...])
+        }
+        // A quoted/explanatory construction ("A quoted question: why?") is not Dot
+        // asking the owner; only a direct final question is an invitation.
+        guard !sentence.contains(":"), !sentence.contains("\""),
+              !sentence.contains("“"), !sentence.contains("”") else { return false }
+        return sentence.split(whereSeparator: \.isWhitespace).count >= 2
+    }
+
+    /// The question contract is preferred; a final question in the spoken answer is
+    /// the fallback. A failed or video-silenced voice never arms the microphone.
+    static func shouldArmFollowup(explicitQuestion: Bool, answer: String,
+                                  voiceFailed: Bool, videoSilent: Bool) -> Bool {
+        guard !voiceFailed, !videoSilent else { return false }
+        return explicitQuestion || endsWithSpokenQuestion(answer)
+    }
+
     /// The name to ask Spotlight for after an exact-path miss. Strips the spoken
     /// filler so "read my notes file" searches for "notes", while a real filename
     /// like "report.txt" is unchanged.
@@ -1806,6 +1841,7 @@ final class ChatModel: ObservableObject {
     private func beginListening(continuation: UUID?) {
         onForegroundInteraction?()
         let invitation = continuation != nil
+        if invitation { Self.runtimeLog.notice("DOT_FOLLOWUP event=capture_started") }
         let id = cancelTurn(preserveFollowup: invitation)
         voiceDeliveryNotice = nil
         voiceRoute = runtime.currentRoute()
@@ -2785,7 +2821,8 @@ final class ChatModel: ObservableObject {
                 // Only a validated question intent may arm the microphone. A reply that
                 // merely ends in a question mark is ordinary punctuation, not consent to listen.
                 let hasQ = question != nil
-                let shouldFollowup = !self.voiceDeliveryFailed && !self.videoSpeechMuted && hasQ
+                let shouldFollowup = Self.shouldArmFollowup(explicitQuestion: hasQ, answer: self.answer,
+                    voiceFailed: self.voiceDeliveryFailed, videoSilent: self.videoSpeechMuted)
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
                 if let question {
                     let qTrimmed = question.text.trimmingCharacters(in: .whitespacesAndNewlines)

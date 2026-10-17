@@ -561,6 +561,10 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Follow-up listening fix (2026-10-17):** after a direct final question, retry transient readiness
+inside the 8 s invitation window instead of revoking at the first 0.4 s poll; a spoken final question
+is a fallback for a missing `ask_user` call. `DOT_FOLLOWUP` notices expose the state transitions.
+
 **Additional owner rule (2026-10-17):** Dot must not speak while the owner is watching a video in any
 app or browser; keep the reply as text and suppress proactive/follow-up speech. Implemented with
 `VideoPlaybackDetector` (video apps, video-shaped browser titles, browser/video audio).

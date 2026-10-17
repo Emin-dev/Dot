@@ -65,6 +65,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **Screen watching.** Idle fingerprint every three minutes; a change or mouse move starts a
   10–50 s watch, gated by the Screen awareness switch, permission and low-power mode, and paused
   during video. The final OCR context is kept for the next turn.
+- **Follow-up listening.** When Dot asks a genuine final question (the `ask_user` tool, or a direct
+  spoken question as fallback), it waits for final playback, then retries readiness for up to 8 s and
+  opens the microphone; quoted/explanatory question marks do not arm it. Permission loss cancels.
 - **Listening and sleep.** A turn listens for up to 5 minutes, then answers what was heard and says
   the cap was reached; a Mac wake clears the sleep block, re-arms proactivity and says "I'm back."
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the

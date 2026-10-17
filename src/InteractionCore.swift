@@ -587,7 +587,10 @@ enum CompanionIssue: CaseIterable, Equatable {
 }
 
 /// Same-turn followup policy; the controller supplies successful final audible playback.
-/// A question ID must come from a validated explicit question contract, never punctuation.
+/// The preferred path is a validated explicit `ask_user` contract. A final spoken
+/// question is the bounded fallback the controller supplies when the local model
+/// omits that call; punctuation alone never opens the microphone, and the invitation
+/// still waits for final playback, a transient-ready environment and the 8 s lifetime.
 struct QuestionReplyGate {
     static let maximumAutomaticReplies = 3
     static let playbackSettleSeconds = 0.4
@@ -627,8 +630,12 @@ struct QuestionReplyGate {
     mutating func consume(turn: UUID, now: Double, ready: Bool, microphoneAuthorized: Bool,
                           screenAuthorized: Bool, interacting: Bool) -> UUID? {
         guard self.turn == turn else { return nil }
-        guard ready, microphoneAuthorized, screenAuthorized, !interacting, now.isFinite,
+        // Permission loss and an exhausted chain are final. Readiness and a brief
+        // interaction are transient after playback (audio route/teardown); the caller
+        // retries them inside the invitation lifetime instead of dropping the reply.
+        guard microphoneAuthorized, screenAuthorized, now.isFinite,
               repliesUsed < Self.maximumAutomaticReplies else { cancel(); return nil }
+        guard ready, !interacting else { return nil }
         guard let question, let played = playbackEndedAt else { return nil }
         guard now >= played, now - played <= Self.invitationLifetimeSeconds else { cancel(); return nil }
         guard now - played >= Self.playbackSettleSeconds else { return nil }

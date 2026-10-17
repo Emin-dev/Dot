@@ -139,22 +139,39 @@ final class VoiceFollowupTests: XCTestCase {
         }
     }
 
-    @MainActor func testEveryEnvironmentLossRevokesRatherThanDefersInvitation() {
+    @MainActor func testTransientReadinessDefersButPermissionLossRevokes() {
         for loss in 0..<4 {
             let fixture = FollowupFixture(), turn = fixture.prepareQuestion()
             fixture.controller.playbackFinished(turn: turn)
             switch loss {
             case 0: fixture.environment.ready = false
-            case 1: fixture.environment.microphoneAuthorized = false
-            case 2: fixture.environment.screenAuthorized = false
-            default: fixture.environment.interacting = true
+            case 1: fixture.environment.interacting = true
+            case 2: fixture.environment.microphoneAuthorized = false
+            default: fixture.environment.screenAuthorized = false
             }
-            fixture.poll(after: 0.2)
+            fixture.poll(after: 0.5)
             fixture.environment = .init(ready: true, microphoneAuthorized: true, screenAuthorized: true, interacting: false)
             fixture.poll(after: 0.5)
-            XCTAssertTrue(fixture.invitations.isEmpty)
-            XCTAssertFalse(fixture.controller.pending)
+            if loss < 2 {
+                XCTAssertEqual(fixture.invitations.map(\.turn), [turn],
+                               "A transient readiness/interaction loss must wait, not drop the reply")
+                XCTAssertFalse(fixture.controller.pending)
+            } else {
+                XCTAssertTrue(fixture.invitations.isEmpty, "A permission loss is final")
+                XCTAssertFalse(fixture.controller.pending)
+            }
         }
+    }
+
+    @MainActor func testDeferredInvitationStillExpiresAtTheBoundedLifetime() {
+        let fixture = FollowupFixture(), turn = fixture.prepareQuestion()
+        fixture.controller.playbackFinished(turn: turn)
+        fixture.environment.ready = false
+        fixture.poll(after: 0.2)
+        fixture.environment = .init(ready: true, microphoneAuthorized: true, screenAuthorized: true, interacting: false)
+        fixture.poll(after: QuestionReplyGate.invitationLifetimeSeconds)
+        XCTAssertTrue(fixture.invitations.isEmpty)
+        XCTAssertFalse(fixture.controller.pending)
     }
 
     @MainActor func testReplacementTurnRejectsOldGenerationAndPlayback() {

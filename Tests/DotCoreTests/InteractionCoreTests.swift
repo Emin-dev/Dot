@@ -876,15 +876,22 @@ final class QuestionReplyGateTests: XCTestCase {
         gate.questionPlayed(turn: first, question: question, now: 0)
         XCTAssertNil(consume(&gate, next))
     }
-    func testInterruptionOrMissingPermissionCancelsRatherThanDefersListening() {
+    func testTransientInterruptionDefersButMissingPermissionCancels() {
         for missing in 0..<4 {
             var gate = QuestionReplyGate(); let turn = UUID(), question = UUID()
             gate.begin(turn: turn, explicitClick: true)
             gate.responseFinished(turn: turn, question: question, succeeded: true)
             gate.questionPlayed(turn: turn, question: question, now: 0)
-            XCTAssertNil(gate.consume(turn: turn, now: 1, ready: missing != 0, microphoneAuthorized: missing != 1,
-                screenAuthorized: missing != 2, interacting: missing == 3))
-            XCTAssertNil(consume(&gate, turn))
+            let waiting = gate.consume(turn: turn, now: 1, ready: missing != 0, microphoneAuthorized: missing != 1,
+                screenAuthorized: missing != 2, interacting: missing == 3)
+            XCTAssertNil(waiting)
+            let recovered = gate.consume(turn: turn, now: 2, ready: true, microphoneAuthorized: true,
+                screenAuthorized: true, interacting: false)
+            if missing == 0 || missing == 3 {
+                XCTAssertNotNil(recovered, "Transient readiness/interaction must wait, not revoke")
+            } else {
+                XCTAssertNil(recovered, "Permission loss is final")
+            }
         }
     }
     func testSettleDelayAndExpiryCannotBeExtendedByRepeatedDrain() {

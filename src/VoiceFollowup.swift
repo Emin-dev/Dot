@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Connects successful generation and final playback to one revocable invitation.
 /// Audio capture owns the separate, user-selected time to begin speaking.
@@ -20,6 +21,8 @@ final class VoiceFollowup {
     private var generationEnded = false
     private var playedAt: Double?
     private var task: Task<Void, Never>?
+    private var waitingReason: String?
+    private static let log = Logger(subsystem: "app.dot", category: "timing")
     private(set) var pending = false
 
     init(clock: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime }, automaticScheduling: Bool = true) {
@@ -36,9 +39,11 @@ final class VoiceFollowup {
         let question = hasQuestion ? UUID() : nil
         self.question = question; pending = hasQuestion
         policy.responseFinished(turn: turn, question: question, succeeded: true)
+        Self.log.notice("DOT_FOLLOWUP event=generation_finished has_question=\(hasQuestion)")
     }
     func playbackFinished(turn: UUID) {
         guard self.turn == turn, let question, playedAt == nil else { return }
+        Self.log.notice("DOT_FOLLOWUP event=playback_finished")
         playedAt = clock()
         policy.questionPlayed(turn: turn, question: question, now: playedAt!)
         guard automaticScheduling else { return }
@@ -52,18 +57,57 @@ final class VoiceFollowup {
     /// Also used by deterministic tests; all deadlines use the monotonic clock.
     func poll() {
         guard let turn, question != nil, let playedAt else { return }
-        guard clock() - playedAt <= QuestionReplyGate.invitationLifetimeSeconds else { cancel(); return }
+        let elapsed = clock() - playedAt
+        guard elapsed.isFinite, elapsed <= QuestionReplyGate.invitationLifetimeSeconds else {
+            cancelInvitation(reason: "expired"); return
+        }
+        guard elapsed >= QuestionReplyGate.playbackSettleSeconds else {
+            noteWaiting("settling"); retryAfter(QuestionReplyGate.playbackSettleSeconds - elapsed); return
+        }
         let value = environment()
-        guard value.ready, value.microphoneAuthorized, value.screenAuthorized, !value.interacting else { cancel(); return }
-        guard clock() - playedAt >= QuestionReplyGate.playbackSettleSeconds else { return }
+        guard value.microphoneAuthorized else { cancelInvitation(reason: "microphone"); return }
+        guard value.screenAuthorized else { cancelInvitation(reason: "screen"); return }
+        guard value.ready, !value.interacting else {
+            noteWaiting(value.ready ? "interacting" : "not_ready")
+            retryAfter(0.2)
+            return
+        }
         guard let continuation = policy.consume(turn: turn, now: clock(), ready: value.ready,
             microphoneAuthorized: value.microphoneAuthorized, screenAuthorized: value.screenAuthorized,
-            interacting: value.interacting) else { cancel(); return }
+            interacting: value.interacting) else {
+            // A transient case was handled above; anything here is a hard
+            // revocation, an exhausted chain or a missing question.
+            cancelInvitation(reason: "policy")
+            return
+        }
+        waitingReason = nil
         question = nil; self.turn = nil; pending = false
+        Self.log.notice("DOT_FOLLOWUP event=invited")
         onInvite?(turn, continuation)
+    }
+    private func retryAfter(_ seconds: Double) {
+        guard automaticScheduling, task == nil else { return }
+        task = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(max(0.05, seconds) * 1_000_000_000)) }
+            catch { return }
+            guard let self, !Task.isCancelled else { return }
+            self.task = nil
+            self.poll()
+        }
+    }
+    private func noteWaiting(_ reason: String) {
+        guard waitingReason != reason else { return }
+        waitingReason = reason
+        Self.log.notice("DOT_FOLLOWUP event=deferred reason=\(reason, privacy: .public)")
+    }
+    private func cancelInvitation(reason: String) {
+        Self.log.notice("DOT_FOLLOWUP event=cancelled reason=\(reason, privacy: .public)")
+        waitingReason = nil
+        cancel()
     }
     func cancel() {
         task?.cancel(); task = nil; policy.cancel()
+        waitingReason = nil
         turn = nil; question = nil; pending = false; generationEnded = false; playedAt = nil
     }
 }

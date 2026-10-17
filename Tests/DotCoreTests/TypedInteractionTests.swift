@@ -431,6 +431,25 @@ final class TypedInteractionTests: XCTestCase {
         guard case .speaking = f.model.phase else { return XCTFail("The greeting must start playback") }
     }
 
+    @MainActor func testFinalSpokenQuestionArmsTheFollowupWithoutAToolCall() {
+        XCTAssertTrue(ChatModel.shouldArmFollowup(explicitQuestion: false,
+            answer: "Would you like me to open it?", voiceFailed: false, videoSilent: false))
+        XCTAssertTrue(ChatModel.shouldArmFollowup(explicitQuestion: true,
+            answer: "Done.", voiceFailed: false, videoSilent: false))
+        XCTAssertFalse(ChatModel.shouldArmFollowup(explicitQuestion: false,
+            answer: "It is 3pm.", voiceFailed: false, videoSilent: false))
+        XCTAssertFalse(ChatModel.shouldArmFollowup(explicitQuestion: false,
+            answer: "What?", voiceFailed: false, videoSilent: false))
+        XCTAssertFalse(ChatModel.shouldArmFollowup(explicitQuestion: false,
+            answer: "A quoted question: why?", voiceFailed: false, videoSilent: false))
+        XCTAssertTrue(ChatModel.shouldArmFollowup(explicitQuestion: false,
+            answer: "Here is the plan. Do you want me to proceed?", voiceFailed: false, videoSilent: false))
+        XCTAssertFalse(ChatModel.shouldArmFollowup(explicitQuestion: true,
+            answer: "Done.", voiceFailed: true, videoSilent: false))
+        XCTAssertFalse(ChatModel.shouldArmFollowup(explicitQuestion: true,
+            answer: "Done.", voiceFailed: false, videoSilent: true))
+    }
+
     @MainActor func testFiveMinuteCapAnswersAndSaysTheLimitWasReached() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
         f.model.clicked()

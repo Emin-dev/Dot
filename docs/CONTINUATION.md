@@ -185,6 +185,16 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Follow-up listening — fixed 2026-10-17 (owner report).** Two causes. First, the controller
+polled once 0.4 s after final playback and **revoked the invitation on any transient not-ready
+state** (TTS teardown, route settle, brief interaction), so the microphone never opened. It now retries
+every 0.2 s inside the 8 s lifetime; only microphone/screen permission loss, an exhausted chain,
+replacement turns and expiry cancel. Second, the local model sometimes ends an answer with a spoken
+question without calling `ask_user`, so the follow-up never armed. A final **direct** spoken question
+now arms it as a fallback, while quoted/explanatory constructions ("A quoted question: why?") do not.
+`DOT_FOLLOWUP` notices record generation/playback/deferred/invited/cancelled states for a real session.
+Full lane 898/0, `swift test` 577/0.
+
 **Release gate — rerun 2026-10-17 after R1–R15 work.** `verify_macos.sh` completed every stage:
 Python **604 passed / 4 skipped**, Splash sandbox PASS, 53 guardrails, SwiftPM **576/0**, XCTest
 **896/0**, Debug and Release builds succeeded. Its only failure is the documented by-design runtime
