@@ -159,6 +159,16 @@ fresh runtime; a successful connection refills the budget and a failed restart l
 the same connection attempt cannot loop. Later turns probe again. The existing `EngineError`
 messages already reach the owner as visible blocked text.
 
+**Binding rules R1 and R12 — implemented 2026-10-17.** R1: the capture bound is now **300 s**
+(`VoiceCaptureDeadline.maximumDuration`). When the cap closes a turn with measured speech, the
+evidence carries `.maximumDuration`, the captured audio is transcribed and answered, and the answer
+gains a spoken notice that the five-minute limit was reached; a cap with no speech keeps the honest
+"listened without hearing speech" message. `VoiceCaptureEndReason` and the timing evidence are
+updated, and the tests assert the 300-second boundary and the spoken cap notice. R12:
+`ChatModel.handleSystemWake` clears a sleep-induced voice block, records a user-activity reset,
+re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
+audio-route settle. Full lane 875/0 and `swift test` 555/0.
+
 **Audit defects A9–A10 — fixed 2026-10-17.** A9 timers use `Task.sleep`, which does not advance
 through Mac sleep, so a deadline missed during sleep fired late by the sleep duration. `SmartTimerScheduler.handleWake(now:)`
 now fires each missed timer exactly once at wake (the existing spoken timer alert is the note),

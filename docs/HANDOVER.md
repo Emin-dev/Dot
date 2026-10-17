@@ -42,6 +42,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   history; battery level from IOKit; self-reflection writes to its file, copies to the clipboard and
   offers a paste; read a named text file (with a Spotlight name suggestion when the exact path is
   missing); Spotlight **content** search; timers missed during Mac sleep fire once on wake.
+- **Listening and sleep.** A turn listens for up to 5 minutes, then answers what was heard and says
+  the cap was reached; a Mac wake clears the sleep block, re-arms proactivity and says "I'm back."
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the
   owner on 2026-10-17 after Dot moved nonstop through a cold model load; Dot now stays put during a
   turn. Coverage escapes and snapshot evasions are rate-limited to the same cadence, so a persistently

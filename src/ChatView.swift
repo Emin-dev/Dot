@@ -73,6 +73,9 @@ final class ChatModel: ObservableObject {
     private var captureOutcomeTask: Task<Void, Never>?
     @Published private(set) var firstUseHint: Bool
     private var lastAttemptedText: String?
+    /// Set when the five-minute capture cap closed this turn with speech; the
+    /// answer then carries a spoken notice that the cap was reached.
+    private var captureReachedLimit = false
     @Published var pinned: Bool {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
@@ -988,10 +991,12 @@ final class ChatModel: ObservableObject {
                   evidence.firstSpeechAt <= evidence.speechEndedAt,
                   // A held-Fn release ends the turn without the silence rule being
                   // satisfied; its evidence carries the last PCM actually processed.
-                  evidence.outcome == .forcedFinish ||
+                  // The five-minute cap does the same, with a spoken notice later.
+                  evidence.outcome == .forcedFinish || evidence.outcome == .maximumDuration ||
                   abs(evidence.silenceSatisfiedAt - evidence.speechEndedAt - evidence.selectedSilenceSeconds) < 0.000001 else { return }
             self.speechEndedAt = evidence.speechEndedAt
             self.silenceSatisfiedAt = evidence.silenceSatisfiedAt
+            self.captureReachedLimit = evidence.outcome == .maximumDuration
             let milliseconds = Int(evidence.selectedSilenceSeconds * 1000)
             Self.timingLog.notice("DOT_TIMING selected_silence=\(milliseconds)ms")
         }
@@ -2527,6 +2532,15 @@ final class ChatModel: ObservableObject {
                     self.answer += prefixSpace + confirmation
                     self.enqueueVoice(confirmation, id: id)
                 }
+                if self.captureReachedLimit {
+                    // R1: answer with what was heard and say the five-minute cap was
+                    // reached. The notice is part of the answer, spoken before any
+                    // follow-up question.
+                    let notice = "I listened for the five-minute limit, so this answer uses what I heard."
+                    self.answer += (self.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : " ") + notice
+                    self.enqueueVoice(notice, id: id)
+                    self.captureReachedLimit = false
+                }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 // Only a validated question intent may arm the microphone. A reply that
                 // merely ends in a question mark is ordinary punctuation, not consent to listen.
@@ -2689,7 +2703,7 @@ final class ChatModel: ObservableObject {
         let id = gate.advance()
         work?.cancel(); work = nil; warmup.cancel()
         runtime.stopCapture(); runtime.stopVoice(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
-        currentTurnIsTyped = false; voiceDeliveryFailed = false
+        currentTurnIsTyped = false; voiceDeliveryFailed = false; captureReachedLimit = false
         if let speechID = activeSpeechUpdateID {
             activeSpeechUpdateID = nil
             runtime.stopVoice()
@@ -2725,6 +2739,17 @@ final class ChatModel: ObservableObject {
             cancelTurn()
             if let message = reason.recoveryMessage { block(message, issue: .voice) }
         }
+    }
+    /// R12: a wake is not a failure. Clear the sleep-induced block, re-arm the
+    /// proactive scheduler and say Dot is back. The audio route needs a moment to
+    /// settle before the greeting, so the caller delays this briefly.
+    func handleSystemWake() {
+        guard !shuttingDown else { return }
+        IdleSelfReflectionEngine.shared.recordUserActivity()
+        if case .blocked = phase, issue == .voice { issue = nil; phase = .idle }
+        proactive.start()
+        updateProactiveContext()
+        speakDirect("I'm back.")
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
     func beginShutdown() { shuttingDown = true; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }

@@ -419,5 +419,32 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.spotlightNameQuery(from: "report.txt"), "report.txt")
         XCTAssertEqual(ChatModel.spotlightNameQuery(from: "/Users/me/Documents/budget.csv"), "budget.csv")
     }
+
+    @MainActor func testSystemWakeClearsTheSleepBlockAndSaysItIsBack() async throws {
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.cancelForEnvironment(reason: .systemSleep)
+        guard case .blocked = f.model.phase else { return XCTFail("Sleep must block the turn") }
+        f.model.handleSystemWake()
+        XCTAssertNil(f.model.issue)
+        XCTAssertTrue(f.enqueued.contains("I'm back."))
+        guard case .speaking = f.model.phase else { return XCTFail("The greeting must start playback") }
+    }
+
+    @MainActor func testFiveMinuteCapAnswersAndSaysTheLimitWasReached() async throws {
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.clicked()
+        try await eventually { f.captureIDs.count == 1 }
+        let id = try XCTUnwrap(f.captureIDs.first)
+        f.model.stt.onRecording?(id)
+        let now = ProcessInfo.processInfo.systemUptime
+        let evidence = VoiceCaptureTimingEvidence(captureStartedAt: now - 10, firstSpeechAt: now - 9,
+            speechEndedAt: now - 5, silenceSatisfiedAt: now, selectedSilenceSeconds: 3,
+            invitationSeconds: nil, outcome: .maximumDuration)
+        f.model.stt.onSpeechEnded?(id, evidence)
+        f.model.stt.onFinal?(id, "What is two plus two?")
+        try await eventually { f.completed.count == 1 }
+        XCTAssertTrue(f.model.answer.contains("five-minute limit"))
+        XCTAssertTrue(f.enqueued.contains { $0.contains("five-minute limit") })
+    }
 }
 #endif

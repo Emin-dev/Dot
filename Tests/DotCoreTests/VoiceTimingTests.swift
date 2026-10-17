@@ -149,16 +149,16 @@ final class VoiceTimingTests: XCTestCase {
         capture.observeAudio(firstSpeech: 6.3, lastSpeech: 7, through: 7)
         XCTAssertEqual(capture.evaluate(at: 20), .cancelled)
     }
-    func testCaptureNeverReasonsAtSixtySecondLimitWithoutSatisfiedSilence() {
+    func testCaptureNeverReasonsAtFiveMinuteLimitWithoutSatisfiedSilence() {
         var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 8, invitationSeconds: 6)
-        capture.observeAudio(firstSpeech: 1, lastSpeech: 59.9, through: 60)
-        XCTAssertEqual(capture.evaluate(at: 60), .maximumDuration)
+        capture.observeAudio(firstSpeech: 1, lastSpeech: 299.9, through: 300)
+        XCTAssertEqual(capture.evaluate(at: 300), .maximumDuration)
         XCTAssertNil(capture.timingEvidence)
         var manual = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
-        manual.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 60)
-        XCTAssertEqual(manual.evaluate(at: 60), .maximumDuration)
+        manual.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 300)
+        XCTAssertEqual(manual.evaluate(at: 300), .maximumDuration)
     }
-    func testEarlierCompletedSilenceWinsDelayedTimerPastOverallLimit() {
+    func testEarlierCompletedSilenceWinsDelayedTimer() {
         var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
         capture.observeAudio(firstSpeech: 1, lastSpeech: 56, through: 56)
         capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 60)
@@ -216,37 +216,37 @@ final class VoiceTimingTests: XCTestCase {
     }
     func testSampleBoundIsTerminalBeforeLaterSilenceCanBeAccepted() {
         var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
-        capture.observeAudio(firstSpeech: 1, lastSpeech: 59.9, through: 59.9)
+        capture.observeAudio(firstSpeech: 1, lastSpeech: 299.9, through: 299.9)
         capture.reachCaptureLimit()
-        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 63)
-        XCTAssertEqual(capture.evaluate(at: 63), .maximumDuration)
+        capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: 303)
+        XCTAssertEqual(capture.evaluate(at: 303), .maximumDuration)
         XCTAssertNil(capture.timingEvidence)
     }
     func testCrossingLimitBufferKeepsEarlierSilenceInsideItsAllowedPrefix() {
-        let window = VoiceCaptureFrameWindow(frames: 320, stored: 479_840, rate: 8_000,
-                                             bufferStartedAt: 59.98, captureStartedAt: 0)
+        let window = VoiceCaptureFrameWindow(frames: 320, stored: 2_399_840, rate: 8_000,
+                                             bufferStartedAt: 299.98, captureStartedAt: 0)
         XCTAssertEqual(window.offset, 0)
         XCTAssertLessThanOrEqual(window.count, 160)
         XCTAssertTrue(window.reachesLimit)
-        let through = 59.98 + Double(window.count) / 8_000
-        XCTAssertGreaterThanOrEqual(through, 59.99)
-        XCTAssertLessThanOrEqual(through, 60)
+        let through = 299.98 + Double(window.count) / 8_000
+        XCTAssertGreaterThanOrEqual(through, 299.99)
+        XCTAssertLessThanOrEqual(through, 300)
         var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
-        capture.observeAudio(firstSpeech: 1, lastSpeech: 56.99, through: 59.98)
+        capture.observeAudio(firstSpeech: 1, lastSpeech: 296.99, through: 299.98)
         capture.observeAudio(firstSpeech: nil, lastSpeech: nil, through: through)
         capture.reachCaptureLimit()
-        XCTAssertEqual(capture.evaluate(at: 60.1), .silenceSatisfied)
-        XCTAssertEqual(capture.timingEvidence?.silenceSatisfiedAt, 59.99)
+        XCTAssertEqual(capture.evaluate(at: 300.1), .silenceSatisfied)
+        XCTAssertEqual(capture.timingEvidence?.silenceSatisfiedAt, 299.99)
     }
     func testCrossingLimitBufferCannotTranscribeAnUnfinishedUtterance() {
-        let window = VoiceCaptureFrameWindow(frames: 320, stored: 479_840, rate: 8_000,
-                                             bufferStartedAt: 59.98, captureStartedAt: 0)
-        let through = 59.98 + Double(window.count) / 8_000
+        let window = VoiceCaptureFrameWindow(frames: 320, stored: 2_399_840, rate: 8_000,
+                                             bufferStartedAt: 299.98, captureStartedAt: 0)
+        let through = 299.98 + Double(window.count) / 8_000
         var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 3)
-        capture.observeAudio(firstSpeech: 1, lastSpeech: 56.99, through: 59.98)
-        capture.observeAudio(firstSpeech: 59.98, lastSpeech: through, through: through)
+        capture.observeAudio(firstSpeech: 1, lastSpeech: 296.99, through: 299.98)
+        capture.observeAudio(firstSpeech: 299.98, lastSpeech: through, through: through)
         capture.reachCaptureLimit()
-        XCTAssertEqual(capture.evaluate(at: 60.1), .maximumDuration)
+        XCTAssertEqual(capture.evaluate(at: 300.1), .maximumDuration)
         XCTAssertNil(capture.timingEvidence)
     }
     func testFrameWindowTrimsBeforeCaptureAndNeverExceedsSampleBudget() {
@@ -255,12 +255,12 @@ final class VoiceTimingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(first.offset, 160)
         XCTAssertLessThanOrEqual(first.count, 160)
         XCTAssertFalse(first.reachesLimit)
-        let final = VoiceCaptureFrameWindow(frames: 320, stored: 479_999, rate: 8_000,
-                                            bufferStartedAt: 59, captureStartedAt: 0)
+        let final = VoiceCaptureFrameWindow(frames: 320, stored: 2_399_999, rate: 8_000,
+                                            bufferStartedAt: 299, captureStartedAt: 0)
         XCTAssertEqual(final.count, 1)
         XCTAssertTrue(final.reachesLimit)
         let expired = VoiceCaptureFrameWindow(frames: 320, stored: 100, rate: 8_000,
-                                              bufferStartedAt: 60.1, captureStartedAt: 0)
+                                              bufferStartedAt: 300.1, captureStartedAt: 0)
         XCTAssertEqual(expired.count, 0)
         XCTAssertTrue(expired.reachesLimit)
     }
@@ -273,7 +273,7 @@ final class VoiceTimingTests: XCTestCase {
             XCTAssertEqual(snapshot.phase, .invitation)
             XCTAssertEqual(snapshot.deadlineAt, 100 + invitation)
             XCTAssertEqual(snapshot.remainingSeconds!, invitation - 0.6, accuracy: 0.00001)
-            XCTAssertEqual(snapshot.maximumRemainingSeconds, 59.4, accuracy: 0.00001)
+            XCTAssertEqual(snapshot.maximumRemainingSeconds, 299.4, accuracy: 0.00001)
             XCTAssertEqual(snapshot.audioThrough, 100.5)
             XCTAssertEqual(snapshot.sampledAt, 100.6)
             XCTAssertEqual(snapshot.decision, .listening)
@@ -449,13 +449,16 @@ final class VoiceTimingTests: XCTestCase {
         XCTAssertEqual(capture.timingEvidence?.firstSpeechAt, 0.1, "The turn's own timeline survives the change")
     }
 
-    func testRouteRearmCannotOutliveTheCaptureLimit() {
+    func testRouteRearmCannotOutliveTheCaptureLimit() throws {
         var capture = VoiceCaptureDeadline(startedAt: 0, silenceSeconds: 8, invitationSeconds: 6)
         capture.observeAudio(firstSpeech: 1, lastSpeech: 2, through: 2)
-        capture.rearmAfterRouteChange(at: 59.9)
-        XCTAssertEqual(capture.evaluate(at: 60.5), .maximumDuration, "The 60-second bound still wins")
+        capture.rearmAfterRouteChange(at: 299.9)
+        XCTAssertEqual(capture.evaluate(at: 300.5), .maximumDuration, "The 300-second bound still wins")
         XCTAssertNil(capture.timingEvidence)
-        XCTAssertNil(capture.closedEvidence)
+        let evidence = try XCTUnwrap(capture.closedEvidence)
+        XCTAssertEqual(evidence.outcome, .maximumDuration)
+        XCTAssertEqual(evidence.firstSpeechAt, 1)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 2, "The cap uses the last PCM processed, not a silence deadline")
     }
 }
 
@@ -636,13 +639,13 @@ final class CapturedPCMTimingTests: XCTestCase {
         XCTAssertEqual(after.take().count, 3_200, "Pre-switch and post-switch audio are both preserved")
     }
 
-    func testReArmedCaptureKeepsItsOriginalSixtySecondBound() {
+    func testReArmedCaptureKeepsItsOriginalFiveMinuteBound() {
         let pcm = CapturedPCM(rate: 8_000)
         pcm.begin(at: 800, silence: 3, invitation: nil)
         append(pcm, at: 800.0, amplitude: 0.1)
         let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 850.0)
-        XCTAssertEqual(migrated.poll(at: 850.0).snapshot?.maximumRemainingSeconds ?? -1, 10, accuracy: 0.00001)
-        XCTAssertEqual(migrated.poll(at: 860.1).decision, .maximumDuration, "The turn ends at its original bound")
+        XCTAssertEqual(migrated.poll(at: 850.0).snapshot?.maximumRemainingSeconds ?? -1, 250, accuracy: 0.00001)
+        XCTAssertEqual(migrated.poll(at: 1_100.1).decision, .maximumDuration, "The turn ends at its original bound")
     }
 
     func testCancellationSurvivesAFormatChange() {

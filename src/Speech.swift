@@ -221,9 +221,9 @@ final class STTManager: ObservableObject {
         timingSnapshot = observation.snapshot
         switch observation.decision {
         case .listening: break
-        case .silenceSatisfied, .forcedFinish:
+        case .silenceSatisfied, .forcedFinish, .maximumDuration:
             closeCapture(id, observation)
-        case .noSpeech, .maximumDuration, .audioUnavailable, .cancelled:
+        case .noSpeech, .audioUnavailable, .cancelled:
             endCapture(id, reason: observation.endReason ?? .invalidAudio)
         }
     }
@@ -242,7 +242,16 @@ final class STTManager: ObservableObject {
             guard let evidence = observation.evidence else { endCapture(id, reason: .noSpeech); return }
             onSpeechEnded?(id, evidence)
             finishCapture(id)
-        case .noSpeech, .maximumDuration, .audioUnavailable, .cancelled:
+        case .maximumDuration:
+            // The five-minute cap is not a failure when speech was heard: use the
+            // measured utterance, transcribe it, and tell the owner the cap was hit.
+            if let evidence = observation.evidence {
+                onSpeechEnded?(id, evidence)
+                finishCapture(id)
+            } else {
+                endCapture(id, reason: .maximumDuration)
+            }
+        case .noSpeech, .audioUnavailable, .cancelled:
             endCapture(id, reason: observation.endReason ?? .invalidAudio)
         }
     }
