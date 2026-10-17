@@ -70,6 +70,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   offers a paste; read a named text file (with a Spotlight name suggestion when the exact path is
   missing); Spotlight **content** search; timers missed during Mac sleep fire once on wake; optional
   low-battery and charging-start alerts (off by default) with a threshold submenu.
+- **Screen off/locked.** Display sleep or the login screen pauses Dot entirely: no turns, speech,
+  proactive work, screen watching, model download or movement. Display wake/unlock resumes silently.
 - **Video silence.** Dot does not speak while a video is detected (known video app, a browser window
   titled for a video service, or audio playing in a browser/video app). The answer/notice stays as
   text; proactive suggestions and automatic follow-up listening are suppressed. Muted background

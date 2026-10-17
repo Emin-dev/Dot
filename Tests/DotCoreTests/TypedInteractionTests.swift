@@ -421,6 +421,25 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.spotlightNameQuery(from: "/Users/me/Documents/budget.csv"), "budget.csv")
     }
 
+    @MainActor func testScreenOffPausesAutonomousWorkAndSpeech() async throws {
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.startProactivity()
+        f.model.speakDirect("hello")
+        XCTAssertTrue(f.enqueued.contains("hello"))
+
+        f.model.pauseForScreenOff()
+        XCTAssertTrue(f.model.screenPaused)
+        XCTAssertEqual(f.model.phase, .idle)
+        f.model.speakDirect("hidden")
+        XCTAssertFalse(f.enqueued.contains("hidden"))
+        f.model.stt.onFinal?(UUID(), "ignored")
+
+        f.model.resumeAfterScreenOn()
+        XCTAssertFalse(f.model.screenPaused)
+        f.model.speakDirect("back")
+        XCTAssertTrue(f.enqueued.contains("back"))
+    }
+
     @MainActor func testSystemWakeClearsTheSleepBlockAndSaysItIsBack() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
         f.model.cancelForEnvironment(reason: .systemSleep)

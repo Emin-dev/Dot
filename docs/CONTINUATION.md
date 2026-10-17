@@ -185,6 +185,17 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Screen-off pause — 2026-10-17 (owner request).** Dot now observes display sleep/wake
+(`NSWorkspace.screensDidSleep/Wake`) and login-screen lock/unlock (`com.apple.screenIsLocked/Unlocked`),
+with an initial `CGSessionCopyCurrentDictionary` check. While the display is off or locked, ChatModel
+pauses: cancels the turn/listening/speech, stops proactivity and the reflection ticker, cancels the
+screen watcher, memory summary and prewarm, and suppresses direct/streamed speech; autonomous movement
+and placement captures stop, and `OfflinePreparation` pauses (so a public first-launch model download
+does not run at the login screen). On display wake/unlock it restarts proactivity, the screen watcher
+and prewarm, and retries preparation; it does not speak on an ordinary display wake (R12's Mac-wake
+greeting still applies). `TypedInteractionTests` cover pause/suppression/resume. Full lane 904/0,
+`swift test` 580/0.
+
 **A5 vision notice and R13 arbitrary calendar edit — 2026-10-17.** A text-only model now sets a
 visible `visionNotice` ("Text-only model: screen image off") shown in the context menu and the pet's
 accessibility value, instead of only logging; explicit page/OCR reading is unaffected. The calendar

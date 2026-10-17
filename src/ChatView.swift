@@ -135,6 +135,8 @@ final class ChatModel: ObservableObject {
     @Published private(set) var engineStage: String?
     /// A5: a visible capability note when the local model has no image input.
     @Published private(set) var visionNotice: String?
+    /// Screen off or locked: no turns, speech, captures, proactive work or movement.
+    @Published private(set) var screenPaused = false
     private var taskProgress = ResearchTaskProgress()
     private var activeSpeechUpdateID: UUID?
     private var taskProgressTicker: Task<Void, Never>?
@@ -148,7 +150,7 @@ final class ChatModel: ObservableObject {
     var onShowHistory: (() -> Void)?
 
     func speakDirect(_ text: String) {
-        guard !shuttingDown, phase == .idle else { return }
+        guard !shuttingDown, !screenPaused, phase == .idle else { return }
         // The owner asked Dot not to talk over video. Keep the text visible instead.
         if videoPlayback() {
             DiagnosticChatLogger.record(role: "dot (silent)", text: text)
@@ -1208,7 +1210,7 @@ final class ChatModel: ObservableObject {
                 lastMouse = mouse
                 let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
                 let enabled = self.screenEnabled && self.screen.enabled && CGPreflightScreenCaptureAccess()
-                let idle = self.visible && self.phase == .idle && !self.generating
+                let idle = !self.screenPaused && self.visible && self.phase == .idle && !self.generating
                     && !self.runtime.ttsSpeaking() && !videoPlayback()
                 let action = state.tick(now: now, enabled: enabled, idle: idle, changed: pendingChange,
                                         inputActive: moved, batteryOK: !lowPower)
@@ -1234,6 +1236,7 @@ final class ChatModel: ObservableObject {
     /// put them in the key-points tier. The full transcript is already in the FTS
     /// archive; the debounce cancels itself when the owner starts another turn.
     private func scheduleMemorySummary() {
+        guard !screenPaused else { return }
         memorySummaryTask?.cancel()
         guard memory != nil else { return }
         memorySummaryTask = Task { @MainActor [weak self] in
@@ -1264,10 +1267,34 @@ final class ChatModel: ObservableObject {
     }
 
     func startProactivity() {
+        guard !screenPaused else { return }
         proactive.start()
         updateProactiveContext()
         IdleSelfReflectionEngine.shared.recordUserActivity()
         ensureSelfReflectionTicker()
+    }
+
+    /// The display is off or the Mac is locked: stop all autonomous work and audio.
+    /// The engine process stays resident; this is a pause, not a shutdown.
+    func pauseForScreenOff() {
+        guard !screenPaused else { return }
+        screenPaused = true
+        cancelTurn()
+        stopProactivity()
+        followup.cancel()
+        screenWatchTask?.cancel(); screenWatchTask = nil
+        memorySummaryTask?.cancel(); memorySummaryTask = nil
+        prewarmTask?.cancel(); prewarmTask = nil
+        DiagnosticChatLogger.record(role: "system", text: "Paused: display is off or locked.")
+    }
+
+    func resumeAfterScreenOn() {
+        guard screenPaused else { return }
+        screenPaused = false
+        startProactivity()
+        startAdaptiveScreenWatch()
+        startPrewarmIfEnabled()
+        DiagnosticChatLogger.record(role: "system", text: "Resumed after display wake/unlock.")
     }
     func stopProactivity() {
         proactive.stop()
@@ -1281,7 +1308,7 @@ final class ChatModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 guard let self, !Task.isCancelled, !self.shuttingDown else { break }
                 let now = ProcessInfo.processInfo.systemUptime
-                if self.visible, !self.proactive.paused, self.phase == .idle,
+                if !self.screenPaused, self.visible, !self.proactive.paused, self.phase == .idle,
                    !self.generating, !self.runtime.ttsSpeaking(),
                    !videoPlayback(),
                    self.proactive.activeOpportunity == nil, self.proactiveTurn == nil {
@@ -1844,6 +1871,7 @@ final class ChatModel: ObservableObject {
         return true
     }
     private func beginListening(continuation: UUID?) {
+        guard !screenPaused else { return }
         onForegroundInteraction?()
         let invitation = continuation != nil
         if invitation { Self.runtimeLog.notice("DOT_FOLLOWUP event=capture_started") }
@@ -2992,7 +3020,7 @@ final class ChatModel: ObservableObject {
     }
 
     private func enqueueVoice(_ text: String, id: UUID) {
-        guard gate.accepts(id), !voiceDeliveryFailed else { return }
+        guard gate.accepts(id), !voiceDeliveryFailed, !screenPaused else { return }
         // Check once per turn, before Dot's own audio starts, so the audio device's
         // running state cannot make Dot suppress itself. A text answer still appears.
         if !videoSpeechChecked {
@@ -3092,8 +3120,16 @@ final class ChatModel: ObservableObject {
     /// R12: a wake is not a failure. Clear the sleep-induced block, re-arm the
     /// proactive scheduler and say Dot is back. The audio route needs a moment to
     /// settle before the greeting, so the caller delays this briefly.
+    /// Read the current login-session lock flag, for races where the distributed
+    /// lock notification has not arrived yet.
+    static func screenIsCurrentlyLocked() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        if let value = session["CGSSessionScreenIsLocked"] as? Bool { return value }
+        return (session["CGSSessionScreenIsLocked"] as? NSNumber)?.boolValue ?? false
+    }
+
     func handleSystemWake() {
-        guard !shuttingDown else { return }
+        guard !shuttingDown, !screenPaused else { return }
         IdleSelfReflectionEngine.shared.recordUserActivity()
         if case .blocked = phase, issue == .voice { issue = nil; phase = .idle }
         proactive.start()

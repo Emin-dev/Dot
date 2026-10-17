@@ -43,6 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         didSet { model?.menuIsOpen = menuTracking > 0 }
     }
     private var observations: [NSObjectProtocol] = []
+    private var displayAsleep = false
+    private var screenLocked = false
+    private var screenIsOff: Bool { displayAsleep || screenLocked }
     private var movementInterval = 0.5
     private var lastEscapeAttemptAt = 0.0
     private var documentWorker: WatchedDocumentWorker?
@@ -94,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         model.onShowHistory = { [weak self] in self?.readHistory() }
         model.startProactivity()
+        installScreenPowerObservers()
         webResearch.onVisibility = { [weak self] in self?.utilityVisibility("webResearch", visible: $0) }
         model.onForegroundInteraction = { [weak webResearch] in webResearch?.foregroundPause() }
         historyPanel.onVisibility = { [weak self] in self?.utilityVisibility("history", visible: $0) }
@@ -330,7 +334,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in model?.visible = true }
         })
         placement.onSnapshotUpdated = { [weak self] snapshot in
-            guard let self, !self.isAnimatingRoam,
+            guard let self, !self.screenIsOff, !self.isAnimatingRoam,
                   let panel = self.panel, let model = self.model,
                   model.screenEnabled, !model.pinned, model.phase == .idle,
                   !model.hovered, model.menuIsOpen == false,
@@ -696,7 +700,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return current ?? placement.fastWindowSnapshot(screen: screen)
     }
 
+    private func installScreenPowerObservers() {
+        let workspace = NSWorkspace.shared.notificationCenter
+        observations.append(workspace.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.applyScreenPower(displayAsleep: true, locked: self?.screenLocked ?? false) }
+        })
+        observations.append(workspace.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.applyScreenPower(displayAsleep: false, locked: self?.screenLocked ?? false) }
+        })
+        let distributed = DistributedNotificationCenter.default()
+        observations.append(distributed.addObserver(forName: .init("com.apple.screenIsLocked"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.applyScreenPower(displayAsleep: self?.displayAsleep ?? false, locked: true) }
+        })
+        observations.append(distributed.addObserver(forName: .init("com.apple.screenIsUnlocked"), object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.applyScreenPower(displayAsleep: self?.displayAsleep ?? false, locked: false) }
+        })
+        // A launch at the login screen must not start autonomous work.
+        let locked = ChatModel.screenIsCurrentlyLocked()
+        screenLocked = locked
+        if locked {
+            model?.pauseForScreenOff()
+            OfflinePreparation.shared.pause()
+        }
+    }
+
+    private func applyScreenPower(displayAsleep: Bool, locked: Bool) {
+        self.displayAsleep = displayAsleep
+        self.screenLocked = locked
+        if displayAsleep || locked {
+            model?.pauseForScreenOff()
+            OfflinePreparation.shared.pause()
+        } else {
+            model?.resumeAfterScreenOn()
+            OfflinePreparation.shared.retry()
+        }
+    }
+
     private func moveGently() {
+        if screenIsOff {
+            cancelMovement()
+            return
+        }
         guard !isAnimatingRoam, let panel, let model else { return }
         let cursor = NSEvent.mouseLocation
         if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
@@ -762,7 +806,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func performIdleRoam() {
-        guard !isAnimatingRoam, let panel, let model else { return }
+        guard !screenIsOff, !isAnimatingRoam, let panel, let model else { return }
         let cursor = NSEvent.mouseLocation
         if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
             model.hovered = false
@@ -845,6 +889,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for observation in observations {
             NotificationCenter.default.removeObserver(observation)
             NSWorkspace.shared.notificationCenter.removeObserver(observation)
+            DistributedNotificationCenter.default().removeObserver(observation)
         }
         observations.removeAll()
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }

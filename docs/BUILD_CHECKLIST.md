@@ -561,6 +561,9 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Screen-off pause (2026-10-17):** display sleep and login-screen lock pause all turns, speech,
+proactive work, screen watching, preparation and movement; wake/unlock resumes silently.
+
 **A5/R13 completion (2026-10-17):** visible text-only-model notice; calendar `edit_event` by title with
 the existing confirmation card. Remaining calendar scope: renaming and editing past/recurring series
 is not exposed.
