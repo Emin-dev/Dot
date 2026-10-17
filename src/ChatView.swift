@@ -1515,6 +1515,12 @@ final class ChatModel: ObservableObject {
         do {
             try screen.prepare(turn: id, requestPermission: false)
         } catch {
+            // A refused screen permission is the owner's business, not a log line: the
+            // screen features are silently dead otherwise, which is how the microphone
+            // failure went unnoticed for so long.
+            if case ScreenContext.ScreenFailure.permission = error {
+                block("I need Screen Recording permission to see your screen. Enable Dot in System Settings > Privacy & Security > Screen & System Audio Recording.", issue: .unknown)
+            }
             Self.runtimeLog.notice("Screen preparation skipped for typed turn: \(error.localizedDescription, privacy: .public)")
         }
         do { try runtime.startVoice(id) }

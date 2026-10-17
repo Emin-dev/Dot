@@ -24,17 +24,34 @@ final class ScreenContext {
     static var isPermanentlyConfigured: Bool {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
         let marker = support?.appendingPathComponent("Dot/.screen_permission_configured")
-        if let marker, FileManager.default.fileExists(atPath: marker.path) { return true }
-        if UserDefaults.standard.bool(forKey: "dot.screenAccessRequested") ||
-           UserDefaults.standard.bool(forKey: "dot.screenAccessGrantedInSettings") {
+        if let marker, FileManager.default.fileExists(atPath: marker.path) {
+            // The marker only records that the prompt was offered, and older builds wrote
+            // it before the owner answered. While preflight still disagrees it is not
+            // evidence of a decision, so clear it and let the next interaction ask again.
+            guard CGPreflightScreenCaptureAccess() else {
+                try? FileManager.default.removeItem(at: marker)
+                UserDefaults.standard.removeObject(forKey: "dot.screenAccessRequested")
+                UserDefaults.standard.removeObject(forKey: "dot.screenAccessGrantedInSettings")
+                return false
+            }
+            return true
+        }
+        if UserDefaults.standard.bool(forKey: "dot.screenAccessGrantedInSettings") {
+            return CGPreflightScreenCaptureAccess()
+        }
+        if UserDefaults.standard.bool(forKey: "dot.screenAccessRequested") {
             return true
         }
         return false
     }
 
+    /// Record that the prompt has been *offered*. This must never claim that access was
+    /// granted: an earlier build wrote `screenAccessGrantedInSettings` here, before the
+    /// owner had answered anything, and because that key decides whether to ask again the
+    /// app then never asked - the microphone failure again, but persisted to disk.
     static func markPermanentlyConfigured() {
         hasRequestedAccess = true
-        UserDefaults.standard.set(true, forKey: "dot.screenAccessGrantedInSettings")
+        UserDefaults.standard.set(true, forKey: "dot.screenAccessRequested")
         UserDefaults.standard.synchronize()
         if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
             let dotDir = support.appendingPathComponent("Dot")
