@@ -4693,6 +4693,19 @@ public enum DiagnosticChatLogger {
 
 // MARK: - Action Approval Request (Milestone 2)
 
+public struct CalendarDraft: Equatable, Sendable {
+    public enum Action: String, Equatable, Sendable { case create, edit }
+    public let action: Action
+    public let eventID: String?
+    public let title: String
+    public let startDate: Date
+    public let durationMinutes: Int
+    public init(action: Action, eventID: String? = nil, title: String, startDate: Date, durationMinutes: Int) {
+        self.action = action; self.eventID = eventID; self.title = title
+        self.startDate = startDate; self.durationMinutes = durationMinutes
+    }
+}
+
 public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let title: String
@@ -4700,14 +4713,19 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     public let target: String
     public let isDestructive: Bool
     public let command: String
+    /// A calendar action is confirmed on the card and executed by the approval
+    /// branch, never by the shell-command branches below it.
+    public let calendarDraft: CalendarDraft?
 
-    public init(id: UUID = UUID(), title: String, detail: String, target: String, isDestructive: Bool, command: String) {
+    public init(id: UUID = UUID(), title: String, detail: String, target: String, isDestructive: Bool, command: String,
+                calendarDraft: CalendarDraft? = nil) {
         self.id = id
         self.title = title
         self.detail = detail
         self.target = target
         self.isDestructive = isDestructive
         self.command = command
+        self.calendarDraft = calendarDraft
     }
 
     /// Executables whose invocation can destroy data or take over the machine. Matching is by
@@ -5270,6 +5288,33 @@ public final class CalendarMeetingAssistant {
             return (true, "Scheduled '\(title)' for \(fmt.string(from: startDate)) (\(durationMinutes) min).")
         } catch {
             return (false, "Could not save event: \(error.localizedDescription)")
+        }
+        #else
+        return (false, "EventKit is not available on this platform.")
+        #endif
+    }
+
+    public func updateEvent(id: String, title: String? = nil, startDate: Date? = nil,
+                            durationMinutes: Int? = nil) -> (success: Bool, message: String) {
+        #if canImport(EventKit)
+        guard hasAccess() else {
+            return (false, "Calendar access is required to edit events. Please grant access in System Settings.")
+        }
+        guard let event = eventStore.event(withIdentifier: id) else {
+            return (false, "I could not find that event; it may have been deleted.")
+        }
+        if let title, !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { event.title = title }
+        if let startDate {
+            let minutes = durationMinutes ?? max(1, Int(event.endDate.timeIntervalSince(event.startDate) / 60))
+            event.startDate = startDate
+            event.endDate = startDate.addingTimeInterval(Double(minutes * 60))
+        }
+        do {
+            try eventStore.save(event, span: .thisEvent, commit: true)
+            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+            return (true, "Updated '\(event.title ?? "event")' to \(fmt.string(from: event.startDate)).")
+        } catch {
+            return (false, "Could not save the event change: \(error.localizedDescription)")
         }
         #else
         return (false, "EventKit is not available on this platform.")

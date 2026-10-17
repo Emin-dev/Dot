@@ -169,6 +169,14 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R13 calendar confirmation — implemented 2026-10-17.** Calendar creation and the new
+`move_next_meeting` tool action now build a `CalendarDraft` and show the approval card instead of
+writing to EventKit immediately. Approval calls `CalendarMeetingAssistant.createEvent` or the new
+`updateEvent` (title/start/duration), reports the result and logs it; the tool schema and parser carry
+the new action and its ISO start time. Read-only schedule/brief paths are unchanged. Scope note: the
+spoken edit path currently moves the next meeting's start time (and can rename it through `updateEvent`);
+arbitrary event selection/editing is not exposed yet. Full lane 878/0, `swift test` 558/0.
+
 **R14 battery alerts — implemented 2026-10-17.** `BatteryAlertPolicy` announces a low battery once
 per discharge below the owner's threshold (10/15/20/30%, default 20) with 5-point hysteresis, and a
 charging-start notice once per plug-in when that toggle is on. Alerts are **off by default**; the new

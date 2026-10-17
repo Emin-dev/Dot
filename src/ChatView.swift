@@ -169,6 +169,30 @@ final class ChatModel: ObservableObject {
             respondDirectly("Pasted my suggestion into the app you are using.", id: cancelTurn())
             return
         }
+        if let draft = req.calendarDraft {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                _ = await CalendarMeetingAssistant.shared.requestAccess()
+                let result: (success: Bool, message: String)
+                switch draft.action {
+                case .create:
+                    result = CalendarMeetingAssistant.shared.createEvent(
+                        title: draft.title, startDate: draft.startDate, durationMinutes: draft.durationMinutes)
+                case .edit:
+                    guard let eventID = draft.eventID else {
+                        self.speakDirect("I could not identify the event to change.")
+                        return
+                    }
+                    result = CalendarMeetingAssistant.shared.updateEvent(
+                        id: eventID, title: draft.title, startDate: draft.startDate,
+                        durationMinutes: draft.durationMinutes)
+                }
+                DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: draft.title,
+                                                outcome: result.message, succeeded: result.success)
+                self.speakDirect(result.message)
+            }
+            return
+        }
         let target = req.target
         let isDelete = req.title == "Delete File"
         let cmd = req.command
@@ -2227,13 +2251,12 @@ final class ChatModel: ObservableObject {
             }
             return
         case .schedule(let title, let date, let duration):
-            work = Task { [weak self] in
-                guard let self, self.gate.accepts(id) else { return }
-                _ = await CalendarMeetingAssistant.shared.requestAccess()
-                let res = CalendarMeetingAssistant.shared.createEvent(title: title, startDate: date, durationMinutes: duration)
-                guard self.gate.accepts(id), !Task.isCancelled else { return }
-                self.respondDirectly(res.message, id: id)
-            }
+            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+            pendingApproval = ActionApprovalRequest(
+                title: "Add Calendar Event",
+                detail: "Add '\(title)' on \(fmt.string(from: date)) for \(duration) minutes?",
+                target: title, isDestructive: false, command: title,
+                calendarDraft: CalendarDraft(action: .create, title: title, startDate: date, durationMinutes: duration))
             return
         case .none:
             break
@@ -2516,15 +2539,40 @@ final class ChatModel: ObservableObject {
                         case "create_event":
                             let eventTitle = title ?? "New Meeting"
                             let duration = durationMinutes ?? 30
-                            let date: Date
-                            if let startTime, let parsed = ISO8601DateFormatter().date(from: startTime) {
-                                date = parsed
-                            } else {
-                                date = Date().addingTimeInterval(3600)
+                            let date = startTime.flatMap { ISO8601DateFormatter().date(from: $0) }
+                                ?? Date().addingTimeInterval(3600)
+                            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+                            self.pendingApproval = ActionApprovalRequest(
+                                title: "Add Calendar Event",
+                                detail: "Add '\(eventTitle)' on \(fmt.string(from: date)) for \(duration) minutes?",
+                                target: eventTitle, isDestructive: false, command: eventTitle,
+                                calendarDraft: CalendarDraft(action: .create, title: eventTitle,
+                                                             startDate: date, durationMinutes: duration))
+                            executedToolConfirmation = "I need your confirmation to add '\(eventTitle)' to the calendar."
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: "create_event:\(eventTitle)", outcome: "awaiting confirmation", succeeded: true)
+                        case "move_next_meeting":
+                            guard CalendarMeetingAssistant.shared.hasAccess() else {
+                                executedToolConfirmation = "Calendar access is not granted. Enable it in System Settings > Privacy & Security > Calendars."
+                                break
                             }
-                            let res = CalendarMeetingAssistant.shared.createEvent(title: eventTitle, startDate: date, durationMinutes: duration)
-                            executedToolConfirmation = res.message
-                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: "create_event:\(eventTitle)", outcome: res.message, succeeded: res.success)
+                            guard let next = CalendarMeetingAssistant.shared.fetchNextMeeting() else {
+                                executedToolConfirmation = "I found no upcoming meeting to move."
+                                break
+                            }
+                            guard let startTime, let parsed = ISO8601DateFormatter().date(from: startTime) else {
+                                executedToolConfirmation = "Tell me the new start time for '\(next.title)'."
+                                break
+                            }
+                            let minutes = durationMinutes ?? max(1, Int(next.endDate.timeIntervalSince(next.startDate) / 60))
+                            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+                            self.pendingApproval = ActionApprovalRequest(
+                                title: "Move Calendar Event",
+                                detail: "Move '\(next.title)' to \(fmt.string(from: parsed))?",
+                                target: next.title, isDestructive: false, command: next.title,
+                                calendarDraft: CalendarDraft(action: .edit, eventID: next.id, title: next.title,
+                                                             startDate: parsed, durationMinutes: minutes))
+                            executedToolConfirmation = "I need your confirmation to move '\(next.title)'."
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: "move_next_meeting:\(next.title)", outcome: "awaiting confirmation", succeeded: true)
                         default:
                             executedToolConfirmation = "Unknown calendar action '\(action)'."
                             DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action, outcome: executedToolConfirmation ?? "", succeeded: false)
