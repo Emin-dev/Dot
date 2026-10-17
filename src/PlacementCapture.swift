@@ -33,8 +33,13 @@ final class PlacementCapture {
         let now = ProcessInfo.processInfo.systemUptime
         let reason: PlacementDiagnostic.Reason?
         if !checkPreflight(now: now) { reason = .permission }
-        else if now - snapshot.capturedAt > PlacementSnapshot.lifetime { reason = .expired }
-        else if screen.frame != snapshot.displayFrame || screen.visibleFrame != snapshot.visibleFrame { reason = .invalidMap }
+        else if now - snapshot.capturedAt > PlacementSnapshot.lifetime {
+            // A refresh may already be in flight; its result replaces this map.
+            // Rejecting here would cancel that capture and guarantee the next
+            // validation is blind, which is the cycle the old ordering wasted.
+            if gate.active != nil { return nil }
+            reason = .expired
+        } else if screen.frame != snapshot.displayFrame || screen.visibleFrame != snapshot.visibleFrame { reason = .invalidMap }
         else if (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value != snapshot.displayID { reason = .displayMissing }
         else if let top = NSScreen.screens.first?.frame.maxY,
                 let windows = try? Self.windowRegions(primaryTop: top, display: screen.frame) {
@@ -46,6 +51,14 @@ final class PlacementCapture {
             invalidate(); return nil
         }
         return snapshot
+    }
+    /// True when the held map is absent, display-invalid, or will age out before
+    /// the next movement check. Callers ask this before `current` so a refresh
+    /// starts while the old map is still valid instead of being rejected first.
+    func needsRefresh(screen: NSScreen) -> Bool {
+        guard let snapshot = gate.snapshot else { return true }
+        return screen.frame != snapshot.displayFrame || screen.visibleFrame != snapshot.visibleFrame
+            || ProcessInfo.processInfo.systemUptime - snapshot.capturedAt > PlacementSnapshot.lifetime - 1.0
     }
     func fastWindowSnapshot(screen: NSScreen) -> PlacementSnapshot? {
         guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,

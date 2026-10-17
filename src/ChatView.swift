@@ -635,15 +635,20 @@ final class ChatModel: ObservableObject {
             return "Here is my official GitHub repository: \(repoURL). I've opened it in your browser and copied the link to your clipboard so you can always see my latest updated code!"
         }
         if clean.contains("read your own code") || clean.contains("see your own code") || clean.contains("read your code") || clean.contains("see your code") || clean.contains("inspect your code") || clean == "can you see and read your own code" || clean == "can you read your own code" {
-            let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("src").path))?.filter { $0.hasSuffix(".swift") } ?? []
-            return "Yes! I have direct access to read and inspect my source code at /Users/mac/.gemini/antigravity/scratch/Dot, and my open-source repository is at https://github.com/Emin-dev/Dot. I have \(files.count) Swift files including App.swift, ChatView.swift, RoamingCore.swift, Engine.swift, NativeActions.swift, and more. You can ask me to read or explain any file!"
+            let root = SelfCodebaseReader.defaultRootPath
+            let files = SelfCodebaseReader.listSwiftFiles(rootPath: root)
+            guard !root.isEmpty, !files.isEmpty else {
+                return "I cannot see my source files on this install, so I will not pretend to read them. The latest code is always at https://github.com/Emin-dev/Dot."
+            }
+            return "Yes. My source is at \(root) and I can read it. I have \(files.count) Swift files including \(files.prefix(5).joined(separator: ", ")), and more. You can ask me to read or explain any file."
         }
         if clean == "list your files" || clean == "list files" || clean == "show your files" || clean == "show files in code" || clean == "what files do you have" || clean == "show codebase files" {
-            let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
-            let files = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("src").path))?.filter { $0.hasSuffix(".swift") }.sorted() ?? []
-            let topFiles = files.prefix(8).joined(separator: ", ")
-            return "My codebase has \(files.count) Swift modules including \(topFiles), and more. You can also view the latest updated code on GitHub at https://github.com/Emin-dev/Dot."
+            let root = SelfCodebaseReader.defaultRootPath
+            let files = SelfCodebaseReader.listSwiftFiles(rootPath: root)
+            guard !root.isEmpty, !files.isEmpty else {
+                return "I cannot see my source files on this install. The latest updated code is always at https://github.com/Emin-dev/Dot."
+            }
+            return "My codebase has \(files.count) Swift modules including \(files.prefix(8).joined(separator: ", ")), and more. You can also view the latest updated code on GitHub at https://github.com/Emin-dev/Dot."
         }
 
         // 11. Permission Status Check
@@ -664,12 +669,14 @@ final class ChatModel: ObservableObject {
             let prefix = clean.hasPrefix("read file ") ? "read file " : (clean.hasPrefix("show file ") ? "show file " : (clean.hasPrefix("read code ") ? "read code " : "show code "))
             var pathStr = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
             pathStr = pathStr.trimmingCharacters(in: CharacterSet(charactersIn: "`\"'"))
-            let root = URL(fileURLWithPath: "/Users/mac/.gemini/antigravity/scratch/Dot")
-            var candidates = [
-                root.appendingPathComponent(pathStr),
-                root.appendingPathComponent("src").appendingPathComponent(pathStr),
-                URL(fileURLWithPath: pathStr)
-            ]
+            var candidates: [URL] = []
+            let sourceRoot = SelfCodebaseReader.defaultRootPath
+            if !sourceRoot.isEmpty {
+                let root = URL(fileURLWithPath: sourceRoot)
+                candidates.append(root.appendingPathComponent(pathStr))
+                candidates.append(root.appendingPathComponent("src").appendingPathComponent(pathStr))
+            }
+            candidates.append(URL(fileURLWithPath: pathStr))
             if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
                 candidates.append(docs.appendingPathComponent(pathStr))
             }
@@ -2271,7 +2278,10 @@ final class ChatModel: ObservableObject {
         }
 
         let snapshot = history
-        work = Task { [weak self] in
+        // A reply the owner is waiting for is user-initiated work: do not inherit
+        // whatever priority the event that started the turn happened to have. The
+        // engine's child request inherits this priority.
+        work = Task(priority: .userInitiated) { [weak self] in
             guard let self else { return }
             var stage = PipelineDiagnostic.Stage.readiness
             do {

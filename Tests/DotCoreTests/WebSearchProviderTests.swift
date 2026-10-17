@@ -307,8 +307,22 @@ private final class LoopbackSearchFixture: @unchecked Sendable {
     var observedFirstRead: Data { lock.lock(); defer { lock.unlock() }; return firstRead }
 
     /// Serves exactly one request on a background queue, then closes the connection.
+    /// Waiting for a client is bounded so a case that never connects cannot pin a
+    /// dispatch thread for the rest of the suite; the listener itself stays open
+    /// because one fixture can legitimately serve two searches in sequence.
     func serveOne() {
         DispatchQueue.global().async { [self] in
+            var pending = pollfd(fd: listener, events: Int16(POLLIN), revents: 0)
+            let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+            while pending.revents == 0 {
+                let remaining = ContinuousClock.now.duration(to: deadline)
+                guard remaining > .zero else { return }
+                let milliseconds = Int32(clamping: remaining.components.seconds * 1_000
+                                         + remaining.components.attoseconds / 1_000_000_000_000_000)
+                let ready = poll(&pending, 1, max(1, milliseconds))
+                if ready < 0 && errno == EINTR { continue }
+                guard ready > 0 else { return }
+            }
             let client = accept(listener, nil, nil)
             guard client >= 0 else { return }
             defer { close(client) }
@@ -394,7 +408,11 @@ private enum LocalDotSearchProviderFixture {
         #!/bin/sh
         printf '%s' "$$" > "\(pidFile.path)"
         read -r command
-        generation=$(printf '%s' "$command" | sed 's/.*"generation":"//' | sed 's/".*//')
+        # Built-in parameter expansion only: readiness must not depend on spawning
+        # two extra processes, which under the full gate's load delayed the ready
+        # line past the honest ten-second startup bound.
+        generation=${command##*'"generation":"'}
+        generation=${generation%%'"'*}
         \(body)
         """
         try Data(script.utf8).write(to: executable)

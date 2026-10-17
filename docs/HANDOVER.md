@@ -46,35 +46,41 @@ the "what is solid, what is not, what is next" list.
    acceptance exists for any current build: the diagnostic log contains no entries from them. Every
    claim above is structural (tests, typechecks, logs from the app booting) rather than a recorded
    conversation.
-2. **`verify_macos.sh` still exits nonzero**, for two reasons that are *not* build failures:
-   - the mandatory runtime-finalizer canary fails on a hosted toolchain
-     (`unsupported hosted toolchain image`) by design, and blocks packaging;
-   - `LocalDotSearchProviderTests.testRuntimeAnswersAreBoundedAndCapabilityRejectionSurfaces` is
-     flaky under the gate's combined load (hung 1041 s once; passes 7/7 in 7.2 s in isolation). The
-     fixture's readiness needs to be deterministic, or its retries bounded.
-3. **A quality-of-service inversion is real and only papered over.** A User-interactive thread waits on
-   a Default-QoS one (surfaced by `TypedInteractionTests.testPanelRebinds…`). The waiting work is
-   created by the app, so the turn-pipeline task in `ChatView.submit` should carry `.userInitiated`.
-   `verify_macos.sh` currently filters *only* that advisory out of its zero-warning check; **remove the
-   filter together with the fix.**
+2. **`verify_macos.sh` still exits nonzero** for the mandatory runtime-finalizer canary, which fails on
+   a hosted toolchain image (`unsupported hosted toolchain image`) by design and blocks packaging.
+   The former flaky search case was fixed on 2026-10-17: the fixture's readiness line now uses shell
+   parameter expansion instead of spawning two `sed` processes, and its accept wait is bounded at 30 s
+   so a case that never connects cannot pin a dispatch thread. `startupSeconds` is unchanged at 10 s.
+   Evidence: `LocalDotSearchProviderTests` 7/7 in 7.4 s and the full lane 860/0 after the change.
+3. **Quality-of-service advisory: diagnosed, not caused by the turn pipeline.** The turn task in
+   `ChatView.submit` now carries `.userInitiated` (correct in its own right), but a controlled
+   experiment on 2026-10-17 reproduced the XCTest warning with *only* `NSApplication.shared` plus an
+   `NSHostingView(rootView:)` in a test process — no turn, no URLSession, no engine task — and the
+   system log names the wait as `-[NSCondition waitUntilDate:]` inside AppKit/SwiftUI. The narrow
+   filter in `verify_macos.sh` therefore records an Apple-framework inversion that product code cannot
+   remove; every other warning stays fatal. Do not widen that filter.
 4. **Memory rough edges.** `MemoryTierStore` opens a second SQLite connection to
    `dot_records.sqlite` (a `withConnection` accessor on `LocalFTSStore` removes ~120 lines). Capture is
    a heuristic (240-character bound plus cue words) and may over- or under-capture. "Compression"
    concatenates a bounded summary rather than summarising with the model. There is no UI to browse or
    edit memory beyond the spoken listing and "forget".
-5. **Screen awareness.** Reachable only once Screen Recording is granted, and the
-   `.screen_permission_configured` marker is a trap: it is written before the prompt, so a denied or
-   never-asked state can look "configured" forever and no prompt follows. Worth an audit. Screenshot
-   reasoning ("which of these videos is more useful?") is unverified.
+5. **Screen awareness.** The persisted-marker trap is fixed: the marker now records only that the
+   prompt was *offered*, and `isPermanentlyConfigured` clears it whenever preflight still disagrees,
+   so a denial or crash during the prompt is asked about again. The model prompt no longer asserts
+   Screen Recording permission (it is resolved from `CGPreflightScreenCaptureAccess` each turn), and
+   it no longer names a source path from another Mac. Actual capture and screenshot reasoning
+   ("which of these videos is more useful?") remain unverified in a real session.
 6. **Self-improvement paste.** The offer reuses the approval card and types the suggestion (it does not
    paste from the clipboard), requires Accessibility, and has never been exercised in a real session.
 7. **Broad file access is partial.** What exists: read a named text file, Spotlight name and content
    search, and a watched folder. What is missing: indexing arbitrary trees, iCloud placeholder handling,
    relevance ranking, and any scan budget. The owner's ask was "everything on my disk".
-8. **Placement wastes a capture every cycle.** `PlacementSnapshot.lifetime` is 10 s and validation runs
-   on a ~10 s cadence, so the first validation of each cycle is rejected by construction
-   (`reason=expired elapsed=10475ms` in the live log) before a fresh capture. Fix it in the caller —
-   refresh before validating — and **never raise the lifetime**: `RoamingTests` guards that rule.
+8. **Placement refresh: fixed 2026-10-17.** The map's 10 s lifetime and the 10 s capture cadence meant
+   the first validation of each cycle was rejected by construction, and a caller that had just started
+   a refresh could have it cancelled by that rejection. `PlacementCapture.needsRefresh` now lets the
+   movement callers start a capture while the old map is still valid, and `current` no longer
+   invalidates an in-flight refresh. Thinking relocation and the two-minute idle roam now request a
+   refresh as well; the lifetime stays 10 s (`RoamingTests` guards it).
 9. **Last Dot-authored Python.** The Splash supervisor, child observation and TLS relay (640 lines).
    Slice 1 of the Rust port is committed (`crates/dot-runtime`: wire contract, api key, 3 tests; the
    binary deliberately reports `failed/supervisor/not-implemented`). Remaining: child ownership,
@@ -103,7 +109,10 @@ the "what is solid, what is not, what is next" list.
 
 1. Have the owner grant the microphone and screen prompts, then record **one real conversation** and
    the resulting `DOT_*` log lines. Everything else is guesswork until that exists.
-2. Turn-pipeline `.userInitiated` fix, and remove the warning filter in the same commit.
-3. Make the search fixture deterministic so the gate's only failure is the by-design canary.
-4. Supervisor slices 2 → 3 → 4 → 5, with `splash.sb` and the 53 guardrails green at each step.
-5. Memory second-connection cleanup; then dead-code batches; then file indexing; then placement.
+2. Supervisor slices 2 → 3 → 4 → 5, with `splash.sb` and the 53 guardrails green at each step.
+3. Memory second-connection cleanup; then dead-code batches; then file indexing.
+
+Already closed on 2026-10-17: the turn task's `.userInitiated` priority (the advisory itself is an
+AppKit/SwiftUI inversion, documented above), the search fixture's readiness and bounded accept wait,
+and the placement refresh-before-validation cycle. `verify_macos.sh` still exits nonzero only for the
+by-design runtime-finalizer canary.

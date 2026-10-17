@@ -63,6 +63,9 @@ record = json.loads(path.read_text())
 record.update({
     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
     'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()),
+    # This development install can read its own Dot checkout. A public build has
+    # no source_root and says so instead of searching a path from another machine.
+    'source_root': str(pathlib.Path.cwd()),
     'signing': 'apple-development', 'notarized': False,
     'runtime_bundled': True, 'models_bundled': True,
 })

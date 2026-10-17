@@ -61,19 +61,21 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
    Ordinary conversation now does populate memory: the detector previously required the whole turn to
    begin with one of five exact prefixes, so real speech was never stored; it now matches a
    first-person or explicit cue anywhere in the turn, bounded to 240 characters, and lands in T5 core.
-4. *Known advisory: a quality-of-service inversion.* XCTest reports, from
-   `TypedInteractionTests.testPanelRebindsCallbacksAndDraftWithoutActivatingOrRetainingOldModel`, that a
-   thread at User-interactive QoS waits on one at Default QoS. The waiting work is produced by the app
-   (the test fixture creates no tasks of its own), so the lead is to find the turn-pipeline task in
-   `ChatView.submit` and give it `.userInitiated` - a reply the owner is waiting for is user-initiated
-   work. `scripts/verify_macos.sh` filters *only* this advisory out of its zero-warning check (it is a
-   runtime observation, not a compiler warning); every other warning remains fatal. Removing the filter
-   alongside the actual fix would be the honest end state.
+4. *Quality-of-service advisory — resolved as far as product code allows (2026-10-17).* The turn task in
+   `ChatView.submit` now carries `.userInitiated`, which is correct: a reply the owner waits for is
+   user-initiated work. The XCTest advisory itself is **not** produced by that task. A controlled
+   experiment reproduced it in a test process containing only `NSApplication.shared` and an
+   `NSHostingView(rootView:)` — no turn, no URLSession, no engine task — and the system log names the
+   wait as `-[NSCondition waitUntilDate:]` inside AppKit/SwiftUI. `scripts/verify_macos.sh` therefore
+   still filters *only* that one advisory out of its zero-warning check, now with this evidence in the
+   comment next to the filter. Every other warning remains fatal; do not widen it.
 
-5. *Latent issue.* `PlacementSnapshot.lifetime` is 10 s while the app validates on a ~10 s cadence, so
-   every cycle's first validation is rejected by construction (`reason=expired elapsed=10475ms` in the
-   live log) before a fresh capture. Fix it in the caller — refresh before validating — and **do not
-   raise the lifetime**: `RoamingTests` correctly guards the 10 s fail-closed rule.
+5. *Placement refresh — fixed (2026-10-17).* The map's 10 s lifetime and the 10 s capture cadence made
+   the first validation of every cycle reject by construction, and a caller that had just started a
+   refresh could have it cancelled by that rejection. `PlacementCapture.needsRefresh` now lets
+   `AppDelegate` start a capture before validating the old map, `current` no longer invalidates an
+   in-flight refresh, and thinking relocation plus the two-minute idle roam refresh too. The lifetime
+   is unchanged at 10 s (`RoamingTests` guards the fail-closed rule).
 6. *Last Dot-authored Python — port in progress.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`
    and `dot_tls.py` (Splash supervisor, child observation and TLS relay; 640 lines, stdlib-only) are the
    only Python that is Dot's own. Splash itself and its interpreter are deliberately retained: the owner
@@ -93,21 +95,24 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
    guardrails satisfied.
 
 **Small owner requests closed this session.** Copying Dot's answer, showing it on screen, reporting
-battery level from IOKit, and reading its own source from a resolved path (a `DOT_SOURCE_ROOT`
-override, then the known checkout if present, otherwise an honest empty result instead of a pinned
-absolute path that only existed on one machine). The self-improvement loop no longer activates another
-application or synthesizes keystrokes: it writes to its reflections file, copies the suggestion to the
-clipboard and says so.
+battery level from IOKit, and reading its own source through one resolver: a `DOT_SOURCE_ROOT`
+override, then the `source_root` recorded by `scripts/install_local.sh` in `build-provenance.json`,
+then the known checkout if present, otherwise an honest "I cannot see my source on this install"
+instead of a pinned absolute path from another machine. The old ChatView fast paths and the engine
+system prompt were still using that pinned path (and the prompt also asserted Screen Recording
+permission unconditionally); both now use the resolver and the real permission state. The
+self-improvement loop no longer activates another application or synthesizes keystrokes: it writes to
+its reflections file, copies the suggestion to the clipboard and says so.
 
-**Flaky under load, observed once.** A full `scripts/verify_macos.sh` run reported
+**Flaky under load — fixed 2026-10-17.** A full `scripts/verify_macos.sh` run once reported
 `Tests/DotCoreTests/WebSearchProviderTests.swift:585`
 (`LocalDotSearchProviderTests.testRuntimeAnswersAreBoundedAndCapabilityRejectionSurfaces`) failing with
-`startupTimeout` where `challenge` was expected, after the case took 1041 seconds. The same test passes
-in isolation in 3.5 s (the class runs 7/7 in 7.2 s) and passed in every standalone `swift test` run this
-session, so this is load sensitivity rather than a product defect: the local fixture's script did not
-produce its ready line before the retry path spun under the gate's combined load. The lead if it recurs
-is to make that fixture's readiness deterministic (or bound its retries) rather than to raise
-`startupSeconds`, which is a correct 10 s bound on a real runtime.
+`startupTimeout` where `challenge` was expected, after the case took 1041 seconds. The fixture's shell
+script spawned two `sed` processes just to extract the generation from the start command; under the
+gate's combined load that could delay the ready line past the honest ten-second bound. The script now
+uses built-in parameter expansion only, and the fixture's wait for a client is bounded at 30 s so a
+case that never connects cannot pin a dispatch thread for the rest of the process. `startupSeconds` is
+unchanged. Evidence: the class passes 7/7 in ~7.4 s and the full lane passed 860/0 afterwards.
 
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`

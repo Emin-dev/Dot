@@ -41,9 +41,13 @@ xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Release \
   CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$LOGS/release.log"
 # A failed mandatory capability must stop before packaging or a pass summary.
 if [ "$RUNTIME_FINALIZER_STATUS" -ne 0 ]; then
-  # Fatal, except for XCTest's advisory quality-of-service diagnostic: a
-  # runtime observation rather than a compiler warning, and recorded in
-  # docs/CONTINUATION.md as a known issue.
+  # Fatal, except for XCTest's quality-of-service diagnostic. Evidence gathered
+  # 2026-10-17: it reproduces with only `NSApplication.shared` and an
+  # `NSHostingView(rootView:)` in one test process (no turn, no URLSession, no
+  # engine task), and the system log names `-[NSCondition waitUntilDate:]` inside
+  # AppKit/SwiftUI. That is an Apple-framework inversion no product code can
+  # change; the app's own turn task is now explicitly .userInitiated as well.
+  # Keep this filter this narrow; every other warning stays fatal.
   if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log \
      | grep -v 'Thread running at .*quality-of-service class waiting on a lower QoS thread'; then
     echo 'FAIL: warning detected in verification before packaging'
@@ -52,9 +56,7 @@ if [ "$RUNTIME_FINALIZER_STATUS" -ne 0 ]; then
   exit "$RUNTIME_FINALIZER_STATUS"
 fi
 bash build.sh 2>&1 | tee "$LOGS/package.log"
-# Fatal, except for XCTest's advisory quality-of-service diagnostic: a
-# runtime observation rather than a compiler warning, and recorded in
-# docs/CONTINUATION.md as a known issue.
+# Fatal, except for the narrow AppKit/SwiftUI advisory recorded above.
 if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log \
    | grep -v 'Thread running at .*quality-of-service class waiting on a lower QoS thread'; then
   echo 'FAIL: warning detected in verification or delivered-app build'; exit 1

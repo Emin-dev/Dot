@@ -2281,18 +2281,31 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
 
 public enum SelfCodebaseReader {
     /// Where Dot reads its own source. Resolved when it is asked rather than pinned
-    /// to one machine: an explicit override wins, then the long-standing checkout if
+    /// to one machine: an explicit override wins, then the source root recorded by
+    /// the installer in `build-provenance.json`, then the long-standing checkout if
     /// it is really there, and otherwise nothing - so a machine without the source
-    /// reports no matches instead of searching a path that cannot exist.
+    /// says so instead of searching a path that cannot exist.
     public static var defaultRootPath: String {
-        if let override = ProcessInfo.processInfo.environment["DOT_SOURCE_ROOT"], !override.isEmpty {
+        resolvedRoot()
+    }
+
+    /// Injectable form for tests; every candidate must really contain `src`.
+    public static func resolvedRoot(bundleResourceURL: URL? = Bundle.main.resourceURL,
+                                    environment: [String: String] = ProcessInfo.processInfo.environment,
+                                    historicalRoot: String = "/Users/mac/.gemini/antigravity/scratch/Dot") -> String {
+        func hasSource(_ root: String) -> Bool {
+            !root.isEmpty && FileManager.default.fileExists(atPath: (root as NSString).appendingPathComponent("src"))
+        }
+        if let override = environment["DOT_SOURCE_ROOT"], hasSource(override) {
             return override
         }
-        let historical = "/Users/mac/.gemini/antigravity/scratch/Dot"
-        if FileManager.default.fileExists(atPath: (historical as NSString).appendingPathComponent("src")) {
-            return historical
+        if let resource = bundleResourceURL?.appendingPathComponent("build-provenance.json"),
+           let data = try? Data(contentsOf: resource),
+           let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let root = record["source_root"] as? String, hasSource(root) {
+            return root
         }
-        return ""
+        return hasSource(historicalRoot) ? historicalRoot : ""
     }
 
     public static func listSwiftFiles(rootPath: String = defaultRootPath) -> [String] {

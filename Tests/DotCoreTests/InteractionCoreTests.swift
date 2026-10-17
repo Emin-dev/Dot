@@ -1823,3 +1823,39 @@ final class CalendarMeetingAssistantTests: XCTestCase {
 }
 
 
+
+final class SelfCodebaseReaderTests: XCTestCase {
+    /// The installed development app records where its source came from. Resolution
+    /// must trust that only when the directory really contains `src`, so a stale or
+    /// foreign path reports nothing instead of listing zero files as if it worked.
+    func testResolutionUsesOverrideThenInstalledProvenanceAndRequiresRealSource() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("dot-source-" + UUID().uuidString)
+        defer { try? fm.removeItem(at: base) }
+        let checkout = base.appendingPathComponent("checkout"), empty = base.appendingPathComponent("empty")
+        try fm.createDirectory(at: checkout.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try Data().write(to: checkout.appendingPathComponent("src/A.swift"))
+        try fm.createDirectory(at: empty, withIntermediateDirectories: true)
+        let resources = base.appendingPathComponent("Resources")
+        try fm.createDirectory(at: resources, withIntermediateDirectories: true)
+        let provenance = resources.appendingPathComponent("build-provenance.json")
+        func writeProvenance(root: String) throws {
+            let data = try JSONSerialization.data(withJSONObject: ["source_root": root])
+            try data.write(to: provenance)
+        }
+        try writeProvenance(root: checkout.path)
+        XCTAssertEqual(SelfCodebaseReader.resolvedRoot(bundleResourceURL: resources, environment: [:],
+                                                       historicalRoot: empty.path), checkout.path)
+        XCTAssertEqual(SelfCodebaseReader.listSwiftFiles(rootPath: checkout.path), ["A.swift"])
+        XCTAssertEqual(SelfCodebaseReader.resolvedRoot(bundleResourceURL: resources,
+                                                       environment: ["DOT_SOURCE_ROOT": checkout.path],
+                                                       historicalRoot: empty.path), checkout.path)
+        // A recorded root without src is rejected, as is a missing provenance file.
+        try writeProvenance(root: empty.path)
+        XCTAssertEqual(SelfCodebaseReader.resolvedRoot(bundleResourceURL: resources, environment: [:],
+                                                       historicalRoot: ""), "")
+        try fm.removeItem(at: provenance)
+        XCTAssertEqual(SelfCodebaseReader.resolvedRoot(bundleResourceURL: resources, environment: [:],
+                                                       historicalRoot: checkout.path), checkout.path)
+    }
+}

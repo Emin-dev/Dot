@@ -587,6 +587,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.updateProactiveContext()
     }
 
+    /// Refresh a placement map before validating it. The map's lifetime and the
+    /// capture cadence are both ten seconds, so validating first rejects the
+    /// first check of every cycle and cancels the refresh that would replace it.
+    private func placementSnapshot(for screen: NSScreen, eligible: Bool) -> PlacementSnapshot? {
+        if eligible, placement.needsRefresh(screen: screen) {
+            placement.request(screen: screen, eligible: true)
+        }
+        let current = placement.current(screen: screen)
+        if eligible, current == nil { placement.request(screen: screen, eligible: true) }
+        return current ?? placement.fastWindowSnapshot(screen: screen)
+    }
+
     private func moveGently() {
         guard !isAnimatingRoam, let panel, let model else { return }
         let cursor = NSEvent.mouseLocation
@@ -604,9 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let eligible = !paused && model.screenEnabled
         if !eligible { placement.invalidate() }
-        let currentSnapshot = eligible ? placement.current(screen: screen) : nil
-        let snapshot = eligible ? (currentSnapshot ?? placement.fastWindowSnapshot(screen: screen)) : nil
-        if eligible && currentSnapshot == nil { placement.request(screen: screen, eligible: eligible) }
+        let snapshot = eligible ? placementSnapshot(for: screen, eligible: true) : nil
         let visible = screen.visibleFrame
         let now = ProcessInfo.processInfo.systemUptime
 
@@ -667,7 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
 
-        let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
+        let snap = placementSnapshot(for: screen, eligible: model.screenEnabled)
         let protectedRegions = snap?.protected ?? []
 
         let currentOrigin = panel.frame.origin
@@ -733,7 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
 
-        let snap = placement.current(screen: screen) ?? placement.fastWindowSnapshot(screen: screen)
+        let snap = placementSnapshot(for: screen, eligible: model.screenEnabled)
         let protectedRegions = snap?.protected ?? []
 
         // Roam on the agreed cadence to a clear safe zone: `findRandomEmptySpace`
