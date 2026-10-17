@@ -551,6 +551,16 @@ Recorded before implementation, per the standing documentation rule. These super
 
 **End goal.** A working personal app on the owner's Mac **and** the full public release path (first-launch downloader, license closure, notarization, clean second-Mac acceptance). Installation of the fixed build replaces the existing installed app.
 
+**Fixed engine and model (2026-10-17, reaffirmed).** The local engine stays **Splash** and the model stays
+**Qwen3.8 27B Q4** (`llm-target`: `qwen3_5_text`, 64 layers, 4-bit affine group-64, ~15 GB, with the
+`DFlash2DraftModel` draft that provides its speculative decoding). This is not a placeholder or a
+fallback: the owner has repeatedly confirmed it as the fastest configuration they have, so no session
+may substitute another engine, model, quantisation or a "smaller for speed" default. The Rust supervisor
+port exists to make the *app* Rust-only while keeping this engine and payload byte-identical; the
+existing payload verification (pinned per-file hashes in `bundled-models.json` plus the runtime
+manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
+owner decision, not an implementation detail.
+
 **Runtime is Rust-only.** No Python or other interpreted runtime in the shipped app. `dot-voice` (Kokoro), `dot-search` (search) and `dot-fetch` (pinned source reader) are Rust binaries built by `build.sh`/`build_complete.sh` and copied into `Contents/MacOS`. Both were verified working with the owner's real payload: `dot-voice` synthesized 78,000 samples of `bf_isabella` at 24 kHz offline, and `dot-search` returned live results through its capability-gated loopback endpoint. The Python voice helper, the Python source fetcher and the entire Python SearXNG search stack are deleted. **The fixed exception is the LLM engine**: Qwen 3.8 27B Q4 on Splash is retained exactly as-is, because it is the fastest measured path; Splash's own interpreter remains part of the external offline payload and is not Dot-authored runtime code. The remaining Dot-authored Python on the runtime path is the Splash supervisor/TLS relay (`Resources/Runtime/dot_*.py`); porting it to Rust is the next migration step.
 
 **Search.** No SearXNG, no waitress, no AGPL obligation, no API keys by default. Rust `dot-search` queries DuckDuckGo and Wikipedia behind a per-launch capability token on loopback. Resilience work (additional free providers and fallback ordering) is an open item; a keyed provider may be added later without removing the free path.
