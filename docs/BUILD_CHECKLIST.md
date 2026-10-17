@@ -1,7 +1,7 @@
 # dot: product roadmap and build checklist
 
-> **CURRENT STATUS (2026-10-18):** app code **`f03d608`** (docs-only commits may be newer; installed
-> at `251b57e`, same binary); 904 XCTest/0 (1 skipped), 580
+> **CURRENT STATUS (2026-10-18):** app code **`f03d608`** (later commits are docs/scripts); reinstall
+> so provenance matches HEAD. 904 XCTest/0 (1 skipped), 580
 > `swift test`/0, 604 Python/4 skipped, 53 guardrails. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded),
 > R11, R12, R13 (create/edit/move), R14, R15 are implemented; **R4 blocked on the payload decision**,
 > **R9 not built**, **R10 partial**. Read [AI_HANDOFF.md](AI_HANDOFF.md) for current state, blockers,

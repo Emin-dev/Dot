@@ -2,8 +2,8 @@
 
 **Current state is maintained in [AI_HANDOFF.md](AI_HANDOFF.md); this file is the narrative "what is solid / what is not" list and is partly historical.** The binding spec is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R15); follow it wherever documents conflict.
 
-App code is **`f03d608`**; docs-only commits can be newer. The app was last installed at `251b57e`
-(docs handoff; same binary). Current automated gates: **904 XCTest / 0**
+App code is **`f03d608`**; later commits are docs/scripts only. Run `scripts/install_local.sh` so the
+installed provenance matches HEAD. Current automated gates: **904 XCTest / 0**
 (1 live test skipped), **580 `swift test` / 0**, **604 Python passed / 4 skipped**, **53 guardrails**;
 the last full `verify_macos.sh` run was clean apart from its by-design finalizer canary. A **1.0 GB
 `Dot.dmg`** and 785 MB `Dot.zip` are built and verified but **not uploaded**; the app is Apple

@@ -8,9 +8,9 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
 ## Current build and gates
 
 - Repo: `/Users/mac/Documents/deepseek-harness/default-workspace/Dot`, branch **main only**.
-- App code: **`f03d608`**; docs-only commits may be newer. The installed app was last installed at
-  `251b57e` (the docs handoff commit), with the same binary as `f03d608`. Run `git log -1` and
-  `scripts/install_local.sh` after any newer commit; never assume an older installed provenance.
+- App code: **`f03d608`**; later commits are docs/scripts only. Run `git log -1` and
+  `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
+  Do not assume an older installed provenance from any document.
 - Last full green automated gate: **XCTest 904 / 0 failures (1 opt-in live test skipped)**,
   **`swift test` 580 / 0**, **Python 604 passed / 4 skipped**, **53 static guardrails**, Debug + Release
   builds. The full `verify_macos.sh` run at `e0fb2a7` was clean apart from its **by-design
@@ -158,7 +158,7 @@ PATH=/private/tmp/dot-py313/bin:$PATH bash scripts/verify_macos.sh
 
 ## Recent commits (newest first)
 
-`251b57e` current AI handoff docs · `f03d608` Keychain release auth · `a6fe2eb` public DMG packaging · `8afab50` screen-off/lock pause ·
+`f03d608` Keychain release auth · `a6fe2eb` public DMG packaging · `8afab50` screen-off/lock pause ·
 `e0fb2a7` visible text-only notice + named calendar edit · `398cb5f` immediate coverage escape ·
 `b0cc3aa` safe path for the 2-minute roam/random relocation · `fca8e7f` placement/click accuracy ·
 `951b939` answer-length prompt · `e31a466` mic-mode guidance · `9425744` downloader timeout ·

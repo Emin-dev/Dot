@@ -4,8 +4,8 @@
 > preserves the dated engineering record below; older sections are historical and may describe fixed
 > defects or retired runtimes.
 
-**Current state.** `main` only; app code **`f03d608`** (docs-only commits may be newer; installed at
-`251b57e` with the same binary). Automated gates:
+**Current state.** `main` only; app code **`f03d608`** (later commits are docs/scripts). Reinstall after
+checking out so the installed provenance matches HEAD. Automated gates:
 **904 XCTest / 0** (1 opt-in live test skipped), **580 `swift test` / 0**, **604 Python / 4 skipped**,
 **53 guardrails**. Last full `verify_macos.sh` (at `e0fb2a7`) was clean except its by-design
 runtime-finalizer canary; rerun after the latest placement/screen-off changes. A **1.0 GB
