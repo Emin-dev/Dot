@@ -2167,10 +2167,13 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
     private var lastUserActivityAt: Double = ProcessInfo.processInfo.systemUptime
     private var lastReflectionAt: Double = ProcessInfo.processInfo.systemUptime
     private var emittedSuggestions: [String] = []
+    private var lastReflectedSessionStart: String?
+    private var lastReflectedLineCount = 0
 
     /// The suggestion produced by the most recent reflection, so the coordinator can
     /// offer to paste it without parsing it back out of the spoken report.
     public private(set) var lastSuggestion: String?
+    public static let noNewMaterialMessage = "No new conversation to reflect on yet."
 
     public init() {}
 
@@ -2197,13 +2200,16 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         lock.unlock()
     }
 
+    static func currentSessionLines(_ content: String) -> [String] {
+        let all = content.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let start = all.lastIndex { $0.contains("[SYSTEM] App session started") }
+        return start.map { Array(all[$0...]) } ?? all
+    }
+
     public func analyzeConversationLog(logContent: String) -> String {
-        let allLines = logContent.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         // The app writes a session marker on every launch. Analyse only the current
         // session: an older or fixture-written tail is not evidence about today.
-        let sessionStart = allLines.lastIndex { $0.contains("[SYSTEM] App session started") }
-        let lines = sessionStart.map { Array(allLines[$0...]) } ?? allLines
-        let recentLines = Array(lines.suffix(120))
+        let recentLines = Array(Self.currentSessionLines(logContent).suffix(120))
 
         // 1. Check for recorded self-improvement failures or errors
         let failureLines = recentLines.filter { $0.contains("[DOT (SELF-IMPROVEMENT)]") || $0.contains("[DOT (ERROR)]") }
@@ -2255,11 +2261,25 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
     @MainActor
     public func performReflectionAndWriteToAntigravity(logURL: URL? = nil) -> String {
         markReflected()
-        let url = logURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
+        lock.lock(); lastSuggestion = nil; lock.unlock()
+        let url = logURL ?? DiagnosticChatLogger.logFileURL
         let content = (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
-        let readLog = !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let lines = Self.currentSessionLines(content)
+        let sessionStart = lines.last { $0.contains("[SYSTEM] App session started") }
+        let hasConversation = lines.contains { $0.contains("[USER]") || $0.contains("[DOT") }
+        lock.lock()
+        let newSession = sessionStart != lastReflectedSessionStart
+        let previousCount = newSession ? 0 : lastReflectedLineCount
+        lock.unlock()
+        // Nothing new since the last reflection means no suggestion. Analysing an
+        // empty or unchanged log was how junk suggestions were produced.
+        guard hasConversation, lines.count > previousCount else { return Self.noNewMaterialMessage }
         let suggestion = analyzeConversationLog(logContent: content)
-        lock.lock(); lastSuggestion = suggestion; lock.unlock()
+        lock.lock()
+        lastSuggestion = suggestion
+        lastReflectedSessionStart = sessionStart
+        lastReflectedLineCount = lines.count
+        lock.unlock()
 
         // Write to dedicated reflections log in Downloads. The result is reported,
         // never assumed: the old code always claimed both writes had succeeded.
@@ -2285,7 +2305,7 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         // The suggestion is written to its own file above and copied to the clipboard
         // so it can be pasted deliberately, and Dot states what actually happened.
         let copied = ClipboardIntelligence.write(suggestion)
-        return Self.reflectionReport(suggestion: suggestion, readLog: readLog, wroteFile: wroteFile, copied: copied)
+        return Self.reflectionReport(suggestion: suggestion, readLog: true, wroteFile: wroteFile, copied: copied)
     }
 
     static func reflectionReport(suggestion: String, readLog: Bool, wroteFile: Bool, copied: Bool) -> String {
@@ -3836,8 +3856,7 @@ public final class DotSoulManager: @unchecked Sendable {
         let profile = brain.readProfile()
         let volatile = brain.readVolatile()
 
-        let chatLogURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
-        let chatLogContent = (chatLogURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+        let chatLogContent = (DiagnosticChatLogger.logFileURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
 
         let payload: [String: Any] = [
             "archivedAt": formatter.string(from: now),
@@ -3867,8 +3886,7 @@ public final class DotSoulManager: @unchecked Sendable {
         let brain = PersistentMemoryBrain.shared
         let profile = brain.readProfile()
         let volatile = brain.readVolatile()
-        let chatLogURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
-        let chatLogContent = (chatLogURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+        let chatLogContent = (DiagnosticChatLogger.logFileURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
 
         let soulExport: [String: Any] = [
             "version": 1,
@@ -4480,25 +4498,58 @@ public final class InteractiveWalkthroughManager {
 
 public enum DiagnosticChatLogger {
     private static let lock = NSLock()
-    /// Never write fixture conversations into the owner's real Downloads log: the
+    static let fileName = "dot_chat_log.txt"
+    private static let rotatedFileName = "dot_chat_log.1.txt"
+    private static let rotationBytes = 2_000_000
+    /// Never write fixture conversations into the owner's real log: the
     /// self-reflection reads that file, so a test suite would otherwise feed it
     /// synthetic turns. The test bundle gets a temporary file instead.
     static var isRunningTests: Bool {
         NSClassFromString("XCTestCase") != nil
             || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
     }
-    static func resolvedLogURL(testProcess: Bool, downloads: URL?, temporary: URL) -> URL? {
-        (testProcess ? temporary : downloads)?.appendingPathComponent("dot_chat_log.txt")
+    static func resolvedLogURL(testProcess: Bool, persistent: URL?, temporary: URL) -> URL? {
+        (testProcess ? temporary : persistent)?.appendingPathComponent(fileName)
     }
-    private static let logURL: URL? = resolvedLogURL(
-        testProcess: isRunningTests,
-        downloads: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
-        temporary: FileManager.default.temporaryDirectory)
+    private static let logURL: URL? = {
+        let persistent = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("Dot", isDirectory: true)
+            .appendingPathComponent("Logs", isDirectory: true)
+        return resolvedLogURL(testProcess: isRunningTests, persistent: persistent,
+                              temporary: FileManager.default.temporaryDirectory)
+    }()
+    /// The one path the reflection reads. Not Downloads: a notarised/sandboxed
+    /// build loses write access there and observability dies silently.
+    static var logFileURL: URL? { logURL }
     private static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return f
     }()
+
+    /// Create the private log directory, migrate the old Downloads log once, and
+    /// rotate by size. Called under the writer lock.
+    private static func prepare(_ url: URL) {
+        let directory = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        if !isRunningTests, !FileManager.default.fileExists(atPath: url.path),
+           let old = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
+               .appendingPathComponent(fileName),
+           FileManager.default.fileExists(atPath: old.path) {
+            // Preserve the owner's existing history; if the move fails, start fresh.
+            try? FileManager.default.moveItem(at: old, to: url)
+        }
+        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attributes[.size] as? Int, size > rotationBytes {
+            let rotated = directory.appendingPathComponent(rotatedFileName)
+            try? FileManager.default.removeItem(at: rotated)
+            try? FileManager.default.moveItem(at: url, to: rotated)
+        }
+        if FileManager.default.fileExists(atPath: url.path) {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+    }
 
     public static func record(role: String, text: String) {
         guard let url = logURL else { return }
@@ -4510,6 +4561,7 @@ public enum DiagnosticChatLogger {
 
         lock.lock()
         defer { lock.unlock() }
+        prepare(url)
 
         if FileManager.default.fileExists(atPath: url.path) {
             if let handle = try? FileHandle(forWritingTo: url) {
@@ -4518,7 +4570,7 @@ public enum DiagnosticChatLogger {
                 try? handle.close()
             }
         } else {
-            let header = "# Dot Conversation Diagnostic Log (Temporary)\n# Created: \(timestamp)\n# Records all user prompts and assistant actions/responses for debugging.\n\n"
+            let header = "# Dot Conversation Diagnostic Log\n# Created: \(timestamp)\n# Records user prompts, assistant actions and turn errors for local debugging. Rotates at \(rotationBytes) bytes.\n\n"
             var combined = header.data(using: .utf8) ?? Data()
             combined.append(data)
             try? combined.write(to: url, options: .atomic)

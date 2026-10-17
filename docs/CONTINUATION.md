@@ -164,10 +164,13 @@ into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate ru
 reflection could analyse test text as conversation. Test processes now write to a temporary log
 (`DiagnosticChatLogger.isRunningTests`), and the app writes a `[SYSTEM] App session started` marker on
 launch; the reflection analyses only lines after the latest marker, so old or fixture-written tails are
-ignored. The reflection report now names which writes actually succeeded (reflections file and
-clipboard) instead of always claiming both, and the idle timer speaks that report rather than a fixed
-sentence. Verified: the full 864-test lane left the real log byte-identical, and the new logger,
-session-scope and report tests pass.
+ignored. The log now lives in `~/Library/Application Support/Dot/Logs/dot_chat_log.txt` (migrating the
+old Downloads file once, rotating at 2 MB) instead of Downloads, and the soul export reads the same
+path. The reflection skips when the current session has no user/Dot lines or nothing new since the last
+reflection, never emits a suggestion from empty input, and clears `lastSuggestion` before skipping so a
+stale offer cannot be pasted. The report still names which writes actually succeeded, and the idle timer
+skips the announcement when there is nothing new. Verified: the full XCTest lane left the real log
+byte-identical, and the logger, empty-input, session-scope and report tests pass.
 
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`

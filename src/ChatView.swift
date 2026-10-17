@@ -1153,6 +1153,8 @@ final class ChatModel: ObservableObject {
                     continue
                 }
                 let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
+                // Nothing new is not an event: do not speak or offer a stale suggestion.
+                guard report != IdleSelfReflectionEngine.noNewMaterialMessage else { continue }
                 offerPasteIfAvailable()
                 DiagnosticChatLogger.record(role: "dot (10m-self-reflection)", text: report)
                 // Speak what actually happened; the old fixed sentence claimed both

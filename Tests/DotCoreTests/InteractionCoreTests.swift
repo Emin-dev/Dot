@@ -1861,18 +1861,18 @@ final class SelfCodebaseReaderTests: XCTestCase {
 }
 
 final class DiagnosticChatLoggerTests: XCTestCase {
-    /// The self-reflection reads the Downloads log. A test run must never append
+    /// The self-reflection reads the persistent log. A test run must never append
     /// fixture turns to it, and the current test process must detect itself.
     func testTestProcessesWriteOnlyToTemporaryDirectory() {
-        let downloads = URL(fileURLWithPath: "/Users/owner/Downloads")
+        let persistent = URL(fileURLWithPath: "/Users/owner/Library/Application Support/Dot/Logs")
         let temporary = URL(fileURLWithPath: "/private/tmp/dot-tests")
-        XCTAssertEqual(DiagnosticChatLogger.resolvedLogURL(testProcess: true, downloads: downloads,
+        XCTAssertEqual(DiagnosticChatLogger.resolvedLogURL(testProcess: true, persistent: persistent,
                                                            temporary: temporary)?.path,
                        temporary.appendingPathComponent("dot_chat_log.txt").path)
-        XCTAssertEqual(DiagnosticChatLogger.resolvedLogURL(testProcess: false, downloads: downloads,
+        XCTAssertEqual(DiagnosticChatLogger.resolvedLogURL(testProcess: false, persistent: persistent,
                                                            temporary: temporary)?.path,
-                       downloads.appendingPathComponent("dot_chat_log.txt").path)
-        XCTAssertNil(DiagnosticChatLogger.resolvedLogURL(testProcess: false, downloads: nil, temporary: temporary))
+                       persistent.appendingPathComponent("dot_chat_log.txt").path)
+        XCTAssertNil(DiagnosticChatLogger.resolvedLogURL(testProcess: false, persistent: nil, temporary: temporary))
         XCTAssertTrue(DiagnosticChatLogger.isRunningTests)
     }
 }
@@ -1921,5 +1921,22 @@ final class AutonomousMoveCadenceTests: XCTestCase {
         XCTAssertTrue(RoamingCore.autonomousMoveAllowed(now: 240, lastMoveAt: 120))
         XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: .nan, lastMoveAt: 0))
         XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: 100, lastMoveAt: .infinity))
+    }
+}
+
+final class SelfReflectionEmptyInputTests: XCTestCase {
+    /// An empty or system-only log must never produce a suggestion (the old code
+    /// analysed "" and emitted a rotating fallback), and must not offer a stale one.
+    @MainActor func testLogWithoutConversationLinesProducesNoSuggestion() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dot-reflect-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("dot_chat_log.txt")
+        try Data("[SYSTEM] App session started\n".utf8).write(to: url)
+        let engine = IdleSelfReflectionEngine()
+        XCTAssertEqual(engine.performReflectionAndWriteToAntigravity(logURL: url),
+                       IdleSelfReflectionEngine.noNewMaterialMessage)
+        XCTAssertNil(engine.lastSuggestion)
     }
 }
