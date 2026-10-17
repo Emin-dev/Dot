@@ -2754,7 +2754,7 @@ public enum MeetingFocusAwareness {
 /// background window are undetectable with public APIs and are not guessed.
 public enum VideoPlaybackDetector {
     public static let videoAppSignatures = [
-        "com.apple.quicktimeplayerx", "com.apple.tv", "com.apple.photos", "com.apple.dvdplayer",
+        "com.apple.quicktimeplayerx", "com.apple.quicktimeplayer", "com.apple.tv", "com.apple.dvdplayer",
         "org.videolan.vlc", "com.colliderli.iina", "io.mpv", "com.plexapp.plex", "tv.kodi.kodi",
         "com.elmediaplayer", "com.movistplayer", "com.5kplayer", "com.infuseapp.infuse"
     ]
