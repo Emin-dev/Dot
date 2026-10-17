@@ -1388,7 +1388,8 @@ public enum SmartTimerParser {
 public final class SmartTimerScheduler: @unchecked Sendable {
     public static let shared = SmartTimerScheduler()
     private let lock = NSLock()
-    private var timers: [UUID: (timer: ScheduledTimer, task: Task<Void, Never>)] = [:]
+    private var timers: [UUID: (timer: ScheduledTimer, task: Task<Void, Never>,
+                                 onFire: @Sendable (ScheduledTimer) -> Void)] = [:]
 
     private init() {}
 
@@ -1396,19 +1397,46 @@ public final class SmartTimerScheduler: @unchecked Sendable {
         let fireDate = Date().addingTimeInterval(seconds)
         let scheduled = ScheduledTimer(label: label, durationSeconds: seconds, fireDate: fireDate)
         let id = scheduled.id
+        let task = Self.firingTask(id: id, timer: scheduled, seconds: seconds, onFire: onFire)
 
-        let task = Task {
+        lock.lock()
+        timers[id] = (scheduled, task, onFire)
+        lock.unlock()
+        return scheduled
+    }
+
+    /// `Task.sleep` is a monotonic suspension; a Mac that sleeps through a timer
+    /// deadline would otherwise fire late by the sleep duration. On wake, fire each
+    /// missed timer exactly once (the spoken note is the owner's answer), and
+    /// reschedule future timers against their wall-clock fire date.
+    public func handleWake(now: Date = Date()) {
+        lock.lock()
+        let entries = timers
+        lock.unlock()
+        for (id, entry) in entries {
+            entry.task.cancel()
+            let remaining = entry.timer.fireDate.timeIntervalSince(now)
+            if remaining <= 0 {
+                remove(id)
+                entry.onFire(entry.timer)
+            } else {
+                let task = Self.firingTask(id: id, timer: entry.timer, seconds: remaining, onFire: entry.onFire)
+                lock.lock()
+                if timers[id] != nil { timers[id] = (entry.timer, task, entry.onFire) }
+                lock.unlock()
+            }
+        }
+    }
+
+    private static func firingTask(id: UUID, timer: ScheduledTimer, seconds: Double,
+                                   onFire: @escaping @Sendable (ScheduledTimer) -> Void) -> Task<Void, Never> {
+        Task {
             let ms = UInt64(max(0.1, seconds) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: ms)
             guard !Task.isCancelled else { return }
-            self.remove(id)
-            onFire(scheduled)
+            SmartTimerScheduler.shared.remove(id)
+            onFire(timer)
         }
-
-        lock.lock()
-        timers[id] = (scheduled, task)
-        lock.unlock()
-        return scheduled
     }
 
     public func cancelAll() -> Int {

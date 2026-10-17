@@ -40,7 +40,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).
 - **Small owner requests.** Copy Dot's answer to the clipboard; "show that" opens the readable
   history; battery level from IOKit; self-reflection writes to its file, copies to the clipboard and
-  offers a paste; read a named text file; Spotlight **content** search.
+  offers a paste; read a named text file (with a Spotlight name suggestion when the exact path is
+  missing); Spotlight **content** search; timers missed during Mac sleep fire once on wake.
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the
   owner on 2026-10-17 after Dot moved nonstop through a cold model load; Dot now stays put during a
   turn. Coverage escapes and snapshot evasions are rate-limited to the same cadence, so a persistently

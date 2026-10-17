@@ -1401,6 +1401,16 @@ final class ChatModel: ObservableObject {
         return nil
     }
 
+    /// The name to ask Spotlight for after an exact-path miss. Strips the spoken
+    /// filler so "read my notes file" searches for "notes", while a real filename
+    /// like "report.txt" is unchanged.
+    static func spotlightNameQuery(from spokenPath: String) -> String {
+        let last = (spokenPath as NSString).lastPathComponent
+        return last.replacingOccurrences(of: "my ", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: " file", with: "", options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// An explicit request to read the front app's page/document. Kept to exact
     /// phrases so ordinary sentences still go to the model.
     static func isPageReadRequest(_ phrase: String) -> Bool {
@@ -1702,7 +1712,15 @@ final class ChatModel: ObservableObject {
                 var isDirectory: ObjCBool = false
                 guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
                       !isDirectory.boolValue else {
-                    self.respondDirectly("I cannot find a file at \(expanded).", id: id)
+                    // A spoken name is often not a path ("read my notes file").
+                    // Ask before reading a different file rather than failing at once.
+                    let query = Self.spotlightNameQuery(from: expanded)
+                    if !query.isEmpty,
+                       let match = SystemControlSuite.findFilesSpotlight(named: query, limit: 1).first {
+                        self.respondDirectly("I couldn't find \(expanded). Did you mean \(match)? Say \"read file \(match)\" and I'll read it.", id: id)
+                    } else {
+                        self.respondDirectly("I cannot find a file at \(expanded), and Spotlight has no name match for \"\(query)\".", id: id)
+                    }
                     return
                 }
                 guard let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),

@@ -159,6 +159,15 @@ fresh runtime; a successful connection refills the budget and a failed restart l
 the same connection attempt cannot loop. Later turns probe again. The existing `EngineError`
 messages already reach the owner as visible blocked text.
 
+**Audit defects A9–A10 — fixed 2026-10-17.** A9 timers use `Task.sleep`, which does not advance
+through Mac sleep, so a deadline missed during sleep fired late by the sleep duration. `SmartTimerScheduler.handleWake(now:)`
+now fires each missed timer exactly once at wake (the existing spoken timer alert is the note),
+reschedules future timers against their wall-clock fire date, and is wired to `NSWorkspace.didWakeNotification`.
+A10 an exact "read file" path miss now queries Spotlight's name index and asks "did you mean <match>?"
+before reading anything; the spoken filler is stripped ("read my notes file" searches "notes"), and the
+answer names the match rather than silently failing. New tests cover the wake firing/rescheduling and
+the name-query cleanup.
+
 **Self-reflection data and truthfulness — fixed 2026-10-17.** The XCTest lane wrote its fixture turns
 into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate run), so the 10-minute
 reflection could analyse test text as conversation. Test processes now write to a temporary log

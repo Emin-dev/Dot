@@ -1370,6 +1370,23 @@ final class SmartTimerTests: XCTestCase {
         XCTAssertEqual(scheduler.activeTimers().count, 0)
     }
 
+    func testMissedTimerFiresOnceAtWakeAndFutureTimerSurvives() {
+        final class FiredBox: @unchecked Sendable { var count = 0 }
+        let box = FiredBox()
+        let scheduler = SmartTimerScheduler.shared
+        _ = scheduler.cancelAll()
+        _ = scheduler.schedule(seconds: 1, label: "Missed") { _ in box.count += 1 }
+        scheduler.handleWake(now: Date().addingTimeInterval(2))
+        XCTAssertEqual(box.count, 1)
+        XCTAssertEqual(scheduler.activeTimers().count, 0)
+
+        let future = scheduler.schedule(seconds: 100, label: "Future")
+        scheduler.handleWake(now: Date())
+        XCTAssertEqual(box.count, 1)
+        XCTAssertEqual(scheduler.activeTimers().map(\.id), [future.id])
+        _ = scheduler.cancelAll()
+    }
+
     func testDurationFormatting() {
         XCTAssertEqual(SmartTimerScheduler.formatDuration(30), "30 seconds")
         XCTAssertEqual(SmartTimerScheduler.formatDuration(60), "1 minute")

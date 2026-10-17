@@ -295,6 +295,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor in self?.cancelMovement() }
             })
         }
+        observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            // Monotonic timer sleeps do not advance through Mac sleep; fire a missed
+            // timer once on wake instead of making the owner wait the sleep duration.
+            SmartTimerScheduler.shared.handleWake()
+        })
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak model, weak webResearch] _ in
             Task { @MainActor in webResearch?.foregroundPause(); model?.cancelForEnvironment(reason: .systemSleep) }
         })

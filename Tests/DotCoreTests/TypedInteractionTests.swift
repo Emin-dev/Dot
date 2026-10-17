@@ -413,5 +413,11 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertFalse(ChatModel.isPageReadRequest("read this page later and tell me"))
         XCTAssertFalse(ChatModel.isPageReadRequest("what is on the screen"))
     }
+
+    @MainActor func testSpotlightFallbackStripsSpokenFileFiller() {
+        XCTAssertEqual(ChatModel.spotlightNameQuery(from: "my notes file"), "notes")
+        XCTAssertEqual(ChatModel.spotlightNameQuery(from: "report.txt"), "report.txt")
+        XCTAssertEqual(ChatModel.spotlightNameQuery(from: "/Users/me/Documents/budget.csv"), "budget.csv")
+    }
 }
 #endif
