@@ -1,4 +1,30 @@
-# New-session prompt — copy everything below the line into a fresh session
+# New-session prompt
+
+## Goal command (short form)
+
+Pass this as the objective to the harness goal tool:
+
+```
+Finish Dot (repo /Users/mac/Documents/deepseek-harness/default-workspace/Dot, branch main only) so every
+capability works in practice, not just in tests: find and fix the "compiles but can never fire" class
+(unreachable permission requests, stale markers that suppress prompts, failures hidden in logs), and
+verify each fix with typecheck, focused suite, full gate, then scripts/install_local.sh. Keep the engine
+fixed at Splash + Qwen3.8 27B Q4 with its DFlash draft and the payload byte-identical, keep all
+Dot-authored runtime code Rust (continue the supervisor port in crates/dot-runtime, no new Python), and
+prefer deleting code to adding it. Finish with main pushed, the installed app's provenance matching HEAD,
+and docs/HANDOVER.md, docs/CONTINUATION.md and docs/BUILD_CHECKLIST.md truthful. Completion requires one
+real observed session from the owner plus verify_macos.sh free of non-by-design failures.
+```
+
+One-line variant:
+
+```
+Make Dot's capabilities actually fire in practice (fix unreachable/stale-marker/hidden-failure bugs),
+keep Splash + Qwen3.8 27B Q4 fixed and all Dot code Rust, verify each change end-to-end and install it,
+and leave main, the running app and the three docs in sync.
+```
+
+— copy everything below the line into a fresh session
 
 ---
 
