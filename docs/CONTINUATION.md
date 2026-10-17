@@ -85,6 +85,16 @@ absolute path that only existed on one machine). The self-improvement loop no lo
 application or synthesizes keystrokes: it writes to its reflections file, copies the suggestion to the
 clipboard and says so.
 
+**Flaky under load, observed once.** A full `scripts/verify_macos.sh` run reported
+`Tests/DotCoreTests/WebSearchProviderTests.swift:585`
+(`LocalDotSearchProviderTests.testRuntimeAnswersAreBoundedAndCapabilityRejectionSurfaces`) failing with
+`startupTimeout` where `challenge` was expected, after the case took 1041 seconds. The same test passes
+in isolation in 3.5 s (the class runs 7/7 in 7.2 s) and passed in every standalone `swift test` run this
+session, so this is load sensitivity rather than a product defect: the local fixture's script did not
+produce its ready line before the retry path spun under the gate's combined load. The lead if it recurs
+is to make that fixture's readiness deterministic (or bound its retries) rather than to raise
+`startupSeconds`, which is a correct 10 s bound on a real runtime.
+
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`
 scratch path (SwiftPM) or `xattr -cr` before `codesign`, because the File Provider re-applies
