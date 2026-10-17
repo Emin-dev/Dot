@@ -500,6 +500,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let model else { return }
         model.proactive.setPaused(!model.proactive.paused)
     }
+    @objc private func toggleBatteryAlerts() { model?.batteryAlerts.enabled.toggle() }
+    @objc private func setBatteryThreshold(_ sender: NSMenuItem) { model?.batteryAlerts.lowThreshold = sender.tag }
+    @objc private func toggleChargingAlerts() { model?.batteryAlerts.chargingAlerts.toggle() }
     private func showOptions() {
         guard let panel, let view = panel.contentView, let model else { return }
         model.cancelForInteraction(); panel.cancelPointerGesture(); cancelMovement(); panel.makeKey()
@@ -550,6 +553,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             silence: #selector(setSilence(_:)), invitation: #selector(setInvitation(_:))))
         menu.addItem(ProactivityOptionsMenu.make(proactive: model.proactive, target: self,
             action: #selector(setProactivityFrequency(_:)), pauseAction: #selector(toggleProactivityPause)))
+        menu.addItem(BatteryOptionsMenu.make(settings: model.batteryAlerts, target: self,
+            toggle: #selector(toggleBatteryAlerts), threshold: #selector(setBatteryThreshold(_:)),
+            charging: #selector(toggleChargingAlerts)))
 
         let toolsItem = NSMenuItem(title: "Tools & History", action: nil, keyEquivalent: "")
         let toolsMenu = NSMenu()

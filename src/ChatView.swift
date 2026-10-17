@@ -76,6 +76,7 @@ final class ChatModel: ObservableObject {
     /// Set when the five-minute capture cap closed this turn with speech; the
     /// answer then carries a spoken notice that the cap was reached.
     private var captureReachedLimit = false
+    private var batteryPolicy = BatteryAlertPolicy()
     @Published var pinned: Bool {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
     }
@@ -96,6 +97,7 @@ final class ChatModel: ObservableObject {
     let textHistory: ConversationHistoryModel
     let voiceTiming: VoiceTimingSettings
     let skinPreferences: SkinPreferences
+    let batteryAlerts: BatteryAlertSettings
     let proactive: ProactiveBehavior
     private let defaults: UserDefaults
     private let runtime: ChatRuntime
@@ -947,6 +949,7 @@ final class ChatModel: ObservableObject {
         self.defaults = defaults
         voiceTiming = VoiceTimingSettings(defaults: defaults)
         skinPreferences = SkinPreferences(defaults: defaults)
+        batteryAlerts = BatteryAlertSettings(defaults: defaults)
         self.proactive = proactive ?? ProactiveBehavior(defaults: defaults)
         self.followup = followup ?? VoiceFollowup()
         firstUseHint = !defaults.bool(forKey: "dot.interactionHintDismissed.v1")
@@ -1120,6 +1123,7 @@ final class ChatModel: ObservableObject {
                 if self.visible, !self.proactive.paused, self.phase == .idle,
                    !self.generating, !self.runtime.ttsSpeaking(),
                    self.proactive.activeOpportunity == nil, self.proactiveTurn == nil {
+                    if self.checkBatteryAlerts() { continue }
                     if !self.proactiveEvidence.isRecent(now: now) || !self.proactiveContextChangedAfterUser {
                         self.proactiveEvidence.recordUser(turn: UUID(), now: now)
                         self.proactiveContextChangedAfterUser = true
@@ -1481,17 +1485,40 @@ final class ChatModel: ObservableObject {
 
     /// Battery state from IOKit's power-source description; no permission and no
     /// polling, and honest when the machine has no battery to report.
-    private static func batteryStatus() -> String {
+    private static func batterySnapshot() -> (percent: Int, charging: Bool, onAC: Bool)? {
         guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef],
               let source = list.first,
               let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any] else {
-            return "I cannot read a battery on this Mac."
+            return nil
         }
         let percent = info[kIOPSCurrentCapacityKey as String] as? Int ?? 0
         let charging = info[kIOPSIsChargingKey as String] as? Bool ?? false
         let onAC = (info[kIOPSPowerSourceStateKey as String] as? String) == (kIOPSACPowerValue as String)
-        return "Battery: \(percent)%" + (charging ? ", charging." : onAC ? ", plugged in." : ", on battery.")
+        return (percent, charging, onAC)
+    }
+    private static func batteryStatus() -> String {
+        guard let battery = batterySnapshot() else { return "I cannot read a battery on this Mac." }
+        return "Battery: \(battery.percent)%" + (battery.charging ? ", charging." : battery.onAC ? ", plugged in." : ", on battery.")
+    }
+    /// R14: optional, off by default. Called from the idle ticker; the policy keeps a
+    /// low notice to once per discharge and a charging notice to once per plug-in.
+    @discardableResult private func checkBatteryAlerts() -> Bool {
+        guard batteryAlerts.enabled, let battery = Self.batterySnapshot() else { return false }
+        guard let alert = batteryPolicy.evaluate(percent: battery.percent, charging: battery.charging,
+                                                 enabled: true, lowThreshold: batteryAlerts.lowThreshold,
+                                                 chargingAlerts: batteryAlerts.chargingAlerts) else { return false }
+        switch alert {
+        case .low(let percent):
+            let message = "Battery is low at \(percent) percent. Please plug in."
+            speakDirect(message)
+            DiagnosticChatLogger.record(role: "system", text: message)
+        case .charging(let percent):
+            let message = "Charging started at \(percent) percent."
+            speakDirect(message)
+            DiagnosticChatLogger.record(role: "system", text: message)
+        }
+        return true
     }
 
     /// Ask for the two prompts the app cannot work without, once each. Waiting on the

@@ -1957,3 +1957,46 @@ final class SelfReflectionEmptyInputTests: XCTestCase {
         XCTAssertNil(engine.lastSuggestion)
     }
 }
+
+final class BatteryAlertTests: XCTestCase {
+    func testLowAlertFiresOncePerDischargeAndReArmsAboveHysteresis() {
+        var policy = BatteryAlertPolicy()
+        XCTAssertEqual(policy.evaluate(percent: 15, charging: false, enabled: true,
+                                       lowThreshold: 20, chargingAlerts: true), .low(15))
+        XCTAssertNil(policy.evaluate(percent: 14, charging: false, enabled: true,
+                                     lowThreshold: 20, chargingAlerts: true))
+        XCTAssertNil(policy.evaluate(percent: 27, charging: false, enabled: true,
+                                     lowThreshold: 20, chargingAlerts: true))
+        XCTAssertEqual(policy.evaluate(percent: 19, charging: false, enabled: true,
+                                       lowThreshold: 20, chargingAlerts: true), .low(19))
+    }
+
+    func testChargingAlertOnlyOnThePlugInTransition() {
+        var policy = BatteryAlertPolicy()
+        XCTAssertNil(policy.evaluate(percent: 50, charging: true, enabled: true,
+                                     lowThreshold: 20, chargingAlerts: true))
+        XCTAssertNil(policy.evaluate(percent: 51, charging: true, enabled: true,
+                                     lowThreshold: 20, chargingAlerts: true))
+        XCTAssertNil(policy.evaluate(percent: 50, charging: false, enabled: true,
+                                     lowThreshold: 20, chargingAlerts: true))
+        XCTAssertEqual(policy.evaluate(percent: 50, charging: true, enabled: true,
+                                       lowThreshold: 20, chargingAlerts: true), .charging(50))
+    }
+
+    func testAlertsAreOffByDefaultAndDisabledPolicyStaysQuiet() {
+        let suite = "app.dot.tests.battery." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = BatteryAlertSettings(defaults: defaults)
+        XCTAssertFalse(settings.enabled)
+        XCTAssertEqual(settings.lowThreshold, 20)
+        XCTAssertTrue(settings.chargingAlerts)
+        settings.lowThreshold = 30
+        XCTAssertEqual(settings.lowThreshold, 30)
+        var policy = BatteryAlertPolicy()
+        XCTAssertNil(policy.evaluate(percent: 5, charging: false, enabled: false,
+                                     lowThreshold: 20, chargingAlerts: true))
+        XCTAssertEqual(policy.evaluate(percent: 5, charging: false, enabled: true,
+                                       lowThreshold: 20, chargingAlerts: true), .low(5))
+    }
+}

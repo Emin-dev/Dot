@@ -41,7 +41,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **Small owner requests.** Copy Dot's answer to the clipboard; "show that" opens the readable
   history; battery level from IOKit; self-reflection writes to its file, copies to the clipboard and
   offers a paste; read a named text file (with a Spotlight name suggestion when the exact path is
-  missing); Spotlight **content** search; timers missed during Mac sleep fire once on wake.
+  missing); Spotlight **content** search; timers missed during Mac sleep fire once on wake; optional
+  low-battery and charging-start alerts (off by default) with a threshold submenu.
 - **Listening and sleep.** A turn listens for up to 5 minutes, then answers what was heard and says
   the cap was reached; a Mac wake clears the sleep block, re-arms proactivity and says "I'm back."
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the

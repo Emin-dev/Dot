@@ -1477,6 +1477,70 @@ public final class SmartTimerScheduler: @unchecked Sendable {
     }
 }
 
+// MARK: - Battery alerts (R14)
+
+/// Owner-set, off-by-default battery notices. Pure state so the transitions can be
+/// tested without IOKit: low is announced once per discharge below the threshold
+/// (with hysteresis), charging once per plug-in transition.
+public struct BatteryAlertPolicy: Equatable {
+    public enum Alert: Equatable {
+        case low(Int)
+        case charging(Int)
+    }
+    private var lowAlerted = false
+    private var wasCharging: Bool?
+
+    public init() {}
+
+    public mutating func evaluate(percent: Int, charging: Bool, enabled: Bool,
+                                  lowThreshold: Int, chargingAlerts: Bool) -> Alert? {
+        guard enabled, (0...100).contains(percent) else { return nil }
+        if charging || percent > min(95, lowThreshold + 5) { lowAlerted = false }
+        var alert: Alert?
+        if chargingAlerts, charging, wasCharging == false {
+            alert = .charging(percent)
+        } else if !charging, percent <= lowThreshold, !lowAlerted {
+            lowAlerted = true
+            alert = .low(percent)
+        }
+        wasCharging = charging
+        return alert
+    }
+}
+
+/// Persisted owner choices. Alerts are off by default; the threshold defaults to 20%
+/// and charging notices default on once alerts are enabled.
+public struct BatteryAlertSettings {
+    public static let thresholds = [10, 15, 20, 30]
+    private let defaults: UserDefaults
+    private static let enabledKey = "dot.batteryAlertsEnabled"
+    private static let thresholdKey = "dot.batteryLowThreshold"
+    private static let chargingKey = "dot.batteryChargingAlerts"
+
+    public init(defaults: UserDefaults = .standard) { self.defaults = defaults }
+    public var enabled: Bool {
+        get { defaults.bool(forKey: Self.enabledKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.enabledKey) }
+    }
+    public var lowThreshold: Int {
+        get {
+            let stored = defaults.integer(forKey: Self.thresholdKey)
+            return stored == 0 ? 20 : max(5, min(50, stored))
+        }
+        nonmutating set {
+            let bounded = max(5, min(50, newValue))
+            defaults.set(bounded, forKey: Self.thresholdKey)
+        }
+    }
+    public var chargingAlerts: Bool {
+        get {
+            defaults.object(forKey: Self.chargingKey) == nil
+                ? true : defaults.bool(forKey: Self.chargingKey)
+        }
+        nonmutating set { defaults.set(newValue, forKey: Self.chargingKey) }
+    }
+}
+
 // MARK: - Native Screen OCR
 
 #if canImport(Vision)

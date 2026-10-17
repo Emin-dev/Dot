@@ -169,6 +169,13 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R14 battery alerts — implemented 2026-10-17.** `BatteryAlertPolicy` announces a low battery once
+per discharge below the owner's threshold (10/15/20/30%, default 20) with 5-point hysteresis, and a
+charging-start notice once per plug-in when that toggle is on. Alerts are **off by default**; the new
+"Battery alerts" submenu in the context menu sets the switch, threshold and charging toggle. The idle
+ticker evaluates IOKit state every 6 s and speaks/logs an alert once, then skips the rest of that tick.
+Three policy/defaults tests cover the transitions, hysteresis and off-by-default state.
+
 **B3 screen ask-on-need — fixed 2026-10-17.** A typed submission is a real owner interaction, so it
 now uses the same screen-preparation policy as a click (`requestPermission: true`) and reports a
 refusal with the Settings pane; automatic follow-up invitations and proactive turns still never

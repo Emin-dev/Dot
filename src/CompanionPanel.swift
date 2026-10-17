@@ -246,6 +246,34 @@ enum AppearanceOptionsMenu {
 }
 
 @MainActor
+enum BatteryOptionsMenu {
+    static func make(settings: BatteryAlertSettings, target: AnyObject, toggle: Selector,
+                     threshold: Selector, charging: Selector) -> NSMenuItem {
+        let root = NSMenuItem(title: "Battery alerts", action: nil, keyEquivalent: "")
+        let menu = NSMenu()
+        let enable = NSMenuItem(title: "Low-battery and charging alerts", action: toggle, keyEquivalent: "")
+        enable.target = target; enable.state = settings.enabled ? .on : .off; menu.addItem(enable)
+        menu.addItem(.separator())
+        let lowParent = NSMenuItem(title: "Low-battery threshold", action: nil, keyEquivalent: "")
+        let lowMenu = NSMenu(); lowParent.submenu = lowMenu
+        for value in BatteryAlertSettings.thresholds {
+            let item = NSMenuItem(title: "\(value)%", action: threshold, keyEquivalent: "")
+            item.target = target; item.tag = value
+            item.state = settings.lowThreshold == value ? .on : .off
+            lowMenu.addItem(item)
+        }
+        menu.addItem(lowParent)
+        let chargingItem = NSMenuItem(title: "Charging started alert", action: charging, keyEquivalent: "")
+        chargingItem.target = target; chargingItem.state = settings.chargingAlerts ? .on : .off
+        menu.addItem(chargingItem)
+        let hint = NSMenuItem(title: "Off by default; each event is spoken once", action: nil, keyEquivalent: "")
+        hint.isEnabled = false; menu.addItem(hint)
+        root.submenu = menu
+        return root
+    }
+}
+
+@MainActor
 enum ProactivityOptionsMenu {
     static func make(proactive: ProactiveBehavior, target: AnyObject, action: Selector, pauseAction: Selector) -> NSMenuItem {
         let root = NSMenuItem(title: "Proactivity", action: nil, keyEquivalent: "")
