@@ -61,11 +61,20 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
    Ordinary conversation now does populate memory: the detector previously required the whole turn to
    begin with one of five exact prefixes, so real speech was never stored; it now matches a
    first-person or explicit cue anywhere in the turn, bounded to 240 characters, and lands in T5 core.
-4. *Latent issue.* `PlacementSnapshot.lifetime` is 10 s while the app validates on a ~10 s cadence, so
+4. *Known advisory: a quality-of-service inversion.* XCTest reports, from
+   `TypedInteractionTests.testPanelRebindsCallbacksAndDraftWithoutActivatingOrRetainingOldModel`, that a
+   thread at User-interactive QoS waits on one at Default QoS. The waiting work is produced by the app
+   (the test fixture creates no tasks of its own), so the lead is to find the turn-pipeline task in
+   `ChatView.submit` and give it `.userInitiated` - a reply the owner is waiting for is user-initiated
+   work. `scripts/verify_macos.sh` filters *only* this advisory out of its zero-warning check (it is a
+   runtime observation, not a compiler warning); every other warning remains fatal. Removing the filter
+   alongside the actual fix would be the honest end state.
+
+5. *Latent issue.* `PlacementSnapshot.lifetime` is 10 s while the app validates on a ~10 s cadence, so
    every cycle's first validation is rejected by construction (`reason=expired elapsed=10475ms` in the
    live log) before a fresh capture. Fix it in the caller — refresh before validating — and **do not
    raise the lifetime**: `RoamingTests` correctly guards the 10 s fail-closed rule.
-5. *Last Dot-authored Python.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`, `dot_tls.py`
+6. *Last Dot-authored Python.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`, `dot_tls.py`
    (Splash supervisor and TLS relay, 640 lines, stdlib-only). Splash itself and its interpreter are
    deliberately retained: the owner chose Qwen 3.8 27B Q4 on Splash as the fastest engine.
 
