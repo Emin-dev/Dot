@@ -82,7 +82,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **Movement and clicks.** Placement protects full window bounds, returns no fallback when every
   pocket is covered (Dot stays), and validates the swept path so a trip cannot cross text/buttons.
   OCR clicks use the captured display's coordinate space, prefer exact short control labels and raise
-  the window under the point before clicking.
+  the window under the point before clicking. The two-minute idle-roam animation and "move to a new
+  spot" also require a verified map and a safe swept path, and stay put when none exists.
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the
   owner on 2026-10-17 after Dot moved nonstop through a cold model load; Dot now stays put during a
   turn. Coverage escapes and snapshot evasions are rate-limited to the same cadence, so a persistently

@@ -193,7 +193,9 @@ swept bounds may not contain content the pet did not already overlap. (3) Large 
 only inside a 48 pt inset, leaving a band of toolbars/tabs/buttons; the whole window is protected now.
 Clicks now use the **screen that was actually OCR'd** (not `NSScreen.main`), score exact/short control
 labels over paragraphs, and activate the window under the click point before dispatching so a
-background click is not consumed as a window-raise. Full lane 903/0, `swift test` 580/0.
+background click is not consumed as a window-raise. The separate two-minute `performIdleRoam` path
+and the "move to a new spot" command also require a verified map and a safe swept path; if no clear
+pocket or path exists they stay and say so. Full lane 903/0, `swift test` 580/0.
 
 **Answer length — tuned 2026-10-17.** The main system prompt now matches length to the request
 instead of asking for blanket brevity: simple factual/yes-no/single-step questions get one short

@@ -165,22 +165,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let snap = self.placement.current(screen: screen) ?? self.placement.fastWindowSnapshot(screen: screen)
                 let protectedRegions = snap?.protected ?? []
                 let cursor = NSEvent.mouseLocation
-                if let safeSpot = RoamingCore.findRandomEmptySpace(frame: panel.frame, bounds: bounds, cursor: cursor, regions: protectedRegions, minDistance: 160) {
+                if let safeSpot = RoamingCore.findRandomEmptySpace(frame: panel.frame, bounds: bounds, cursor: cursor, regions: protectedRegions, minDistance: 160),
+                   RoamingCore.safePath(from: panel.frame, to: safeSpot, regions: protectedRegions) {
                     target = safeSpot
+                    reply = "Relocating to a new spot!"
                 } else {
-                    let spots: [CGPoint] = [
-                        CGPoint(x: bounds.minX + margin, y: bounds.maxY - margin),
-                        CGPoint(x: bounds.maxX - margin, y: bounds.maxY - margin),
-                        CGPoint(x: bounds.minX + margin, y: bounds.minY + margin),
-                        CGPoint(x: bounds.maxX - margin, y: bounds.minY + margin),
-                        CGPoint(x: bounds.midX, y: bounds.midY),
-                        CGPoint(x: bounds.minX + margin, y: bounds.midY),
-                        CGPoint(x: bounds.maxX - margin, y: bounds.midY)
-                    ]
-                    let farSpots = spots.filter { hypot($0.x - current.x, $0.y - current.y) >= 160 }
-                    target = farSpots.randomElement() ?? spots.max(by: { hypot($0.x - current.x, $0.y - current.y) < hypot($1.x - current.x, $1.y - current.y) }) ?? current
+                    target = current
+                    reply = "I can't find a clear empty spot right now, so I'll stay here."
                 }
-                reply = "Relocating to a new spot!"
             }
 
             let now = ProcessInfo.processInfo.systemUptime
@@ -768,23 +760,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let visible = screen.visibleFrame
         guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
 
-        let snap = placementSnapshot(for: screen, eligible: model.screenEnabled)
-        let protectedRegions = snap?.protected ?? []
+        // No verified map means no autonomous move: a blind roam can cover content.
+        guard let snap = placementSnapshot(for: screen, eligible: model.screenEnabled) else { return }
+        let protectedRegions = snap.protected
 
-        // Roam on the agreed cadence to a clear safe zone: `findRandomEmptySpace`
-        // rejects positions that would cover protected windows or the cursor.
+        // Roam on the agreed cadence to a clear safe zone. The destination must be
+        // clear *and* the whole swept path must not cross content.
         let currentOrigin = panel.frame.origin
         let currentFrame = panel.frame
-
-        guard let target = RoamingCore.findRandomEmptySpace(
+        let target = RoamingCore.findRandomEmptySpace(
             frame: currentFrame,
             bounds: bounds,
             cursor: cursor,
             regions: protectedRegions,
             minDistance: 120
-        ) else { return }
-
-        guard target != currentOrigin else { return }
+        ).flatMap { candidate in
+            RoamingCore.safePath(from: currentFrame, to: candidate, regions: protectedRegions) ? candidate : nil
+        } ?? RoamingCore.findEmptySpace(
+            frame: currentFrame,
+            bounds: bounds,
+            cursor: cursor,
+            regions: protectedRegions,
+            preferredNear: currentOrigin,
+            minDistance: 120
+        ).flatMap { candidate in
+            RoamingCore.safePath(from: currentFrame, to: candidate, regions: protectedRegions) ? candidate : nil
+        }
+        guard let target, target != currentOrigin else { return }
 
         self.isAnimatingRoam = true
         self.lastRoamRelocationAt = now
