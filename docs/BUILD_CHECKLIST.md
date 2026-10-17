@@ -581,6 +581,8 @@ app or browser; keep the reply as text and suppress proactive/follow-up speech. 
   suggestions from everything Dot sees.
 - Screen: **adaptive watching** — idle snapshot every few minutes; on screen change or mouse movement,
   continuous capture for 10–50 s (extended while changing); battery-aware; visible pause switch.
+  Implemented 2026-10-17: 3-min fingerprint, 10–50 s watch, 4 s settle, 60 s cooldown, low-power and
+  Screen-awareness gating, paused during video; final OCR context retained (no per-frame narrative).
 - Self-healing: snapshot → apply → self-test → auto-rollback; one risky change per pass; keep 10
   snapshots; a fixed Rust watcher worker; a sealed last-known-good fallback; an emergency canary flag.
 - Research: **all and more** providers (news, optional keyed) plus local solutions (own index, cached

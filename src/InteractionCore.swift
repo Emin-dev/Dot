@@ -2746,6 +2746,65 @@ public enum MeetingFocusAwareness {
     #endif
 }
 
+// MARK: - Adaptive screen watching (R8)
+
+/// Pure cadence for adaptive screen watching. One idle snapshot every three minutes;
+/// a change or real mouse movement starts a 10–50 s watch that is extended while the
+/// screen keeps changing and stops after a settled period. Battery/low-power and the
+/// visible screen switch gate every capture.
+public struct ScreenWatchState: Equatable, Sendable {
+    public enum Action: Equatable, Sendable { case none, idleSnapshot, startWatch, captureFrame, stop }
+    public static let idleInterval = 180.0
+    public static let frameInterval = 2.0
+    public static let minimumWatch = 10.0
+    public static let maximumWatch = 50.0
+    public static let settleInterval = 4.0
+    public static let triggerCooldown = 60.0
+
+    private var watching = false
+    private var startedAt = 0.0
+    private var lastChangeAt = 0.0
+    private var lastFrameAt = 0.0
+    private var lastIdleAt = -Self.idleInterval
+    private var lastTriggerAt = -Self.triggerCooldown
+
+    public init() {}
+
+    public var isWatching: Bool { watching }
+
+    public mutating func tick(now: Double, enabled: Bool, idle: Bool, changed: Bool,
+                              inputActive: Bool, batteryOK: Bool) -> Action {
+        guard now.isFinite else { return .none }
+        if !enabled || !idle {
+            if watching { watching = false; return .stop }
+            return .none
+        }
+        if watching {
+            if changed { lastChangeAt = now }
+            if now - startedAt >= Self.maximumWatch { watching = false; return .stop }
+            if now - startedAt >= Self.minimumWatch, now - lastChangeAt >= Self.settleInterval {
+                watching = false
+                return .stop
+            }
+            if now - lastFrameAt >= Self.frameInterval {
+                lastFrameAt = now
+                return .captureFrame
+            }
+            return .none
+        }
+        if batteryOK, (changed || inputActive), now - lastTriggerAt >= Self.triggerCooldown {
+            watching = true
+            startedAt = now; lastChangeAt = now; lastFrameAt = now; lastTriggerAt = now
+            return .startWatch
+        }
+        if now - lastIdleAt >= Self.idleInterval {
+            lastIdleAt = now
+            return .idleSnapshot
+        }
+        return .none
+    }
+}
+
 // MARK: - Video playback silence
 
 /// Dot stays quiet while the owner is watching a video. Detection is deliberately

@@ -81,6 +81,7 @@ final class ChatModel: ObservableObject {
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
     private var memorySummaryTask: Task<Void, Never>?
+    private var screenWatchTask: Task<Void, Never>?
     static let prewarmDefaultsKey = "dot.prewarmAtLogin"
     @Published var pinned: Bool {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
@@ -1154,6 +1155,7 @@ final class ChatModel: ObservableObject {
         }
         self.engine.onReadinessStage = { [weak self] stage in self?.engineStage = stage }
         startPrewarmIfEnabled()
+        startAdaptiveScreenWatch()
     }
 
     /// R11: optional prewarm. Off by default; when enabled, waits for the payload
@@ -1172,6 +1174,48 @@ final class ChatModel: ObservableObject {
         }
     }
     func prewarmIfEnabled() { startPrewarmIfEnabled() }
+
+    /// R8: one idle fingerprint every three minutes; a screen change or real mouse
+    /// movement starts a 10–50 s watch extended while the screen keeps changing. Every
+    /// capture is gated by the visible Screen awareness switch, permission and low-power
+    /// state. The final watch step records an OCR snapshot for the next turn's context.
+    private func startAdaptiveScreenWatch() {
+        guard screenWatchTask == nil else { return }
+        screenWatchTask = Task { @MainActor [weak self] in
+            var state = ScreenWatchState()
+            var lastFingerprint: UInt64?
+            var pendingChange = false
+            var lastMouse = NSEvent.mouseLocation
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !self.shuttingDown else { break }
+                let now = ProcessInfo.processInfo.systemUptime
+                let mouse = NSEvent.mouseLocation
+                let moved = hypot(mouse.x - lastMouse.x, mouse.y - lastMouse.y) > 2
+                lastMouse = mouse
+                let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+                let enabled = self.screenEnabled && self.screen.enabled && CGPreflightScreenCaptureAccess()
+                let idle = self.visible && self.phase == .idle && !self.generating
+                    && !self.runtime.ttsSpeaking() && !VideoPlaybackDetector.isWatchingVideo()
+                let action = state.tick(now: now, enabled: enabled, idle: idle, changed: pendingChange,
+                                        inputActive: moved, batteryOK: !lowPower)
+                pendingChange = false
+                switch action {
+                case .none:
+                    break
+                case .idleSnapshot, .captureFrame:
+                    if let fingerprint = await self.screen.captureFingerprint() {
+                        pendingChange = lastFingerprint.map { $0 != fingerprint } ?? false
+                        lastFingerprint = fingerprint
+                    }
+                case .startWatch:
+                    lastFingerprint = await self.screen.captureFingerprint()
+                case .stop:
+                    await self.screen.captureSilentScreenSnapshot()
+                }
+            }
+        }
+    }
 
     /// R5: after a conversation lull, ask the local model for 5–10 key points and
     /// put them in the key-points tier. The full transcript is already in the FTS
@@ -2943,7 +2987,7 @@ final class ChatModel: ObservableObject {
         speakDirect("I'm back.")
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
-    func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
+    func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; screenWatchTask?.cancel(); screenWatchTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
     func shutdown() { stopProactivity(); cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 

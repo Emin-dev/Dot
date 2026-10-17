@@ -60,6 +60,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   titled for a video service, or audio playing in a browser/video app). The answer/notice stays as
   text; proactive suggestions and automatic follow-up listening are suppressed. Muted background
   videos are not detectable and are not guessed.
+- **Screen watching.** Idle fingerprint every three minutes; a change or mouse move starts a
+  10–50 s watch, gated by the Screen awareness switch, permission and low-power mode, and paused
+  during video. The final OCR context is kept for the next turn.
 - **Listening and sleep.** A turn listens for up to 5 minutes, then answers what was heard and says
   the cap was reached; a Mac wake clears the sleep block, re-arms proactivity and says "I'm back."
 - **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the

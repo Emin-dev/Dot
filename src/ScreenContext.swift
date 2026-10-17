@@ -214,6 +214,42 @@ final class ScreenContext {
         return []
         #endif
     }
+    /// R8: a cheap 32x24 grayscale fingerprint used to decide whether the screen is
+    /// changing. No OCR and no model payload; the cursor is excluded.
+    func captureFingerprint() async -> UInt64? {
+        guard enabled, CGPreflightScreenCaptureAccess() else { return nil }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
+            let displayID = (selected?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            guard let display = content.displays.first(where: { $0.displayID == displayID }) ?? content.displays.first else { return nil }
+            let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
+            let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
+            let configuration = SCStreamConfiguration()
+            configuration.width = 160
+            configuration.height = 120
+            configuration.showsCursor = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
+            return Self.fingerprint(of: image)
+        } catch { return nil }
+    }
+
+    static func fingerprint(of image: CGImage) -> UInt64? {
+        let width = 32, height = 24
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        return pixels.withUnsafeMutableBytes { raw -> UInt64? in
+            guard let context = CGContext(data: raw.baseAddress, width: width, height: height,
+                                          bitsPerComponent: 8, bytesPerRow: width,
+                                          space: CGColorSpaceCreateDeviceGray(),
+                                          bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+            context.interpolationQuality = .low
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            var hash: UInt64 = 14_695_981_039_346_656_037
+            for byte in raw { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
+            return hash
+        }
+    }
+
     func captureSilentScreenSnapshot() async {
         guard enabled, CGPreflightScreenCaptureAccess() else { return }
         do {

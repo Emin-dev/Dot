@@ -169,6 +169,15 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R8 adaptive screen watching — implemented 2026-10-17 (bounded).** `ScreenWatchState` drives a
+three-minute idle fingerprint (32×24 grayscale, cursor excluded), and a real mouse move or a changed
+fingerprint starts a 10–50 s watch that extends while the screen keeps changing and stops after 4 s
+settled; a 60 s cooldown bounds restarts. The visible **Screen awareness** switch, Screen Recording
+permission and low-power mode gate captures (low power still allows the cheap idle snapshot). The watch
+is paused entirely while video playback is detected. On stop, one OCR snapshot is recorded to
+`PreviousScreenMemory`, so the next turn sees what changed. Scope note: the "understanding" is that
+final OCR context, not an LLM narrative of every frame. Full lane 891/0, `swift test` 571/0.
+
 **Video silence — implemented 2026-10-17 (owner request).** Dot must not speak while the owner is
 watching a video. `VideoPlaybackDetector` treats a known video app, a browser whose window title names
 a video service, or audio playing in a browser/video app as playback (muted videos in background

@@ -2138,3 +2138,53 @@ final class VideoPlaybackDetectorTests: XCTestCase {
             windowTitle: "Library", audioPlaying: false))
     }
 }
+
+final class ScreenWatchStateTests: XCTestCase {
+    func testIdleSnapshotChangeStartsWatchAndSettles() {
+        var state = ScreenWatchState()
+        XCTAssertEqual(state.tick(now: 0, enabled: true, idle: true, changed: false,
+                                  inputActive: false, batteryOK: true), .idleSnapshot)
+        XCTAssertEqual(state.tick(now: 1, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .startWatch)
+        XCTAssertEqual(state.tick(now: 2, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .none)
+        XCTAssertEqual(state.tick(now: 3.1, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .captureFrame)
+        XCTAssertEqual(state.tick(now: 11.2, enabled: true, idle: true, changed: false,
+                                  inputActive: false, batteryOK: true), .stop)
+    }
+
+    func testMaximumWatchAndCooldownBoundRestarts() {
+        var state = ScreenWatchState()
+        XCTAssertEqual(state.tick(now: 0, enabled: true, idle: true, changed: false,
+                                  inputActive: false, batteryOK: true), .idleSnapshot)
+        XCTAssertEqual(state.tick(now: 1, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .startWatch)
+        for time in stride(from: 3.0, through: 49.0, by: 2.0) {
+            XCTAssertEqual(state.tick(now: time, enabled: true, idle: true, changed: true,
+                                      inputActive: false, batteryOK: true), .captureFrame)
+        }
+        XCTAssertEqual(state.tick(now: 51, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .stop)
+        XCTAssertEqual(state.tick(now: 52, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .none)
+        XCTAssertEqual(state.tick(now: 62, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: true), .startWatch)
+    }
+
+    func testDisabledLowPowerOrNonIdleBlocksWatching() {
+        var state = ScreenWatchState()
+        XCTAssertEqual(state.tick(now: 0, enabled: false, idle: true, changed: false,
+                                  inputActive: false, batteryOK: true), .none)
+        // Low power only blocks continuous watching; the cheap three-minute idle
+        // snapshot still runs.
+        XCTAssertEqual(state.tick(now: 1, enabled: true, idle: true, changed: true,
+                                  inputActive: false, batteryOK: false), .idleSnapshot)
+        XCTAssertEqual(state.tick(now: 2, enabled: true, idle: false, changed: true,
+                                  inputActive: false, batteryOK: true), .none)
+        XCTAssertEqual(state.tick(now: 3, enabled: true, idle: true, changed: false,
+                                  inputActive: true, batteryOK: true), .startWatch)
+        XCTAssertEqual(state.tick(now: 4, enabled: false, idle: true, changed: false,
+                                  inputActive: false, batteryOK: true), .stop)
+    }
+}
