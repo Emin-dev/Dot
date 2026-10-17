@@ -185,6 +185,11 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Persistent release auth — 2026-10-18.** `scripts/store_github_token.sh` stores a one-time classic
+PAT (repo scope) or fine-grained Contents-write token in the macOS Keychain; `publish_public_release.sh`
+falls back to it, so later releases need no device login. A 1 GB DMG cannot be pushed as ordinary git
+content (GitHub rejects files over 100 MB); release assets require this API token or a manual upload.
+
 **Public DMG — prepared 2026-10-18.** `scripts/package_public_release.sh` now produces a **1.0 GB
 `Dot.dmg`** (compressed runtime-only app, Applications symlink, no models) alongside `Dot.zip`;
 `hdiutil verify`, signature and contents were checked (no `OfflineModels`, downloader present).

@@ -12,7 +12,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-[ -n "$TOKEN" ] || { echo "publish_public_release: set GITHUB_TOKEN or GH_TOKEN" >&2; exit 1; }
+if [ -z "$TOKEN" ]; then
+  # Persistent one-time setup: bash scripts/store_github_token.sh
+  TOKEN="$(security find-generic-password -a "$USER" -s dot-github-token -w 2>/dev/null || true)"
+fi
+[ -n "$TOKEN" ] || { echo "publish_public_release: run scripts/store_github_token.sh once" >&2; exit 1; }
 ZIP="build-public/Dot.zip"
 SUM="$ZIP.sha256"
 DMG="build-public/Dot.dmg"
