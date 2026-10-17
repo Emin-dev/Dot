@@ -79,6 +79,7 @@ final class ChatModel: ObservableObject {
     private var videoSpeechChecked = false
     private var videoSpeechMuted = false
     private var microphoneModeNoticeShown = false
+    private var visionNoticeShown = false
     private let videoPlayback: @MainActor () -> Bool
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
@@ -132,6 +133,8 @@ final class ChatModel: ObservableObject {
     @Published private(set) var taskStage: String?
     @Published private(set) var taskStatusText: String?
     @Published private(set) var engineStage: String?
+    /// A5: a visible capability note when the local model has no image input.
+    @Published private(set) var visionNotice: String?
     private var taskProgress = ResearchTaskProgress()
     private var activeSpeechUpdateID: UUID?
     private var taskProgressTicker: Task<Void, Never>?
@@ -1447,6 +1450,7 @@ final class ChatModel: ObservableObject {
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
                     guard self.screenEnabled && self.runtime.screenAuthorized() else { return nil }
+                    if !hasVision { self.noteTextOnlyVisionIfNeeded(); return nil }
                     self.capturingScreen = true
                     defer { if self.gate.accepts(id) { self.capturingScreen = false } }
                     let image = try? await self.screen.capture(turn: id, modelHasVision: hasVision)
@@ -2755,6 +2759,42 @@ final class ChatModel: ObservableObject {
                                                              startDate: date, durationMinutes: duration))
                             executedToolConfirmation = "I need your confirmation to add '\(eventTitle)' to the calendar."
                             DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: "create_event:\(eventTitle)", outcome: "awaiting confirmation", succeeded: true)
+                        case "edit_event":
+                            guard CalendarMeetingAssistant.shared.hasAccess() else {
+                                executedToolConfirmation = "Calendar access is not granted. Enable it in System Settings > Privacy & Security > Calendars."
+                                break
+                            }
+                            guard let wanted = title, !wanted.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                                executedToolConfirmation = "Tell me which calendar event to edit."
+                                break
+                            }
+                            guard let startTime, let parsed = ISO8601DateFormatter().date(from: startTime) else {
+                                executedToolConfirmation = "Tell me the new start time for '\(wanted)'."
+                                break
+                            }
+                            let now = Date()
+                            guard let week = Calendar.current.date(byAdding: .day, value: 7, to: now) else {
+                                executedToolConfirmation = "I could not read the calendar window."
+                                break
+                            }
+                            let events = CalendarMeetingAssistant.shared.fetchEvents(from: now, to: week)
+                            let lowered = wanted.lowercased()
+                            let matches = events.filter { $0.title.lowercased().contains(lowered) }
+                            guard let match = matches.min(by: { $0.title.count < $1.title.count }) else {
+                                executedToolConfirmation = "I could not find an upcoming event matching '\(wanted)'."
+                                break
+                            }
+                            let minutes = durationMinutes ?? max(1, Int(match.endDate.timeIntervalSince(match.startDate) / 60))
+                            let fmt = DateFormatter(); fmt.dateStyle = .short; fmt.timeStyle = .short
+                            self.pendingApproval = ActionApprovalRequest(
+                                title: "Edit Calendar Event",
+                                detail: "Edit '\(match.title)' to \(fmt.string(from: parsed)) for \(minutes) minutes?",
+                                target: match.title, isDestructive: false, command: match.title,
+                                calendarDraft: CalendarDraft(action: .edit, eventID: match.id, title: match.title,
+                                                             startDate: parsed, durationMinutes: minutes))
+                            executedToolConfirmation = "I need your confirmation to edit '\(match.title)'."
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule",
+                                target: "edit_event:\(match.title)", outcome: "awaiting confirmation", succeeded: true)
                         case "move_next_meeting":
                             guard CalendarMeetingAssistant.shared.hasAccess() else {
                                 executedToolConfirmation = "Calendar access is not granted. Enable it in System Settings > Privacy & Security > Calendars."
@@ -2785,6 +2825,7 @@ final class ChatModel: ObservableObject {
                     }
                 }, screenImage: { [weak self] hasVision in
                     guard let self, self.gate.accepts(id), !Task.isCancelled else { throw CancellationError() }
+                    if !hasVision { self.noteTextOnlyVisionIfNeeded(); return nil }
                     stage = .capture
                     self.capturingScreen = self.screen.enabled
                     if self.screen.enabled {
@@ -3011,6 +3052,16 @@ final class ChatModel: ObservableObject {
         return id
     }
     func stopCurrentTurn() { cancelTurn(); showCaptureOutcome("Stopped") }
+    /// A5: make the text-only model's missing screen image visible once instead of
+    /// only writing a log line. OCR/page reading still work.
+    private func noteTextOnlyVisionIfNeeded() {
+        guard !visionNoticeShown else { return }
+        visionNoticeShown = true
+        visionNotice = "Text-only model: screen image off"
+        DiagnosticChatLogger.record(role: "system",
+            text: "Screen image skipped: the local model reports no image input; text and OCR paths remain available.")
+    }
+
     private func showCaptureOutcome(_ text: String) {
         captureOutcomeTask?.cancel(); captureOutcome = text
         let turn = gate.current
@@ -3116,7 +3167,7 @@ struct PetView: View {
         .buttonStyle(.plain)
         .contentShape(Ellipse())
         .accessibilityLabel("Dot companion")
-        .accessibilityValue(model.engineStage ?? model.taskStatusText ?? emotion.caption)
+        .accessibilityValue(model.visionNotice ?? model.engineStage ?? model.taskStatusText ?? emotion.caption)
         .accessibilityHint("Click to talk or interrupt. Drag to move. Right-click for options. Escape stops.")
         .accessibilityAction(named: Text("Options")) { openOptions() }
         .background(accessibilityContractIndicators)

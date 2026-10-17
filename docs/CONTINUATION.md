@@ -185,6 +185,13 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**A5 vision notice and R13 arbitrary calendar edit — 2026-10-17.** A text-only model now sets a
+visible `visionNotice` ("Text-only model: screen image off") shown in the context menu and the pet's
+accessibility value, instead of only logging; explicit page/OCR reading is unaffected. The calendar
+tool gains `edit_event`: it finds an upcoming event by title, builds an edit draft with a new start
+time/duration, and uses the same approval card (updateEvent). The parser test covers the new action.
+Full lane 903/0, `swift test` 580/0, 53 guardrails.
+
 **Placement and click accuracy — 2026-10-17 (owner report).** Three real causes fixed.
 (1) `findRandomEmptySpace` had a Pass-3 "fewest hits" fallback that returned a spot even when it
 overlapped a window/text; it now returns nil and Dot stays put. (2) A diagonal trip only checked its

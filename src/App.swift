@@ -591,6 +591,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         micItem.target = self
         menu.addItem(micItem)
 
+        if let visionNotice = model.visionNotice {
+            let noticeItem = NSMenuItem(title: visionNotice, action: nil, keyEquivalent: "")
+            noticeItem.isEnabled = false
+            menu.addItem(noticeItem)
+        }
+
         let clearItem = NSMenuItem(title: "Clear conversation", action: #selector(clearConversation), keyEquivalent: "k")
         clearItem.target = self; menu.addItem(clearItem)
 

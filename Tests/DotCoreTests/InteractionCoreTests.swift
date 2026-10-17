@@ -1526,6 +1526,13 @@ final class InPlaceAppTypingTests: XCTestCase {
         try moveStream.feed("data: [DONE]")
         XCTAssertNil(try moveStream.completed())
         XCTAssertEqual(try moveStream.completedToolAction(), .calendarSchedule(action: "move_next_meeting", title: nil, startTime: "2026-10-18T16:00:00Z", durationMinutes: 45))
+
+        var editStream = QuestionIntentStream()
+        try editStream.feed(toolFrame(name: "calendar_schedule", arguments: #"{"action":"edit_event","title":"Design Review","start_time_iso":"2026-10-18T15:30:00Z","duration_minutes":60}"#))
+        try editStream.feed(finishFrame)
+        try editStream.feed("data: [DONE]")
+        XCTAssertNil(try editStream.completed())
+        XCTAssertEqual(try editStream.completedToolAction(), .calendarSchedule(action: "edit_event", title: "Design Review", startTime: "2026-10-18T15:30:00Z", durationMinutes: 60))
     }
 
     func testActionApprovalRequestDestructiveGuard() {

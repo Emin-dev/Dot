@@ -561,6 +561,10 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**A5/R13 completion (2026-10-17):** visible text-only-model notice; calendar `edit_event` by title with
+the existing confirmation card. Remaining calendar scope: renaming and editing past/recurring series
+is not exposed.
+
 **Placement/click accuracy (2026-10-17):** no overlapping fallback target, full-window protected
 bounds, swept-path validation for diagonal trips and the two-minute idle roam, captured-display OCR
 coordinates and raise-before-click. Remaining: no motion planner beyond conservative 60–140 pt moves.

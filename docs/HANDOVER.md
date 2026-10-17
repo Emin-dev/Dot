@@ -18,6 +18,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   its capability-gated loopback endpoint, and now survives a client that splits head and body across
   TCP segments (the shipped binary previously answered 400). `dot-fetch` is the pinned HTTPS reader
   with a verified sandbox canary (inherited socket only, `connect()` denied).
+- **Text-only model.** When the local model reports no image input, a one-time visible notice appears
+  in the menu/accessibility value; OCR/page reading still work.
 - **Answer length.** Simple questions get one short sentence; complex tasks get the detail and steps
   they need. There is no fixed word limit.
 - **Click to listen.** Whisper is compiled in and embedded by `build.sh` via `DOT_WHISPER_FRAMEWORK`;
@@ -60,8 +62,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **Cold start.** The menu-bar title shows "Preparing N%" during the payload check and "Loading
   model…" during Splash readiness; the menu header and accessibility value carry the full stage.
   Tools & History offers optional prewarm at launch (off by default).
-- **Calendar.** Briefs and schedule reads work; creating an event and moving the next meeting now
-  present a confirmation card and execute only after approval. Arbitrary event editing is not exposed.
+- **Calendar.** Briefs and schedule reads work; creating an event, editing a named upcoming event
+  (new start/duration) and moving the next meeting all present a confirmation card and execute only
+  after approval.
 - **Small owner requests.** Copy Dot's answer to the clipboard; "show that" opens the readable
   history; battery level from IOKit; self-reflection writes to its file, copies to the clipboard and
   offers a paste; read a named text file (with a Spotlight name suggestion when the exact path is

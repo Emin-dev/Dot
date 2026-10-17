@@ -730,9 +730,9 @@ final class EngineManager: ObservableObject {
                     ], "required": ["app", "action"], "additionalProperties": false]
                 ]],
                 ["type": "function", "function": [
-                    "name": "calendar_schedule", "description": "Inspect today's calendar schedule, prepare a meeting brief, schedule a new event, or move the next meeting on macOS. Creating and moving always show a confirmation card.",
+                    "name": "calendar_schedule", "description": "Inspect today's calendar schedule, prepare a meeting brief, schedule a new event, edit a named event, or move the next meeting on macOS. Every mutation shows a confirmation card.",
                     "strict": true, "parameters": ["type": "object", "properties": [
-                        "action": ["type": "string", "enum": ["today_schedule", "next_meeting_brief", "create_event", "move_next_meeting"]],
+                        "action": ["type": "string", "enum": ["today_schedule", "next_meeting_brief", "create_event", "edit_event", "move_next_meeting"]],
                         "title": ["type": "string", "maxLength": 200],
                         "start_time_iso": ["type": "string", "maxLength": 50],
                         "duration_minutes": ["type": "integer"]
