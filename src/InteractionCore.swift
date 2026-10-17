@@ -1633,6 +1633,24 @@ public enum SystemControlSuite {
         }
     }
 
+    /// Search file *contents* (Spotlight indexes text, and the query is not limited to
+    /// names). Read-only, bounded, and it reports nothing rather than guessing.
+    public static func searchFileContents(_ query: String, limit: Int = 5) -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return [] }
+        do {
+            let data = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: [trimmed]).data
+            let lines = String(decoding: data, as: UTF8.self)
+                .components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty && !$0.hasPrefix("/System/") && !$0.hasPrefix("/private/var/") }
+            var seen = Set<String>()
+            return lines.filter { seen.insert($0).inserted }.prefix(limit).map { $0 }
+        } catch {
+            return []
+        }
+    }
+
     public static func findFilesSpotlight(named: String, limit: Int = 5) -> [String] {
         do {
             let data = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: ["-name", named]).data

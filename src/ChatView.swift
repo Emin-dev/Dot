@@ -1359,6 +1359,18 @@ final class ChatModel: ObservableObject {
         beginListening(continuation: nil)
     }
 
+    /// The subject of an explicit content-search request, or nil when the turn is not
+    /// one. Kept narrow so ordinary sentences are not turned into Spotlight queries.
+    private static func fileSearchRequest(from phrase: String) -> String? {
+        for prefix in ["search my files for ", "search my files ", "search files for ",
+                       "search file contents for ", "find in my files ", "search documents for "]
+        where phrase.hasPrefix(prefix) {
+            let query = String(phrase.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return query.count >= 3 ? query : nil
+        }
+        return nil
+    }
+
     /// The path from an explicit "read file ..." request, or nil when the turn is not
     /// one. A bare "read file" asks for a path instead of guessing.
     private static func fileReadRequest(from phrase: String) -> String? {
@@ -1578,6 +1590,17 @@ final class ChatModel: ObservableObject {
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
         let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Searching file contents, as opposed to the existing name search: "search my
+        // files for X" reports where X appears instead of only where it is named.
+        if pendingApproval == nil, let query = Self.fileSearchRequest(from: copyPhrase) {
+            let matches = SystemControlSuite.searchFileContents(query, limit: 5)
+            respondDirectly(matches.isEmpty
+                ? "I found nothing indexed that mentions \"\(query)\"."
+                : "Files mentioning \"\(query)\":\n" + matches.map { "• \($0)" }.joined(separator: "\n"),
+                id: id)
+            return
+        }
+
         // Reading a named local file. The owner authorised broad local access, so this
         // is bounded and honest: UTF-8 text only, a hard size cap, and a clear refusal
         // for anything missing, binary or oversized. The system still enforces its own
