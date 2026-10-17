@@ -144,6 +144,9 @@ final class ChatModel: ObservableObject {
         // The owner asked Dot not to talk over video. Keep the text visible instead.
         if VideoPlaybackDetector.isWatchingVideo() {
             DiagnosticChatLogger.record(role: "dot (silent)", text: text)
+            let id = cancelTurn()
+            answer = text
+            displayedAnswerTurn = id
             showCaptureOutcome("Video playing — staying quiet.")
             return
         }
