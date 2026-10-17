@@ -2758,6 +2758,9 @@ public enum VideoPlaybackDetector {
         "org.videolan.vlc", "com.colliderli.iina", "io.mpv", "com.plexapp.plex", "tv.kodi.kodi",
         "com.elmediaplayer", "com.movistplayer", "com.5kplayer", "com.infuseapp.infuse"
     ]
+    /// Apps that are not dedicated players but do play videos; only their audio
+    /// makes them count, so browsing photos does not silence Dot.
+    public static let mediaAppSignatures = ["com.apple.photos"]
     public static let browserSignatures = [
         "com.apple.safari", "com.google.chrome", "org.mozilla.firefox", "company.thebrowser.browser",
         "com.microsoft.edgemac", "com.brave.browser", "com.operasoftware.opera", "com.vivaldi.vivaldi",
@@ -2776,8 +2779,10 @@ public enum VideoPlaybackDetector {
         let title = (windowTitle ?? "").lowercased()
         let videoApp = videoAppSignatures.contains { id.contains($0) || name.contains($0) }
         let browser = browserSignatures.contains { id.contains($0) || name.contains($0) }
+        let mediaApp = mediaAppSignatures.contains { id.contains($0) || name.contains($0) }
         let shapedTitle = videoTitleHints.contains { title.contains($0) }
         if videoApp { return true }
+        if mediaApp && audioPlaying { return true }
         if browser && shapedTitle { return true }
         if audioPlaying && (browser || videoApp) { return true }
         return false

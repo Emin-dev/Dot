@@ -2130,5 +2130,11 @@ final class VideoPlaybackDetectorTests: XCTestCase {
         XCTAssertFalse(VideoPlaybackDetector.isVideoContext(
             appName: "Safari", bundleID: "com.apple.Safari",
             windowTitle: "Inbox", audioPlaying: false))
+        XCTAssertTrue(VideoPlaybackDetector.isVideoContext(
+            appName: "Photos", bundleID: "com.apple.Photos",
+            windowTitle: "Library", audioPlaying: true))
+        XCTAssertFalse(VideoPlaybackDetector.isVideoContext(
+            appName: "Photos", bundleID: "com.apple.Photos",
+            windowTitle: "Library", audioPlaying: false))
     }
 }
