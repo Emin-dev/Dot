@@ -1,5 +1,7 @@
 # Dot handover — 2026-10-17
 
+**Spec superseded by `docs/DEV_TEAM_PROMPT.md` (owner answers R1–R15, 2026-10-17) — follow it wherever these documents conflict.**
+
 First written at commit `f089231`; revised and reinstalled from the committed tree (installed app
 provenance matches HEAD, `source_root` recorded). Read [CONTINUATION.md](CONTINUATION.md) for the dated record and
 the supervisor-port slices; this file is the "what is solid, what is not, what is next" list.
@@ -39,8 +41,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **Small owner requests.** Copy Dot's answer to the clipboard; "show that" opens the readable
   history; battery level from IOKit; self-reflection writes to its file, copies to the clipboard and
   offers a paste; read a named text file; Spotlight **content** search.
-- **Movement.** Idle roam every 2 minutes, thinking relocation every 5 s, and no movement while the
-  menu is open, the pointer is on Dot, or a mouse button is held.
+- **Movement.** Idle roam every 2 minutes only. The 5-second thinking relocation was retired by the
+  owner on 2026-10-17 after Dot moved nonstop through a cold model load; Dot now stays put during a
+  turn, and still never moves while the menu is open, the pointer is on Dot, or a mouse button is held.
 - **Appearance.** Dew is the default; an explicit choice persists (the interim migration that
   reverted an explicit Dew choice is gone).
 - **Install.** `bash scripts/install_local.sh` builds with the recognizer, clones the payload

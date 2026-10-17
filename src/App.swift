@@ -28,7 +28,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var visibleUtilities = Set<String>()
     private var terminating = false
     private var movement: Timer?
-    private var thinkingRelocationTimer: Timer?
     private var idleRoamTimer: Timer?
     private var isAnimatingRoam = false
     private var lastRoamRelocationAt: Double = 0
@@ -106,9 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         voiceEnvironment.start()
         placement.onCaptureChanged = { [weak model] active in model?.placementCapturing = active }
         model.placementInvalidated = { [weak self] in self?.cancelMovement() }
-        model.onPhaseChanged = { [weak self] newPhase in
-            self?.handlePhaseChanged(newPhase)
-        }
         model.onMove = { [weak self] command in
             guard let self, let panel = self.panel else { return nil }
             guard let screen = panel.screen ?? NSScreen.main else { return nil }
@@ -418,11 +414,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private func cancelMovement() { placement.invalidate(); roam.cancel(now: ProcessInfo.processInfo.systemUptime) }
 
-    @objc private func showPet() { stopThinkingRelocation(); model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
+    @objc private func showPet() { model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
     @objc private func quit() { NSApp.terminate(nil) }
 
     @objc private func stopCurrentAction() {
-        stopThinkingRelocation()
         cancelMovement()
         model?.stopCurrentTurn()
         sourcePanel.stop(); researchPanel.cancel(); webResearchPanel?.cancel(); actionPanel.stop()
@@ -661,79 +656,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if interval != movementInterval { scheduleMovement(interval: interval) }
     }
 
-    private func handlePhaseChanged(_ phase: PetPhase) {
-        if phase == .thinking {
-            startThinkingRelocation()
-        } else {
-            stopThinkingRelocation()
-        }
-    }
-
-    private func startThinkingRelocation() {
-        stopThinkingRelocation()
-        relocateDuringThinking()
-        // The documented policy is a safe-zone relocation every 5 seconds for as
-        // long as the thinking phase lasts, never covering windows or content.
-        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.relocateDuringThinking() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        thinkingRelocationTimer = timer
-    }
-
-    private func stopThinkingRelocation() {
-        thinkingRelocationTimer?.invalidate()
-        thinkingRelocationTimer = nil
-    }
-
-    private func relocateDuringThinking() {
-        guard !isAnimatingRoam, let panel, let model else { return }
-        let cursor = NSEvent.mouseLocation
-        if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
-            model.hovered = false
-        }
-        // Never move while the owner has the menu open or the pointer on Dot.
-        guard model.phase == .thinking, !model.pinned, !model.hovered,
-              panel.isVisible, menuTracking == 0, NSEvent.pressedMouseButtons == 0 else { return }
-        guard let screen = panel.screen ?? NSScreen.main else { return }
-        let visible = screen.visibleFrame
-        guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
-
-        let snap = placementSnapshot(for: screen, eligible: model.screenEnabled)
-        let protectedRegions = snap?.protected ?? []
-
-        let currentOrigin = panel.frame.origin
-        let currentFrame = panel.frame
-
-        guard let target = RoamingCore.findRandomEmptySpace(
-            frame: currentFrame,
-            bounds: bounds,
-            cursor: cursor,
-            regions: protectedRegions,
-            minDistance: 140
-        ) else { return }
-
-        guard target != currentOrigin else { return }
-
-        let now = ProcessInfo.processInfo.systemUptime
-        self.isAnimatingRoam = true
-        self.lastRoamRelocationAt = now
-        self.roam.cancel(now: now, longRest: true)
-        let targetFrame = NSRect(origin: target, size: panel.frame.size)
-
-        NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.28
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().setFrame(targetFrame, display: true)
-        }, completionHandler: { [weak self] in
-            Task { @MainActor in
-                panel.setFrameOrigin(target)
-                self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: true)
-                self?.isAnimatingRoam = false
-            }
-        })
-    }
-
     private func startIdleRoaming() {
         idleRoamTimer?.invalidate()
         // The owner's cadence: Dot moves to a new clear spot every 2 minutes while
@@ -817,7 +739,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         documentWorker?.stop()
-        stopThinkingRelocation()
         idleRoamTimer?.invalidate()
         model?.stopProactivity(); voiceEnvironment.stop(); movement?.invalidate(); placement.invalidate(); model?.shutdown()
         for observation in observations {

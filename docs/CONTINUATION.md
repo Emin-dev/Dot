@@ -74,8 +74,10 @@ write path wired (preferences → T5, corrections → core, one ageing pass at l
    the first validation of every cycle reject by construction, and a caller that had just started a
    refresh could have it cancelled by that rejection. `PlacementCapture.needsRefresh` now lets
    `AppDelegate` start a capture before validating the old map, `current` no longer invalidates an
-   in-flight refresh, and thinking relocation plus the two-minute idle roam refresh too. The lifetime
-   is unchanged at 10 s (`RoamingTests` guards the fail-closed rule).
+   in-flight refresh, and the two-minute idle roam refreshes too. The lifetime is unchanged at 10 s
+   (`RoamingTests` guards the fail-closed rule). The owner retired the 5-second thinking relocation on
+   2026-10-17 (nonstop movement through long model loads), so that path was deleted; movement is the
+   2-minute idle roam plus necessary escape when covered.
 6. *Last Dot-authored Python — port in progress.* `Resources/Runtime/dot_runtime.py`, `dot_process.py`
    and `dot_tls.py` (Splash supervisor, child observation and TLS relay; 640 lines, stdlib-only) are the
    only Python that is Dot's own. Splash itself and its interpreter are deliberately retained: the owner

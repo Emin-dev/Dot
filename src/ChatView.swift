@@ -62,8 +62,7 @@ enum DotMovementCommand: String, Sendable {
 @MainActor
 final class ChatModel: ObservableObject {
     var onMove: ((DotMovementCommand) -> String?)?
-    var onPhaseChanged: ((PetPhase) -> Void)?
-    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext(); onPhaseChanged?(phase) } }
+    @Published private(set) var phase: PetPhase = .idle { didSet { if phase.isActive { placementInvalidated?() }; updateProactiveContext() } }
     @Published private(set) var issue: CompanionIssue?
     @Published private(set) var answer = ""
     /// Identity of the displayed text, retained on Stop so history can describe

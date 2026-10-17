@@ -72,11 +72,17 @@ A public, signed, notarised macOS release where:
 - **Less code.** Prefer deleting to adding; no dead code, no second mechanism for something that exists.
 - **Dew** (`NativeSkin.dew`) is the default skin and an explicit choice must persist.
 - **Dot never moves** while its menu is open, the pointer is on it, or a mouse button is held.
-  Idle roaming every **2 minutes**; thinking relocation every 5 s.
+  Idle roaming every **2 minutes** only. The 5-second thinking relocation was retired by the owner on
+  2026-10-17 after Dot moved nonstop through long model loads; do not reintroduce it.
 - **Memory** has five tiers, never deletes automatically (except eviction under real RAM pressure,
   T1→T2 only, never T3/T4/T5, never pinned), and the owner can delete explicitly.
-- **Approvals** are a card, and only for genuinely destructive actions; a plain "yes" is accepted only
-  for the non-destructive paste offer.
+- **Listening** is up to 5 minutes per turn with a spoken cap notice; there is no wake word (click or
+  hold-Fn only). **English only.**
+- **Memory** captures 5–10 LLM-written key points per conversation (details kept) with full text in a
+  separate searchable archive.
+- **Approvals** use a trusted-app allowlist; a per-command card remains outside it. File operations are
+  automatic without asking (create/write/rename/move/delete); calendar mutations keep a confirmation
+  card. A plain "yes" is accepted only for non-destructive offers.
 - **Always** commit + push to `main` and reinstall locally after testing; never leave the repo and the
   installed app out of step.
 

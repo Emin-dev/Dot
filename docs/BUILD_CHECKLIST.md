@@ -103,7 +103,7 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 ### Completed Capabilities (Verified & Deployed)
 - [x] **Permission Preflight & Once-Only Caching:** Screen Recording permission checked before requesting, asked at most once, and cached persistently without prompt loops.
 - [x] **Full Background Autonomy:** Dot keeps working when clicking into other applications; turns are only interrupted if user explicitly clicks Stop in Dot's window or says "stop".
-- [x] **Safe-Zone 5-Second Random Movement:** While thinking, Dot relocates every 5 seconds to a safe empty zone detected via `PlacementCapture` and `RoamingCore`, never covering buttons, text, or interactive windows.
+- [x] **Safe-Zone 5-Second Random Movement — retired 2026-10-17.** While thinking, Dot used to relocate every 5 seconds to a safe empty zone detected via `PlacementCapture` and `RoamingCore`. The owner observed Dot moving nonstop through long model loads and retired the cadence: Dot now keeps its position through a turn and moves only on the 2-minute idle roam (plus a necessary escape when covered). The safe-zone calculation remains.
 - [x] **Self-Improvement & Failure Logging:** Automatically logs task failure reason, missing capability, and proposed fix via `DiagnosticChatLogger.recordFailure` and indexes corrections in local FTS5 store.
 - [x] **Live GitHub Repository Integration:** Built-in menu items and conversational inquiries to inspect, copy, and open Dot's repository (`https://github.com/Emin-dev/Dot`) and read local source code directly.
 - [x] **Hardware Specification Launch Gate:** Production App Store ready launch gate enforcing Apple Silicon M4 Pro, M5 or newer, 48 GB Unified Memory, and macOS 27+:
@@ -561,13 +561,35 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Owner answers — 2026-10-17 audit (authoritative; see `docs/DEV_TEAM_PROMPT.md` R1–R15).**
+- Listening: up to **5 minutes** per turn, then answer and say the cap was reached (was 60 s).
+- **No wake word** — click or hold-Fn only. **English only, always.**
+- Voice: local and fast, but **quality first**; a calm, warm **British woman**. Kokoro British-female
+  picker now (`bf_emma`, `bf_isabella`, `bf_alice`); evaluate Chatterbox/Orpheus next; **never cloud TTS**.
+- Memory: remember everything as **5–10 key points per conversation** (LLM summarisation, details kept),
+  full text in a separate searchable archive; voice-only interface.
+- Files: **full autonomy** — create/write/rename/move/delete automatically, without asking (this
+  overrides the earlier "card for destructive actions" rule for file operations); proactive
+  suggestions from everything Dot sees.
+- Screen: **adaptive watching** — idle snapshot every few minutes; on screen change or mouse movement,
+  continuous capture for 10–50 s (extended while changing); battery-aware; visible pause switch.
+- Self-healing: snapshot → apply → self-test → auto-rollback; one risky change per pass; keep 10
+  snapshots; a fixed Rust watcher worker; a sealed last-known-good fallback; an emergency canary flag.
+- Research: **all and more** providers (news, optional keyed) plus local solutions (own index, cached
+  results, optional offline encyclopedia snapshot).
+- Cold start: live stage-by-stage progress + optional prewarm at login. Sleep/wake: auto re-arm and say
+  so. Calendar: briefs + create/edit with a confirmation card. Battery: optional threshold alerts, off
+  by default.
+- Approvals: **trusted-app allowlist**; per-command card outside it; file operations are automatic (above).
+
+
 **Runtime is Rust-only.** No Python or other interpreted runtime in the shipped app. `dot-voice` (Kokoro), `dot-search` (search) and `dot-fetch` (pinned source reader) are Rust binaries built by `build.sh`/`build_complete.sh` and copied into `Contents/MacOS`. Both were verified working with the owner's real payload: `dot-voice` synthesized 78,000 samples of `bf_isabella` at 24 kHz offline, and `dot-search` returned live results through its capability-gated loopback endpoint. The Python voice helper, the Python source fetcher and the entire Python SearXNG search stack are deleted. **The fixed exception is the LLM engine**: Qwen 3.8 27B Q4 on Splash is retained exactly as-is, because it is the fastest measured path; Splash's own interpreter remains part of the external offline payload and is not Dot-authored runtime code. The remaining Dot-authored Python on the runtime path is the Splash supervisor/TLS relay (`Resources/Runtime/dot_*.py`); porting it to Rust is the next migration step.
 
 **Search.** No SearXNG, no waitress, no AGPL obligation, no API keys by default. Rust `dot-search` queries DuckDuckGo and Wikipedia behind a per-launch capability token on loopback. Resilience work (additional free providers and fallback ordering) is an open item; a keyed provider may be added later without removing the free path.
 
 **Proactive cadence.** Choices remain 10 / 4 / 1 minutes; the **default is Normal (4 minutes)**, changed from High.
 
-**Idle movement.** Dot roams to a new clear spot **every 2 minutes** while idle (3.2 s glide), and relocates every 5 seconds while thinking (0.28 s glide). The idle cadence was 12–18 seconds until 2026-10-17, which was too frequent. It never covers protected windows, text regions or the cursor, and stays put while hovered, pinned, dragging, hidden or in a menu.
+**Idle movement.** Dot roams to a new clear spot **every 2 minutes** while idle (3.2 s glide). The idle cadence was 12–18 seconds until 2026-10-17, which was too frequent. The former relocation every 5 seconds while thinking was **retired by the owner on 2026-10-17** after Dot moved nonstop through long model loads; Dot now stays put during a turn and only the 2-minute idle roam is scheduled. It never covers protected windows, text regions or the cursor, and stays put while hovered, pinned, dragging, hidden or in a menu.
 
 **Default appearance (changed 2026-10-17): Dew is the default skin.** The owner replaced the
 long-standing Original default. An explicit stored choice still wins and nothing is written when
@@ -582,8 +604,8 @@ catalogue should be trimmed to an always-on subset with the rest offered on dema
 tightened to the chosen set.
 
 **No movement while the owner is interacting.** Dot must not relocate while its own context menu is
-open, while the pointer is on it, or while a mouse button is held: thinking relocation, idle roaming
-and reactive evasion all honour that rule.
+open, while the pointer is on it, or while a mouse button is held: idle roaming and reactive evasion
+honour that rule. (The former 5-second thinking relocation was retired on 2026-10-17.)
 
 **Skins and expressions.** All eleven skins share one warm expression set plus amplitude-driven speech. The "120 reviewed recipes per new skin" target (1,200 total) is **retired as a requirement** and must not be presented as delivered; accurate viseme/phoneme lip-sync remains a desirable improvement, not a completed feature.
 
