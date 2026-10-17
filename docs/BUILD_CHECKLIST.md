@@ -578,7 +578,9 @@ app or browser; keep the reply as text and suppress proactive/follow-up speech. 
   overrides the earlier "card for destructive actions" rule for file operations; implemented
   2026-10-17 for simple file utilities and `delete_file`, while shells/sudo/substitutions still card);
   proactive
-  suggestions from everything Dot sees.
+  suggestions from everything Dot sees. Implemented 2026-10-17 (bounded): recent-file scan of
+  Desktop/Documents/Downloads (24 h, names/folders/ages/WIP only) feeds the proactive prompt and
+  triggers on a changed newest file; full disk index/content search still open.
 - Screen: **adaptive watching** — idle snapshot every few minutes; on screen change or mouse movement,
   continuous capture for 10–50 s (extended while changing); battery-aware; visible pause switch.
   Implemented 2026-10-17: 3-min fingerprint, 10–50 s watch, 4 s settle, 60 s cooldown, low-power and

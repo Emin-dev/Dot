@@ -82,6 +82,8 @@ final class ChatModel: ObservableObject {
     private var prewarmTask: Task<Void, Never>?
     private var memorySummaryTask: Task<Void, Never>?
     private var screenWatchTask: Task<Void, Never>?
+    private var lastFileInsightKey: String?
+    private var lastFileScanAt = 0.0
     static let prewarmDefaultsKey = "dot.prewarmAtLogin"
     @Published var pinned: Bool {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
@@ -1278,6 +1280,21 @@ final class ChatModel: ObservableObject {
                         self.proactiveContextChangedAfterUser = true
                     }
                     self.updateProactiveContext()
+                    if now - self.lastFileScanAt > 300 {
+                        self.lastFileScanAt = now
+                        let roots = [
+                            FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
+                            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+                            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+                        ].compactMap { $0 }
+                        if let newest = FileInsightScanner.recentFiles(in: roots, limit: 1).first {
+                            let key = "file:\(newest.folder)/\(newest.name):\(Int(newest.modifiedAt.timeIntervalSince1970))"
+                            if let previous = self.lastFileInsightKey, previous != key {
+                                _ = self.proactive.offerContext(key: key, reason: .workspaceChanged)
+                            }
+                            self.lastFileInsightKey = key
+                        }
+                    }
 
                     if !MeetingFocusAwareness.isMeetingActive() {
                         let desktop = ActiveDesktopContext.current()

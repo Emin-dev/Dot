@@ -2188,3 +2188,48 @@ final class ScreenWatchStateTests: XCTestCase {
                                   inputActive: false, batteryOK: true), .stop)
     }
 }
+
+final class FileInsightScannerTests: XCTestCase {
+    private func makeFile(_ name: String, in directory: URL, modified: Date) throws {
+        let url = directory.appendingPathComponent(name)
+        try Data("x".utf8).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+    }
+
+    func testRecentFilesAreBoundedSortedAndSkipOldOrHidden() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Desktop-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sub = root.appendingPathComponent("Projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let now = Date()
+        try makeFile("old.txt", in: root, modified: now.addingTimeInterval(-2 * 86_400))
+        try makeFile("recent.txt", in: root, modified: now.addingTimeInterval(-3_600))
+        try makeFile(".secret", in: root, modified: now.addingTimeInterval(-60))
+        try makeFile("nested.md", in: sub, modified: now.addingTimeInterval(-1_800))
+
+        let insights = FileInsightScanner.recentFiles(in: [root], now: now, limit: 2)
+        XCTAssertEqual(insights.map(\.name), ["nested.md", "recent.txt"])
+        XCTAssertTrue(insights.allSatisfy { $0.folder == root.lastPathComponent })
+    }
+
+    func testSummaryMentionsFolderAgeAndWorkInProgress() {
+        let now = Date()
+        let files = [FileInsight(name: "plan.md", folder: "Desktop",
+                                 modifiedAt: now.addingTimeInterval(-3_600), isWorkInProgress: true)]
+        let summary = try? XCTUnwrap(FileInsightScanner.summary(files, now: now))
+        XCTAssertTrue(summary?.contains("plan.md") == true)
+        XCTAssertTrue(summary?.contains("Desktop") == true)
+        XCTAssertTrue(summary?.contains("work in progress") == true)
+        XCTAssertNil(FileInsightScanner.summary([], now: now))
+    }
+
+    func testPromptSummaryCarriesTheRecentFilesLine() {
+        let snapshot = AutonomousWorkspaceSnapshot(activeApp: "Xcode", windowTitle: nil, selectedText: nil,
+            recentDownloadFile: nil, clipboardSignal: nil, autonomousActionNote: nil,
+            recentFiles: [FileInsight(name: "plan.md", folder: "Desktop", modifiedAt: Date(), isWorkInProgress: false)])
+        XCTAssertTrue(snapshot.promptSummary.contains("Recently Changed Files"))
+        XCTAssertTrue(snapshot.promptSummary.contains("plan.md"))
+    }
+}

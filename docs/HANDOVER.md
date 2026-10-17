@@ -35,7 +35,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 - **File autonomy.** Simple file-utility commands (delete/move/copy/create/write/rename) and the
   `delete_file` tool execute without a card; shells, `sudo`, substitutions, pipes into other
   executables, `/dev`/`/System` targets and non-file destructive commands still card. Proactive
-  suggestions from files/folders are not implemented.
+  suggestions now use a bounded recent-file scan of Desktop/Documents/Downloads (names, folders,
+  ages, WIP hints; no contents) in the proactive prompt and trigger when the newest file changes.
+  A full disk index and content-semantic search are still not implemented.
 - **Approvals.** Destructive detection is tokenized (paths, wrappers, `-exec/-delete`, unquoted
   redirects); the card is clickable; a plain "yes" is accepted only for the non-destructive paste
   offer, so the destructive wording stays strict. Contextual app actions are carded unless the app is

@@ -3164,6 +3164,64 @@ private final class LaserBoxView: NSView {
 
 // MARK: - Autonomous Mac Agent & Workspace Observer
 
+/// R7: a bounded view of recently changed files across the owner's usual folders.
+/// Only names, folders, times and a work-in-progress hint leave the scan; contents
+/// are never read here.
+public struct FileInsight: Equatable, Sendable {
+    public let name: String
+    public let folder: String
+    public let modifiedAt: Date
+    public let isWorkInProgress: Bool
+    public init(name: String, folder: String, modifiedAt: Date, isWorkInProgress: Bool) {
+        self.name = name; self.folder = folder; self.modifiedAt = modifiedAt
+        self.isWorkInProgress = isWorkInProgress
+    }
+}
+
+public enum FileInsightScanner {
+    public static func recentFiles(in roots: [URL], now: Date = Date(),
+                                   lookback: TimeInterval = 86_400, limit: Int = 6,
+                                   maximumEntriesPerRoot: Int = 600) -> [FileInsight] {
+        var found: [FileInsight] = []
+        let cutoff = now.addingTimeInterval(-max(0, lookback))
+        let keys: [URLResourceKey] = [.contentModificationDateKey, .isRegularFileKey, .isHiddenKey]
+        for root in roots {
+            var examined = 0
+            let enumerator = FileManager.default.enumerator(
+                at: root, includingPropertiesForKeys: keys,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants])
+            while let url = enumerator?.nextObject() as? URL {
+                examined += 1
+                if examined > maximumEntriesPerRoot { break }
+                guard let values = try? url.resourceValues(forKeys: Set(keys)),
+                      values.isRegularFile == true,
+                      values.isHidden != true,
+                      let modified = values.contentModificationDate,
+                      modified >= cutoff else { continue }
+                let name = url.lastPathComponent
+                if name.hasPrefix(".") || name == "dot_chat_log.txt" { continue }
+                let lower = name.lowercased()
+                let wip = ["draft", "todo", "wip", "untitled"].contains { lower.contains($0) }
+                found.append(FileInsight(name: name, folder: root.lastPathComponent,
+                                         modifiedAt: modified, isWorkInProgress: wip))
+            }
+        }
+        return Array(found.sorted { $0.modifiedAt > $1.modifiedAt }.prefix(max(0, limit)))
+    }
+
+    public static func summary(_ files: [FileInsight], now: Date = Date()) -> String? {
+        guard !files.isEmpty else { return nil }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        let parts = files.prefix(5).map { file -> String in
+            let age = formatter.localizedString(for: file.modifiedAt, relativeTo: now)
+            let wip = file.isWorkInProgress ? ", work in progress" : ""
+            return "\(file.name) (\(file.folder), \(age)\(wip))"
+        }
+        return parts.joined(separator: "; ")
+    }
+}
+
 public struct AutonomousWorkspaceSnapshot: Equatable, Sendable {
     public let activeApp: String
     public let windowTitle: String?
@@ -3171,6 +3229,7 @@ public struct AutonomousWorkspaceSnapshot: Equatable, Sendable {
     public let recentDownloadFile: String?
     public let clipboardSignal: String?
     public let autonomousActionNote: String?
+    public let recentFiles: [FileInsight]
 
     public init(
         activeApp: String,
@@ -3178,7 +3237,8 @@ public struct AutonomousWorkspaceSnapshot: Equatable, Sendable {
         selectedText: String?,
         recentDownloadFile: String?,
         clipboardSignal: String?,
-        autonomousActionNote: String?
+        autonomousActionNote: String?,
+        recentFiles: [FileInsight] = []
     ) {
         self.activeApp = activeApp
         self.windowTitle = windowTitle
@@ -3186,6 +3246,7 @@ public struct AutonomousWorkspaceSnapshot: Equatable, Sendable {
         self.recentDownloadFile = recentDownloadFile
         self.clipboardSignal = clipboardSignal
         self.autonomousActionNote = autonomousActionNote
+        self.recentFiles = recentFiles
     }
 
     public var promptSummary: String {
@@ -3207,6 +3268,9 @@ public struct AutonomousWorkspaceSnapshot: Equatable, Sendable {
         }
         if let note = autonomousActionNote {
             lines.append("Autonomous Background Action Completed: \(note)")
+        }
+        if let files = FileInsightScanner.summary(recentFiles) {
+            lines.append("Recently Changed Files: \(files)")
         }
         return lines.joined(separator: "\n")
     }
@@ -3297,13 +3361,20 @@ public final class AutonomousMacAgent {
             }
         }
 
+        let roots = [
+            FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
+            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
+            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+        ].compactMap { $0 }
+        let recentFiles = FileInsightScanner.recentFiles(in: roots)
         return AutonomousWorkspaceSnapshot(
             activeApp: appName,
             windowTitle: winTitle,
             selectedText: desktop.selectedText,
             recentDownloadFile: recentDownload,
             clipboardSignal: clipboardSignal,
-            autonomousActionNote: actionNote
+            autonomousActionNote: actionNote,
+            recentFiles: recentFiles
         )
     }
 

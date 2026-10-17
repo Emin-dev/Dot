@@ -169,6 +169,14 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R7 proactive file suggestions — implemented 2026-10-17 (bounded).** `FileInsightScanner` scans
+Desktop, Documents and Downloads (24-hour window, at most 600 entries per root, no file contents) and
+reports up to six recently changed files with folder, age and a drafts/todo/WIP hint. The workspace
+snapshot carries "Recently Changed Files" into the proactive prompt, and the idle ticker notices when
+the newest file changes (after a recent user turn) and offers a proactive opportunity. Tests cover
+ordering, bounds, hidden/old-file exclusion, the summary text and the prompt line. Scope note: this is
+shallow recent-file awareness, not a full disk index or content semantic search.
+
 **R10 local result cache — implemented 2026-10-17 (partial).** `SearchResultCache` keeps up to 50
 query/limit results for six hours in `~/Library/Application Support/Dot/SearchCache.json` (0700
 directory, 0600 file, atomic writes). A fresh hit returns without launching `dot-search`, so repeated
