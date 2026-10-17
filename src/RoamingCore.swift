@@ -127,6 +127,10 @@ struct RoamingCore {
         self.nextDecision = now + 6
         self.nextWander = now + initialWanderDelay
     }
+    /// A manual drag or completed roam rests autonomous motion; the direct coverage
+    /// escape in the app must respect it too, not only the internal step path.
+    func isResting(now: Double) -> Bool { now.isFinite && now < minimumRestUntil }
+
     mutating func cancel(now: Double, longRest: Bool = false) {
         trip = nil; isTravelling = false; lastTick = now
         if longRest {

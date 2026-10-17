@@ -44,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     private var observations: [NSObjectProtocol] = []
     private var movementInterval = 0.5
+    private var lastEscapeAttemptAt = 0.0
     private var documentWorker: WatchedDocumentWorker?
     private var activityAssertion: NSObjectProtocol?
     private var keyMonitor: Any?
@@ -335,10 +336,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   !model.hovered, model.menuIsOpen == false,
                   NSEvent.pressedMouseButtons == 0 else { return }
             let now = ProcessInfo.processInfo.systemUptime
-            guard RoamingCore.autonomousMoveAllowed(now: now, lastMoveAt: self.lastRoamRelocationAt) else { return }
+            guard !self.roam.isTravelling, !self.roam.isResting(now: now),
+                  now - self.lastEscapeAttemptAt > 1.5 else { return }
             guard let screen = panel.screen else { return }
             let frame = panel.frame
             if !RoamingCore.clear(frame, regions: snapshot.protected) {
+                self.lastEscapeAttemptAt = now
                 self.lastRoamRelocationAt = now
                 _ = self.roam.evadeToEmptySpace(frame: frame, visible: screen.visibleFrame,
                                                 cursor: NSEvent.mouseLocation,
@@ -711,7 +714,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let checkRegions = snapshot?.protected ?? []
         let isCovered = !checkRegions.isEmpty && !RoamingCore.clear(panel.frame, regions: checkRegions)
         let isCursorNear = panel.frame.insetBy(dx: -24, dy: -24).contains(cursor)
-        if eligible && (isCovered || isCursorNear) && !isAnimatingRoam && model.phase == .idle {
+        if eligible && isCovered, !isAnimatingRoam, !roam.isTravelling, model.phase == .idle,
+           !roam.isResting(now: now), now - lastEscapeAttemptAt > 1.5, let snapshot {
+            // Content is under Dot: leave immediately, not after a two-minute cadence.
+            lastEscapeAttemptAt = now
+            lastRoamRelocationAt = now
+            _ = roam.evadeToEmptySpace(frame: panel.frame, visible: visible, cursor: cursor,
+                                       now: now, displayID: displayID, snapshot: snapshot)
+            scheduleMovement(interval: 1.0 / 60)
+            return
+        }
+        if eligible && isCursorNear, !isAnimatingRoam, model.phase == .idle {
             performIdleRoam()
             return
         }
