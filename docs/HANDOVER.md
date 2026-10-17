@@ -30,6 +30,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   global monitors; macOS delivers no events to them until Dot is trusted for Accessibility. That grant
   now has a reachable request: the first-use menu says so, and Tools & History offers "Enable hold-Fn
   and global gestures (Accessibility)…" while untrusted.
+- **Microphone mode.** Dot reports the macOS Control Center mode (Standard/Voice Isolation/Wide
+  Spectrum), offers the system selector in its menu, captions the first non-wide listening attempt and
+  nudges once on first launch. Wide Spectrum is the owner's choice per app; no public API sets it.
 - **Microphone discipline.** It arms only after final playback: not from a question mark, not from an
   intermediate audio-queue drain.
 - **File autonomy.** Simple file-utility commands (delete/move/copy/create/write/rename) and the

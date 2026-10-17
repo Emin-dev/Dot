@@ -561,6 +561,10 @@ existing payload verification (pinned per-file hashes in `bundled-models.json` p
 manifest audit) is the guard that keeps it honest. Any proposal to change engine or model is a separate
 owner decision, not an implementation detail.
 
+**Microphone mode (2026-10-17):** Dot reads the macOS mic mode, shows it in the menu with the system
+selector, captions the first non-wide listen and nudges once on first launch; there is no public API to
+force Wide Spectrum, so the owner chooses it once.
+
 **Public download (2026-10-17):** README Download button + one-line installer; `scripts/package_public_release.sh`
 builds a runtime-only `Dot.zip` and `scripts/publish_public_release.sh` uploads it. First launch downloads
 the exact manifest-verified model files from Hugging Face. The live 20 GB download, actual GitHub asset

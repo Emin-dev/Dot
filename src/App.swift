@@ -263,6 +263,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             options: #selector(openOptions), type: #selector(typeMessage))
         statusItem = item
         VideoPlaybackDetector.recordFrontmostApp()
+        if !MicrophoneMode.isWideSpectrum,
+           !UserDefaults.standard.bool(forKey: "dot.wideSpectrumPrompted") {
+            UserDefaults.standard.set(true, forKey: "dot.wideSpectrumPrompted")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                MicrophoneMode.openSystemSelector()
+            }
+        }
         let preparation = OfflinePreparation.shared
         statusObservations.append(preparation.$progress.receive(on: RunLoop.main).sink { [weak self] _ in
             Task { @MainActor in self?.updateStatusTitle(engineStage: self?.model?.engineStage) }
@@ -490,6 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     @objc private func retryPreparation() { OfflinePreparation.shared.retry() }
     @objc private func togglePin() { model?.pinned.toggle() }
+    @objc private func openMicrophoneModes() { MicrophoneMode.openSystemSelector() }
     @objc private func toggleScreen() { model?.screenEnabled.toggle() }
     @objc private func clearConversation() { model?.reset() }
     @objc private func copyDetails() {
@@ -580,6 +588,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let screenItem = NSMenuItem(title: "Screen awareness", action: #selector(toggleScreen), keyEquivalent: "")
         screenItem.target = self; screenItem.state = model.screenEnabled ? .on : .off; menu.addItem(screenItem)
+
+        let micTitle = MicrophoneMode.isWideSpectrum
+            ? "Microphone mode: Wide Spectrum (change…)"
+            : "Microphone mode: \(MicrophoneMode.displayName) — choose Wide Spectrum…"
+        let micItem = NSMenuItem(title: micTitle, action: #selector(openMicrophoneModes), keyEquivalent: "")
+        micItem.target = self
+        menu.addItem(micItem)
 
         let clearItem = NSMenuItem(title: "Clear conversation", action: #selector(clearConversation), keyEquivalent: "k")
         clearItem.target = self; menu.addItem(clearItem)

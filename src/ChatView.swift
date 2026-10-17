@@ -78,6 +78,7 @@ final class ChatModel: ObservableObject {
     private var captureReachedLimit = false
     private var videoSpeechChecked = false
     private var videoSpeechMuted = false
+    private var microphoneModeNoticeShown = false
     private let videoPlayback: @MainActor () -> Bool
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
@@ -1842,6 +1843,11 @@ final class ChatModel: ObservableObject {
         onForegroundInteraction?()
         let invitation = continuation != nil
         if invitation { Self.runtimeLog.notice("DOT_FOLLOWUP event=capture_started") }
+        if !MicrophoneMode.isWideSpectrum, !microphoneModeNoticeShown {
+            microphoneModeNoticeShown = true
+            Self.runtimeLog.notice("DOT_MIC_MODE mode=\(MicrophoneMode.displayName, privacy: .public) wide=false")
+            showCaptureOutcome("Mic mode: \(MicrophoneMode.displayName) · choose Wide Spectrum")
+        }
         let id = cancelTurn(preserveFollowup: invitation)
         voiceDeliveryNotice = nil
         voiceRoute = runtime.currentRoute()

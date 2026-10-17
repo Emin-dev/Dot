@@ -185,6 +185,14 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Microphone mode — 2026-10-17 (owner request).** macOS exposes the Control Center microphone
+filters as read-only state plus a system selector; there is no public setter. Dot now reads
+`AVCaptureDevice.activeMicrophoneMode`, shows "Microphone mode: Standard/Voice Isolation/Wide Spectrum"
+in its menu with a one-click system selector, logs the mode once (`DOT_MIC_MODE`), shows a caption on
+the first listening attempt, and opens the selector once on first launch so the owner can choose Wide
+Spectrum. The system remembers that choice per app. Dot does not claim to force the mode; the private
+setter was rejected as unsafe/notarisable.
+
 **Public download — prepared 2026-10-17.** The README now carries a Download button and a one-line
 installer. `scripts/package_public_release.sh` builds a **785 MB runtime-only `Dot.zip`** (complete
 `Offline` runtime, no 19.9 GB models; Apple Development signed after stripping the sealed models).

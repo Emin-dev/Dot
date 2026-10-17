@@ -2242,3 +2242,11 @@ final class FileInsightScannerTests: XCTestCase {
         XCTAssertTrue(snapshot.promptSummary.contains("plan.md"))
     }
 }
+
+final class MicrophoneModeTests: XCTestCase {
+    func testModeNamesMatchTheSystemLabels() {
+        XCTAssertEqual(MicrophoneMode.displayName(for: .standard), "Standard")
+        XCTAssertEqual(MicrophoneMode.displayName(for: .wideSpectrum), "Wide Spectrum")
+        XCTAssertEqual(MicrophoneMode.displayName(for: .voiceIsolation), "Voice Isolation")
+    }
+}

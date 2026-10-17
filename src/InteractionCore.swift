@@ -10,6 +10,9 @@ import AppKit
 #if canImport(EventKit)
 import EventKit
 #endif
+#if canImport(AVFoundation)
+import AVFoundation
+#endif
 
 // MARK: - Shared helpers
 
@@ -2809,6 +2812,42 @@ public struct ScreenWatchState: Equatable, Sendable {
             return .idleSnapshot
         }
         return .none
+    }
+}
+
+// MARK: - Microphone mode
+
+/// macOS exposes the Control Center microphone filters only as read-only state plus
+/// a system selector; there is no public setter. Dot reports the active mode, offers
+/// the selector in its menu, and nudges once so the owner can choose Wide Spectrum.
+public enum MicrophoneMode {
+    public static var current: AVCaptureDevice.MicrophoneMode {
+        if #available(macOS 12.0, *) { return AVCaptureDevice.activeMicrophoneMode }
+        return .standard
+    }
+
+    public static var displayName: String {
+        switch current {
+        case .wideSpectrum: return "Wide Spectrum"
+        case .voiceIsolation: return "Voice Isolation"
+        default: return "Standard"
+        }
+    }
+
+    public static var isWideSpectrum: Bool { current == .wideSpectrum }
+
+    public static func displayName(for mode: AVCaptureDevice.MicrophoneMode) -> String {
+        switch mode {
+        case .wideSpectrum: return "Wide Spectrum"
+        case .voiceIsolation: return "Voice Isolation"
+        default: return "Standard"
+        }
+    }
+
+    public static func openSystemSelector() {
+        if #available(macOS 12.0, *) {
+            AVCaptureDevice.showSystemUserInterface(.microphoneModes)
+        }
     }
 }
 
