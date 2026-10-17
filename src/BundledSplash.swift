@@ -37,8 +37,34 @@ final class BundledSplash {
     private(set) var certificateSHA256: String?
     private(set) var serverPID: Int?
     private(set) var apiKey: String?
+    /// One automatic restart per connection attempt. A successful connection refills
+    /// the budget; a failed restart leaves it empty, so the same attempt cannot loop.
+    private var restartBudget = 1
     struct Connection { let url: URL; let pid: Int; let backendPort: Int; let certificateSHA256: String }
     func connection() async throws -> Connection {
+        do {
+            let value = try await openConnection()
+            restartBudget = 1
+            return value
+        } catch {
+            guard !(error is CancellationError), !Task.isCancelled, restartBudget > 0 else { throw error }
+            restartBudget -= 1
+            Self.log.notice("stage=splash_restart outcome=attempt")
+            // A process that exited leaves its owned handle behind. Clear it and
+            // start one fresh runtime; otherwise every later turn repeats the same
+            // failure until the whole app is relaunched.
+            shutdown()
+            do {
+                let value = try await openConnection()
+                restartBudget = 1
+                return value
+            } catch {
+                shutdown()
+                throw error
+            }
+        }
+    }
+    private func openConnection() async throws -> Connection {
         let payload = try await OfflinePayload.shared.validate()
         try Task.checkCancellation()
         guard OfflinePreparation.shared.ready, let models = OfflinePreparation.shared.root else { throw OfflineFailure.incomplete }

@@ -151,6 +151,14 @@ is missing or the app exposes no readable text; calendar denials already surface
 formatters. New unit tests cover A1–A3 and the page-request parser; full lane 870/0 and `swift test`
 553/0 after the batch.
 
+**Audit defect A6 — fixed 2026-10-17.** A Splash process that exited left its owned handle behind, so
+every later `connection()` threw the same failure and the engine stayed dead until the app was
+relaunched (the repeated "Splash stopped answering" lines). `BundledSplash.connection()` now wraps the
+startup probe with a one-shot `restartBudget`: on failure it shuts the stale handle down and opens one
+fresh runtime; a successful connection refills the budget and a failed restart leaves it empty, so
+the same connection attempt cannot loop. Later turns probe again. The existing `EngineError`
+messages already reach the owner as visible blocked text.
+
 **Self-reflection data and truthfulness — fixed 2026-10-17.** The XCTest lane wrote its fixture turns
 into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate run), so the 10-minute
 reflection could analyse test text as conversation. Test processes now write to a temporary log
