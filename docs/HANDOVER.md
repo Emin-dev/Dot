@@ -81,6 +81,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
    ("which of these videos is more useful?") remain unverified in a real session.
 6. **Self-improvement paste.** The offer reuses the approval card and types the suggestion (it does not
    paste from the clipboard), requires Accessibility, and has never been exercised in a real session.
+   The reflection itself now reports which writes actually succeeded instead of always claiming both,
+   and it analyses only the current app session (test processes write to a temporary log), so fixture
+   text can no longer drive a suggestion.
 7. **Broad file access is partial.** What exists: read a named text file, Spotlight name and content
    search, and a watched folder. What is missing: indexing arbitrary trees, iCloud placeholder handling,
    relevance ranking, and any scan budget. The owner's ask was "everything on my disk".

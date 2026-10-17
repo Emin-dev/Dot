@@ -125,6 +125,16 @@ Evidence from the installed build: payload preparation 17.1 s, first cold engine
 then a proactive turn completed (`[DOT (PROACTIVE)]` at 15:37:41) — the first current-build generation
 observed. Owner speech, permissions and audible output remain unverified.
 
+**Self-reflection data and truthfulness — fixed 2026-10-17.** The XCTest lane wrote its fixture turns
+into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate run), so the 10-minute
+reflection could analyse test text as conversation. Test processes now write to a temporary log
+(`DiagnosticChatLogger.isRunningTests`), and the app writes a `[SYSTEM] App session started` marker on
+launch; the reflection analyses only lines after the latest marker, so old or fixture-written tails are
+ignored. The reflection report now names which writes actually succeeded (reflections file and
+clipboard) instead of always claiming both, and the idle timer speaks that report rather than a fixed
+sentence. Verified: the full 864-test lane left the real log byte-identical, and the new logger,
+session-scope and report tests pass.
+
 **Environment traps a future session will hit.** `python3` here is 3.9 and the suite needs ≥3.11 — use
 `/private/tmp/dot-py313/bin/python`. Builds inside this cloud-synced checkout need a `/private/tmp`
 scratch path (SwiftPM) or `xattr -cr` before `codesign`, because the File Provider re-applies

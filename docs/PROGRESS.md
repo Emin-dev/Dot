@@ -15,8 +15,8 @@ This checkpoint records work verified on this machine, not intentions. Everythin
 | `swift test` | **534 tests, 0 failures** |
 | `xcodebuild -project Dot.xcodeproj -scheme Dot build` | **BUILD SUCCEEDED** |
 
-**Later on 2026-10-17 (installed from this revision):** the full XCTest lane is **861 tests, 0 failures** and
-`swift test` is **547 tests, 0 failures**; the Python suite is still 604 passed / 4 skipped and the 53
+**Later on 2026-10-17 (installed from this revision):** the full XCTest lane is **864 tests, 0 failures** and
+`swift test` is **550 tests, 0 failures**; the Python suite is still 604 passed / 4 skipped and the 53
 guardrails pass. The installed Rust-only payload audits clean with `scripts/audit_runtime_payload.py`
 (**34,004 files, 1,594,205,216 bytes, exit 0**), so the earlier note that the auditor still required
 the deleted Python voice closure is superseded; only
@@ -24,8 +24,10 @@ the deleted Python voice closure is superseded; only
 context. `scripts/verify_macos.sh` now fails only the documented runtime-finalizer canary. Also on this
 revision: the dead first-use hint now renders in the context menu, and the global Fn/screenshot/gesture
 monitors, which deliver nothing without Accessibility, have a reachable request under Tools & History.
-The installed app reached cold engine readiness in 70.9 s and completed a proactive turn at 15:37:41;
-no owner speech or audible acceptance has been observed.
+The XCTest lane no longer writes fixture turns into the owner's Downloads log (verified byte-identical
+before/after), the reflection is scoped to the current app session, and its report states which writes
+actually succeeded. The installed app reached cold engine readiness in 70.9 s and completed a proactive
+turn at 15:37:41; no owner speech or audible acceptance has been observed.
 
 The Xcode app target previously could not build at all: it hard-wired `SWIFT_ACTIVE_COMPILATION_CONDITIONS = DOT_COMPLETE_BUNDLE`, `-framework whisper` and a `build-complete/` framework search path that is gitignored and absent, so `src/WhisperRecognizer.swift:2` raised `#error` on a clean checkout and `scripts/verify_macos.sh` could never pass. The target now builds the development configuration; complete bundles remain with the `swiftc`-based scripts that pass the define themselves. Separately, `scripts/verify_macos.sh` selected a Python ≥3.11 interpreter and then ran the suite with bare `python3`; it now uses the interpreter it validated, and the Portable Search contracts gate pull requests as well as main pushes.
 

@@ -1859,3 +1859,54 @@ final class SelfCodebaseReaderTests: XCTestCase {
                                                        historicalRoot: checkout.path), checkout.path)
     }
 }
+
+final class DiagnosticChatLoggerTests: XCTestCase {
+    /// The self-reflection reads the Downloads log. A test run must never append
+    /// fixture turns to it, and the current test process must detect itself.
+    func testTestProcessesWriteOnlyToTemporaryDirectory() {
+        let downloads = URL(fileURLWithPath: "/Users/owner/Downloads")
+        let temporary = URL(fileURLWithPath: "/private/tmp/dot-tests")
+        XCTAssertEqual(DiagnosticChatLogger.resolvedLogURL(testProcess: true, downloads: downloads,
+                                                           temporary: temporary)?.path,
+                       temporary.appendingPathComponent("dot_chat_log.txt").path)
+        XCTAssertEqual(DiagnosticChatLogger.resolvedLogURL(testProcess: false, downloads: downloads,
+                                                           temporary: temporary)?.path,
+                       downloads.appendingPathComponent("dot_chat_log.txt").path)
+        XCTAssertNil(DiagnosticChatLogger.resolvedLogURL(testProcess: false, downloads: nil, temporary: temporary))
+        XCTAssertTrue(DiagnosticChatLogger.isRunningTests)
+    }
+}
+
+final class SelfReflectionSessionScopeTests: XCTestCase {
+    func testReflectionIgnoresLinesBeforeTheCurrentSession() {
+        let engine = IdleSelfReflectionEngine()
+        let log = """
+        [2026-10-17T00:00:00Z] [USER] old fixture noise
+        [2026-10-17T00:00:01Z] [DOT (SELF-IMPROVEMENT)] TASK: "old fixture" | REASON: nope
+        [2026-10-17T15:00:00Z] [SYSTEM] App session started
+        [2026-10-17T15:00:01Z] [USER] make the window snap left
+        """
+        let suggestion = engine.analyzeConversationLog(logContent: log)
+        XCTAssertTrue(suggestion.contains("make the window snap left"))
+        XCTAssertFalse(suggestion.contains("old fixture noise"))
+    }
+}
+
+final class SelfReflectionOutcomeTests: XCTestCase {
+    /// The spoken report must name what actually happened; the old message always
+    /// claimed the file and clipboard writes had succeeded.
+    func testReportNamesSuccessAndEachFailure() {
+        let success = IdleSelfReflectionEngine.reflectionReport(
+            suggestion: "add a fast path", readLog: true, wroteFile: true, copied: true)
+        XCTAssertTrue(success.contains("Wrote the suggestion to my reflections file."))
+        XCTAssertTrue(success.contains("Copied it to the clipboard."))
+        XCTAssertFalse(success.contains("Could not"))
+
+        let failed = IdleSelfReflectionEngine.reflectionReport(
+            suggestion: "add a fast path", readLog: false, wroteFile: false, copied: false)
+        XCTAssertTrue(failed.contains("Could not write my reflections file."))
+        XCTAssertTrue(failed.contains("Could not copy it to the clipboard."))
+        XCTAssertTrue(failed.contains("could not read my conversation log"))
+        XCTAssertTrue(failed.contains("add a fast path"))
+    }
+}

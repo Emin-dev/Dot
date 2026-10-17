@@ -932,6 +932,9 @@ final class ChatModel: ObservableObject {
     init(engine: EngineManager? = nil, textHistory: ConversationHistoryModel? = nil,
          defaults: UserDefaults = .standard, followup: VoiceFollowup? = nil,
          proactive: ProactiveBehavior? = nil, runtime: ChatRuntime? = nil) {
+        // Self-reflection is scoped to the current app session, so old test runs and
+        // yesterday's unrelated conversation cannot drive today's suggestion.
+        DiagnosticChatLogger.record(role: "system", text: "App session started")
         let stt = STTManager(), tts = TTSManager()
         self.stt = stt; self.tts = tts
         self.engine = engine ?? EngineManager()
@@ -1153,7 +1156,9 @@ final class ChatModel: ObservableObject {
                 let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
                 offerPasteIfAvailable()
                 DiagnosticChatLogger.record(role: "dot (10m-self-reflection)", text: report)
-                self.speakDirect("I reviewed my recent conversations after 10 minutes of inactivity, wrote an improvement suggestion to my reflections file and copied it to your clipboard.")
+                // Speak what actually happened; the old fixed sentence claimed both
+                // writes even when the file or clipboard write had failed.
+                self.speakDirect(report)
             }
             self?.selfReflectionTicker = nil
         }

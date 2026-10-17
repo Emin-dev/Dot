@@ -2198,7 +2198,11 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
     }
 
     public func analyzeConversationLog(logContent: String) -> String {
-        let lines = logContent.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        let allLines = logContent.components(separatedBy: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        // The app writes a session marker on every launch. Analyse only the current
+        // session: an older or fixture-written tail is not evidence about today.
+        let sessionStart = allLines.lastIndex { $0.contains("[SYSTEM] App session started") }
+        let lines = sessionStart.map { Array(allLines[$0...]) } ?? allLines
         let recentLines = Array(lines.suffix(120))
 
         // 1. Check for recorded self-improvement failures or errors
@@ -2253,27 +2257,45 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         markReflected()
         let url = logURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
         let content = (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+        let readLog = !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let suggestion = analyzeConversationLog(logContent: content)
         lock.lock(); lastSuggestion = suggestion; lock.unlock()
 
-        // Write to dedicated reflections log in Downloads
+        // Write to dedicated reflections log in Downloads. The result is reported,
+        // never assumed: the old code always claimed both writes had succeeded.
+        var wroteFile = false
         if let reflectionURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_self_reflections.txt") {
             let timestamp = ISO8601DateFormatter().string(from: Date())
             let entry = "[\(timestamp)] \(suggestion)\n"
-            if let handle = try? FileHandle(forWritingTo: reflectionURL) {
-                handle.seekToEndOfFile()
-                if let data = entry.data(using: .utf8) { handle.write(data) }
-                try? handle.close()
+            if FileManager.default.fileExists(atPath: reflectionURL.path) {
+                if let handle = try? FileHandle(forWritingTo: reflectionURL) {
+                    do {
+                        try handle.seekToEnd()
+                        try handle.write(contentsOf: Data(entry.utf8))
+                        try handle.close()
+                        wroteFile = true
+                    } catch { try? handle.close() }
+                }
             } else {
-                try? entry.write(to: reflectionURL, atomically: true, encoding: .utf8)
+                wroteFile = (try? entry.write(to: reflectionURL, atomically: true, encoding: .utf8)) != nil
             }
         }
 
         // The owner asked for this: never type into another application unprompted.
         // The suggestion is written to its own file above and copied to the clipboard
-        // so it can be pasted deliberately, and Dot states that instead of acting.
-        ClipboardIntelligence.write(suggestion)
-        return "Wrote a self-improvement suggestion to my reflections file and copied it to the clipboard: \"\(suggestion)\""
+        // so it can be pasted deliberately, and Dot states what actually happened.
+        let copied = ClipboardIntelligence.write(suggestion)
+        return Self.reflectionReport(suggestion: suggestion, readLog: readLog, wroteFile: wroteFile, copied: copied)
+    }
+
+    static func reflectionReport(suggestion: String, readLog: Bool, wroteFile: Bool, copied: Bool) -> String {
+        var parts: [String] = []
+        parts.append(wroteFile ? "Wrote the suggestion to my reflections file."
+                               : "Could not write my reflections file.")
+        parts.append(copied ? "Copied it to the clipboard." : "Could not copy it to the clipboard.")
+        if !readLog { parts.append("I could not read my conversation log, so this is a general suggestion.") }
+        parts.append("Suggestion: \"\(suggestion)\"")
+        return parts.joined(separator: " ")
     }
 }
 
@@ -4458,10 +4480,20 @@ public final class InteractiveWalkthroughManager {
 
 public enum DiagnosticChatLogger {
     private static let lock = NSLock()
-    private static let logURL: URL? = {
-        FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("dot_chat_log.txt")
-    }()
+    /// Never write fixture conversations into the owner's real Downloads log: the
+    /// self-reflection reads that file, so a test suite would otherwise feed it
+    /// synthetic turns. The test bundle gets a temporary file instead.
+    static var isRunningTests: Bool {
+        NSClassFromString("XCTestCase") != nil
+            || ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+    }
+    static func resolvedLogURL(testProcess: Bool, downloads: URL?, temporary: URL) -> URL? {
+        (testProcess ? temporary : downloads)?.appendingPathComponent("dot_chat_log.txt")
+    }
+    private static let logURL: URL? = resolvedLogURL(
+        testProcess: isRunningTests,
+        downloads: FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+        temporary: FileManager.default.temporaryDirectory)
     private static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
