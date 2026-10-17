@@ -1,0 +1,109 @@
+# Dot handover — 2026-10-17
+
+Written at commit `f089231` (installed app provenance matches HEAD). Read
+[CONTINUATION.md](CONTINUATION.md) for the dated record and the supervisor-port slices; this file is
+the "what is solid, what is not, what is next" list.
+
+## Verified working (each with the evidence that was actually gathered)
+
+- **Repository gates.** Xcode app build SUCCEEDED; the XCTest lane `verify_macos.sh` runs is
+  860 tests / 0 failures (it began at 11 failures); `swift test` 546 / 0; the Python suite 604 passed
+  4 skipped; 53 static guardrails; `cargo build --release` produces `dot-voice`, `dot-search`,
+  `dot-fetch`; `scripts/audit_runtime_payload.py` accepts the owner's real Rust-only payload
+  (34,004 files, exit 0).
+- **Rust runtime.** `dot-voice` synthesises `bf_isabella` at 24 kHz offline from the real model
+  (78,000 samples, 156,044-byte WAV). `dot-search` returns live DuckDuckGo/Wikipedia results through
+  its capability-gated loopback endpoint, and now survives a client that splits head and body across
+  TCP segments (the shipped binary previously answered 400). `dot-fetch` is the pinned HTTPS reader
+  with a verified sandbox canary (inherited socket only, `connect()` denied).
+- **Click to listen.** Whisper is compiled in and embedded by `build.sh` via `DOT_WHISPER_FRAMEWORK`;
+  readiness reaches `outcome=ready` in ~15 s; a refused click now says why; **the app now asks for the
+  microphone and Screen Recording on the first click or hold-Fn, before any readiness gate** (it
+  previously only checked status, which is why the log held sixteen "microphone access is off"
+  messages and the app never prompted).
+- **Microphone discipline.** It arms only after final playback: not from a question mark, not from an
+  intermediate audio-queue drain.
+- **Approvals.** Destructive detection is tokenized (paths, wrappers, `-exec/-delete`, unquoted
+  redirects); the card is clickable; a plain "yes" is accepted only for the non-destructive paste
+  offer, so the destructive wording stays strict.
+- **Memory (five tiers).** Capture from natural speech, tier-aware recall with an FTS fallback,
+  "what do you remember", bounded explicit "forget about X", ageing that promotes T1→T2→T3→T4 and
+  never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).
+- **Small owner requests.** Copy Dot's answer to the clipboard; "show that" opens the readable
+  history; battery level from IOKit; self-reflection writes to its file, copies to the clipboard and
+  offers a paste; read a named text file; Spotlight **content** search.
+- **Movement.** Idle roam every 2 minutes, thinking relocation every 5 s, and no movement while the
+  menu is open, the pointer is on Dot, or a mouse button is held.
+- **Appearance.** Dew is the default; an explicit choice persists (the interim migration that
+  reverted an explicit Dew choice is gone).
+- **Install.** `bash scripts/install_local.sh` builds with the recognizer, clones the payload
+  copy-on-write, writes honest provenance, signs with the stable Apple Development identity, keeps
+  `Dot.app.backup-latest`, relaunches and verifies provenance against HEAD.
+
+## Not fully working, or not stable
+
+1. **No real session has ever been observed.** No microphone, screen-permission, acoustic or device
+   acceptance exists for any current build: the diagnostic log contains no entries from them. Every
+   claim above is structural (tests, typechecks, logs from the app booting) rather than a recorded
+   conversation.
+2. **`verify_macos.sh` still exits nonzero**, for two reasons that are *not* build failures:
+   - the mandatory runtime-finalizer canary fails on a hosted toolchain
+     (`unsupported hosted toolchain image`) by design, and blocks packaging;
+   - `LocalDotSearchProviderTests.testRuntimeAnswersAreBoundedAndCapabilityRejectionSurfaces` is
+     flaky under the gate's combined load (hung 1041 s once; passes 7/7 in 7.2 s in isolation). The
+     fixture's readiness needs to be deterministic, or its retries bounded.
+3. **A quality-of-service inversion is real and only papered over.** A User-interactive thread waits on
+   a Default-QoS one (surfaced by `TypedInteractionTests.testPanelRebinds…`). The waiting work is
+   created by the app, so the turn-pipeline task in `ChatView.submit` should carry `.userInitiated`.
+   `verify_macos.sh` currently filters *only* that advisory out of its zero-warning check; **remove the
+   filter together with the fix.**
+4. **Memory rough edges.** `MemoryTierStore` opens a second SQLite connection to
+   `dot_records.sqlite` (a `withConnection` accessor on `LocalFTSStore` removes ~120 lines). Capture is
+   a heuristic (240-character bound plus cue words) and may over- or under-capture. "Compression"
+   concatenates a bounded summary rather than summarising with the model. There is no UI to browse or
+   edit memory beyond the spoken listing and "forget".
+5. **Screen awareness.** Reachable only once Screen Recording is granted, and the
+   `.screen_permission_configured` marker is a trap: it is written before the prompt, so a denied or
+   never-asked state can look "configured" forever and no prompt follows. Worth an audit. Screenshot
+   reasoning ("which of these videos is more useful?") is unverified.
+6. **Self-improvement paste.** The offer reuses the approval card and types the suggestion (it does not
+   paste from the clipboard), requires Accessibility, and has never been exercised in a real session.
+7. **Broad file access is partial.** What exists: read a named text file, Spotlight name and content
+   search, and a watched folder. What is missing: indexing arbitrary trees, iCloud placeholder handling,
+   relevance ranking, and any scan budget. The owner's ask was "everything on my disk".
+8. **Placement wastes a capture every cycle.** `PlacementSnapshot.lifetime` is 10 s and validation runs
+   on a ~10 s cadence, so the first validation of each cycle is rejected by construction
+   (`reason=expired elapsed=10475ms` in the live log) before a fresh capture. Fix it in the caller —
+   refresh before validating — and **never raise the lifetime**: `RoamingTests` guards that rule.
+9. **Last Dot-authored Python.** The Splash supervisor, child observation and TLS relay (640 lines).
+   Slice 1 of the Rust port is committed (`crates/dot-runtime`: wire contract, api key, 3 tests; the
+   binary deliberately reports `failed/supervisor/not-implemented`). Remaining: child ownership,
+   TLS relay (**the expensive slice** — ~700 lines of Python contract tests move with it), socket
+   handoff, and switching `BundledSplash.swift`. Splash itself stays Python by the owner's decision.
+10. **~540 audited dead lines remain**, in the cases whose declarations are not cleanly separable.
+11. **Tool catalogue.** Every conversational turn carries fourteen tool schemas. That was a documented
+    decision in the owner's absence; a smaller always-on set is still an option if turns feel slow.
+
+## Traps that cost time here (do not rediscover them)
+
+- `python3` on this Mac is 3.9; the suite needs ≥3.11 — use `/private/tmp/dot-py313/bin/python`.
+- This checkout is cloud-synced: build SwiftPM with a `/private/tmp` scratch path, and `xattr -cr`
+  before `codesign`, or the File Provider makes codesign reject the bundle.
+- **Re-signing resets TCC.** Always install with `scripts/install_local.sh` (stable Apple Development
+  identity) or the microphone grant silently disappears.
+- Never silence a symptom by weakening a bound: `startupSeconds` (10 s) and
+  `PlacementSnapshot.lifetime` (10 s) are correct; `RoamingTests` and the TLS contract tests exist to
+  catch exactly that temptation.
+- A grep-verified "unreferenced" declaration can still share a line with a live one (comma-declared
+  properties): verify deletions with a typecheck immediately, as happened with `RAMMetrics.usagePercent`.
+- Broad agent briefs over this 22k-line codebase consume whole budgets reading and write nothing.
+  Narrow, single-fix scopes (or doing it directly) produced every commit in this session.
+
+## Suggested order for the next session
+
+1. Have the owner grant the microphone and screen prompts, then record **one real conversation** and
+   the resulting `DOT_*` log lines. Everything else is guesswork until that exists.
+2. Turn-pipeline `.userInitiated` fix, and remove the warning filter in the same commit.
+3. Make the search fixture deterministic so the gate's only failure is the by-design canary.
+4. Supervisor slices 2 → 3 → 4 → 5, with `splash.sb` and the 53 guardrails green at each step.
+5. Memory second-connection cleanup; then dead-code batches; then file indexing; then placement.
