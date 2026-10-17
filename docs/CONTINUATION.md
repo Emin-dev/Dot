@@ -169,6 +169,13 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R10 news provider — implemented 2026-10-17 (partial).** `dot-search` now enriches results with Google
+News RSS (`news.google.com/rss/search`, no key): up to three deduplicated items with title, link,
+description and `published_date`, appended after DuckDuckGo and before the Wikipedia fallback, still
+bounded at eight results. The RSS parser is dependency-free and unit-tested; the live endpoint was
+fetched successfully. Scope note: more providers (keyed news/other engines), a local result index/cache
+and the offline encyclopedia snapshot remain open.
+
 **R7 file autonomy — implemented 2026-10-17.** `FileOperationPolicy` treats a command as automatic
 only when every segment is a simple file utility (`rm`, `rmdir`, `mv`, `cp`, `touch`, `mkdir`, `ln`,
 `unlink`, `trash`, `echo`, `printf`, `cat`, `tee`, `truncate`, or `find` with `-delete` and no

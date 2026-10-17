@@ -364,7 +364,18 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
         results.extend(ddg_results);
     }
 
-    // 2. Wikipedia search fallback / enrichment
+    // 2. News enrichment (Google News RSS, no key). Deduplicated and bounded by
+    // the same eight-result response as the web providers.
+    if let Ok(news_results) = search_news(query, client).await {
+        for res in news_results {
+            if !results.iter().any(|r| r.url == res.url) {
+                results.push(res);
+                if results.len() >= 8 { break; }
+            }
+        }
+    }
+
+    // 3. Wikipedia search fallback / enrichment when the web providers are thin.
     if results.len() < 3 {
         if let Ok(wiki_results) = search_wikipedia(query, client).await {
             for res in wiki_results {
@@ -377,6 +388,53 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
 
     results.truncate(8);
     results
+}
+
+async fn search_news(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!(
+        "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en",
+        urlencoding::encode(query)
+    );
+    let resp = client.get(&url)
+        .header("User-Agent", "Dot/1.0 (+https://github.com/Emin-dev/Dot)")
+        .send().await?
+        .text().await?;
+    Ok(parse_news_rss(&resp, 3))
+}
+
+/// Parse the Google News RSS shape without an XML dependency. Items with no usable
+/// HTTP link are skipped; the limit is applied after validation.
+fn parse_news_rss(xml: &str, limit: usize) -> Vec<SearchResult> {
+    let mut results = Vec::new();
+    for item in xml.split("<item>").skip(1) {
+        let link = rss_tag(item, "link").map(clean_rss).unwrap_or_default();
+        if !link.starts_with("http") { continue; }
+        let title = rss_tag(item, "title").map(clean_rss).unwrap_or_default();
+        if title.is_empty() { continue; }
+        let content = rss_tag(item, "description").map(clean_rss).unwrap_or_default();
+        let published = rss_tag(item, "pubDate").map(clean_rss).filter(|d| !d.is_empty());
+        results.push(SearchResult { url: link, title, content, published_date: published });
+        if results.len() >= limit { break; }
+    }
+    results
+}
+
+fn rss_tag<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let start = xml.find(&open)? + open.len();
+    let rest = &xml[start..];
+    let end = rest.find(&close)?;
+    Some(&rest[..end])
+}
+
+fn clean_rss(text: &str) -> String {
+    let trimmed = text.trim();
+    let inner = trimmed
+        .strip_prefix("<![CDATA[")
+        .and_then(|value| value.strip_suffix("]]>"))
+        .unwrap_or(trimmed);
+    clean_html(inner)
 }
 
 async fn search_duckduckgo(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
@@ -498,6 +556,40 @@ fn clean_html(text: &str) -> String {
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&#39;", "'")
+        .replace("&#8217;", "'")
+        .replace("&nbsp;", " ")
         .trim()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const RSS: &str = r#"<rss><channel><title>News</title>
+    <item><title><![CDATA[Dot ships a fix]]></title><link>https://example.com/a</link>
+    <description><![CDATA[The <b>details</b> &amp; context.]]></description><pubDate>Fri, 17 Oct 2026 10:00:00 GMT</pubDate></item>
+    <item><title>No link</title><description>skip</description></item>
+    <item><title>Second story</title><link>https://example.com/b</link><description>Second.</description></item>
+    <item><title>Third story</title><link>https://example.com/c</link><description>Third.</description></item>
+    </channel></rss>"#;
+
+    #[test]
+    fn parses_valid_news_items_and_skips_links() {
+        let results = parse_news_rss(RSS, 3);
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].title, "Dot ships a fix");
+        assert_eq!(results[0].url, "https://example.com/a");
+        assert_eq!(results[0].content, "The details & context.");
+        assert_eq!(results[0].published_date.as_deref(), Some("Fri, 17 Oct 2026 10:00:00 GMT"));
+        assert_eq!(results[1].title, "Second story");
+        assert!(results.iter().all(|r| r.url.starts_with("https://example.com/")));
+    }
+
+    #[test]
+    fn news_limit_and_no_items_are_safe() {
+        assert_eq!(parse_news_rss(RSS, 1).len(), 1);
+        assert!(parse_news_rss("<rss><channel></channel></rss>", 3).is_empty());
+        assert!(parse_news_rss("", 3).is_empty());
+    }
 }

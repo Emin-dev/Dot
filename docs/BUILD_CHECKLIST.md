@@ -579,7 +579,8 @@ owner decision, not an implementation detail.
 - Self-healing: snapshot → apply → self-test → auto-rollback; one risky change per pass; keep 10
   snapshots; a fixed Rust watcher worker; a sealed last-known-good fallback; an emergency canary flag.
 - Research: **all and more** providers (news, optional keyed) plus local solutions (own index, cached
-  results, optional offline encyclopedia snapshot).
+  results, optional offline encyclopedia snapshot). Implemented 2026-10-17: Google News RSS enrichment
+  in `dot-search` (3 items, deduped, published dates); local index/cache/offline snapshot still open.
 - Cold start: live stage-by-stage progress + optional prewarm at login (implemented 2026-10-17: menu-bar title, menu header/accessibility stage, prewarm toggle off by default). Sleep/wake: auto re-arm and say
   so. Calendar: briefs + create/edit with a confirmation card (implemented 2026-10-17: create and move-next-meeting actions card + approve; arbitrary event selection/edit still open). Battery: optional threshold alerts, off
   by default (implemented 2026-10-17: context-menu switch, 10/15/20/30% low threshold, charging-start
