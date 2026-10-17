@@ -114,6 +114,10 @@ final class OfflinePreparation: ObservableObject {
         let closure = Task.detached(priority: .utility) { try Self.verifyClosure(folder, names: Set(plan.files.map(\.path))) }
         try await withTaskCancellationHandler(operation: { try await closure.value }, onCancel: { closure.cancel() })
         var completed: Int64 = 0
+        // A downloaded model has already been verified file-by-file; the final pass
+        // still re-hashes it, but its progress must continue from 90%, not jump back.
+        let progressBase = useBundled ? 0.0 : 0.90
+        let progressSpan = useBundled ? 0.95 : 0.05
         for asset in plan.files {
             try Task.checkCancellation()
             let path = try OfflinePayload.safePath(asset.path, root: folder)
@@ -130,7 +134,8 @@ final class OfflinePreparation: ObservableObject {
             }
             try Task.checkCancellation()
             guard generation == token else { throw CancellationError() }
-            completed += asset.bytes; progress = 0.95 * Double(completed) / Double(plan.total_bytes)
+            completed += asset.bytes
+            progress = progressBase + progressSpan * Double(completed) / Double(plan.total_bytes)
         }
         try Task.checkCancellation()
         return folder
@@ -243,6 +248,7 @@ actor ModelProvisioner {
             }
             let (temporary, response) = try await session.download(from: remote, delegate: reporter)
             defer { try? FileManager.default.removeItem(at: temporary) }
+            try Task.checkCancellation()
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 throw PreparationFailure.download("The model server returned an unexpected response.")
             }

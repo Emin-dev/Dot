@@ -565,3 +565,27 @@ final class ModelProvisionerTests: XCTestCase {
     }
 }
 #endif
+
+
+#if !SWIFT_PACKAGE
+/// Opt-in live check of the reviewed downloader against the real Hugging Face file.
+/// Skipped unless DOT_LIVE_MODEL_TEST=1 so the normal gate stays offline and stable.
+final class ModelProvisionerLiveTests: XCTestCase {
+    func testLiveDownloadOfOneSmallManifestFile() async throws {
+        let enabled = ProcessInfo.processInfo.environment["DOT_LIVE_MODEL_TEST"] == "1"
+            || FileManager.default.fileExists(atPath: "/private/tmp/dot-live-model-test")
+        guard enabled else {
+            throw XCTSkip("Create /private/tmp/dot-live-model-test or set DOT_LIVE_MODEL_TEST=1 to run the live Hugging Face check.")
+        }
+        let json = #"{"schema_version":1,"total_bytes":4932,"files":[{"path":"llm-target/config.json","bytes":4932,"sha256":"14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85"}]}"#
+        let plan = try JSONDecoder().decode(BundledModelIndex.self, from: Data(json.utf8))
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dot-model-live-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try await ModelProvisioner.shared.ensureModels(at: folder, plan: plan) { _ in }
+        let file = folder.appendingPathComponent("llm-target/config.json")
+        XCTAssertEqual(try Data(contentsOf: file).count, 4932)
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int, 4932)
+    }
+}
+#endif
