@@ -8,9 +8,10 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
 ## Current build and gates
 
 - Repo: `/Users/mac/Documents/deepseek-harness/default-workspace/Dot`, branch **main only**.
-- App code: **`f03d608`**; later commits are docs/scripts only. Run `git log -1` and
-  `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
-  Do not assume an older installed provenance from any document.
+- App source last changed at **`8afab50`** (screen-off/lock pause); `f03d608` added release scripts;
+  later commits are docs. Run `git log -1` and `scripts/install_local.sh`; the installed app's
+  `build-provenance.json` must equal that HEAD. Do not assume an older installed provenance from any
+  document.
 - Last full green automated gate: **XCTest 904 / 0 failures (1 opt-in live test skipped)**,
   **`swift test` 580 / 0**, **Python 604 passed / 4 skipped**, **53 static guardrails**, Debug + Release
   builds. The full `verify_macos.sh` run at `e0fb2a7` was clean apart from its **by-design
