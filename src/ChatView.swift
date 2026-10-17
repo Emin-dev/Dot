@@ -2573,7 +2573,10 @@ final class ChatModel: ObservableObject {
                             DiagnosticChatLogger.recordTool(name: "snap_window", target: layout, outcome: executedToolConfirmation ?? "", succeeded: false)
                         }
                     case .executeCommand(let command, let explanation):
-                        if ActionApprovalRequest.isPotentiallyDestructive(command) {
+                        // R7: file utilities are autonomous; every other destructive
+                        // command keeps the card.
+                        if ActionApprovalRequest.isPotentiallyDestructive(command),
+                           !FileOperationPolicy.isAutomaticFileOperation(command) {
                             let req = ActionApprovalRequest(title: "Execute Command", detail: explanation ?? "Terminal command requires approval", target: command, isDestructive: true, command: command)
                             self.pendingApproval = req
                             executedToolConfirmation = "This command requires your approval. Click Approve or say 'Approve' to run: \(command)."
@@ -2583,11 +2586,16 @@ final class ChatModel: ObservableObject {
                             executedToolConfirmation = "Executed command:\n\(output)"
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: output, succeeded: true)
                         }
-                    case .deleteFile(let path, let explanation):
-                        let req = ActionApprovalRequest(title: "Delete File", detail: explanation ?? "File deletion requires approval", target: path, isDestructive: true, command: "rm -rf '\(path)'")
-                        self.pendingApproval = req
-                        executedToolConfirmation = "Deleting this file requires your approval. Click Approve or say 'Approve' to delete: \(path)."
-                        DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: "Awaiting user approval", succeeded: true)
+                    case .deleteFile(let path, _):
+                        // R7: file deletion is autonomous.
+                        do {
+                            try FileManager.default.removeItem(atPath: path)
+                            executedToolConfirmation = "Deleted \(path)."
+                            DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: "File deleted successfully", succeeded: true)
+                        } catch {
+                            executedToolConfirmation = "Could not delete \(path): \(error.localizedDescription)"
+                            DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: error.localizedDescription, succeeded: false)
+                        }
                     case .contextualWorkflow(let app, let action):
                         if TrustedAppStore(defaults: self.defaults).isTrusted(app) {
                             let workflowApp = ContextualWorkflowApp(rawValue: app.lowercased()) ?? .unknown

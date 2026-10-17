@@ -570,7 +570,9 @@ owner decision, not an implementation detail.
   full text in a separate searchable archive; voice-only interface. Implemented 2026-10-17: 20 s
   debounce, local-model summary, key-points tier T3, bullet parser/dedupe/cap.
 - Files: **full autonomy** — create/write/rename/move/delete automatically, without asking (this
-  overrides the earlier "card for destructive actions" rule for file operations); proactive
+  overrides the earlier "card for destructive actions" rule for file operations; implemented
+  2026-10-17 for simple file utilities and `delete_file`, while shells/sudo/substitutions still card);
+  proactive
   suggestions from everything Dot sees.
 - Screen: **adaptive watching** — idle snapshot every few minutes; on screen change or mouse movement,
   continuous capture for 10–50 s (extended while changing); battery-aware; visible pause switch.

@@ -32,6 +32,10 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   and global gestures (Accessibility)…" while untrusted.
 - **Microphone discipline.** It arms only after final playback: not from a question mark, not from an
   intermediate audio-queue drain.
+- **File autonomy.** Simple file-utility commands (delete/move/copy/create/write/rename) and the
+  `delete_file` tool execute without a card; shells, `sudo`, substitutions, pipes into other
+  executables, `/dev`/`/System` targets and non-file destructive commands still card. Proactive
+  suggestions from files/folders are not implemented.
 - **Approvals.** Destructive detection is tokenized (paths, wrappers, `-exec/-delete`, unquoted
   redirects); the card is clickable; a plain "yes" is accepted only for the non-destructive paste
   offer, so the destructive wording stays strict. Contextual app actions are carded unless the app is

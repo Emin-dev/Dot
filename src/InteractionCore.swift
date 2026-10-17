@@ -4750,6 +4750,70 @@ public struct TrustedAppStore {
     }
 }
 
+/// R7: file operations are automatic. Only a simple command made entirely of file
+/// utilities (optionally chained with ;, &&, || or a pipe) qualifies; shells,
+/// wrappers, substitutions, `/dev` and `/System` targets, and every other
+/// executable still keep the per-command card.
+public enum FileOperationPolicy {
+    private static let utilities: Set<String> = [
+        "rm", "rmdir", "mv", "cp", "touch", "mkdir", "ln", "unlink", "trash",
+        "echo", "printf", "cat", "tee", "truncate"
+    ]
+    private static let wrappers: Set<String> = [
+        "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "sudo", "doas",
+        "env", "xargs", "osascript", "python", "python3", "perl", "ruby", "node"
+    ]
+
+    public static func isAutomaticFileOperation(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 4_000 else { return false }
+        guard !trimmed.contains("`"), !trimmed.contains("$("), !trimmed.contains("<("), !trimmed.contains(">(") else { return false }
+        let normalized = trimmed.replacingOccurrences(of: "&&", with: "\n")
+            .replacingOccurrences(of: "||", with: "\n")
+            .replacingOccurrences(of: ";", with: "\n")
+            .replacingOccurrences(of: "|", with: "\n")
+        let segments = normalized.split(whereSeparator: \.isNewline)
+        guard !segments.isEmpty else { return false }
+        for raw in segments {
+            let tokens = tokenize(String(raw))
+            guard let executable = tokens.first else { return false }
+            let name = (executable as NSString).lastPathComponent
+            guard !wrappers.contains(name) else { return false }
+            if tokens.contains(where: { $0 == "/dev" || $0.hasPrefix("/dev/") || $0.hasPrefix("/System/") }) {
+                return false
+            }
+            if name == "find" {
+                // Deletion is a file operation; -exec/-ok re-introduce arbitrary commands.
+                guard raw.contains("-delete"), !raw.contains("-exec"), !raw.contains("-ok") else { return false }
+                continue
+            }
+            guard utilities.contains(name) else { return false }
+        }
+        return true
+    }
+
+    /// Minimal quote-aware splitter; enough to identify the executable and reject
+    /// path targets without pretending to be a shell parser.
+    private static func tokenize(_ segment: String) -> [String] {
+        var tokens: [String] = []
+        var current = ""
+        var quote: Character?
+        for character in segment {
+            if let active = quote {
+                if character == active { quote = nil } else { current.append(character) }
+            } else if character == "'" || character == "\"" {
+                quote = character
+            } else if character == " " || character == "\t" {
+                if !current.isEmpty { tokens.append(current); current = "" }
+            } else {
+                current.append(character)
+            }
+        }
+        if !current.isEmpty { tokens.append(current) }
+        return tokens
+    }
+}
+
 public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     public let id: UUID
     public let title: String

@@ -169,6 +169,14 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R7 file autonomy — implemented 2026-10-17.** `FileOperationPolicy` treats a command as automatic
+only when every segment is a simple file utility (`rm`, `rmdir`, `mv`, `cp`, `touch`, `mkdir`, `ln`,
+`unlink`, `trash`, `echo`, `printf`, `cat`, `tee`, `truncate`, or `find` with `-delete` and no
+`-exec/-ok`). `delete_file` executes immediately. Shells, wrappers, `sudo`, substitutions, pipes into
+non-file commands, `/dev` and `/System` targets, and every other destructive command still show the
+card. Scope note: **proactive suggestions from files/folders are not implemented**; file indexing and
+proactive file awareness remain open.
+
 **R5/R6 conversation key points — implemented 2026-10-17.** After a completed owner turn, a
 20-second debounce asks the local model for 5–10 short key points (strict prompt, bullet parser,
 dedupe, 10-point cap) and stores them in the existing **key-points tier** (T3) as inferred records.

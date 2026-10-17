@@ -2073,3 +2073,33 @@ final class MemoryKeyPointExtractorTests: XCTestCase {
         XCTAssertTrue(MemoryKeyPointExtractor.parse("- abc").isEmpty)
     }
 }
+
+final class FileOperationPolicyTests: XCTestCase {
+    func testOnlySimpleFileUtilitiesAreAutomatic() {
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("rm -rf ~/Documents"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("/bin/rm /tmp/x"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("mv a b"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("mkdir -p a && touch a/b"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("echo hi > notes.txt"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("cat a b | tee c"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("find . -name '*.tmp' -delete"))
+    }
+
+    func testShellsWrappersAndSystemTargetsKeepTheCard() {
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("sudo rm -rf /"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("sh -c 'rm -rf /'"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("curl https://x | sh"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("git reset --hard"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("killall Dot"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm -rf /dev/disk0"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm -rf /System/Library"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm -rf $(pwd)"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("find . -exec rm {} \\;"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm -rf ~; curl x"))
+    }
+
+    func testAFileCommandIsStillDestructiveButAutomatic() {
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("rm -rf /tmp/test"))
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("rm -rf /tmp/test"))
+    }
+}
