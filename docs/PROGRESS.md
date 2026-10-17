@@ -15,6 +15,14 @@ This checkpoint records work verified on this machine, not intentions. Everythin
 | `swift test` | **534 tests, 0 failures** |
 | `xcodebuild -project Dot.xcodeproj -scheme Dot build` | **BUILD SUCCEEDED** |
 
+**Later on 2026-10-17 (installed from this revision):** the full XCTest lane is **861 tests, 0 failures** and
+`swift test` is **547 tests, 0 failures**; the Python suite is still 604 passed / 4 skipped and the 53
+guardrails pass. The installed Rust-only payload audits clean with `scripts/audit_runtime_payload.py`
+(**34,004 files, 1,594,205,216 bytes, exit 0**), so the earlier note that the auditor still required
+the deleted Python voice closure is superseded; only
+`packaging/runtime/reconstruction-policy.json` retains that archive as inert `supported: false`
+context. `scripts/verify_macos.sh` now fails only the documented runtime-finalizer canary.
+
 The Xcode app target previously could not build at all: it hard-wired `SWIFT_ACTIVE_COMPILATION_CONDITIONS = DOT_COMPLETE_BUNDLE`, `-framework whisper` and a `build-complete/` framework search path that is gitignored and absent, so `src/WhisperRecognizer.swift:2` raised `#error` on a clean checkout and `scripts/verify_macos.sh` could never pass. The target now builds the development configuration; complete bundles remain with the `swiftc`-based scripts that pass the define themselves. Separately, `scripts/verify_macos.sh` selected a Python ≥3.11 interpreter and then ran the suite with bare `python3`; it now uses the interpreter it validated, and the Portable Search contracts gate pull requests as well as main pushes.
 
 **The runtime is Rust-only.** `dot-voice` (Kokoro), `dot-search` (search) and `dot-fetch` (pinned source reader) are Rust binaries that `build.sh` now actually builds (`cargo build --release`) and copies into `Contents/MacOS`. That was the root cause of the Rust runtime never running: no script or workflow built either crate, so `dot-voice` was always missing and the app silently fell back to the Python torch helper.
@@ -47,7 +55,13 @@ Deleted as a result: `Resources/Voice/bionic_helper.py`, `Resources/Voice/voice.
 
 **Documentation (updated 2026-10-17 after this checkpoint):** the stale runtime documentation set (`docs/voice-bridge.md`, `docs/search-helper.md`, `docs/source-transport.md`, `docs/runtime-reconstruction.md`, `docs/offline-voice-assembly.md`, `docs/bundled-voice-research.md`, `docs/self-contained-build-plan.md`, `docs/architecture/staged-services.md`, `docs/verification.md`, `docs/verification/*`, `docs/PROFILE_BOOTSTRAP.md`, `docs/BUILD_CHECKLIST.md`, `docs/BUILD_CHECKLIST.txt`) has been rewritten or explicitly banner-marked against the Rust-only runtime; see [the Rust runtime reference](rust-runtime.md).
 
-**Still open and not claimed as done:** porting the Splash supervisor/TLS relay to Rust; the five-tier memory, broad file access, provider resilience and self-improvement clipboard flow; the dead-code and duplication reduction pass; the packaging-side gates that still require the deleted Python voice closure (`scripts/audit_runtime_payload.py` and `packaging/runtime/reconstruction-policy.json`, recorded in [the Rust runtime reference](rust-runtime.md)); installing the rebuilt app over the currently installed one; and every public-release gate (first-launch downloader, license closure, notarization, clean second-Mac acceptance). No installed-app, acoustic, device or release acceptance is claimed by this checkpoint.
+**Still open and not claimed as done (state at this revision):** porting the Splash supervisor/TLS relay
+to Rust; the five-tier memory, broad file access, provider resilience and self-improvement clipboard
+flow; the dead-code and duplication reduction pass; the inert Python-voice pins in
+`packaging/runtime/reconstruction-policy.json` (the runtime audit itself now passes; see above); and
+every public-release gate (first-launch downloader, license closure, notarization, clean second-Mac
+acceptance). The rebuilt app **is** installed and its provenance matches HEAD; no acoustic, device or
+release acceptance is claimed by this checkpoint.
 
 ## Published checkpoint — 2026-10-16 16:30 UTC
 

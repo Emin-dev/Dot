@@ -1,7 +1,7 @@
 # Dot handover — 2026-10-17
 
-First written at commit `f089231`; revised and reinstalled at `a7549ee` (installed app provenance
-matches HEAD, `source_root` recorded). Read [CONTINUATION.md](CONTINUATION.md) for the dated record and
+First written at commit `f089231`; revised and reinstalled from the committed tree (installed app
+provenance matches HEAD, `source_root` recorded). Read [CONTINUATION.md](CONTINUATION.md) for the dated record and
 the supervisor-port slices; this file is the "what is solid, what is not, what is next" list.
 
 ## Verified working (each with the evidence that was actually gathered)

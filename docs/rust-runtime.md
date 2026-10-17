@@ -90,19 +90,17 @@ Python voice closure. The Python-era half of
 
 ## Known packaging-side inconsistencies (outside this documentation change)
 
-Two source files outside `docs/**` still require the deleted Python voice stack. They are recorded
-here so the Rust-only claim is not read as complete:
+One source file outside `docs/**` still describes the deleted Python voice stack. It is recorded here
+so the Rust-only claim is not read as complete:
 
-- `scripts/audit_runtime_payload.py` requires a `speech_synthesis` component containing
-  `Voice/python/bin/python3`, a passed offline voice import probe and a complete voice dependency
-  lock, so `scripts/build_complete.sh` cannot audit a Rust-only payload until it is updated.
 - `packaging/runtime/reconstruction-policy.json` still pins the retired standalone CPython voice
-  archive and its 92-wheel lock/audit hashes as inert context, and the reconstruction tool's native
-  gates 2, 5 and 8 still describe Python voice evidence.
+  archive and its 92-wheel lock/audit hashes as inert context (`supported: false`), and the
+  reconstruction tool's native gates 2, 5 and 8 still describe Python voice evidence.
 
-Both are named in [offline acceptance](offline-acceptance.md) and
-[runtime reconstruction](runtime-reconstruction.md). Neither is a documentation defect and neither has
-been changed here.
+`scripts/audit_runtime_payload.py` no longer requires that closure: its `speech_synthesis` component
+is the Voice model files, and the installed Rust-only payload audits clean (34,004 files, exit 0 on
+2026-10-17). The policy file is named in [offline acceptance](offline-acceptance.md) and
+[runtime reconstruction](runtime-reconstruction.md); it is not a documentation defect.
 
 ## Not claimed
 
