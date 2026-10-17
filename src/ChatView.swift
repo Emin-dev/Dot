@@ -153,6 +153,18 @@ final class ChatModel: ObservableObject {
     func approvePendingAction() {
         guard let req = pendingApproval else { return }
         pendingApproval = nil
+        // The self-improvement offer is not a command: handle it here and never let it
+        // reach the branches below, which execute shell commands and delete files and
+        // must stay exactly as they are.
+        if req.title == "Paste Suggestion" {
+            guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true) else {
+                block("I need Accessibility access before I can paste into your app.", issue: .unknown)
+                return
+            }
+            _ = InPlaceAppTyping.type(text: req.command)
+            respondDirectly("Pasted my suggestion into the app you are using.", id: cancelTurn())
+            return
+        }
         let target = req.target
         let isDelete = req.title == "Delete File"
         let cmd = req.command
@@ -1132,8 +1144,9 @@ final class ChatModel: ObservableObject {
                     continue
                 }
                 let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
+                offerPasteIfAvailable()
                 DiagnosticChatLogger.record(role: "dot (10m-self-reflection)", text: report)
-                self.speakDirect("I reviewed my recent conversations after 10 minutes of inactivity and wrote an improvement suggestion for myself into Antigravity.")
+                self.speakDirect("I reviewed my recent conversations after 10 minutes of inactivity, wrote an improvement suggestion to my reflections file and copied it to your clipboard.")
             }
             self?.selfReflectionTicker = nil
         }
@@ -1346,6 +1359,20 @@ final class ChatModel: ObservableObject {
         beginListening(continuation: nil)
     }
 
+    /// After a reflection, offer to paste the suggestion where the owner is working.
+    /// It is already on the clipboard; pasting is their decision, so this only asks,
+    /// and it never touches the destructive approval branches.
+    private func offerPasteIfAvailable() {
+        guard let suggestion = IdleSelfReflectionEngine.shared.lastSuggestion,
+              !suggestion.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        pendingApproval = ActionApprovalRequest(
+            title: "Paste Suggestion",
+            detail: "Paste my suggestion into the app you are using?",
+            target: suggestion,
+            isDestructive: false,
+            command: suggestion)
+    }
+
     /// The subject of an explicit "forget ..." request, or nil when the turn is not one.
     /// A bare "everything" becomes an empty subject so the caller asks instead of wiping.
     private static func forgetSubject(from phrase: String) -> String? {
@@ -1522,7 +1549,12 @@ final class ChatModel: ObservableObject {
             // Only unambiguous approval wording may execute a pending destructive
             // action. Generic acknowledgements ("yes", "okay", "sure") can be an
             // answer to an unrelated question and must never approve one.
-            if ["approve", "approved", "run it", "do it"].contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
+            // A plain "yes" may accept the non-destructive paste offer, but never a
+            // destructive action: the destructive guard stays exactly as strict.
+            let approvals = (pendingApproval?.isDestructive ?? true)
+                ? ["approve", "approved", "run it", "do it"]
+                : ["approve", "approved", "run it", "do it", "yes", "yeah", "sure", "okay", "ok", "go ahead", "paste it", "paste"]
+            if approvals.contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
                 approvePendingAction()
                 return
             } else if ["deny", "no", "cancel", "stop", "don't do it", "reject", "nevermind", "abort"].contains(lower) || lower.hasPrefix("deny") || lower.hasPrefix("cancel") {
@@ -1845,6 +1877,7 @@ final class ChatModel: ObservableObject {
         }
         if lowerClean == "self reflect" || lowerClean == "reflect on your logs" || lowerClean == "analyze your logs" || lowerClean == "suggest improvements to antigravity" {
             let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
+            offerPasteIfAvailable()
             respondDirectly(report, id: id)
             return
         }

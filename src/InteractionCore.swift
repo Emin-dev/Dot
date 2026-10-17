@@ -2150,6 +2150,10 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
     private var lastReflectionAt: Double = ProcessInfo.processInfo.systemUptime
     private var emittedSuggestions: [String] = []
 
+    /// The suggestion produced by the most recent reflection, so the coordinator can
+    /// offer to paste it without parsing it back out of the spoken report.
+    public private(set) var lastSuggestion: String?
+
     public init() {}
 
     public func recordUserActivity(now: Double = ProcessInfo.processInfo.systemUptime) {
@@ -2232,6 +2236,7 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         let url = logURL ?? FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_chat_log.txt")
         let content = (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
         let suggestion = analyzeConversationLog(logContent: content)
+        lock.lock(); lastSuggestion = suggestion; lock.unlock()
 
         // Write to dedicated reflections log in Downloads
         if let reflectionURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_self_reflections.txt") {
