@@ -1340,6 +1340,12 @@ final class ChatModel: ObservableObject {
 
     /// Manual clicks interrupt; automatic capture requires the same-turn final-question gate.
     func clicked() {
+        // The OS only prompts while a permission is undetermined, and only for the
+        // process that asks. The prompt used to live deep inside the capture path,
+        // behind readiness and screen preparation, so in practice it never fired and
+        // every turn reported "microphone access is off". Ask here instead, on the
+        // owner's first explicit interaction, regardless of readiness.
+        Task { await Self.requestPermissionsIfNeeded() }
         if !OfflinePreparation.shared.ready && OfflinePreparation.shared.state == .paused {
             OfflinePreparation.shared.retry()
             expressionRevision &+= 1
@@ -1422,9 +1428,29 @@ final class ChatModel: ObservableObject {
         return "Battery: \(percent)%" + (charging ? ", charging." : onAC ? ", plugged in." : ", on battery.")
     }
 
+    /// Ask for the two prompts the app cannot work without, once each. Waiting on the
+    /// microphone answer keeps the "granted" path honest; the screen request returns a
+    /// Bool that is only advisory - the authoritative check stays CGPreflightScreenCaptureAccess.
+    static func requestPermissionsIfNeeded() async {
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            _ = await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
+            }
+        }
+        if !CGPreflightScreenCaptureAccess() {
+            _ = CGRequestScreenCaptureAccess()
+        }
+    }
+
     /// A click or key press that cannot start listening must say why instead of
     /// appearing to do nothing: this is the honest counterpart of the readiness gate.
     private func reportNotReady() {
+        // If the microphone is the actual blocker, say so and link straight to the pane
+        // instead of reporting a files problem that no longer applies.
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .denied {
+            block("Microphone access is off. Enable Dot in System Settings > Privacy & Security > Microphone, then click me again.", issue: .speech)
+            return
+        }
         let state = OfflinePreparation.shared.state
         block(state.detail ?? state.caption, issue: .files)
     }
@@ -1433,6 +1459,7 @@ final class ChatModel: ObservableObject {
     private var pushToTalkStart: Double = 0
 
     func beginPushToTalk() {
+        Task { await Self.requestPermissionsIfNeeded() }
         guard !shuttingDown, runtime.isReady() else {
             reportNotReady()
             return
