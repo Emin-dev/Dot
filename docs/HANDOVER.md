@@ -55,7 +55,8 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   preferences go to core. Capture from natural speech, tier-aware recall with an FTS fallback,
   "what do you remember", bounded explicit "forget about X", ageing that promotes T1→T2→T3→T4 and
   never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).
-- **Public download.** README has a Download button and one-line installer. `scripts/package_public_release.sh`
+- **Public download.** README has a Download button and one-line installer, with a **1.0 GB
+  `Dot.dmg`** (drag to Applications) and a zip equivalent. `scripts/package_public_release.sh`
   produces a ~785 MB runtime-only `Dot.zip`; first launch downloads the exact 15 model files from the
   two reviewed Hugging Face repositories and verifies their SHA-256 against the signed manifest. The
   20 GB live download and notarisation are not yet exercised.

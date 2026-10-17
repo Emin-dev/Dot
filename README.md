@@ -4,19 +4,24 @@
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
 
-**Download `Dot.zip` from the latest release, move `Dot.app` to Applications, and open it.** The app
-verifies its signed runtime, then downloads the exact 19.9 GB local model from Hugging Face on first
-launch, checking every file's SHA-256 against the bundled manifest. Allow about 25 GB of free disk and
-a stable connection; the progress appears in the menu bar and context menu.
+**[Download `Dot.dmg`](https://github.com/Emin-dev/Dot/releases/latest/download/Dot.dmg)**, open it,
+drag **Dot** into **Applications**, and launch it. The app verifies its signed runtime, then downloads
+the exact 19.9 GB local model from Hugging Face on first launch, checking every file's SHA-256 against
+the bundled manifest. Allow about 25 GB of free disk and a stable connection; progress appears in the
+menu bar and context menu.
 
-One-line install:
+DMG one-line install (after a clean macOS install):
 
 ```bash
-curl -L -o /tmp/Dot.zip https://github.com/Emin-dev/Dot/releases/latest/download/Dot.zip \
-  && ditto -x -k /tmp/Dot.zip /Applications \
+curl -L -o /tmp/Dot.dmg https://github.com/Emin-dev/Dot/releases/latest/download/Dot.dmg \
+  && hdiutil attach /tmp/Dot.dmg -nobrowse -quiet \
+  && cp -R "/Volumes/Dot/Dot.app" /Applications/ \
+  && hdiutil detach "/Volumes/Dot" -quiet \
   && xattr -dr com.apple.quarantine /Applications/Dot.app \
   && open /Applications/Dot.app
 ```
+
+A zip is also published (`Dot.zip`) with the equivalent `ditto` installer.
 
 The public build is **Apple Development signed, not notarised yet**, so macOS may warn on first open;
 the command clears the quarantine flag. The button resolves once the `Dot.zip` asset is uploaded to a

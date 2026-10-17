@@ -185,6 +185,13 @@ cache failure never fails a search. Tests cover round-trip, expiry, disk persist
 limit, eviction and the in-memory test mode. Scope note: the offline encyclopedia snapshot and more
 providers remain open.
 
+**Public DMG — prepared 2026-10-18.** `scripts/package_public_release.sh` now produces a **1.0 GB
+`Dot.dmg`** (compressed runtime-only app, Applications symlink, no models) alongside `Dot.zip`;
+`hdiutil verify`, signature and contents were checked (no `OfflineModels`, downloader present).
+`scripts/publish_public_release.sh` uploads both plus checksums. README's recommended install is the
+DMG, with a DMG one-liner for a clean macOS install. The asset upload still needs a GitHub token;
+notarisation remains open.
+
 **Screen-off pause — 2026-10-17 (owner request).** Dot now observes display sleep/wake
 (`NSWorkspace.screensDidSleep/Wake`) and login-screen lock/unlock (`com.apple.screenIsLocked/Unlocked`),
 with an initial `CGSessionCopyCurrentDictionary` check. While the display is off or locked, ChatModel

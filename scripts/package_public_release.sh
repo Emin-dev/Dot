@@ -3,7 +3,7 @@
 #
 # The app verifies its signed manifest and downloads the exact model files from
 # Hugging Face into ~/Library/Application Support/Dot/Models on first launch. The
-# resulting zip must stay under GitHub's 2 GB per-asset limit.
+# resulting DMG/ZIP must stay under GitHub's 2 GB per-asset limit.
 #
 # Usage:
 #   bash scripts/package_public_release.sh
@@ -66,9 +66,23 @@ ditto -c -k --sequesterRsrc --keepParent "$STAGE/Dot.app" "$ZIP"
 SIZE=$(stat -f%z "$ZIP")
 [ "$SIZE" -lt 2000000000 ] || fail "zip is $SIZE bytes; GitHub rejects assets at 2 GB"
 shasum -a 256 "$ZIP" > "$ZIP.sha256"
-ls -lh "$ZIP" "$ZIP.sha256"
+
+DMG="$OUT/Dot.dmg"
+echo "==> creating $DMG"
+DMGROOT="$STAGE/dmg"
+rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
+cp -c -R "$STAGE/Dot.app" "$DMGROOT/Dot.app" 2>/dev/null || cp -R "$STAGE/Dot.app" "$DMGROOT/Dot.app"
+ln -s /Applications "$DMGROOT/Applications"
+rm -f "$DMG"
+hdiutil create -quiet -volname "Dot" -srcfolder "$DMGROOT" -ov -format UDZO "$DMG"
+hdiutil verify -quiet "$DMG" || fail "DMG failed verification"
+DSIZE=$(stat -f%z "$DMG")
+[ "$DSIZE" -lt 2000000000 ] || fail "DMG is $DSIZE bytes; GitHub rejects assets at 2 GB"
+shasum -a 256 "$DMG" > "$DMG.sha256"
+ls -lh "$ZIP" "$ZIP.sha256" "$DMG" "$DMG.sha256"
 echo
 echo "PASS: runtime-only public app packaged (models download on first launch)"
-echo "Upload $ZIP to https://github.com/Emin-dev/Dot/releases/new as asset name Dot.zip."
-echo "Until that upload exists the README button has no asset to serve."
+echo "Upload $DMG as Dot.dmg (recommended) and $ZIP as Dot.zip to"
+echo "https://github.com/Emin-dev/Dot/releases/new, or run scripts/publish_public_release.sh."
+echo "Until those assets exist the README buttons have nothing to serve."
 rm -rf "$STAGE"
