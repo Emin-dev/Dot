@@ -567,7 +567,8 @@ owner decision, not an implementation detail.
 - Voice: local and fast, but **quality first**; a calm, warm **British woman**. Kokoro British-female
   picker now (`bf_emma`, `bf_isabella`, `bf_alice`); evaluate Chatterbox/Orpheus next; **never cloud TTS**.
 - Memory: remember everything as **5–10 key points per conversation** (LLM summarisation, details kept),
-  full text in a separate searchable archive; voice-only interface.
+  full text in a separate searchable archive; voice-only interface. Implemented 2026-10-17: 20 s
+  debounce, local-model summary, key-points tier T3, bullet parser/dedupe/cap.
 - Files: **full autonomy** — create/write/rename/move/delete automatically, without asking (this
   overrides the earlier "card for destructive actions" rule for file operations); proactive
   suggestions from everything Dot sees.

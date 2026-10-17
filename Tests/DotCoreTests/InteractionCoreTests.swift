@@ -2040,3 +2040,36 @@ final class TrustedAppTests: XCTestCase {
         XCTAssertNil(request.calendarDraft)
     }
 }
+
+final class MemoryKeyPointExtractorTests: XCTestCase {
+    func testPromptUsesSystemAndTranscriptOnlyForARealExchange() {
+        let one = MemoryKeyPointExtractor.prompt(for: [.init(role: "user", text: "hi")])
+        XCTAssertNil(one)
+        let prompt = MemoryKeyPointExtractor.prompt(for: [.init(role: "user", text: "I like tea."),
+                                                          .init(role: "assistant", text: "Noted.")])
+        XCTAssertEqual(prompt?.map(\.role), ["system", "user"])
+        XCTAssertTrue(prompt?.last?.text.contains("User: I like tea.") == true)
+        XCTAssertTrue(prompt?.last?.text.contains("Dot: Noted.") == true)
+    }
+
+    func testParsesBulletsNumbersAndDropsNoiseAndDuplicates() {
+        let raw = """
+        Key points:
+        - Likes oat flat whites.
+        2. Lives in Tbilisi.
+        * Working on Dot's memory.
+        - likes OAT flat whites.
+        NONE
+        This is commentary.
+        """
+        XCTAssertEqual(MemoryKeyPointExtractor.parse(raw),
+                       ["Likes oat flat whites.", "Lives in Tbilisi.", "Working on Dot's memory."])
+    }
+
+    func testParseCapsAtTenAndRejectsShortOrEmpty() {
+        let raw = (1...12).map { "- Point number \($0)" }.joined(separator: "\n")
+        XCTAssertEqual(MemoryKeyPointExtractor.parse(raw).count, 10)
+        XCTAssertTrue(MemoryKeyPointExtractor.parse("NONE").isEmpty)
+        XCTAssertTrue(MemoryKeyPointExtractor.parse("- abc").isEmpty)
+    }
+}

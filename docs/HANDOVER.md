@@ -36,7 +36,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
   redirects); the card is clickable; a plain "yes" is accepted only for the non-destructive paste
   offer, so the destructive wording stays strict. Contextual app actions are carded unless the app is
   in the **Trusted apps** list, which toggles the frontmost app; calendar create/move also card.
-- **Memory (five tiers).** Capture from natural speech, tier-aware recall with an FTS fallback,
+- **Memory (five tiers).** After a conversation lull the local model extracts 5–10 key points into
+  the key-points tier; the full transcript stays in the searchable FTS archive. Explicit "remember …"
+  preferences go to core. Capture from natural speech, tier-aware recall with an FTS fallback,
   "what do you remember", bounded explicit "forget about X", ageing that promotes T1→T2→T3→T4 and
   never deletes, eviction only from the real RAM-pressure path (never T3/T4/T5, never pinned).
 - **Cold start.** The menu-bar title shows "Preparing N%" during the payload check and "Loading

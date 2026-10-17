@@ -169,6 +169,14 @@ updated, and the tests assert the 300-second boundary and the spoken cap notice.
 re-arms proactivity, and says "I'm back."; `NSWorkspace.didWakeNotification` invokes it after a short
 audio-route settle. Full lane 875/0 and `swift test` 555/0.
 
+**R5/R6 conversation key points — implemented 2026-10-17.** After a completed owner turn, a
+20-second debounce asks the local model for 5–10 short key points (strict prompt, bullet parser,
+dedupe, 10-point cap) and stores them in the existing **key-points tier** (T3) as inferred records.
+The full transcript stays in the FTS conversation archive, not in a tier; a new turn cancels the
+pending summary. Explicit "remember …" preferences still go straight to core. Memory remains
+voice-only (no panel): "what do you remember" and "forget about X" are unchanged. Extractor tests
+cover the prompt contract, bullet/number parsing, noise/duplicate rejection and the cap.
+
 **R15 trusted-app allowlist — implemented 2026-10-17.** Contextual app actions now check
 `TrustedAppStore` (UserDefaults, empty by default). An untrusted app's action presents an
 `Allow App Action` card carrying an `AppActionDraft`; approval runs the workflow and reports the result.

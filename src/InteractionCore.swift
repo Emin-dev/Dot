@@ -5392,3 +5392,56 @@ public final class CalendarMeetingAssistant {
     }
 }
 
+
+// MARK: - Conversation key points (R5)
+
+/// Turns a conversation into a prompt for the local model and parses its bullet
+/// key points. Pure so the prompt/parse contract is testable without inference;
+/// the full transcript stays in the FTS conversation archive, never in a tier.
+public enum MemoryKeyPointExtractor {
+    public static let systemPrompt = """
+    You extract durable memory from a conversation with Dot's owner. Reply with 5 to 10 short key \
+    points, one per line, each starting with "- ". Keep names, preferences, decisions, dates, \
+    projects, constraints and corrections. Do not quote whole sentences from the conversation, do \
+    not include chit-chat, and do not add any commentary. If nothing is worth remembering, reply \
+    exactly: NONE.
+    """
+
+    public struct Line: Equatable, Sendable {
+        public let role: String
+        public let text: String
+        public init(role: String, text: String) { self.role = role; self.text = text }
+    }
+
+    public static func prompt(for lines: [Line], limit: Int = 16) -> [Line]? {
+        let usable = lines.filter {
+            !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                && ($0.role == "user" || $0.role == "assistant")
+        }.suffix(max(2, limit))
+        guard usable.contains(where: { $0.role == "user" }), usable.count >= 2 else { return nil }
+        let transcript = usable.map { line -> String in
+            let speaker = line.role == "user" ? "User" : "Dot"
+            return "\(speaker): \(String(line.text.prefix(500)))"
+        }.joined(separator: "\n")
+        return [Line(role: "system", text: systemPrompt), Line(role: "user", text: transcript)]
+    }
+
+    public static func parse(_ response: String) -> [String] {
+        var seen = Set<String>()
+        var points: [String] = []
+        for raw in response.split(whereSeparator: \.isNewline) {
+            var line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty || line.uppercased() == "NONE" { continue }
+            if let range = line.range(of: #"^(?:[-*•–]|\d{1,2}[\.\)])\s+"#, options: .regularExpression) {
+                line.removeSubrange(range)
+            } else { continue }
+            line = line.trimmingCharacters(in: CharacterSet(charactersIn: " \t-*•–"))
+            guard line.count >= 4, line.count <= 240 else { continue }
+            let key = line.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            points.append(line)
+            if points.count == 10 { break }
+        }
+        return points
+    }
+}

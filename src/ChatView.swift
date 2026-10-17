@@ -78,6 +78,7 @@ final class ChatModel: ObservableObject {
     private var captureReachedLimit = false
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
+    private var memorySummaryTask: Task<Void, Never>?
     static let prewarmDefaultsKey = "dot.prewarmAtLogin"
     @Published var pinned: Bool {
         didSet { defaults.set(pinned, forKey: "petPinned"); placementInvalidated?() }
@@ -1159,6 +1160,39 @@ final class ChatModel: ObservableObject {
         }
     }
     func prewarmIfEnabled() { startPrewarmIfEnabled() }
+
+    /// R5: after a conversation lull, ask the local model for 5–10 key points and
+    /// put them in the key-points tier. The full transcript is already in the FTS
+    /// archive; the debounce cancels itself when the owner starts another turn.
+    private func scheduleMemorySummary() {
+        memorySummaryTask?.cancel()
+        guard memory != nil else { return }
+        memorySummaryTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled, let self, !self.shuttingDown,
+                  self.phase == .idle, !self.generating, !self.runtime.ttsSpeaking() else { return }
+            await self.summariseConversationIntoKeyPoints()
+        }
+    }
+
+    private func summariseConversationIntoKeyPoints() async {
+        guard let memory else { return }
+        let lines = history.map { MemoryKeyPointExtractor.Line(role: $0.role, text: $0.content) }
+        guard let prompt = MemoryKeyPointExtractor.prompt(for: lines) else { return }
+        var output = ""
+        do {
+            _ = try await engine.chat(history: prompt.map { ChatMessage(role: $0.role, content: $0.text) },
+                                      purpose: .background,
+                                      onDelta: { delta in output += delta })
+        } catch { return }
+        let points = MemoryKeyPointExtractor.parse(output)
+        guard !points.isEmpty else { return }
+        for point in points {
+            _ = try? await memory.remember(text: point, tier: .keyPoints, source: .inferred, now: Date())
+        }
+        DiagnosticChatLogger.record(role: "system",
+            text: "Memory: stored \(points.count) conversation key point(s).")
+    }
 
     func startProactivity() {
         proactive.start()
@@ -2683,6 +2717,7 @@ final class ChatModel: ObservableObject {
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 let finalAnswer = self.answer
                 DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
+                self.scheduleMemorySummary()
                 Task { [weak self] in await self?.screen.captureSilentScreenSnapshot() }
 
                 // Auto-copy to clipboard if system speaker is muted
@@ -2825,6 +2860,7 @@ final class ChatModel: ObservableObject {
         work?.cancel(); work = nil; warmup.cancel()
         runtime.stopCapture(); runtime.stopVoice(); screen.cancel(); screenContextUsed = false; capturingScreen = false; generating = false
         currentTurnIsTyped = false; voiceDeliveryFailed = false; captureReachedLimit = false
+        memorySummaryTask?.cancel(); memorySummaryTask = nil
         if let speechID = activeSpeechUpdateID {
             activeSpeechUpdateID = nil
             runtime.stopVoice()
@@ -2873,7 +2909,7 @@ final class ChatModel: ObservableObject {
         speakDirect("I'm back.")
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
-    func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
+    func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
     func shutdown() { stopProactivity(); cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 
