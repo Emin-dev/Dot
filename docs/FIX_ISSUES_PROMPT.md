@@ -1,5 +1,10 @@
 # Fix-issues prompt for the AI development team
 
+> **STATUS (2026-10-18):** this is the original 2026-10-17 defect list. A1–A10, B1–B7 and B9 are fixed
+> (A5 completed with a visible text-only notice). **B8 (dead code) remains; B10 is by design.** Do not
+> re-fix items without checking the current code. Current state, remaining product rules (R1–R15) and
+> next steps are in [AI_HANDOFF.md](AI_HANDOFF.md).
+
 You are fixing Dot (macOS SwiftUI companion, repo at
 `/Users/mac/Documents/deepseek-harness/default-workspace/Dot`, branch `main`).
 Read `docs/DEV_TEAM_PROMPT.md` (rules R1–R15 are binding), `docs/DOT_AUDIT.md`,

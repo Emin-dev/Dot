@@ -1,5 +1,7 @@
 # New-session prompt
 
+> **Current state:** see [AI_HANDOFF.md](AI_HANDOFF.md). This file is a dated session brief; some items are fixed.
+
 ## Goal command (short form)
 
 Pass this as the objective to the harness goal tool:

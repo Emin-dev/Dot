@@ -1,5 +1,9 @@
 # dot — floating local companion
 
+> **AI/contributor handoff:** read [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) for the current build,
+> verified gates, what works/partial/missing and the next steps. Older planning documents are dated
+> history and may be superseded.
+
 ## Install Dot
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)

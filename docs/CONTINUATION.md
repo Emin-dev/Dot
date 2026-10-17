@@ -1,3 +1,28 @@
+# Dot continuation — current handoff (2026-10-18)
+
+> **Current source of truth: [AI_HANDOFF.md](AI_HANDOFF.md).** Read it before changing code. This file
+> preserves the dated engineering record below; older sections are historical and may describe fixed
+> defects or retired runtimes.
+
+**Current state.** `main` only; HEAD and installed provenance **`f03d608`**. Automated gates:
+**904 XCTest / 0** (1 opt-in live test skipped), **580 `swift test` / 0**, **604 Python / 4 skipped**,
+**53 guardrails**. Last full `verify_macos.sh` (at `e0fb2a7`) was clean except its by-design
+runtime-finalizer canary; rerun after the latest placement/screen-off changes. A **1.0 GB
+`build-public/Dot.dmg`** and 785 MB zip are built and verified but **not uploaded**; no release asset,
+no Developer ID/notarisation.
+
+**Latest work (2026-10-17/18):** R1 5-minute listening; R5/R6 key-point memory; R7 file autonomy and
+recent-file proactive awareness; R8 bounded adaptive screen watching; R11 cold-start progress/prewarm;
+R12 sleep re-arm; R13 create/edit/move calendar cards; R14 battery alerts; R15 trusted apps; A1–A10
+fixes; B1–B7/B9; follow-up listening fix; video silence; screen-off/lock pause; mic-mode guidance;
+placement/click accuracy; public DMG + first-launch HF model downloader; Keychain release auth.
+
+**Still missing:** R9 self-healing, R4 voice picker (payload decision), R10 offline index/snapshot,
+full-disk file index, B8 dead code, supervisor slices 2–5, release upload/notarisation, and a fresh
+owner acceptance session. See AI_HANDOFF for decisions and commands.
+
+---
+
 > **SUPERSEDED (2026-10-17).** This document describes the retired Python voice helper, source fetcher
 > and SearXNG/Waitress search stack, which no longer exist. See [the Rust-only runtime](rust-runtime.md)
 > for the current runtime. It is a dated continuation handoff: the revisions, run counts, receipts and

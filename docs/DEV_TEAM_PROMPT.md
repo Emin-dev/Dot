@@ -1,5 +1,8 @@
 # Dot — Professional Development Brief v2 (owner-answered, 2026-10-17)
 
+> **Current implementation status:** read [AI_HANDOFF.md](AI_HANDOFF.md) for what is implemented,
+> partial, blocked and next. This brief remains the binding spec (R1–R15); older docs may be stale.
+
 This brief is for the AI development team continuing Dot. It encodes the owner's
 audit answers as binding rules. It supersedes any earlier statement that contradicts it.
 Read `docs/HANDOVER.md`, `docs/CONTINUATION.md`, `docs/BUILD_CHECKLIST.md` and the

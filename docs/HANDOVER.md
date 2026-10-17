@@ -1,16 +1,18 @@
-# Dot handover — 2026-10-17
+# Dot handover — 2026-10-18
 
-**Spec superseded by `docs/DEV_TEAM_PROMPT.md` (owner answers R1–R15, 2026-10-17) — follow it wherever these documents conflict.**
+**Current state is maintained in [AI_HANDOFF.md](AI_HANDOFF.md); this file is the narrative "what is solid / what is not" list and is partly historical.** The binding spec is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R15); follow it wherever documents conflict.
 
-First written at commit `f089231`; revised and reinstalled from the committed tree (installed app
-provenance matches HEAD, `source_root` recorded). Read [CONTINUATION.md](CONTINUATION.md) for the dated record and
-the supervisor-port slices; this file is the "what is solid, what is not, what is next" list.
+Installed app provenance matches HEAD **`f03d608`**. Current automated gates: **904 XCTest / 0**
+(1 live test skipped), **580 `swift test` / 0**, **604 Python passed / 4 skipped**, **53 guardrails**;
+the last full `verify_macos.sh` run was clean apart from its by-design finalizer canary. A **1.0 GB
+`Dot.dmg`** and 785 MB `Dot.zip` are built and verified but **not uploaded**; the app is Apple
+Development signed, not notarised.
 
 ## Verified working (each with the evidence that was actually gathered)
 
 - **Repository gates.** Xcode app build SUCCEEDED; the XCTest lane `verify_macos.sh` runs is
-  860 tests / 0 failures (it began at 11 failures); `swift test` 546 / 0; the Python suite 604 passed
-  4 skipped; 53 static guardrails; `cargo build --release` produces `dot-voice`, `dot-search`,
+  **904 tests / 0 failures** (1 opt-in live test skipped); `swift test` **580 / 0**; the Python suite
+  604 passed / 4 skipped; 53 static guardrails; `cargo build --release` produces `dot-voice`, `dot-search`,
   `dot-fetch`; `scripts/audit_runtime_payload.py` accepts the owner's real Rust-only payload
   (34,004 files, exit 0).
 - **Rust runtime.** `dot-voice` synthesises `bf_isabella` at 24 kHz offline from the real model
@@ -110,12 +112,11 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
    routes, headphones/Bluetooth, echo and a clean second Mac are still unverified. Earlier the same
    build reached engine readiness cold in 70.9 s, captured the screen, and completed a proactive turn
    (`[DOT (PROACTIVE)]` at 15:37:41), proving the payload, supervisor and generation path.
-2. **`verify_macos.sh` still exits nonzero** for the mandatory runtime-finalizer canary, which fails on
-   a hosted toolchain image (`unsupported hosted toolchain image`) by design and blocks packaging.
-   The former flaky search case was fixed on 2026-10-17: the fixture's readiness line now uses shell
-   parameter expansion instead of spawning two `sed` processes, and its accept wait is bounded at 30 s
-   so a case that never connects cannot pin a dispatch thread. `startupSeconds` is unchanged at 10 s.
-   Evidence: `LocalDotSearchProviderTests` 7/7 in 7.4 s and the full lane 860/0 after the change.
+2. **`verify_macos.sh` still exits nonzero only for the mandatory runtime-finalizer canary**, which
+   fails on a hosted toolchain image (`unsupported hosted toolchain image`) by design and blocks
+   packaging. The latest full run (at `e0fb2a7`) was otherwise clean; rerun after the newest
+   placement/screen-off changes. The former flaky search case is fixed; timer/search tests can still
+   flake under heavy load or a locked display and pass in isolation. `startupSeconds` stays 10 s.
 3. **Quality-of-service advisory: diagnosed, not caused by the turn pipeline.** The turn task in
    `ChatView.submit` now carries `.userInitiated` (correct in its own right), but a controlled
    experiment on 2026-10-17 reproduced the XCTest warning with *only* `NSApplication.shared` plus an
@@ -123,11 +124,10 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
    system log names the wait as `-[NSCondition waitUntilDate:]` inside AppKit/SwiftUI. The narrow
    filter in `verify_macos.sh` therefore records an Apple-framework inversion that product code cannot
    remove; every other warning stays fatal. Do not widen that filter.
-4. **Memory rough edges.** `MemoryTierStore` opens a second SQLite connection to
-   `dot_records.sqlite` (a `withConnection` accessor on `LocalFTSStore` removes ~120 lines). Capture is
-   a heuristic (240-character bound plus cue words) and may over- or under-capture. "Compression"
-   concatenates a bounded summary rather than summarising with the model. There is no UI to browse or
-   edit memory beyond the spoken listing and "forget".
+4. **Memory.** The second SQLite connection is fixed: facts and tier state share
+   `LocalFTSStore.withMemoryConnection`. Conversation key points are model-summarised into T3 (R5);
+   ageing compression still concatenates bounded summaries rather than summarising further. There is
+   no UI beyond the spoken listing and "forget".
 5. **Screen awareness.** The persisted-marker trap is fixed: the marker now records only that the
    prompt was *offered*, and `isPermanentlyConfigured` clears it whenever preflight still disagrees,
    so a denial or crash during the prompt is asked about again. The model prompt no longer asserts
@@ -143,14 +143,10 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 7. **Broad file access is partial.** What exists: read a named text file, Spotlight name and content
    search, and a watched folder. What is missing: indexing arbitrary trees, iCloud placeholder handling,
    relevance ranking, and any scan budget. The owner's ask was "everything on my disk".
-8. **Placement refresh: fixed 2026-10-17.** The map's 10 s lifetime and the 10 s capture cadence meant
-   the first validation of each cycle was rejected by construction, and a caller that had just started
-   a refresh could have it cancelled by that rejection. `PlacementCapture.needsRefresh` now lets the
-   movement callers start a capture while the old map is still valid, and `current` no longer
-   invalidates an in-flight refresh. Thinking relocation and the two-minute idle roam now request a
-   refresh as well; the lifetime stays 10 s (`RoamingTests` guards it). Live check on the installed
-   build: consecutive `DOT_PLACEMENT stage=validation outcome=ready` lines every ~10.5 s with **no**
-   `reason=expired` rejections, where the old build logged one every cycle.
+8. **Placement and movement: fixed 2026-10-18.** The map refreshes before validation; full window
+   bounds are protected; no overlapping fallback target exists; trips, the two-minute roam and random
+   relocation require a safe swept path; coverage escapes after the short rest. Clicks use the captured
+   display, exact short labels and raise-before-click. The 10 s lifetime is unchanged.
 9. **Last Dot-authored Python.** The Splash supervisor, child observation and TLS relay (640 lines).
    Slice 1 of the Rust port is committed (`crates/dot-runtime`: wire contract, api key, 3 tests; the
    binary deliberately reports `failed/supervisor/not-implemented`). Remaining: child ownership,
@@ -177,17 +173,17 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
 
 ## Suggested order for the next session
 
-1. Have the owner grant the microphone and screen prompts, then record **one real conversation** and
-   the resulting `DOT_*` log lines. Everything else is guesswork until that exists.
-2. Supervisor slices 2 → 3 → 4 → 5, with `splash.sb` and the 53 guardrails green at each step.
-3. Memory second-connection cleanup; then dead-code batches; then file indexing.
+1. Publish `build-public/Dot.dmg`/`Dot.zip` (manual release upload, or Keychain token via
+   `scripts/store_github_token.sh` then `scripts/publish_public_release.sh`). Then clean-Mac install:
+   download → drag to Applications → first-launch 20 GB model download → voice turn.
+2. Owner acceptance session after the latest changes (voice, follow-up, file op, calendar card, video
+   silence, screen-off pause, screen watching).
+3. Decide and build R9 self-healing (recommended: writable plugin/config layer + snapshots/self-test/
+   rollback + Rust watchdog; the signed bundle cannot be modified in place without breaking its
+   signature).
+4. Decide R4 (payload stays isabella-only, or explicitly add `bf_emma`/`bf_alice`).
+5. Supervisor slices 2–5; R10 local index/offline snapshot; full-disk index/content search; B8 deletions.
+6. Notarisation (Developer ID Application + notary credentials), licence closure, second-Mac acceptance.
 
-Release gate rerun on 2026-10-17 after the R1–R15 work: Python 604 passed / 4 skipped, Splash sandbox
-PASS, 53 guardrails, SwiftPM 576/0, XCTest 896/0, Debug and Release builds succeeded; the only failure
-is the by-design runtime-finalizer canary. Video detection is injectable for tests so an incidentally
-playing video on the host cannot change test outcomes.
-
-Already closed on 2026-10-17: the turn task's `.userInitiated` priority (the advisory itself is an
-AppKit/SwiftUI inversion, documented above), the search fixture's readiness and bounded accept wait,
-and the placement refresh-before-validation cycle. `verify_macos.sh` still exits nonzero only for the
-by-design runtime-finalizer canary.
+Already closed on 2026-10-18: screen-off/lock pause, DMG packaging, A5 visible text-only notice, named
+calendar edit, placement/click accuracy, follow-up listening, mic-mode guidance.

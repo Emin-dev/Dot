@@ -1,5 +1,12 @@
 # dot: product roadmap and build checklist
 
+> **CURRENT STATUS (2026-10-18):** HEAD/installed **`f03d608`**; 904 XCTest/0 (1 skipped), 580
+> `swift test`/0, 604 Python/4 skipped, 53 guardrails. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded),
+> R11, R12, R13 (create/edit/move), R14, R15 are implemented; **R4 blocked on the payload decision**,
+> **R9 not built**, **R10 partial**. Read [AI_HANDOFF.md](AI_HANDOFF.md) for current state, blockers,
+> commands and the next plan. The "4 of 97" and older run counts below are **2026-10-14 historical
+> checkpoints**, not current completion.
+
 Agreed direction, updated 2026-10-14. **This is the canonical future-product checklist.** [PROGRESS](PROGRESS.md) records verified source, tests and installation; agreement here does not mean a feature is built. Roadmap capability boxes remain unchecked until their stated scope is verified; the separate candidate ledger below records narrower source and automated-check milestones. This documentation delta changes no application code; the preview review is complete and checklist implementation is authorized in tested stages. Voice is the first milestone, with a separate reviewable native skin/settings batch; installation remains a separate step. **Runtime direction was superseded on 2026-10-17:** the runtime is Rust-only and the owner decisions below are authoritative; see [the Rust runtime reference](rust-runtime.md).
 
 dot is a very fast, voice-first, Apple-native macOS AI companion. **Speed comes first; a warm, calm, high-quality British female voice generated locally comes second.** It should understand relevant work, research facts, act helpfully and feel alive. Prefer Apple-native solutions and frameworks for every subsystem; use custom components where necessary or demonstrably better under these requirements. This principle preserves the fixed Splash/Qwen LLM and the required British voice.
@@ -28,7 +35,7 @@ Latest planning update, 2026-10-13: the user welcomed the suggestions for persis
 
 ## Scoped progress checkpoint — 2026-10-14 16:16 UTC
 
-This documentation tranche records **4 of 97 current requirements complete, 93 open**, plus **five separate historical milestones**. The completed scopes are R04 **dated reconciliation**, R17 service-boundary **design**, R50 video **feasibility research**, and R66 **shared-native-rig architecture**. These counts are not a feature-completion percentage or release certification. R04 closes only the fresh dated reconciliation; it must continue to be maintained as commits, tests and prerequisites change. All 102 requirement texts and their order are preserved.
+This historical documentation tranche (2026-10-14) recorded **4 of 97 current requirements complete, 93 open**, plus five historical milestones. **Current status is in AI_HANDOFF.md; do not treat this count as current.** The completed scopes are R04 **dated reconciliation**, R17 service-boundary **design**, R50 video **feasibility research**, and R66 **shared-native-rig architecture**. These counts are not a feature-completion percentage or release certification. R04 closes only the fresh dated reconciliation; it must continue to be maintained as commits, tests and prerequisites change. All 102 requirement texts and their order are preserved.
 
 - Published parent for this combined candidate is [`21fb1c2`](https://github.com/Emin-dev/Dot/commit/21fb1c24d2d061bd46995d7cfcd7e6a4c8c40432), tree `dc737d2237170e50675a6b0187f3feb0c1c92065`, 238 files. Its canonical ledger still has **0 of 97 current rows checked**; the expanded local ledger has **4 of 97** after the approved dated R04 reconciliation. This tranche adds the four approved scoped closures and their reports without copying the expanded implementation.
 - Latest exact green hosted-native evidence is [`21fb1c2`](https://github.com/Emin-dev/Dot/commit/21fb1c24d2d061bd46995d7cfcd7e6a4c8c40432): **334 Python passes / 3 skips, 486 SwiftPM and 789 XCTest passes**, plus Debug/Release/development-package/signature and the zero compiler-warning gate. [Run 38594414249](https://github.com/Emin-dev/Dot/actions/runs/38594414249), [job 115957311020](https://github.com/Emin-dev/Dot/actions/runs/38594414249/job/115957311020), completed successfully at 16:11 UTC. This is model-free evidence for that exact parent; runtime diagnostics remain distinct from compiler warnings.

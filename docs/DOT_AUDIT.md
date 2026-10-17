@@ -1,5 +1,9 @@
 # Dot Audit — Logical Issues & Real-Life Limitations
 
+> **HISTORICAL (read-only audit at `555d504`).** Many findings here are fixed in current HEAD; see
+> [AI_HANDOFF.md](AI_HANDOFF.md) for the current state. Do not use this file alone to decide what is
+> broken.
+
 Read-only audit at commit `555d504` (repo untouched). Three sections: what is
 broken by logic, what works but has hidden bounds, and what cannot be done at all.
 Each item ends with a suggested fix; the owner's answers to the questions at the
