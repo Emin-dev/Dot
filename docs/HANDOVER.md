@@ -80,7 +80,9 @@ the supervisor-port slices; this file is the "what is solid, what is not, what i
    a refresh could have it cancelled by that rejection. `PlacementCapture.needsRefresh` now lets the
    movement callers start a capture while the old map is still valid, and `current` no longer
    invalidates an in-flight refresh. Thinking relocation and the two-minute idle roam now request a
-   refresh as well; the lifetime stays 10 s (`RoamingTests` guards it).
+   refresh as well; the lifetime stays 10 s (`RoamingTests` guards it). Live check on the installed
+   build: consecutive `DOT_PLACEMENT stage=validation outcome=ready` lines every ~10.5 s with **no**
+   `reason=expired` rejections, where the old build logged one every cycle.
 9. **Last Dot-authored Python.** The Splash supervisor, child observation and TLS relay (640 lines).
    Slice 1 of the Rust port is committed (`crates/dot-runtime`: wire contract, api key, 3 tests; the
    binary deliberately reports `failed/supervisor/not-implemented`). Remaining: child ownership,
