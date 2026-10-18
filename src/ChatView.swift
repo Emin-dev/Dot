@@ -1044,6 +1044,7 @@ final class ChatModel: ObservableObject {
         self.memory = MemoryTierStore(facts: self.ftsStore)
         if let memory { Task { _ = try? await memory.age(now: Date()) } }
         self.defaults = defaults
+        DotLogSync.shared.start()
         voiceTiming = VoiceTimingSettings(defaults: defaults)
         skinPreferences = SkinPreferences(defaults: defaults)
         batteryAlerts = BatteryAlertSettings(defaults: defaults)
@@ -1831,6 +1832,8 @@ final class ChatModel: ObservableObject {
             if let url { try? data.write(to: url, options: .atomic) }
         }
         DiagnosticChatLogger.record(role: "system", text: "[HEALTH] engine=\(engineStage ?? "unknown") ready=\(runtime.isReady()) mic=\(micStatus) screen=\(CGPreflightScreenCaptureAccess())")
+        // Every health transition is also a reason to publish this Dot's folder.
+        DotLogSync.shared.requestSync(reason: "health-change")
     }
 
     /// The subject of an explicit "forget ..." request, or nil when the turn is not one.
