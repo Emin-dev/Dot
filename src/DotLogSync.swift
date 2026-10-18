@@ -26,8 +26,25 @@ final class DotLogSync: @unchecked Sendable {
         sysctlbyname("hw.model", nil, &size, nil, 0)
         var model = [CChar](repeating: 0, count: max(size, 8))
         sysctlbyname("hw.model", &model, &size, nil, 0)
-        let cleaned = name.replacingOccurrences(of: " ", with: "-").lowercased()
-        let modelName = String(cString: model).lowercased()
+        // One clean slug: letters, digits and hyphens only, so the folder name is
+        // always a valid, stable path on GitHub (commas and spaces in hw.model
+        // otherwise leak into the id).
+        let slug: (String) -> String = { value in
+            let folded = value.lowercased()
+            var result = ""
+            var lastDash = true
+            for scalar in folded.unicodeScalars {
+                let v = scalar.value
+                if (48...57).contains(v) || (97...122).contains(v) || scalar == "-" {
+                    result.unicodeScalars.append(scalar); lastDash = (scalar == "-")
+                } else if !lastDash {
+                    result.unicodeScalars.append("-"); lastDash = true
+                }
+            }
+            return result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        }
+        let cleaned = slug(name)
+        let modelName = slug(String(cString: model))
         return "\(cleaned)-\(modelName)"
     }
 
