@@ -13,9 +13,9 @@
 # to disk, never committed, and never bundled with the app.
 set -euo pipefail
 
-: "${DOT_LOGS_REPO:?set DOT_LOGS_REPO (e.g. https://github.com/owner/dot-logs.git)}"
-: "${DOT_ID:?set DOT_ID (unique name for this Dot, e.g. emin-mac-m5)}"
-: "${GH_TOKEN:?set GH_TOKEN (personal access token with contents:write on that repo)}"
+: "${DOT_LOGS_REPO:=https://github.com/Emin-dev/Dot.git}"
+: "${DOT_ID:=$(scutil --get ComputerName 2>/dev/null | tr -d ' ' | tr 'A-Z' 'a-z')-$(sysctl -n hw.model 2>/dev/null | tr 'A-Z' 'a-z')}"
+: "${GH_TOKEN:?set GH_TOKEN (personal access token with contents:write on the repo)}"
 
 SUPPORT="${HOME}/Library/Application Support/Dot"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/dot-sync.XXXXXX")"
@@ -33,7 +33,10 @@ mkdir -p "repo/dots/$DOT_ID"
 # Logs (rotated, text) and the machine-readable health snapshot travel together.
 [ -d "$SUPPORT/Logs" ] && cp -R "$SUPPORT/Logs/." "repo/dots/$DOT_ID/logs/"
 [ -f "$SUPPORT/dot-health.json" ] && cp "$SUPPORT/dot-health.json" "repo/dots/$DOT_ID/"
-[ -f "$SUPPORT/Records/dot_records.sqlite" ] && cp "$SUPPORT/Records/dot_records.sqlite" "repo/dots/$DOT_ID/" || true
+# The memory database is the most personal artifact: opt in with SYNC_MEMORY=1.
+if [ "${SYNC_MEMORY:-0}" = "1" ] && [ -f "$SUPPORT/Records/dot_records.sqlite" ]; then
+    cp "$SUPPORT/Records/dot_records.sqlite" "repo/dots/$DOT_ID/"
+fi
 
 cd repo
 # Only push when there is something new; a silent no-op is the steady state.
