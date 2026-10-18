@@ -206,6 +206,13 @@ struct VoiceEvent {
     let request: UUID?
     let turn: UUID?
     let filename: String?
+    /// The Bionic helper's reason code for `cancelled`/`unavailable`/`error` events;
+    /// preserved so the caller can report the honest per-code message.
+    let code: Int?
+    init(kind: String, request: UUID?, turn: UUID?, filename: String?, code: Int? = nil) {
+        self.kind = kind; self.request = request; self.turn = turn
+        self.filename = filename; self.code = code
+    }
     static func parse(_ data: Data) -> VoiceEvent? {
         guard data.count <= 8192,
               let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -217,12 +224,16 @@ struct VoiceEvent {
             return VoiceEvent(kind: kind, request: nil, turn: nil, filename: nil)
         }
         if kind == "cancelled" || kind == "unavailable" {
-            return VoiceEvent(kind: kind, request: nil, turn: nil, filename: nil)
+            return VoiceEvent(kind: kind, request: nil, turn: nil, filename: nil,
+                              code: value["code"] as? Int)
         }
         guard kind == "audio" || kind == "error",
               let id = value["id"] as? String, let request = UUID(uuidString: id),
               let generation = value["turn"] as? String, let turn = UUID(uuidString: generation) else { return nil }
-        if kind == "error" { return VoiceEvent(kind: kind, request: request, turn: turn, filename: nil) }
+        if kind == "error" {
+            return VoiceEvent(kind: kind, request: request, turn: turn, filename: nil,
+                              code: value["code"] as? Int)
+        }
         guard let filename = value["file"] as? String, filename.hasPrefix("audio-"), filename.hasSuffix(".wav"),
               UUID(uuidString: String(filename.dropFirst(6).dropLast(4))) != nil,
               filename.count == 46, value["sample_rate"] as? Int == 24000,
@@ -428,6 +439,7 @@ struct RuntimeDiagnostic: LocalizedError, Equatable {
         case outOfMemory = "out_of_memory", fileMissing = "file_missing"
         case argumentRejected = "argument_rejected", deviceUnsupported = "device_unsupported"
         case processExited = "process_exited", startupFailed = "startup_failed"
+        case notImplemented = "not-implemented"
     }
     let stage: Stage
     let reason: Reason
@@ -459,6 +471,7 @@ struct RuntimeDiagnostic: LocalizedError, Equatable {
         case .deviceUnsupported: detail = "the runtime rejected this device"
         case .processExited: detail = "the owned process stopped"
         case .startupFailed: detail = "initialization failed"
+        case .notImplemented: detail = "the supervisor reported a not-implemented path"
         }
         return "\(stage == .voice ? "Voice" : "Splash") \(stage.rawValue): \(detail)\(exitStatus.map { " (exit \($0))" } ?? ""). Click to retry."
     }
@@ -563,7 +576,15 @@ enum CompanionIssue: CaseIterable, Equatable {
         case .unavailable: preparation = "unavailable"
         case .ready: preparation = "ready"
         }
-        return "Dot diagnostic summary\nPreparation: \(preparation)\nIssue: \(issue?.title ?? (readiness.isIssue ? Self.files.title : "None"))"
+        // The blocked message carries the remediation instruction ("enable X in Y");
+        // the short menu title alone never tells the owner what to do about it.
+        let issueText: String
+        if case .unavailable(let message) = readiness, !message.isEmpty {
+            issueText = message
+        } else {
+            issueText = issue?.title ?? (readiness.isIssue ? Self.files.title : "None")
+        }
+        return "Dot diagnostic summary\nPreparation: \(preparation)\nIssue: \(issueText)"
     }
     /// R11: the menu-bar title is the always-visible cold-start surface. Kept short
     /// so it never crowds the menu bar, and nil when nothing is starting.
@@ -607,6 +628,16 @@ struct QuestionReplyGate {
     private var explicitConversation = false
     private var issuedContinuation: UUID?
     private var issuedAt: Double?
+    /// The question provisionally reserved by `reserve` but not yet armed by `commit`.
+    private var reservedQuestion: UUID?
+
+    /// One provisional reply slot: `reserve` spends it, `commit` arms it, and
+    /// `release` gives it back when the caller rejects the invitation.
+    struct Reservation: Equatable {
+        let turn: UUID
+        let question: UUID
+        let at: Double
+    }
 
     mutating func begin(turn: UUID, explicitClick: Bool, continuation: UUID? = nil, now: Double = 0) {
         guard now.isFinite else { cancel(); return }
@@ -617,6 +648,7 @@ struct QuestionReplyGate {
         }
         issuedContinuation = nil; issuedAt = nil
         self.turn = turn; question = nil; playbackEndedAt = nil; responseFinalized = false
+        reservedQuestion = nil
     }
     mutating func responseFinished(turn: UUID, question: UUID?, succeeded: Bool) {
         guard explicitConversation, self.turn == turn, !responseFinalized else { return }
@@ -630,8 +662,12 @@ struct QuestionReplyGate {
         guard self.turn == turn, self.question == question, playbackEndedAt == nil, now.isFinite else { return }
         playbackEndedAt = now
     }
-    mutating func consume(turn: UUID, now: Double, ready: Bool, microphoneAuthorized: Bool,
-                          screenAuthorized: Bool, interacting: Bool) -> UUID? {
+    /// Two-phase consumption: `reserve` spends the reply slot provisionally, and the
+    /// caller must either `commit` (the invitation is actually armed) or `release`
+    /// (the invitation was rejected) it. A rejected invitation therefore never burns
+    /// `repliesUsed`, and the automatic-reply chain is not shortened by refusals.
+    mutating func reserve(turn: UUID, now: Double, ready: Bool, microphoneAuthorized: Bool,
+                          screenAuthorized: Bool, interacting: Bool) -> Reservation? {
         guard self.turn == turn else { return nil }
         // Permission loss and an exhausted chain are final. Readiness and a brief
         // interaction are transient after playback (audio route/teardown); the caller
@@ -639,16 +675,46 @@ struct QuestionReplyGate {
         guard microphoneAuthorized, screenAuthorized, now.isFinite,
               repliesUsed < Self.maximumAutomaticReplies else { cancel(); return nil }
         guard ready, !interacting else { return nil }
-        guard let question, let played = playbackEndedAt else { return nil }
+        guard let question, let played = playbackEndedAt, reservedQuestion == nil else { return nil }
         guard now >= played, now - played <= Self.invitationLifetimeSeconds else { cancel(); return nil }
         guard now - played >= Self.playbackSettleSeconds else { return nil }
-        repliesUsed += 1; issuedContinuation = question; issuedAt = now
+        repliesUsed += 1
+        reservedQuestion = question
+        return Reservation(turn: turn, question: question, at: now)
+    }
+
+    mutating func commit(_ reservation: Reservation) -> UUID? {
+        guard self.turn == reservation.turn, self.question == reservation.question,
+              reservedQuestion == reservation.question else {
+            release(reservation)
+            return nil
+        }
+        issuedContinuation = reservation.question
+        issuedAt = reservation.at
+        reservedQuestion = nil
         self.turn = nil; self.question = nil; playbackEndedAt = nil
-        return question
+        return reservation.question
+    }
+
+    mutating func release(_ reservation: Reservation) {
+        guard self.turn == reservation.turn, self.question == reservation.question,
+              reservedQuestion == reservation.question else { return }
+        if repliesUsed > 0 { repliesUsed -= 1 }
+        reservedQuestion = nil
+    }
+
+    mutating func consume(turn: UUID, now: Double, ready: Bool, microphoneAuthorized: Bool,
+                          screenAuthorized: Bool, interacting: Bool) -> UUID? {
+        guard let reservation = reserve(turn: turn, now: now, ready: ready,
+                                        microphoneAuthorized: microphoneAuthorized,
+                                        screenAuthorized: screenAuthorized,
+                                        interacting: interacting) else { return nil }
+        return commit(reservation)
     }
     mutating func cancel() {
         turn = nil; question = nil; playbackEndedAt = nil
         explicitConversation = false; issuedContinuation = nil; issuedAt = nil
+        reservedQuestion = nil
     }
 }
 
@@ -1370,9 +1436,18 @@ public enum TimerCommand: Equatable {
 public enum SmartTimerParser {
     public static func parse(_ text: String) -> TimerCommand {
         let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        if lower == "cancel timer" || lower == "stop timer" || lower == "clear timer" || lower == "cancel timers" {
-            return .cancel(label: nil)
+
+        // Labelled cancels: "cancel the tea timer" cancels only timers labelled "tea".
+        // The remainder must really name a timer ("clear clipboard" is not one).
+        let cancelPrefixes = ["cancel the ", "cancel ", "stop the ", "stop ", "clear the ", "clear "]
+        for prefix in cancelPrefixes where lower.hasPrefix(prefix) {
+            let remainder = String(lower.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            if remainder == "timer" || remainder == "timers" { return .cancel(label: nil) }
+            guard let suffix = [" timer", " timers"].first(where: { remainder.hasSuffix($0) }) else { return .none }
+            let label = String(remainder.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return label.isEmpty ? .cancel(label: nil) : .cancel(label: label)
         }
+
         if lower == "timers" || lower == "show timers" || lower == "list timers" || lower == "check timer" || lower == "my timers" {
             return .list
         }
@@ -1433,17 +1508,23 @@ public final class SmartTimerScheduler: @unchecked Sendable {
     /// `Task.sleep` is a monotonic suspension; a Mac that sleeps through a timer
     /// deadline would otherwise fire late by the sleep duration. On wake, fire each
     /// missed timer exactly once (the spoken note is the owner's answer), and
-    /// reschedule future timers against their wall-clock fire date.
-    public func handleWake(now: Date = Date()) {
+    /// reschedule future timers against their wall-clock fire date. Returns the
+    /// timers that were actually missed and fired at wake.
+    @discardableResult
+    public func handleWake(now: Date = Date()) -> [ScheduledTimer] {
         lock.lock()
         let entries = timers
         lock.unlock()
+        var missed: [ScheduledTimer] = []
         for (id, entry) in entries {
             entry.task.cancel()
             let remaining = entry.timer.fireDate.timeIntervalSince(now)
             if remaining <= 0 {
-                remove(id)
-                entry.onFire(entry.timer)
+                // Fire only when this wake removed the entry itself; the firing task
+                // that lost the race must stay silent, so a timer never double-fires.
+                if removeAndFireIfPresent(id, timer: entry.timer, onFire: entry.onFire) {
+                    missed.append(entry.timer)
+                }
             } else {
                 let task = Self.firingTask(id: id, timer: entry.timer, seconds: remaining, onFire: entry.onFire)
                 lock.lock()
@@ -1451,6 +1532,10 @@ public final class SmartTimerScheduler: @unchecked Sendable {
                 lock.unlock()
             }
         }
+        for timer in missed {
+            DiagnosticChatLogger.record(role: "system", text: "Timer missed during sleep: \(timer.label) — firing once at wake.")
+        }
+        return missed
     }
 
     private static func firingTask(id: UUID, timer: ScheduledTimer, seconds: Double,
@@ -1459,9 +1544,22 @@ public final class SmartTimerScheduler: @unchecked Sendable {
             let ms = UInt64(max(0.1, seconds) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: ms)
             guard !Task.isCancelled else { return }
-            SmartTimerScheduler.shared.remove(id)
-            onFire(timer)
+            _ = SmartTimerScheduler.shared.removeAndFireIfPresent(id, timer: timer, onFire: onFire)
         }
+    }
+
+    /// Remove-and-fire as one decision: the callback runs only when this caller
+    /// actually removed the entry, so the wake path and the firing task can race
+    /// without ever firing the same timer twice, and a cancelled timer never fires.
+    /// The callback runs outside the lock because it may re-enter the scheduler
+    /// and NSLock is not recursive.
+    private func removeAndFireIfPresent(_ id: UUID, timer: ScheduledTimer,
+                                        onFire: @Sendable (ScheduledTimer) -> Void) -> Bool {
+        lock.lock()
+        let present = timers.removeValue(forKey: id) != nil
+        lock.unlock()
+        if present { onFire(timer) }
+        return present
     }
 
     public func cancelAll() -> Int {
@@ -1475,16 +1573,44 @@ public final class SmartTimerScheduler: @unchecked Sendable {
         return count
     }
 
+    /// Cancels only the timers whose label matches, case-insensitively; returns how
+    /// many were removed. An empty label cancels nothing (call `cancelAll` for that).
+    public func cancel(matching label: String) -> Int {
+        let lower = label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return 0 }
+        lock.lock()
+        defer { lock.unlock() }
+        let matched = timers.filter { $0.value.timer.label.lowercased() == lower }
+        for id in matched.keys {
+            timers[id]?.task.cancel()
+            timers.removeValue(forKey: id)
+        }
+        return matched.count
+    }
+
     public func activeTimers() -> [ScheduledTimer] {
         lock.lock()
         defer { lock.unlock() }
         return timers.values.map { $0.timer }.sorted { $0.fireDate < $1.fireDate }
     }
 
-    private func remove(_ id: UUID) {
-        lock.lock()
-        timers.removeValue(forKey: id)
-        lock.unlock()
+    /// CA-3: the wake-fired notice. A timer missed while the Mac slept fires exactly
+    /// once, and the owner hears why it is late.
+    public static func wakeMissedNotice(_ timers: [ScheduledTimer]) -> String? {
+        guard !timers.isEmpty else { return nil }
+        let labels = timers.map(\.label).joined(separator: ", ")
+        return timers.count == 1
+            ? "Timer \"\(labels)\" was missed during sleep, so it is firing now."
+            : "\(timers.count) timers were missed during sleep (\(labels)), so they are firing now."
+    }
+
+    /// CA-8: the shutdown notice for timers dropped at quit. The count is reported so
+    /// the owner hears which timers will not fire; persistence stays out of scope.
+    public static func shutdownNotice(dropped count: Int) -> String? {
+        guard count > 0 else { return nil }
+        return count == 1
+            ? "1 active timer was dropped at shutdown."
+            : "\(count) active timers were dropped at shutdown."
     }
 
     public static func formatDuration(_ seconds: Double) -> String {
@@ -1584,11 +1710,16 @@ public struct ScreenOCRLine: Equatable, Sendable {
 }
 
 public enum NativeScreenOCR {
-    public static func recognizeText(in image: CGImage, level: VNRequestTextRecognitionLevel = .accurate) async -> [ScreenOCRLine] {
-        await withCheckedContinuation { continuation in
+    /// Typed failure: a failed recognition is not an empty screen, so callers can
+    /// say "I could not read the screen text right now" instead of presenting the
+    /// failure as a successful blank read.
+    public enum RecognitionFailure: Error, Equatable { case recognitionFailed }
+
+    public static func recognizeText(in image: CGImage, level: VNRequestTextRecognitionLevel = .accurate) async throws -> [ScreenOCRLine] {
+        try await withCheckedThrowingContinuation { continuation in
             let request = VNRecognizeTextRequest { request, error in
                 guard error == nil, let observations = request.results as? [VNRecognizedTextObservation] else {
-                    continuation.resume(returning: [])
+                    continuation.resume(throwing: RecognitionFailure.recognitionFailed)
                     return
                 }
                 var lines: [ScreenOCRLine] = []
@@ -1609,7 +1740,7 @@ public enum NativeScreenOCR {
             do {
                 try handler.perform([request])
             } catch {
-                continuation.resume(returning: [])
+                continuation.resume(throwing: RecognitionFailure.recognitionFailed)
             }
         }
     }
@@ -1737,12 +1868,16 @@ public enum SystemControlSuite {
             return error == nil ? "Putting display to sleep." : "Could not lock screen."
 
         case .findFile(let name):
-            let results = findFilesSpotlight(named: name, limit: 5)
-            if results.isEmpty {
-                return "No files found matching \"\(name)\"."
-            } else {
-                let items = results.map { "• " + $0 }.joined(separator: "\n")
-                return "Found \(results.count) matching file\(results.count > 1 ? "s" : ""):\n\(items)"
+            do {
+                let results = try findFilesSpotlight(named: name, limit: 5)
+                if results.isEmpty {
+                    return "No files found matching \"\(name)\"."
+                } else {
+                    let items = results.map { "• " + $0 }.joined(separator: "\n")
+                    return "Found \(results.count) matching file\(results.count > 1 ? "s" : ""):\n\(items)"
+                }
+            } catch {
+                return "Spotlight search failed (is indexing enabled?)"
             }
 
         case .none:
@@ -1750,35 +1885,36 @@ public enum SystemControlSuite {
         }
     }
 
-    /// Search file *contents* (Spotlight indexes text, and the query is not limited to
-    /// names). Read-only, bounded, and it reports nothing rather than guessing.
-    public static func searchFileContents(_ query: String, limit: Int = 5) -> [String] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 3 else { return [] }
-        do {
-            let data = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: [trimmed]).data
-            let lines = String(decoding: data, as: UTF8.self)
-                .components(separatedBy: "\n")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty && !$0.hasPrefix("/System/") && !$0.hasPrefix("/private/var/") }
-            var seen = Set<String>()
-            return lines.filter { seen.insert($0).inserted }.prefix(limit).map { $0 }
-        } catch {
-            return []
-        }
+    /// A Spotlight failure is not an empty result set: mdfind errors are surfaced so
+    /// the caller never reports "no files found" when the index simply could not answer.
+    enum SpotlightSearchError: LocalizedError, Equatable {
+        case failed
+        var errorDescription: String? { "Spotlight search failed (is indexing enabled?)" }
     }
 
-    public static func findFilesSpotlight(named: String, limit: Int = 5) -> [String] {
-        do {
-            let data = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: ["-name", named]).data
-            let output = String(decoding: data, as: UTF8.self)
-            let lines = output.components(separatedBy: "\n")
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty && FileManager.default.fileExists(atPath: $0) }
-            return Array(lines.prefix(limit))
-        } catch {
-            return []
-        }
+    /// Search file *contents* (Spotlight indexes text, and the query is not limited to
+    /// names). Read-only, bounded, and it throws rather than guessing.
+    public static func searchFileContents(_ query: String, limit: Int = 5) throws -> [String] {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3 else { return [] }
+        let result = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: [trimmed])
+        guard result.status == 0 else { throw SpotlightSearchError.failed }
+        let lines = String(decoding: result.data, as: UTF8.self)
+            .components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.hasPrefix("/System/") && !$0.hasPrefix("/private/var/") }
+        var seen = Set<String>()
+        return lines.filter { seen.insert($0).inserted }.prefix(limit).map { $0 }
+    }
+
+    public static func findFilesSpotlight(named: String, limit: Int = 5) throws -> [String] {
+        let result = try SubprocessRunner.run(executable: "/usr/bin/mdfind", arguments: ["-name", named])
+        guard result.status == 0 else { throw SpotlightSearchError.failed }
+        let output = String(decoding: result.data, as: UTF8.self)
+        let lines = output.components(separatedBy: "\n")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && FileManager.default.fileExists(atPath: $0) }
+        return Array(lines.prefix(limit))
     }
     #endif
 }
@@ -2186,13 +2322,20 @@ public enum InPlaceAppTyping {
     }
 
     #if canImport(CoreGraphics)
+    /// Hard cap on one typing call: posting more than this many characters on the
+    /// caller's actor would freeze the UI, so the tail is dropped instead. This is
+    /// the schema's own `type_text` maximum, so tool calls never truncate.
+    public static let maximumTypingCharacters = 1500
+
     @discardableResult
     public static func type(text: String) -> Bool {
         guard !text.isEmpty else { return false }
         let source = CGEventSource(stateID: .hidSystemState)
         // Type character by character so every Unicode grapheme (ASCII, accented, Cyrillic, CJK, emoji)
-        // is delivered intact via keyboardSetUnicodeString.
-        for character in text {
+        // is delivered intact via keyboardSetUnicodeString. No per-character sleep: events are
+        // posted into the HID queue in order, and the character cap bounds the total duration
+        // so a max-length tool call cannot freeze the UI for seconds.
+        for character in text.prefix(Self.maximumTypingCharacters) {
             var utf16Units = Array(String(character).utf16)
             guard !utf16Units.isEmpty else { continue }
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
@@ -2203,7 +2346,6 @@ public enum InPlaceAppTyping {
             down.post(tap: .cghidEventTap)
             up.keyboardSetUnicodeString(stringLength: utf16Units.count, unicodeString: &utf16Units)
             up.post(tap: .cghidEventTap)
-            usleep(1_500)
         }
         return true
     }
@@ -2285,7 +2427,7 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
     private var lastReflectionAt: Double = ProcessInfo.processInfo.systemUptime
     private var emittedSuggestions: [String] = []
     private var lastReflectedSessionStart: String?
-    private var lastReflectedLineCount = 0
+    private var lastReflectedUserLineCount = 0
 
     /// The suggestion produced by the most recent reflection, so the coordinator can
     /// offer to paste it without parsing it back out of the spoken report.
@@ -2383,25 +2525,34 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         let content = (url.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
         let lines = Self.currentSessionLines(content)
         let sessionStart = lines.last { $0.contains("[SYSTEM] App session started") }
-        let hasConversation = lines.contains { $0.contains("[USER]") || $0.contains("[DOT") }
+        // Only the owner's lines count as material: Dot's own '[DOT'-marked
+        // reflection and reply lines must never feed the loop back into itself.
+        let userLineCount = lines.filter { $0.contains("[USER]") }.count
         lock.lock()
         let newSession = sessionStart != lastReflectedSessionStart
-        let previousCount = newSession ? 0 : lastReflectedLineCount
+        let previousUserCount = newSession ? 0 : lastReflectedUserLineCount
         lock.unlock()
-        // Nothing new since the last reflection means no suggestion. Analysing an
-        // empty or unchanged log was how junk suggestions were produced.
-        guard hasConversation, lines.count > previousCount else { return Self.noNewMaterialMessage }
+        // A new [USER] line since the last reflection is required before any
+        // suggestion, including the rotating fallbacks. Analysing an empty or
+        // self-written log was how the every-10-minutes junk loop was produced.
+        guard userLineCount > 0, userLineCount > previousUserCount else { return Self.noNewMaterialMessage }
         let suggestion = analyzeConversationLog(logContent: content)
         lock.lock()
         lastSuggestion = suggestion
         lastReflectedSessionStart = sessionStart
-        lastReflectedLineCount = lines.count
+        lastReflectedUserLineCount = userLineCount
         lock.unlock()
 
-        // Write to dedicated reflections log in Downloads. The result is reported,
-        // never assumed: the old code always claimed both writes had succeeded.
+        // Write to the reflections log next to the chat log (Application Support/
+        // Dot/Logs, one shared path constant), rotating by size like the chat log.
+        // The result is reported, never assumed.
         var wroteFile = false
-        if let reflectionURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first?.appendingPathComponent("dot_self_reflections.txt") {
+        if let reflectionURL = DiagnosticChatLogger.reflectionsFileURL(for: url) {
+            let directory = reflectionURL.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                     attributes: [.posixPermissions: 0o700])
+            DiagnosticChatLogger.rotateIfOversized(reflectionURL,
+                                                   rotatedName: DiagnosticChatLogger.rotatedReflectionsFileName)
             let timestamp = ISO8601DateFormatter().string(from: Date())
             let entry = "[\(timestamp)] \(suggestion)\n"
             if FileManager.default.fileExists(atPath: reflectionURL.path) {
@@ -3786,8 +3937,11 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
             // Tiered recall: core records are identity, preferences and corrected
             // facts, so they lead; the rest follow by tier through the same store, so
             // promotion and supersession are respected instead of being invisible.
-            if let core = try? await memory.records(tier: .core, limit: 15, includeSuperseded: false) {
-                pinnedMems = core.map(\.text)
+            // Newest first: the store lists records oldest first, so recent
+            // corrections/preferences would otherwise be the ones dropped by limit 15.
+            // Oldest-first stays reserved for the eviction/ageing paths.
+            if let core = try? await memory.records(tier: .core, limit: 200, includeSuperseded: false) {
+                pinnedMems = core.sorted { $0.updatedAt > $1.updatedAt }.prefix(15).map(\.text)
             }
             if let recalled = try? await memory.recall(query: query, limit: 10, now: Date()) {
                 queryMems = recalled.map(\.text)
@@ -3808,8 +3962,13 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
             }
         }
 
-        if let webpage = WholeContextExtractor.shared.extractActiveDocumentOrWebpageText() {
-            docEvidence.append("\(webpage.source): \(webpage.content)")
+        switch WholeContextExtractor.shared.extractActiveDocumentOrWebpageText() {
+        case .text(let source, let content):
+            docEvidence.append("\(source): \(content)")
+        case .permissionDenied:
+            DiagnosticChatLogger.record(role: "dot", text: "Context extraction skipped: permission denied for the active document or webpage.")
+        case .noText:
+            DiagnosticChatLogger.record(role: "dot", text: "Context extraction skipped: the active document or webpage had no readable text.")
         }
 
         var desktopSnippet = activeDesktop?.promptContextSnippet
@@ -4271,6 +4430,11 @@ public final class ParallelAgentCoordinator: @unchecked Sendable {
 public final class DotSoulManager: @unchecked Sendable {
     public static let shared = DotSoulManager()
     private let lock = NSLock()
+    /// The Soul directory keeps a bounded archive: at most this many files, or this
+    /// many bytes total, oldest first — unbounded growth was the old failure mode.
+    public static let maximumArchives = 20
+    public static let maximumArchiveBytes = 10_000_000
+    private var lastArchivedStateDigest: String?
 
     public var soulDirectory: URL {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -4279,7 +4443,10 @@ public final class DotSoulManager: @unchecked Sendable {
         return dir
     }
 
-    public func archiveCurrentState(reason: String = "routine") {
+    /// Throws when the state cannot be archived; returns false when `onTransitionOnly`
+    /// skipped writing because the state is unchanged since the last archive.
+    @discardableResult
+    public func archiveCurrentState(reason: String = "routine", onTransitionOnly: Bool = false) throws -> Bool {
         lock.lock()
         defer { lock.unlock() }
         let now = Date()
@@ -4292,22 +4459,49 @@ public final class DotSoulManager: @unchecked Sendable {
         let volatile = brain.readVolatile()
 
         let chatLogContent = (DiagnosticChatLogger.logFileURL.flatMap { try? String(contentsOf: $0, encoding: .utf8) }) ?? ""
+        let chatSnippet = String(chatLogContent.suffix(50_000))
+
+        // The digest covers the archived *state*, not the archivedAt timestamp, so a
+        // repeated archive of the same state can honestly be skipped on transition only.
+        let stateDigest = Data((profile + "\u{0}" + volatile + "\u{0}" + chatSnippet + "\u{0}" + reason).utf8).sha256Hex
+        if onTransitionOnly, stateDigest == lastArchivedStateDigest { return false }
 
         let payload: [String: Any] = [
             "archivedAt": formatter.string(from: now),
             "reason": reason,
             "profileMarkdown": profile,
             "volatileMarkdown": volatile,
-            "chatLogSnippet": String(chatLogContent.suffix(50_000))
+            "chatLogSnippet": chatSnippet
         ]
 
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys]) {
-            try? data.write(to: archiveFile)
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: archiveFile)
+        lastArchivedStateDigest = stateDigest
+        pruneArchives(directory: archiveFile.deletingLastPathComponent())
+        return true
+    }
+
+    /// Keep the newest archives within the count and byte budgets; remove oldest first.
+    private func pruneArchives(directory: URL) {
+        func size(_ url: URL) -> Int {
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]) else { return 0 }
+            return values.fileSize ?? 0
+        }
+        guard let contents = try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return }
+        var archives = contents
+            .filter { $0.lastPathComponent.hasPrefix("soul_archive_") && $0.pathExtension == "json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var totalBytes = archives.reduce(0) { $0 + size($1) }
+        while archives.count > Self.maximumArchives || totalBytes > Self.maximumArchiveBytes,
+              let oldest = archives.first {
+            totalBytes -= size(oldest)
+            try? FileManager.default.removeItem(at: oldest)
+            archives.removeFirst()
         }
     }
 
     public func exportSoul() -> (url: URL?, message: String) {
-        archiveCurrentState(reason: "user_export")
+        _ = try? archiveCurrentState(reason: "user_export")
         let now = Date()
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd_HHmmss"
@@ -4377,11 +4571,15 @@ public final class DotSoulManager: @unchecked Sendable {
 
     public func cleanContextIfMemoryPressure(force: Bool = false) -> Bool {
         let ram = SystemRAMInspector.currentRAM()
-        if ram.usageRatio >= 0.88 || force {
-            archiveCurrentState(reason: "ram_pressure_cleanup")
+        guard ram.usageRatio >= 0.88 || force else { return false }
+        do {
+            _ = try archiveCurrentState(reason: "ram_pressure_cleanup", onTransitionOnly: true)
             return true
+        } catch {
+            // The archive write failed; claiming the cleanup ran would be a lie.
+            DiagnosticChatLogger.record(role: "system", text: "Memory-pressure soul archive failed: \(error.localizedDescription)")
+            return false
         }
-        return false
     }
 }
 
@@ -4478,10 +4676,19 @@ public enum ScrollControlEngine {
 
 // MARK: - Whole-Document & Active Webpage Reader (DOM Text Extraction)
 
+/// Typed outcome of reading the active document/webpage: a permission problem and
+/// "no readable text" are distinct, so a caller never presents either as a
+/// successful empty read.
+public enum ActiveTextExtraction: Equatable, Sendable {
+    case text(source: String, content: String)
+    case permissionDenied
+    case noText
+}
+
 public final class WholeContextExtractor: @unchecked Sendable {
     public static let shared = WholeContextExtractor()
 
-    public func extractActiveDocumentOrWebpageText() -> (source: String, content: String)? {
+    public func extractActiveDocumentOrWebpageText() -> ActiveTextExtraction {
         let frontApp = NSWorkspace.shared.frontmostApplication
         let appName = (frontApp?.localizedName ?? "").lowercased()
 
@@ -4497,7 +4704,9 @@ public final class WholeContextExtractor: @unchecked Sendable {
                 end if
             end tell
             """
-            if let output = runAppleScript(script), !output.isEmpty {
+            let result = runAppleScript(script)
+            if result.permissionDenied { return .permissionDenied }
+            if let output = result.output, !output.isEmpty {
                 let parts = output.components(separatedBy: "|||")
                 if parts.count >= 3 {
                     let title = parts[0]
@@ -4505,7 +4714,7 @@ public final class WholeContextExtractor: @unchecked Sendable {
                     let body = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
                     let truncated = String(body.prefix(6000))
                     if !truncated.isEmpty {
-                        return ("Safari Webpage [\(title)] (\(url))", truncated)
+                        return .text(source: "Safari Webpage [\(title)] (\(url))", content: truncated)
                     }
                 }
             }
@@ -4523,7 +4732,9 @@ public final class WholeContextExtractor: @unchecked Sendable {
                 end if
             end tell
             """
-            if let output = runAppleScript(script), !output.isEmpty {
+            let result = runAppleScript(script)
+            if result.permissionDenied { return .permissionDenied }
+            if let output = result.output, !output.isEmpty {
                 let parts = output.components(separatedBy: "|||")
                 if parts.count >= 3 {
                     let title = parts[0]
@@ -4531,7 +4742,7 @@ public final class WholeContextExtractor: @unchecked Sendable {
                     let body = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
                     let truncated = String(body.prefix(6000))
                     if !truncated.isEmpty {
-                        return ("Chrome Webpage [\(title)] (\(url))", truncated)
+                        return .text(source: "Chrome Webpage [\(title)] (\(url))", content: truncated)
                     }
                 }
             }
@@ -4547,20 +4758,24 @@ public final class WholeContextExtractor: @unchecked Sendable {
                 end if
             end tell
             """
-            if let output = runAppleScript(script), !output.isEmpty {
+            let result = runAppleScript(script)
+            if result.permissionDenied { return .permissionDenied }
+            if let output = result.output, !output.isEmpty {
                 let parts = output.components(separatedBy: "|||")
                 if parts.count >= 2 {
                     let docName = parts[0]
                     let docText = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
                     let truncated = String(docText.prefix(6000))
                     if !truncated.isEmpty {
-                        return ("TextEdit Document [\(docName)]", truncated)
+                        return .text(source: "TextEdit Document [\(docName)]", content: truncated)
                     }
                 }
             }
         }
 
-        // 3. Inspect active document URL via Accessibility (kAXDocumentAttribute)
+        // 3. Inspect active document URL via Accessibility (kAXDocumentAttribute).
+        // An untrusted Accessibility session is a permission problem, not an empty read.
+        guard InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: false) else { return .permissionDenied }
         if let front = NSWorkspace.shared.frontmostApplication {
             let pid = front.processIdentifier
             let appEl = AXUIElementCreateApplication(pid)
@@ -4577,24 +4792,30 @@ public final class WholeContextExtractor: @unchecked Sendable {
                     ]
                     if readableExts.contains(ext), let text = try? String(contentsOf: docURL, encoding: .utf8), !text.isEmpty {
                         let truncated = String(text.prefix(6000))
-                        return ("Active File [\(docURL.lastPathComponent)]", truncated)
+                        return .text(source: "Active File [\(docURL.lastPathComponent)]", content: truncated)
                     }
                 }
             }
         }
 
-        return nil
+        return .noText
     }
 
-    private func runAppleScript(_ source: String) -> String? {
+    /// Returns the AppleScript output plus whether Automation permission was refused
+    /// (error -1743 = errAEEventNotPermitted), so the refusal surfaces honestly
+    /// instead of looking like an empty document.
+    private func runAppleScript(_ source: String) -> (output: String?, permissionDenied: Bool) {
         var error: NSDictionary?
         if let scriptObject = NSAppleScript(source: source) {
             let output = scriptObject.executeAndReturnError(&error)
             if error == nil {
-                return output.stringValue
+                return (output.stringValue, false)
+            }
+            if let number = error?[NSAppleScript.errorNumber] as? Int, number == -1743 {
+                return (nil, true)
             }
         }
-        return nil
+        return (nil, false)
     }
 }
 
@@ -4924,7 +5145,11 @@ public final class InteractiveWalkthroughManager {
                     self.activeTargetRect = rect
                     ScreenGuideLaserOverlay.shared.highlightRect(space.topLeftRect(fromAppKit: rect), duration: 60.0)
                 }
-            } catch {}
+            } catch {
+                // A failed OCR is not an empty screen; the owner hears the honest
+                // reason instead of a walkthrough that silently stops matching.
+                DiagnosticChatLogger.record(role: "dot", text: "I could not read the screen text right now.")
+            }
         }
     }
 }
@@ -4936,6 +5161,11 @@ public enum DiagnosticChatLogger {
     static let fileName = "dot_chat_log.txt"
     private static let rotatedFileName = "dot_chat_log.1.txt"
     private static let rotationBytes = 2_000_000
+    /// One shared path constant: the reflections log always lives next to the chat
+    /// log (Application Support/Dot/Logs; a temp directory under tests), never in
+    /// Downloads, and rotates by size the same way.
+    static let reflectionsFileName = "dot_self_reflections.txt"
+    static let rotatedReflectionsFileName = "dot_self_reflections.1.txt"
     /// Never write fixture conversations into the owner's real log: the
     /// self-reflection reads that file, so a test suite would otherwise feed it
     /// synthetic turns. The test bundle gets a temporary file instead.
@@ -4956,6 +5186,22 @@ public enum DiagnosticChatLogger {
     /// The one path the reflection reads. Not Downloads: a notarised/sandboxed
     /// build loses write access there and observability dies silently.
     static var logFileURL: URL? { logURL }
+    /// The reflections log beside the given chat log (defaulting to the shared
+    /// Application Support/Dot/Logs path), so both observability files live under
+    /// one directory and one constant.
+    static func reflectionsFileURL(for logURL: URL? = nil) -> URL? {
+        (logURL ?? self.logURL)?.deletingLastPathComponent().appendingPathComponent(reflectionsFileName)
+    }
+    /// Shared size rotation: once `url` exceeds `maxBytes`, move it to `rotatedName`.
+    /// Used by the chat log and the reflections log alike.
+    static func rotateIfOversized(_ url: URL, rotatedName: String, maxBytes: Int = rotationBytes) {
+        guard FileManager.default.fileExists(atPath: url.path),
+              let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let size = attributes[.size] as? Int, size > maxBytes else { return }
+        let rotated = url.deletingLastPathComponent().appendingPathComponent(rotatedName)
+        try? FileManager.default.removeItem(at: rotated)
+        try? FileManager.default.moveItem(at: url, to: rotated)
+    }
     private static let formatter: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -4975,12 +5221,7 @@ public enum DiagnosticChatLogger {
             // Preserve the owner's existing history; if the move fails, start fresh.
             try? FileManager.default.moveItem(at: old, to: url)
         }
-        if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attributes[.size] as? Int, size > rotationBytes {
-            let rotated = directory.appendingPathComponent(rotatedFileName)
-            try? FileManager.default.removeItem(at: rotated)
-            try? FileManager.default.moveItem(at: url, to: rotated)
-        }
+        rotateIfOversized(url, rotatedName: rotatedFileName)
         if FileManager.default.fileExists(atPath: url.path) {
             try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         }
@@ -5182,8 +5423,10 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     ]
     /// Flags that delete, or execute a command per file, inside another command.
     private static let wrapperFlags: Set<String> = ["-exec", "-execdir", "-delete", "-ok", "-okdir"]
-    /// Characters that start a new command in POSIX shell syntax.
-    private static let commandSeparators: Set<Character> = [";", "&", "|", "(", ")", "\"", "'"]
+    /// Characters that start a new command in POSIX shell syntax. The backtick and `$`
+    /// open command substitutions, so `` `rm -rf ~/Documents` `` and `$(sudo reboot)`
+    /// tokenize to their inner destructive commands instead of hiding them inside one token.
+    private static let commandSeparators: Set<Character> = [";", "&", "|", "(", ")", "\"", "'", "`", "$"]
 
     /// Evaluates whether a shell command or action is potentially destructive and requires approval.
     /// Tokenizing (not substring matching) is what stops `/bin/rm -rf ~/Documents`, `sh -c "rm …"`,
@@ -5240,24 +5483,36 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     }
 
     /// `git reset`, `git clean`, `git checkout -f` and `git push --force` discard committed or
-    /// uncommitted work even though `git` itself is harmless.
+    /// uncommitted work even though `git` itself is harmless. Options that take an argument
+    /// (`-C`, `--git-dir`, `--work-tree`, `-c`) never name the subcommand, so their argument is
+    /// skipped and every remaining word is scanned: `git -C /tmp/repo reset --hard` must match.
     private static func hasDestructiveGitInvocation(_ tokens: [String]) -> Bool {
         let words = tokens.map { $0.lowercased() }
         guard let gitIndex = words.firstIndex(where: { basename($0) == "git" }) else { return false }
         let rest = Array(words[(gitIndex + 1)...])
-        guard let subcommand = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
-        let flags = Set(rest.filter { $0.hasPrefix("-") })
-        switch basename(subcommand) {
-        case "reset", "clean":
-            return true
-        case "checkout":
-            return flags.contains("-f") || flags.contains("--force")
-        case "push":
-            return flags.contains("-f") || flags.contains("--force")
-                || flags.contains("--force-with-lease") || flags.contains("--force-if-includes")
-        default:
-            return false
+        let optionArguments: Set<String> = ["-c", "-C", "--git-dir", "--work-tree"]
+        var skipNext = false
+        var commandWords: [String] = []
+        for word in rest {
+            if skipNext { skipNext = false; continue }
+            if optionArguments.contains(word) { skipNext = true; continue }
+            commandWords.append(word)
         }
+        let flags = Set(commandWords.filter { $0.hasPrefix("-") })
+        for word in commandWords where !word.hasPrefix("-") {
+            switch basename(word) {
+            case "reset", "clean":
+                return true
+            case "checkout":
+                if flags.contains("-f") || flags.contains("--force") { return true }
+            case "push":
+                if flags.contains("-f") || flags.contains("--force")
+                    || flags.contains("--force-with-lease") || flags.contains("--force-if-includes") { return true }
+            default:
+                continue
+            }
+        }
+        return false
     }
 
     /// True for a `>`/`>>` write outside quotes. File-descriptor duplication (`2>&1`, `>&-`) is
@@ -5592,16 +5847,43 @@ public final class CalendarMeetingAssistant {
     #endif
 
     public func hasAccess() -> Bool {
+        accessState() == .granted
+    }
+
+    /// The honest distinction the Settings pane cannot fix: `.restricted` is a
+    /// Screen Time or administrator policy, so the refusal must not point at a pane
+    /// the owner cannot change.
+    public enum CalendarAccess: Equatable, Sendable {
+        case granted, denied, restricted, notDetermined
+    }
+
+    public func accessState() -> CalendarAccess {
         #if canImport(EventKit)
         let status = EKEventStore.authorizationStatus(for: .event)
-        if #available(macOS 14.0, *) {
-            return status == .fullAccess
-        } else {
-            return status == .authorized
+        switch status {
+        case .restricted: return .restricted
+        case .denied: return .denied
+        case .notDetermined: return .notDetermined
+        default:
+            if #available(macOS 14.0, *) {
+                return (status == .fullAccess || status == .writeOnly) ? .granted : .denied
+            }
+            // The shipped app targets macOS 26.4, so this branch is unreachable; the
+            // legacy case stays honest rather than referencing the deprecated member.
+            return .denied
         }
         #else
-        return false
+        return .denied
         #endif
+    }
+
+    /// Refusal text for calendar reads and writes. A restriction names Screen Time /
+    /// the administrator instead of a Settings pane that cannot override it.
+    public func accessRefusalMessage(purpose: String) -> String {
+        if accessState() == .restricted {
+            return "Calendar access is restricted on this Mac by Screen Time or an administrator policy, so Dot cannot \(purpose). The administrator must allow Calendar access for Dot; System Settings cannot override this restriction."
+        }
+        return "Calendar access is not granted. You can allow access in System Settings > Privacy & Security > Calendars so I can \(purpose)."
     }
 
     public func requestAccess() async -> Bool {
@@ -5668,7 +5950,7 @@ public final class CalendarMeetingAssistant {
 
     public func formatTodaySchedule(now: Date = Date()) -> String {
         guard hasAccess() else {
-            return "Calendar access is not granted. You can allow access in System Settings > Privacy & Security > Calendars so I can read your meetings."
+            return accessRefusalMessage(purpose: "read your meetings")
         }
         let items = fetchTodaySchedule(now: now)
         guard !items.isEmpty else {
@@ -5687,7 +5969,7 @@ public final class CalendarMeetingAssistant {
 
     public func prepareNextMeetingBrief(now: Date = Date()) -> String {
         guard hasAccess() else {
-            return "Calendar access is not granted. Enable Calendar access in System Settings to view meeting briefs."
+            return accessRefusalMessage(purpose: "view meeting briefs")
         }
         guard let next = fetchNextMeeting(now: now) else {
             return "You have no upcoming meetings in the next 24 hours."
@@ -5714,7 +5996,7 @@ public final class CalendarMeetingAssistant {
     public func createEvent(title: String, startDate: Date, durationMinutes: Int, notes: String? = nil) -> (success: Bool, message: String) {
         #if canImport(EventKit)
         guard hasAccess() else {
-            return (false, "Calendar access is required to create events. Please grant access in System Settings.")
+            return (false, accessRefusalMessage(purpose: "create events"))
         }
         let event = EKEvent(eventStore: eventStore)
         event.title = title
@@ -5740,7 +6022,7 @@ public final class CalendarMeetingAssistant {
                             durationMinutes: Int? = nil) -> (success: Bool, message: String) {
         #if canImport(EventKit)
         guard hasAccess() else {
-            return (false, "Calendar access is required to edit events. Please grant access in System Settings.")
+            return (false, accessRefusalMessage(purpose: "edit events"))
         }
         guard let event = eventStore.event(withIdentifier: id) else {
             return (false, "I could not find that event; it may have been deleted.")

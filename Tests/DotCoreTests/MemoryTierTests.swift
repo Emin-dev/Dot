@@ -19,7 +19,7 @@ final class MemoryTierTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("dot-memory-tiers-" + UUID().uuidString, isDirectory: true)
         directories.append(directory)
-        return try MemoryTierStore(directory: directory)
+        return try MemoryTierStore(facts: LocalFTSStore(directory: directory))
     }
 
     override func tearDownWithError() throws {
@@ -153,7 +153,7 @@ final class MemoryTierTests: XCTestCase {
         XCTAssertEqual(counts[.core], 2)
         XCTAssertEqual(counts[.session], 0)
         let core = try await store.records(tier: .core)
-        XCTAssertEqual(core.map(\.id), [preference.id, correction.id])
+        XCTAssertEqual(core.map(\.id), [correction.id, preference.id], "Core lists newest-edited first")
     }
 
     func testEvictionTakesOldestSessionThenOldestWorkingAndStops() async throws {
@@ -175,12 +175,19 @@ final class MemoryTierTests: XCTestCase {
         XCTAssertEqual(deleted.map(\.id), [first.id, second.id])
         XCTAssertEqual(deleted.map(\.text), [first.text, second.text])
 
-        // Same rule across the tier boundary: T1 is exhausted before T2 is touched.
+        // Same rule across the tier boundary: T1 is exhausted before T2 is touched,
+        // with the byte cap allowing one victim per pass at these sizes.
         let after = try await store.usedBytes()
         let more = try await store.evictIfNeeded(
             pressure: MemoryPressure(budgetBytes: after - third.byteCost - workingOne.byteCost, currentBytes: after),
             now: at(1))
-        XCTAssertEqual(more.map(\.id), [third.id, workingOne.id])
+        XCTAssertEqual(more.map(\.id), [third.id])
+
+        let afterSecond = try await store.usedBytes()
+        let tierTwo = try await store.evictIfNeeded(
+            pressure: MemoryPressure(budgetBytes: afterSecond - workingOne.byteCost, currentBytes: afterSecond),
+            now: at(2))
+        XCTAssertEqual(tierTwo.map(\.id), [workingOne.id], "T1 is exhausted before T2 is touched")
 
         // It stopped as soon as the pressure was relieved.
         let remaining = Set(try await store.records(includeSuperseded: true).map(\.id))
@@ -196,8 +203,10 @@ final class MemoryTierTests: XCTestCase {
         let longTerm = try await store.remember(text: "a long term summary", tier: .longTerm, source: .observed, now: at(-60))
         let core = try await store.remember(text: "core identity fact", tier: .core, source: .userStated, now: at(-50))
 
-        let deleted = try await store.evictIfNeeded(pressure: MemoryPressure(budgetBytes: 0), now: at(0))
-        XCTAssertEqual(Set(deleted.map(\.id)), Set([session.id, working.id]))
+        let firstPass = try await store.evictIfNeeded(pressure: MemoryPressure(budgetBytes: 0), now: at(0))
+        XCTAssertEqual(Set(firstPass.map(\.id)), Set([session.id]), "Capped pass takes the oldest evictable record")
+        let secondPass = try await store.evictIfNeeded(pressure: MemoryPressure(budgetBytes: 0), now: at(1))
+        XCTAssertEqual(Set(secondPass.map(\.id)), Set([working.id]), "Then the working record; nothing else")
 
         let survivors = Set(try await store.records(includeSuperseded: true).map(\.id))
         XCTAssertEqual(survivors, Set([pinned.id, keyPoints.id, longTerm.id, core.id]))
@@ -299,5 +308,91 @@ final class MemoryTierTests: XCTestCase {
         XCTAssertTrue(deleted.isEmpty)
         counts = try await store.tierCounts()
         XCTAssertEqual(counts[.session], 1)
+    }
+
+    /// MS-2: an identical-text write dedups onto the stored row and must keep the
+    /// stored core tier, pin and supersession instead of rewriting them from the new
+    /// call's defaults, so a re-stated preference can never be demoted or unpinned.
+    func testIdenticalTextRewritePreservesCoreTierAndPin() async throws {
+        let store = try makeStore()
+        let original = try await store.remember(text: "i prefer the isabella voice", source: .preference, now: at(0))
+        XCTAssertEqual(original.tier, .core)
+        let pinned = try await store.setPinned(id: original.id, pinned: true, now: at(1))
+        XCTAssertEqual(pinned?.pinned, true)
+
+        let rewritten = try await store.remember(text: "i prefer the isabella voice", source: .observed, now: at(2))
+        XCTAssertEqual(rewritten.id, original.id, "Identical text is the same memory, not a second one")
+        XCTAssertEqual(rewritten.tier, .core, "The stored core tier survives a re-stated preference")
+        XCTAssertTrue(rewritten.pinned, "The stored pin survives a re-stated preference")
+        XCTAssertEqual(rewritten.source, .preference, "The stored source survives a re-stated preference")
+
+        let counts = try await store.tierCounts()
+        XCTAssertEqual(counts.values.reduce(0, +), 1)
+        let stored = try await store.records(tier: .core)
+        XCTAssertEqual(stored.map(\.id), [original.id])
+        XCTAssertTrue(stored[0].pinned)
+    }
+
+    /// MS-3: one pressure pass frees at most a quarter of the evictable bytes, so a
+    /// single RAM-pressure event can never wipe all recent working memory at once.
+    func testEvictionPassCapsAtAQuarterOfEvictableBytes() async throws {
+        let store = try makeStore()
+        var records: [MemoryRecord] = []
+        for index in 0..<8 {
+            records.append(try await store.remember(text: "session note number \(index)", source: .observed, now: at(Double(index) - 30)))
+        }
+        let used = try await store.usedBytes()
+        let evictableBytes = records.reduce(0) { $0 + $1.byteCost }
+        let cap = max(1, evictableBytes / 4)
+        XCTAssertEqual(records.map(\.byteCost).reduce(0, +), evictableBytes)
+
+        let deleted = try await store.evictIfNeeded(
+            pressure: MemoryPressure(budgetBytes: 0, currentBytes: used), now: at(0))
+        let freedBytes = deleted.reduce(0) { $0 + $1.byteCost }
+        XCTAssertEqual(deleted.count, 2, "Exactly the quarter-cap's worth of records leave in one pass")
+        XCTAssertLessThanOrEqual(freedBytes, cap)
+
+        let survivors = try await store.records(tier: .session)
+        XCTAssertEqual(survivors.count, 6, "The rest survives for a later pressure pass")
+    }
+
+    /// MS-7: clearAll removes the tier side table together with the facts, so a later
+    /// write of the same fact id cannot resurrect the old tier state.
+    func testClearAllAlsoClearsMemoryTierState() async throws {
+        let store = try makeStore()
+        let id = UUID()
+        _ = try await store.facts.saveMemory(id: id, category: .userPreference, fact: "core preference fact")
+        _ = try await store.remember(text: "core preference fact", source: .preference, now: at(0))
+        let coreCount = try await store.tierCounts()[.core]
+        XCTAssertEqual(coreCount, 1)
+
+        try await store.facts.clearAll()
+        let remaining = try await store.tierCounts().values.reduce(0, +)
+        XCTAssertEqual(remaining, 0)
+        let afterClear = try await store.records(includeSuperseded: true)
+        XCTAssertTrue(afterClear.isEmpty)
+
+        // Re-inserting the same fact id must start without the old core tier state.
+        _ = try await store.facts.saveMemory(id: id, category: .systemObservation, fact: "core preference fact")
+        let restored = try await store.records(includeSuperseded: true)
+        XCTAssertEqual(restored.map(\.id), [id])
+        XCTAssertEqual(restored.map(\.tier), [.session],
+                       "clearAll must clear memory_tier_state, not just the fact table")
+    }
+
+    /// MS-8: recall returns matches newest-edited first, and editing an older fact
+    /// moves it ahead of its newer neighbours.
+    func testRecallReturnsHitsNewestEditedFirst() async throws {
+        let store = try makeStore()
+        let older = try await store.remember(text: "alpha rust note", source: .observed, now: at(-10))
+        let newer = try await store.remember(text: "beta rust note", source: .observed, now: at(-5))
+
+        let hits = try await store.recall(query: "rust note", now: at(0))
+        XCTAssertEqual(hits.map(\.id), [newer.id, older.id])
+
+        _ = try await store.setTier(id: older.id, tier: .session, now: at(1))
+        let touched = try await store.recall(query: "rust note", now: at(2))
+        XCTAssertEqual(touched.map(\.id), [older.id, newer.id],
+                       "The most recently edited fact leads recall")
     }
 }

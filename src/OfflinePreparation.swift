@@ -97,6 +97,23 @@ final class OfflinePreparation: ObservableObject {
             }
             folder = support.appendingPathComponent("Dot", isDirectory: true)
                 .appendingPathComponent("Models", isDirectory: true)
+            // Refuse before downloading when the volume cannot hold the model plus
+            // the 5 GB working margin; files already present at the exact size are
+            // reusable and need no new space.
+            var reusable: Int64 = 0
+            for asset in plan.files {
+                guard let path = try? OfflinePayload.safePath(asset.path, root: folder),
+                      let size = try? path.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                      Int64(size) == asset.bytes else { continue }
+                reusable += asset.bytes
+            }
+            let requiredFree = DownloadBudget.requiredFree(total: plan.total_bytes, reusableBytes: reusable)
+            var volume = folder
+            while !FileManager.default.fileExists(atPath: volume.path) { volume = volume.deletingLastPathComponent() }
+            if let free = (try? FileManager.default.attributesOfFileSystem(forPath: volume.path))?[.systemFreeSize] as? Int64,
+               free < requiredFree {
+                throw PreparationFailure.download("Not enough free disk space: the model needs \(ByteCountFormatter.string(fromByteCount: requiredFree, countStyle: .file)), but only \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) is available.")
+            }
             detail = "Downloading model"
             do {
                 try await ModelProvisioner.shared.ensureModels(at: folder, plan: plan) { [weak self] fraction in
@@ -246,7 +263,15 @@ actor ModelProvisioner {
             let reporter = ModelDownloadProgress { written, _ in
                 progress(Double(base + min(written, asset.bytes)) / Double(plan.total_bytes))
             }
-            let (temporary, response) = try await session.download(from: remote, delegate: reporter)
+            let temporary: URL, response: URLResponse
+            do {
+                (temporary, response) = try await session.download(from: remote, delegate: reporter)
+            } catch let error as URLError {
+                // A network failure is a retryable download failure, never the
+                // misleading "needs a repaired build" integrity message.
+                if error.code == .cancelled { throw CancellationError() }
+                throw PreparationFailure.download("The download of '\(asset.path)' was interrupted (\(error.code)).")
+            }
             defer { try? FileManager.default.removeItem(at: temporary) }
             try Task.checkCancellation()
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {

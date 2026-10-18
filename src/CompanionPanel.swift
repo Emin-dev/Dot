@@ -180,7 +180,8 @@ final class UtilityPanelHost {
 
 @MainActor
 enum CompanionStatusMenu {
-    static func make(target: AnyObject, show: Selector, quit: Selector, options: Selector? = nil, type: Selector? = nil) -> NSMenu {
+    static func make(target: AnyObject, show: Selector, quit: Selector, options: Selector? = nil, type: Selector? = nil,
+                     readiness: CompanionReadiness? = nil, pauseAction: Selector? = nil, retryAction: Selector? = nil) -> NSMenu {
         let menu = NSMenu()
         let recall = NSMenuItem(title: "Show Dot", action: show, keyEquivalent: "")
         recall.target = target; menu.addItem(recall)
@@ -191,6 +192,20 @@ enum CompanionStatusMenu {
         if let type {
             let item = NSMenuItem(title: "Type to Dot…", action: type, keyEquivalent: "t")
             item.target = target; menu.addItem(item)
+        }
+        if let readiness {
+            // The same pause/retry actions as the options menu, for the readiness
+            // the menu was built for, so "retry from the menu" is a real action.
+            if readiness.canPause, let pauseAction {
+                let item = NSMenuItem(title: CompanionMenuAction.pause.title(busy: false, pinned: false, issue: nil),
+                                      action: pauseAction, keyEquivalent: "")
+                item.target = target; menu.addItem(item)
+            }
+            if readiness.canRetry, let retryAction {
+                let item = NSMenuItem(title: CompanionMenuAction.retry.title(busy: false, pinned: false, issue: nil),
+                                      action: retryAction, keyEquivalent: "")
+                item.target = target; menu.addItem(item)
+            }
         }
         menu.addItem(.separator())
         let exit = NSMenuItem(title: "Quit Dot", action: quit, keyEquivalent: "q")

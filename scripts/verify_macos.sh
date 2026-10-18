@@ -9,8 +9,15 @@ xcrun --sdk macosx --show-sdk-version
 # The native source reader is the third Rust runtime binary built from
 # crates/dot-research. build.sh stages voice/search beside the executable; this
 # gate builds the reader so the assertion below checks a real executable artifact.
+# The Splash supervisor port (crates/dot-runtime, slice 1) must keep its documented
+# wire contract while slices 2-5 are outstanding: it builds, its tests pass, and
+# its only stdout is the documented not-implemented failure line (docs/CONTINUATION.md).
 if command -v cargo >/dev/null; then
   cargo build --release --manifest-path Cargo.toml --bin dot-fetch
+  cargo build --release --manifest-path Cargo.toml --bin dot-runtime
+  cargo test --manifest-path Cargo.toml -p dot-runtime
+  [ "$(target/release/dot-runtime)" = '{"event":"failed","protocol":1,"stage":"supervisor","reason":"not-implemented"}' ] \
+    || { echo 'FAIL: dot-runtime stdout drifted from the documented not-implemented line'; exit 1; }
 fi
 # Test-only interpreter, explicitly selected before XCTest; never a product runtime fallback.
 TEST_PYTHON=$(python3 -B -c 'import sys,ssl; assert sys.version_info >= (3,11), "Tests require Python3.11+"; assert ssl.OPENSSL_VERSION.startswith("OpenSSL ") and ssl.OPENSSL_VERSION_INFO >= (1,1,1), "Tests require supported OpenSSL"; print(sys.executable)')
@@ -36,29 +43,26 @@ swift test --scratch-path "$LOGS/swiftpm" --cache-path "$LOGS/swiftpm-cache" \
 xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \
   -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$LOGS/Debug" \
   DOT_TEST_PYTHON="$TEST_PYTHON" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$LOGS/test.log"
+# Dev-only target: the shipped release is assembled by scripts/build_complete.sh
+# (DOT_COMPLETE_BUNDLE + verified whisper.framework, macOS 26.4). This Release
+# build is a warning-clean compile check of the development configuration, not
+# the artifact anyone ships.
 xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Release \
   -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$LOGS/Release" \
   CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$LOGS/release.log"
 # A failed mandatory capability must stop before packaging or a pass summary.
 if [ "$RUNTIME_FINALIZER_STATUS" -ne 0 ]; then
-  # Fatal, except for XCTest's quality-of-service diagnostic. Evidence gathered
-  # 2026-10-17: it reproduces with only `NSApplication.shared` and an
-  # `NSHostingView(rootView:)` in one test process (no turn, no URLSession, no
-  # engine task), and the system log names `-[NSCondition waitUntilDate:]` inside
-  # AppKit/SwiftUI. That is an Apple-framework inversion no product code can
-  # change; the app's own turn task is now explicitly .userInitiated as well.
-  # Keep this filter this narrow; every other warning stays fatal.
-  if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log \
-     | grep -v 'Thread running at .*quality-of-service class waiting on a lower QoS thread'; then
+  # Every warning diagnostic is fatal; no class-wide filter exists. If the AppKit
+  # test-process QoS advisory recurs, record the exact line with a dated removal
+  # condition in docs/FIX_ISSUES_PROMPT.md - never a blanket class filter.
+  if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log; then
     echo 'FAIL: warning detected in verification before packaging'
   fi
   echo "FAIL: mandatory runtime finalizer canary failed (exit $RUNTIME_FINALIZER_STATUS); packaging was not attempted"
   exit "$RUNTIME_FINALIZER_STATUS"
 fi
 bash build.sh 2>&1 | tee "$LOGS/package.log"
-# Fatal, except for the narrow AppKit/SwiftUI advisory recorded above.
-if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log \
-   | grep -v 'Thread running at .*quality-of-service class waiting on a lower QoS thread'; then
+if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log; then
   echo 'FAIL: warning detected in verification or delivered-app build'; exit 1
 fi
 codesign --verify --strict build/Dot.app

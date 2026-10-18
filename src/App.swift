@@ -31,14 +31,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var movement: Timer?
     private var idleRoamTimer: Timer?
     private var isAnimatingRoam = false
+    /// Monotonic glide identity: a mid-animation abort bumps it so a stale
+    /// animation completion can never pin Dot at a covered destination.
+    private var roamGeneration = 0
     private var lastRoamRelocationAt: Double = 0
     private var statusItem: NSStatusItem?
     private var statusObservations: [AnyCancellable] = []
+    private var lastMenuReadiness: CompanionReadiness?
+    private var wideSpectrumNudges = 0
+    private var lastWideSpectrumNudgeAt = 0.0
+    private static let maximumWideSpectrumNudges = 3
     /// Random wandering is deliberately disabled: Dot stays in its safe spot while
     /// idle and only glides away when a window or the cursor actually covers it.
-    /// RoamingCore is still used for those escape trips (`performIdleRoam`).
-    private static let randomRoamingDisabled = 999_999.0
-    private var roam = RoamingCore(seed: UInt64.random(in: .min ... .max), now: ProcessInfo.processInfo.systemUptime, initialWanderDelay: AppDelegate.randomRoamingDisabled)
+    /// RoamingCore is used for those escape trips (`performIdleRoam`).
+    private var roam = RoamingCore()
     private var menuTracking = 0 {
         didSet { model?.menuIsOpen = menuTracking > 0 }
     }
@@ -48,6 +54,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var screenIsOff: Bool { displayAsleep || screenLocked }
     private var movementInterval = 0.5
     private var lastEscapeAttemptAt = 0.0
+    /// One-time options-menu notice for repeated placement capture failures, set
+    /// only while screen awareness is on.
+    private var placementNotice: String?
+    private var placementFailureStreak = 0
     private var documentWorker: WatchedDocumentWorker?
     private var activityAssertion: NSObjectProtocol?
     private var keyMonitor: Any?
@@ -111,6 +121,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         voiceEnvironment.start()
         placement.onCaptureChanged = { [weak model] active in model?.placementCapturing = active }
+        placement.onDiagnostic = { [weak self, weak model] diagnostic in
+            guard let self else { return }
+            if diagnostic.outcome == .ready { self.placementFailureStreak = 0 }
+            guard model?.screenEnabled == true,
+                  diagnostic.reason == .permission || diagnostic.reason == .framework else { return }
+            self.placementFailureStreak += 1
+            if self.placementFailureStreak >= 3, self.placementNotice == nil {
+                self.placementNotice = "Screen awareness: enable Screen Recording in System Settings → Privacy & Security."
+            }
+        }
         model.placementInvalidated = { [weak self] in self?.cancelMovement() }
         model.onMove = { [weak self] command in
             guard let self, let panel = self.panel else { return nil }
@@ -205,7 +225,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.stopAction = { [weak self] in self?.stopCurrentAction() }
         panel.optionsAction = { [weak self] in self?.showOptions() }
-        panel.primaryAction = { [weak model] in model?.clicked() }
+        panel.primaryAction = { [weak self] in self?.talk() }
         panel.secondaryAction = { [weak self] in self?.typeMessage() }
         panel.onFileDropped = { [weak self] url in
             guard let self, !self.terminating else { return }
@@ -218,11 +238,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             do {
                 try FileManager.default.copyItem(at: url, to: destURL)
                 Task { @MainActor in
-                    self.model?.speakDirect("I have indexed \(url.lastPathComponent). Ask me anything about it!")
+                    // Only claim "indexed" after the worker has really scanned.
                     await self.documentWorker?.scanAndMaintainBrief()
+                    self.model?.speakDirect("I have indexed \(url.lastPathComponent). Ask me anything about it!")
                 }
             } catch {
-                // Fallback
+                self.model?.speakDirect("I couldn't index \(url.lastPathComponent).")
             }
         }
         panel.primaryHitTest = { point in
@@ -256,15 +277,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "pawprint.fill", accessibilityDescription: "Dot")
         item.button?.toolTip = "Dot: Show, Options, Type or Quit"
-        item.menu = CompanionStatusMenu.make(target: self, show: #selector(showPet), quit: #selector(quit),
-            options: #selector(openOptions), type: #selector(typeMessage))
         statusItem = item
+        applyStatusMenu(OfflinePreparation.shared.state)
         VideoPlaybackDetector.recordFrontmostApp()
         if !MicrophoneMode.isWideSpectrum,
            !UserDefaults.standard.bool(forKey: "dot.wideSpectrumPrompted") {
-            UserDefaults.standard.set(true, forKey: "dot.wideSpectrumPrompted")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                MicrophoneMode.openSystemSelector()
+            // The prompted flag is persisted only once the picker outcome is
+            // known (see offerWideSpectrum); the picker never opens at the lock
+            // screen.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self?.offerWideSpectrum()
             }
         }
         let preparation = OfflinePreparation.shared
@@ -276,6 +299,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         })
         statusObservations.append(model.$engineStage.receive(on: RunLoop.main).sink { [weak self] stage in
             Task { @MainActor in self?.updateStatusTitle(engineStage: stage) }
+        })
+        statusObservations.append(model.$phase.receive(on: RunLoop.main).sink { [weak self] phase in
+            guard phase == .listening else { return }
+            Task { @MainActor in self?.recheckWideSpectrumDuringCapture() }
         })
         observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
@@ -313,19 +340,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             })
         }
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
-            // Monotonic timer sleeps do not advance through Mac sleep; fire a missed
-            // timer once on wake instead of making the owner wait the sleep duration.
-            SmartTimerScheduler.shared.handleWake()
+            Task { @MainActor in
+                // Monotonic timer sleeps do not advance through Mac sleep; fire a
+                // missed timer once on wake instead of making the owner wait the
+                // sleep duration. Never at the lock screen: timer notices speak.
+                guard !ChatModel.screenIsCurrentlyLocked() else { return }
+                SmartTimerScheduler.shared.handleWake()
+            }
         })
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak model] _ in
             Task { @MainActor in
+                // Never speak or resume capture at the lock screen: the unlock
+                // notification performs the resume. The distributed lock flag can
+                // lag a wake, so read the session state directly.
+                guard !ChatModel.screenIsCurrentlyLocked() else { return }
                 // Let the audio route settle before the greeting.
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 model?.handleSystemWake()
             }
         })
         observations.append(NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { [weak model, weak webResearch] _ in
-            Task { @MainActor in webResearch?.foregroundPause(); model?.cancelForEnvironment(reason: .systemSleep) }
+            // cancelForEnvironment is the single sleep owner: it ends an active
+            // capture (or blocks the turn) synchronously during notification
+            // delivery, so the capture's own willSleep observer can never end the
+            // same capture a second time.
+            MainActor.assumeIsolated {
+                webResearch?.foregroundPause()
+                model?.cancelForEnvironment(reason: .systemSleep)
+            }
         })
         observations.append(NotificationCenter.default.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { [weak model, weak webResearch] _ in
             Task { @MainActor in webResearch?.foregroundPause(); model?.visible = false }
@@ -340,8 +382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   !model.hovered, model.menuIsOpen == false,
                   NSEvent.pressedMouseButtons == 0 else { return }
             let now = ProcessInfo.processInfo.systemUptime
-            guard !self.roam.isTravelling, !self.roam.isResting(now: now),
-                  now - self.lastEscapeAttemptAt > 1.5 else { return }
+            // This snapshot is fresh by construction, and the overlap proof below
+            // overrides the post-roam rest so Dot never parks over content for
+            // up to 45 s after a roam finished.
+            guard !self.roam.isTravelling, now - self.lastEscapeAttemptAt > 1.5 else { return }
             guard let screen = panel.screen else { return }
             let frame = panel.frame
             if !RoamingCore.clear(frame, regions: snapshot.protected) {
@@ -418,7 +462,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func handleFlagsChanged(_ event: NSEvent) {
-        guard UserDefaults.standard.bool(forKey: "dot.pushToTalkDisabled") != true else { return }
         let isFn = event.modifierFlags.contains(.function)
         if isFn && !fnKeyDown {
             fnKeyDown = true
@@ -452,6 +495,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.title = title ?? ""
         item.length = title == nil ? NSStatusItem.squareLength : NSStatusItem.variableLength
         item.button?.toolTip = title.map { "Dot: \($0)" } ?? "Dot: Show, Options, Type or Quit"
+        // The status menu mirrors the options menu's pause/retry actions for the
+        // current readiness, so "retry from the menu" exists outside the panel too.
+        if preparation.state != lastMenuReadiness {
+            applyStatusMenu(preparation.state)
+        }
+    }
+
+    private func applyStatusMenu(_ readiness: CompanionReadiness) {
+        lastMenuReadiness = readiness
+        statusItem?.menu = CompanionStatusMenu.make(target: self, show: #selector(showPet), quit: #selector(quit),
+            options: #selector(openOptions), type: #selector(typeMessage),
+            readiness: readiness, pauseAction: #selector(pausePreparation), retryAction: #selector(retryPreparation))
+    }
+
+    /// Offer the system mic-mode selector. The "prompted" flag is only persisted
+    /// once the picker outcome is known: the mode is Wide Spectrum, or the bounded
+    /// nudges are exhausted. Never opens at the lock screen.
+    private func offerWideSpectrum() {
+        guard !MicrophoneMode.isWideSpectrum,
+              !UserDefaults.standard.bool(forKey: "dot.wideSpectrumPrompted"),
+              !ChatModel.screenIsCurrentlyLocked() else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        guard wideSpectrumNudges < Self.maximumWideSpectrumNudges else {
+            UserDefaults.standard.set(true, forKey: "dot.wideSpectrumPrompted")
+            return
+        }
+        guard now - lastWideSpectrumNudgeAt >= 60 else { return }
+        wideSpectrumNudges += 1
+        lastWideSpectrumNudgeAt = now
+        MicrophoneMode.openSystemSelector()
+    }
+
+    /// While Dot is capturing, re-check the mode: persist the flag the moment the
+    /// owner switched to Wide Spectrum, or nudge again (bounded) if they did not.
+    private func recheckWideSpectrumDuringCapture() {
+        if MicrophoneMode.isWideSpectrum {
+            UserDefaults.standard.set(true, forKey: "dot.wideSpectrumPrompted")
+            return
+        }
+        guard !UserDefaults.standard.bool(forKey: "dot.wideSpectrumPrompted") else { return }
+        offerWideSpectrum()
     }
 
     @objc private func showPet() { model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
@@ -463,7 +547,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourcePanel.stop(); researchPanel.cancel(); webResearchPanel?.cancel(); actionPanel.stop()
         OfflinePreparation.shared.pause()
     }
-    @objc private func talk() { model?.clicked() }
+    /// A click on an incomplete app is the retry offer: .unavailable restarts the
+    /// file check before the click reports readiness.
+    @objc private func talk() {
+        if OfflinePreparation.shared.state.isIssue { OfflinePreparation.shared.retry() }
+        model?.clicked()
+    }
     @objc private func openOptions() { showOptions() }
     @objc private func typeMessage() {
         guard let model else { return }
@@ -495,6 +584,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = InPlaceAppTyping.isAccessibilityTrusted(promptIfNeeded: true)
     }
     @objc private func retryPreparation() { OfflinePreparation.shared.retry() }
+    @objc private func pausePreparation() { OfflinePreparation.shared.pause() }
     @objc private func togglePin() { model?.pinned.toggle() }
     @objc private func openMicrophoneModes() { MicrophoneMode.openSystemSelector() }
     @objc private func toggleScreen() { model?.screenEnabled.toggle() }
@@ -577,6 +667,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             stopItem.target = self; menu.addItem(stopItem)
         }
 
+        if readiness.canPause {
+            let pauseItem = NSMenuItem(title: CompanionMenuAction.pause.title(busy: false, pinned: false, issue: nil),
+                                       action: #selector(pausePreparation), keyEquivalent: "")
+            pauseItem.target = self; menu.addItem(pauseItem)
+        }
+        if readiness.canRetry {
+            let retryItem = NSMenuItem(title: CompanionMenuAction.retry.title(busy: false, pinned: false, issue: nil),
+                                       action: #selector(retryPreparation), keyEquivalent: "")
+            retryItem.target = self; menu.addItem(retryItem)
+        }
+
         let typed = NSMenuItem(title: "Type to Dot…", action: #selector(typeMessage), keyEquivalent: "t")
         typed.target = self; menu.addItem(typed)
 
@@ -597,6 +698,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let visionNotice = model.visionNotice {
             let noticeItem = NSMenuItem(title: visionNotice, action: nil, keyEquivalent: "")
+            noticeItem.isEnabled = false
+            menu.addItem(noticeItem)
+        }
+        if let placementNotice {
+            let noticeItem = NSMenuItem(title: placementNotice, action: nil, keyEquivalent: "")
             noticeItem.isEnabled = false
             menu.addItem(noticeItem)
         }
@@ -763,9 +869,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let checkRegions = snapshot?.protected ?? []
         let isCovered = !checkRegions.isEmpty && !RoamingCore.clear(panel.frame, regions: checkRegions)
+        // A fresh snapshot that proves overlap overrides the post-roam rest, so
+        // Dot never sits over content for up to 45 s after a roam finished.
+        let freshOverlap = snapshot?.valid(displayID: displayID, visible: visible, now: now) == true && isCovered
         let isCursorNear = panel.frame.insetBy(dx: -24, dy: -24).contains(cursor)
         if eligible && isCovered, !isAnimatingRoam, !roam.isTravelling, model.phase == .idle,
-           !roam.isResting(now: now), now - lastEscapeAttemptAt > 1.5, let snapshot {
+           (freshOverlap || !roam.isResting(now: now)), now - lastEscapeAttemptAt > 1.5, let snapshot {
             // Content is under Dot: leave immediately, not after a two-minute cadence.
             lastEscapeAttemptAt = now
             lastRoamRelocationAt = now
@@ -814,9 +923,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if model.interactionPaused && NSEvent.pressedMouseButtons == 0 {
             model.interactionPaused = false
         }
-        guard model.phase == .idle, !model.pinned, !model.hovered,
-              !model.interactionPaused, panel.isVisible, menuTracking == 0,
-              NSEvent.pressedMouseButtons == 0 else { return }
+        // The 2-minute roam respects the same invariants as the movement loop:
+        // screen awareness on, nothing presented or pending, and the same
+        // accessibility pauses.
+        guard model.phase == .idle, model.screenEnabled, !model.pinned, !model.hovered,
+              !model.interactionPaused, !model.historyPresented, !model.followupPending,
+              panel.isVisible, menuTracking == 0, NSEvent.pressedMouseButtons == 0,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              !NSWorkspace.shared.isVoiceOverEnabled else { return }
         let now = ProcessInfo.processInfo.systemUptime
         guard RoamingCore.autonomousMoveAllowed(now: now, lastMoveAt: lastRoamRelocationAt) else { return }
         guard let screen = panel.screen ?? NSScreen.main else { return }
@@ -854,6 +968,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.isAnimatingRoam = true
         self.lastRoamRelocationAt = now
         self.roam.cancel(now: now, longRest: true)
+        self.roamGeneration += 1
+        let generation = self.roamGeneration
         let targetFrame = NSRect(origin: target, size: panel.frame.size)
 
         NSAnimationContext.runAnimationGroup({ context in
@@ -862,11 +978,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.animator().setFrame(targetFrame, display: true)
         }, completionHandler: { [weak self] in
             Task { @MainActor in
+                guard let self, self.roamGeneration == generation else { return }
                 panel.setFrameOrigin(target)
-                self?.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: true)
-                self?.isAnimatingRoam = false
+                self.roam.cancel(now: ProcessInfo.processInfo.systemUptime, longRest: true)
+                self.isAnimatingRoam = false
             }
         })
+        // Re-validate the glide destination mid-animation: if a fresh map shows
+        // the destination covered, stop the glide in place and let the coverage
+        // escape relocate Dot instead of parking it over content for up to 45 s.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 800_000_000)
+            guard let self, self.roamGeneration == generation, self.isAnimatingRoam,
+                  let model = self.model, model.screenEnabled,
+                  let panel = self.panel, let screen = panel.screen,
+                  let fresh = self.placementSnapshot(for: screen, eligible: true),
+                  !RoamingCore.clear(targetFrame, regions: fresh.protected) else { return }
+            self.roamGeneration += 1
+            self.isAnimatingRoam = false
+            panel.setFrameOrigin(panel.frame.origin)
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

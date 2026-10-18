@@ -1,9 +1,17 @@
 # Fix-issues prompt for the AI development team
 
-> **STATUS (2026-10-18):** this is the original 2026-10-17 defect list. A1–A10, B1–B7 and B9 are fixed
-> (A5 completed with a visible text-only notice). **B8 (dead code) remains; B10 is by design.** Do not
-> re-fix items without checking the current code. Current state, remaining product rules (R1–R15) and
-> next steps are in [AI_HANDOFF.md](AI_HANDOFF.md).
+> **STATUS (2026-10-18, batch 9-scripts-project-docs):** this is the original 2026-10-17 defect list.
+> A1–A10 and B1–B7, B9 are fixed. This batch completes **B1**: the turn task is `.userInitiated` and
+> both AppKit QoS warning filters were removed from `scripts/verify_macos.sh` — no blanket class filter
+> remains; every warning is fatal, and a recurrence must be recorded as an exact line with a dated
+> removal condition. **B4** (single SQLite store) and **B5** (heuristic capture removed in favour of R5
+> key points) are confirmed as fixed; **A5** voice-path visibility is the visible text-only notice.
+> **B8 (dead code) remains; B10 is by design.** Remaining open exceptions: the **61-second recognizer
+> input bound** (`WhisperRecognizer` rejects audio past 61 s while the listening cap is five minutes),
+> **concatenation ageing** (memory ageing still concatenates bounded summaries instead of R5
+> summarisation), **keyed providers** (R10 optional keyed providers not built) and **Rust-side items**
+> (`crates/dot-runtime` supervisor/TLS slices 2–5). Do not re-fix items without checking the current
+> code. Current state, remaining product rules (R1–R15) and next steps are in [AI_HANDOFF.md](AI_HANDOFF.md).
 
 You are fixing Dot (macOS SwiftUI companion, repo at
 `/Users/mac/Documents/deepseek-harness/default-workspace/Dot`, branch `main`).

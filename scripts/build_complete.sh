@@ -98,8 +98,15 @@ record.update({'whisper_input_archive_sha256': whisper['archive_sha256'],
                'whisper_source_manifest_sha256': whisper['source_manifest_sha256']})
 (resources / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
 PYCODE
-codesign --force --sign "$SIGN_IDENTITY" "$APP"
-codesign --verify --deep --strict "$APP"
+# Hardened runtime + a secure timestamp are what notarytool actually requires;
+# --deep is retired because re-signing nested code corrupts the seal.
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$APP"
+else
+  # Ad-hoc fallback: without an identity no timestamp authority will serve us.
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime "$APP"
+fi
+codesign --verify --strict "$APP"
 python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"
 printf 'Bundled app staged for native offline acceptance: %s. No installer released.\n' "$APP"
 printf 'After real relocation/conversation/cancellation tests, run scripts/package_complete.sh with the acceptance record.\n'

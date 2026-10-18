@@ -61,8 +61,11 @@ final class WebResearchModel: ObservableObject {
         guard configured, session.providerID == nil || session.providerID == providerName else { return false }
         return session.queries.contains { $0.status == .pending }
             || session.reads.contains { $0.status == .pending || $0.status == .inFlight }
-            || session.queries.contains { ($0.status == .uncertain || $0.status == .inFlight)
-                && retryPolicy == .retryUncertainWithinBudget && $0.attempts < 2 && session.searchAttempts < session.limits.maxSearchAttempts }
+            || session.queries.contains { query in
+                (query.status == .uncertain || query.status == .inFlight)
+                    && ((retryPolicy == .preserveUncertain && provider?.isKeyless == true)
+                        || (retryPolicy == .retryUncertainWithinBudget && query.attempts < 2
+                            && session.searchAttempts < session.limits.maxSearchAttempts)) }
             || session.stage == .planned || session.stage == .retrieving
             || (session.stage == .paused && Self.hasTerminalRetrieval(session))
     }
@@ -88,9 +91,10 @@ final class WebResearchModel: ObservableObject {
         return "Search: \(providerName) · answers use local Qwen · up to \(limits.maxSearchAttempts) search attempts per session. " + storage
     }
     var retrySummary: String {
-        retryPolicy == .preserveUncertain
-            ? "Interrupted searches keep their unknown outcome; Resume does not repeat them."
-            : "Resume may retry each interrupted search once within the saved attempt cap."
+        if retryPolicy == .retryUncertainWithinBudget || provider?.isKeyless == true {
+            return "Resume may retry each interrupted search once within the saved attempt cap."
+        }
+        return "Interrupted searches keep their unknown outcome; Resume does not repeat them."
     }
 
     init(provider: (any WebSearchProvider)? = nil, store: (any WebResearchSessionAccess)? = nil,
@@ -141,6 +145,8 @@ final class WebResearchModel: ObservableObject {
         operation = Task { [weak self] in
             await previous.value
             guard let self, self.operationID == token else { return }
+            let hadActiveResearch = self.researchSessionID != nil
+            var savedCleanly = false
             do {
                 if let store = self.store, let active = self.activeStored, self.researchSessionID == active.id {
                     var session = active.session
@@ -158,18 +164,25 @@ final class WebResearchModel: ObservableObject {
                     }
                 }
                 if let store = self.store { try await self.refresh(store: store, preferred: self.researchSessionID ?? self.selected?.id, token: token, duringCleanup: true) }
-                if self.researchSessionID == nil { self.notice = "Stopped. Saved research refreshed." }
-                else {
-                    self.notice = self.selected?.session.stage == .completed
-                        ? "The completed answer had already been saved before the pause."
-                        : "Paused. Saved searches and source receipts are available to resume."
-                }
                 self.error = nil
+                savedCleanly = true
             } catch {
                 self.error = "Research stopped, but its latest saved state could not be refreshed. " + error.localizedDescription
                 self.notice = nil
             }
             self.finish(token)
+            // `canResume` needs the idle state finish() publishes, so the pause notice
+            // describes exactly the resumability the Resume button will then offer.
+            if savedCleanly {
+                if !hadActiveResearch { self.notice = "Stopped. Saved research refreshed." }
+                else if self.selected?.session.stage == .completed {
+                    self.notice = "The completed answer had already been saved before the pause."
+                } else if self.canResume {
+                    self.notice = "Paused. Saved searches and source receipts are available to resume."
+                } else {
+                    self.notice = "Paused. Saved searches and source receipts were kept; Resume is not available for this session yet."
+                }
+            }
         }
     }
 
@@ -518,6 +531,10 @@ final class WebResearchModel: ObservableObject {
         case .interruptedOutcomeUnknown: return "Interrupted; the request outcome and usage may be unknown."
         }
     }
+    /// A query's persisted provider error detail, falling back to its failure kind.
+    static func failureLabel(_ query: WebResearchQuery) -> String? {
+        query.failure.map { query.failureDetail ?? failureLabel($0) }
+    }
     static func confidenceLabel(_ confidence: WebResearchConfidence) -> String {
         confidence == .wellSupported ? "well supported (model assessment)" : confidence.rawValue
     }
@@ -540,7 +557,7 @@ final class WebResearchModel: ObservableObject {
             }
         } else { lines += ["", "No completed research answer saved."] }
         lines += ["", "Search log"]
-        for query in session.queries { lines.append("\(query.text) · \(queryLabel(query.status)) · \(query.attempts) attempt(s)\(query.failure.map { " · " + failureLabel($0) } ?? "")") }
+        for query in session.queries { lines.append("\(query.text) · \(queryLabel(query.status)) · \(query.attempts) attempt(s)\(failureLabel(query).map { " · " + $0 } ?? "")") }
         lines += ["", "Actual source receipts"]
         for source in session.sources {
             lines += [source.title, source.finalURL.absoluteString, source.transportSummary, "Read: \(date.string(from: source.retrievedAt)) · \(source.bytesRead) bytes · SHA-256 \(source.sha256)",
@@ -718,7 +735,7 @@ struct WebResearchView: View {
                 Text(verbatim: query.text).font(.callout).textSelection(.enabled)
                 Text("\(WebResearchModel.queryLabel(query.status)) · \(query.attempts) attempt(s) · \(query.results.count) search results").font(.caption)
                 if query.coverage == .partial { Text("Partial search coverage. Some configured engines were unavailable.").font(.caption2).foregroundStyle(.secondary) }
-                if let failure = query.failure { Text(WebResearchModel.failureLabel(failure)).font(.caption2).foregroundStyle(.secondary) }
+                if let text = WebResearchModel.failureLabel(query) { Text(text).font(.caption2).foregroundStyle(.secondary) }
             }
         }
         ForEach(session.reads.filter { $0.status != .completed }) { read in

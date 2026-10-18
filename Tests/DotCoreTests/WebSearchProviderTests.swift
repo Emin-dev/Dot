@@ -575,6 +575,37 @@ final class LocalDotSearchProviderTests: XCTestCase {
         }
     }
 
+    /// F4: a ready line that arrives slowly but inside the honest ten-second startup
+    /// bound is a normal readiness, never a timeout.
+    func testSlowReadyLineWithinTheStartupBoundSucceeds() async throws {
+        let payload = response(["results": [item("https://example.org/slow", "Slow", "snippet")],
+                                "unresponsive_engines": []])
+        let server = try LoopbackSearchFixture()
+        server.configure { $0.payload = payload }
+        let fixture = try LocalDotSearchProviderFixture.make(port: server.port,
+            body: "sleep 2\n" + LocalDotSearchProviderFixture.readyLine(port: server.port))
+        defer { try? FileManager.default.removeItem(at: fixture.executable.deletingLastPathComponent()) }
+        server.serveOne()
+        let provider = LocalDotSearchProvider(executableURL: fixture.executable,
+                                              cache: SearchResultCache(inMemory: true))
+        let result = try await provider.searchResponse(query: "slow", limit: 1)
+        XCTAssertEqual(result.results.map(\.url.absoluteString), ["https://example.org/slow"])
+    }
+
+    /// F4: one past the ten-second startup bound is a distinct, honest failure. The
+    /// bound itself stays at ten seconds; this case never weakens it.
+    func testReadyLinePastTheStartupBoundThrowsStartupTimeout() async throws {
+        let server = try LoopbackSearchFixture()
+        let fixture = try LocalDotSearchProviderFixture.make(port: server.port,
+            body: "sleep 12\n" + LocalDotSearchProviderFixture.readyLine(port: server.port))
+        defer { try? FileManager.default.removeItem(at: fixture.executable.deletingLastPathComponent()) }
+        server.serveOne()
+        let provider = LocalDotSearchProvider(executableURL: fixture.executable,
+                                              cache: SearchResultCache(inMemory: true))
+        do { _ = try await provider.searchResponse(query: "late", limit: 1); XCTFail("Late ready line accepted") }
+        catch { XCTAssertEqual(error as? SearchRuntimeFailure, .startupTimeout) }
+    }
+
     func testRuntimeAnswersAreBoundedAndCapabilityRejectionSurfaces() async throws {
         let valid = response(["results": [item("https://example.org/one", "One", "snippet")],
                               "unresponsive_engines": []])
@@ -620,7 +651,8 @@ final class LocalDotSearchProviderTests: XCTestCase {
         catch { XCTAssertEqual(error as? SearchRuntimeFailure, .invalidResults) }
         // Every reviewed engine reported unavailable is a provider failure, not success.
         let down = try runtime(payload: response(["results": [],
-                                                  "unresponsive_engines": [["duckduckgo", "timeout"], ["wikipedia", "timeout"]]]),
+                                                  "unresponsive_engines": [["duckduckgo", "timeout"], ["wikipedia", "timeout"],
+                                                                          ["google-news", "timeout"]]]),
                                validPayload: valid)
         do { _ = try await down.search(query: "engines-down", limit: 1); XCTFail("Engine outage accepted") }
         catch { XCTAssertEqual(error as? SearchRuntimeFailure, .unavailable) }

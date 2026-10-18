@@ -166,12 +166,15 @@ final class EngineIntegrationTests: XCTestCase {
         XCTAssertEqual(object["parallel_tool_calls"] as? Bool, false)
         XCTAssertEqual(object["stream"] as? Bool, true)
         let tools = try XCTUnwrap(object["tools"] as? [[String: Any]])
-        // A conversational turn carries the whole action catalogue (typing, key
-        // presses, shell, window layout, scrolling, clicking, calendar, workflows),
-        // so this asserts the ask_user contract that matters instead of requiring it
-        // to be the only tool. The test predates the catalogue; if the catalogue is
-        // later trimmed for speed, tighten this to the chosen set.
-        XCTAssertGreaterThanOrEqual(tools.count, 1)
+        // F8: a conversational turn carries exactly the reviewed action catalogue,
+        // nothing more and nothing less, so an added or dropped tool cannot ship
+        // silently with a changed prompt contract.
+        let names = Set(tools.compactMap { ($0["function"] as? [String: Any])?["name"] as? String })
+        XCTAssertEqual(names, Set([
+            "ask_user", "type_text", "press_key", "send_shortcut", "click_element",
+            "move_mouse", "click_point", "point_on_screen", "scroll_screen", "snap_window",
+            "execute_command", "delete_file", "contextual_workflow", "calendar_schedule"
+        ]))
         for tool in tools { XCTAssertEqual(tool["type"] as? String, "function") }
         let askUser = try XCTUnwrap(tools.first { ($0["function"] as? [String: Any])?["name"] as? String == "ask_user" })
         let function = try XCTUnwrap(askUser["function"] as? [String: Any])

@@ -156,11 +156,12 @@ actor MemoryTierStore {
 
     private static let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-    /// One SQLite owner for both facts and tier state: `LocalFTSStore` creates the
-    /// `memory_tier_state` table in its schema, and every read/write here runs inside
-    /// `facts.withMemoryConnection`.
-    init(directory: URL? = nil) throws {
-        facts = try LocalFTSStore(directory: directory)
+    /// MS-1: the tier store is handed the app's existing `LocalFTSStore` (ChatView's
+    /// single handle) instead of opening a second connection to the same SQLite file.
+    /// `LocalFTSStore` creates the `memory_tier_state` table in its schema, and every
+    /// read/write here runs inside `facts.withMemoryConnection` on that one handle.
+    init(facts: LocalFTSStore) {
+        self.facts = facts
     }
 
     // MARK: - User-facing API
@@ -183,11 +184,25 @@ actor MemoryTierStore {
         let created = MemoryRecord(id: fact.id, tier: isCore ? .core : tier, text: trimmed, source: source,
                                    createdAt: now, updatedAt: now, lastAccessedAt: now, pinned: pinned)
         return try await facts.withMemoryConnection { db in
-            try Self.writeMetadata(created, db: db)
             if let supersedes {
                 try Self.markSuperseded(id: supersedes, by: fact.id, now: now, db: db)
             }
-            return try Self.record(id: fact.id, db: db) ?? created
+            // MS-2: when saveMemory deduped onto an existing id whose tier state is
+            // already materialised, refresh only the edit/access times and keep the
+            // stored tier, pin, supersession and source, so an identical-text write
+            // never demotes or unpins a core record. The gate must be real tier state:
+            // record(id:) joins the fact row and synthesises a legacy-default record
+            // for rows without tier state, which would otherwise swallow every
+            // brand-new insert along with the requested tier and the caller's now.
+            if try Self.hasMetadata(id: fact.id, db: db),
+               var stored = try Self.record(id: fact.id, db: db) {
+                stored.updatedAt = now
+                stored.lastAccessedAt = now
+                try Self.writeMetadata(stored, db: db)
+                return stored
+            }
+            try Self.writeMetadata(created, db: db)
+            return created
         }
     }
 
@@ -211,30 +226,61 @@ actor MemoryTierStore {
                 _ = sqlite3_step(touch)
             }
             let stored = Dictionary(uniqueKeysWithValues: try Self.fetchRecords(db: db).map { ($0.id, $0) })
-            return hits.compactMap { hit in
+            let results: [MemoryRecord] = hits.compactMap { hit -> MemoryRecord? in
                 // The FTS stale flag and the tier-state supersession are separate rows;
                 // a corrected fact must never reappear because only one of them says so.
                 guard var found = stored[hit.id], !found.isSuperseded else { return nil }
                 found.lastAccessedAt = now
                 return found
             }
+            // MS-8: the documented recall order is newest-edited first; FTS ranks by
+            // relevance, so re-sort to the same key fetchRecords uses.
+            return results.sorted { lhs, rhs in
+                lhs.updatedAt == rhs.updatedAt ? lhs.id > rhs.id : lhs.updatedAt > rhs.updatedAt
+            }
         }
     }
 
-    /// Explicit user delete (Read / Copy / Delete). Removes the fact and its tier state.
+    /// Explicit user delete (Read / Copy / Delete). Removes the fact, its tier state
+    /// and — recursively — every record whose `superseded_by` points at the forgotten
+    /// id, so forgetting a summary also removes the raw archive rows it represents
+    /// instead of leaving their text in the database forever.
     @discardableResult
     func forget(id: UUID) async throws -> Bool {
-        let existed = try await facts.withMemoryConnection { db -> Bool in
-            guard try Self.record(id: id, db: db) != nil else { return false }
-            let stmt = try Self.prepare("DELETE FROM memory_tier_state WHERE id = ?;",
-                                        "Failed to prepare tier delete", db: db)
-            defer { sqlite3_finalize(stmt) }
-            sqlite3_bind_text(stmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(stmt)
-            return true
+        let doomed = try await facts.withMemoryConnection { db -> [UUID] in
+            let all = try Self.fetchRecords(db: db)
+            let valid = Set(all.map(\.id))
+            var supersededBy: [UUID: [UUID]] = [:]
+            for stored in all {
+                if let replacedBy = stored.supersededBy {
+                    supersededBy[replacedBy, default: []].append(stored.id)
+                }
+            }
+            var queue = [id]
+            var seen = Set<UUID>()
+            var result: [UUID] = []
+            while let current = queue.popLast() {
+                guard seen.insert(current).inserted, valid.contains(current) else { continue }
+                result.append(current)
+                queue.append(contentsOf: supersededBy[current] ?? [])
+            }
+            return result
         }
-        guard existed else { return false }
-        try await facts.deleteMemory(id: id)
+        guard doomed.contains(id) else { return false }
+        try await facts.withMemoryConnection { db in
+            for doomedID in doomed {
+                let stmt = try Self.prepare("DELETE FROM memory_tier_state WHERE id = ?;",
+                                            "Failed to prepare tier delete", db: db)
+                defer { sqlite3_finalize(stmt) }
+                sqlite3_bind_text(stmt, 1, doomedID.uuidString, -1, Self.SQLITE_TRANSIENT)
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw LocalFTSError.executionFailed("Tier delete failed")
+                }
+            }
+        }
+        for doomedID in doomed {
+            try await facts.deleteMemory(id: doomedID)
+        }
         return true
     }
 
@@ -262,7 +308,8 @@ actor MemoryTierStore {
         }
     }
 
-    /// Oldest first. Superseded archive rows are included only when asked for explicitly.
+    /// Newest first (most recently edited) for recall and listing paths. Superseded
+    /// archive rows are included only when asked for explicitly.
     func records(tier: MemoryTier? = nil, limit: Int = 200, includeSuperseded: Bool = false) async throws -> [MemoryRecord] {
         try await facts.withMemoryConnection { db in
             let filtered = try Self.fetchRecords(db: db).filter { stored in
@@ -388,31 +435,45 @@ actor MemoryTierStore {
     // MARK: - Eviction: the only path that deletes
 
     /// Deletes oldest T1 first, then oldest T2, and stops the moment the budget is met.
-    /// Pinned records, T3, T4 and T5 are never deleted by this path.
+    /// Pinned records, T3, T4 and T5 are never deleted by this path. MS-3: each pressure
+    /// pass is capped at a quarter of the evictable bytes, so one RAM-pressure event can
+    /// never wipe all recent working memory while T4/T5 sit untouched.
     func evictIfNeeded(pressure: MemoryPressure, now: Date) async throws -> [MemoryRecord] {
         let initial = pressure.currentBytes
         var used: Int
         if let initial { used = initial } else { used = try await usedBytes() }
         guard used > pressure.budgetBytes else { return [] }
-        var deleted: [MemoryRecord] = []
-        for tier in MemoryTier.allCases where tier.isAutoEvictable {
-            while used > pressure.budgetBytes {
-                let candidates = try await facts.withMemoryConnection { db in
-                    try Self.fetchRecords(db: db).filter {
-                        $0.tier == tier && !$0.pinned && $0.createdAt <= now
-                    }
-                }
-                guard let victim = candidates.first else { break }
-                try await forget(id: victim.id)
-                used -= victim.byteCost
-                deleted.append(victim)
+        // Evictable = unpinned T1+T2 rows only, oldest first with T1 exhausted before T2.
+        let candidates = try await facts.withMemoryConnection { db in
+            try Self.fetchRecords(db: db).filter {
+                $0.tier.isAutoEvictable && !$0.pinned && $0.createdAt <= now
             }
+        }
+        guard !candidates.isEmpty else { return [] }
+        let ordered = candidates.sorted {
+            ($0.tier.rawValue, $0.createdAt, $0.id.uuidString) < ($1.tier.rawValue, $1.createdAt, $1.id.uuidString)
+        }
+        let evictableBytes = ordered.reduce(0) { $0 + $1.byteCost }
+        let passCap = max(1, evictableBytes / 4)
+        var deleted: [MemoryRecord] = []
+        var deletedBytes = 0
+        for victim in ordered {
+            guard used > pressure.budgetBytes else { break }
+            // Always take at least one victim so pressure makes progress; then stop
+            // once this pass has freed its quarter of the evictable corpus.
+            guard deleted.isEmpty || deletedBytes < passCap else { break }
+            try await forget(id: victim.id)
+            used -= victim.byteCost
+            deletedBytes += victim.byteCost
+            deleted.append(victim)
         }
         return deleted
     }
 
     // MARK: - Tier metadata storage
 
+    /// MS-8: newest first (by last edit) for recall and listing; eviction sorts its
+    /// candidates oldest-first itself because that is the only place age order matters.
     private static func fetchRecords(db: OpaquePointer) throws -> [MemoryRecord] {
         let sql = """
         SELECT f.id, f.category, f.fact, s.tier, s.source,
@@ -421,7 +482,7 @@ actor MemoryTierStore {
                COALESCE(s.pinned, 0), COALESCE(s.represents_count, 1)
         FROM memory_facts f
         LEFT JOIN memory_tier_state s ON s.id = f.id
-        ORDER BY COALESCE(s.created_at, f.created_at) ASC, f.id ASC;
+        ORDER BY COALESCE(s.updated_at, f.updated_at) DESC, f.id DESC;
         """
         let stmt = try prepare(sql, "Failed to prepare memory listing", db: db)
         defer { sqlite3_finalize(stmt) }

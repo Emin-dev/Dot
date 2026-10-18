@@ -111,22 +111,14 @@ struct RoamingCore {
         var elapsed = 0.0
         let isEscape: Bool
     }
-    private var nextDecision: Double
-    private var nextWander: Double
     private var minimumRestUntil = 0.0
     private var lastTick: Double?
     private var trip: Trip?
-    private var seed: UInt64
     private(set) var isTravelling = false
     private var lastKnownProtected: [CGRect] = []
     /// Overlap escape has its own short retry so content is cleared quickly without
     /// re-running a failed empty-space search on every tick.
     private var escapeRetryAt = 0.0
-    init(seed: UInt64, now: Double, initialWanderDelay: Double = 45.0) {
-        self.seed = seed
-        self.nextDecision = now + 6
-        self.nextWander = now + initialWanderDelay
-    }
     /// A manual drag or completed roam rests autonomous motion; the direct coverage
     /// escape in the app must respect it too, not only the internal step path.
     func isResting(now: Double) -> Bool { now.isFinite && now < minimumRestUntil }
@@ -135,11 +127,7 @@ struct RoamingCore {
         trip = nil; isTravelling = false; lastTick = now
         if longRest {
             minimumRestUntil = now + 45
-            nextWander = max(nextWander, now + 45)
-        } else {
-            nextWander = max(nextWander, now + 3)
         }
-        nextDecision = max(minimumRestUntil, now + 6)
     }
     static func originBounds(window: CGSize, visible: CGRect) -> CGRect? {
         guard PlacementSnapshot.validRect(visible), window.width.isFinite, window.height.isFinite else { return nil }
@@ -339,7 +327,6 @@ struct RoamingCore {
         let origin = frame.origin
         trip = Trip(start: origin, target: target, snapshot: snapshot, isEscape: true)
         isTravelling = true
-        nextDecision = now + 4.0
         return origin
     }
     /// The swept bounds must not cross content the pet does not already overlap. Axis
@@ -407,7 +394,6 @@ struct RoamingCore {
                                  y: active.start.y + (active.target.y - active.start.y) * eased)
             if t >= 1 {
                 cancel(now: now)
-                nextWander = max(nextWander, now + 45.0 + Double(seed % 20))
             } else {
                 trip = active
             }
@@ -446,79 +432,12 @@ struct RoamingCore {
                    Self.safePath(from: frame, to: target, regions: checkRegions) {
                     trip = Trip(start: origin, target: target, snapshot: validSnapshot, isEscape: true)
                     isTravelling = true
-                    nextDecision = now + 4.0
                     return origin
                 }
                 escapeRetryAt = now + 1.5
                 return origin
             }
         }
-
-        guard now >= nextDecision else { return origin }
-
-        // 2. Periodic Wander (pet simulation wandering every ~12-22 seconds)
-        guard now >= nextWander else { return origin }
-        seed = seed &* 6364136223846793005 &+ 1
-        let regions = validSnapshot?.protected ?? lastKnownProtected
-        let dist = 60.0 + Double((seed >> 8) % 80) // 60 to 140 pt moves
-        let toCenterX: CGFloat = bounds.midX > origin.x ? 1.0 : -1.0
-        let toCenterY: CGFloat = bounds.midY > origin.y ? 1.0 : -1.0
-        var wanderCandidates: [CGPoint] = [
-            CGPoint(x: origin.x + toCenterX * dist, y: origin.y),
-            CGPoint(x: origin.x, y: origin.y + toCenterY * dist),
-            CGPoint(x: origin.x - toCenterX * dist, y: origin.y),
-            CGPoint(x: origin.x, y: origin.y - toCenterY * dist),
-            CGPoint(x: origin.x + toCenterX * (dist * 0.6), y: origin.y),
-            CGPoint(x: origin.x, y: origin.y + toCenterY * (dist * 0.6)),
-            CGPoint(x: origin.x + toCenterX * (dist * 1.3), y: origin.y),
-            CGPoint(x: origin.x, y: origin.y + toCenterY * (dist * 1.3))
-        ]
-        if (seed & 1) == 1 { wanderCandidates.reverse() }
-        for target in wanderCandidates {
-            let clamped = Self.clamp(target, to: bounds)
-            let distance = hypot(clamped.x - origin.x, clamped.y - origin.y)
-            let targetRect = CGRect(origin: clamped, size: frame.size)
-            guard distance >= 30, Self.clear(targetRect, regions: regions),
-                  Self.safePath(from: frame, to: clamped, regions: regions) else { continue }
-            let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
-            guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 90,
-                  Self.distanceToSegment(cursor, CGPoint(x: frame.midX, y: frame.midY), endCenter) >= 60 else { continue }
-            trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
-            isTravelling = true
-            nextWander = max(nextWander, now + 14.0 + Double(seed % 8))
-            return origin
-        }
-
-        // If normal directional wander is blocked, find any clear empty space
-        if let emptySpace = Self.findEmptySpace(frame: frame, bounds: bounds, cursor: cursor,
-                                                regions: regions, minDistance: 50.0) {
-            trip = Trip(start: origin, target: emptySpace, snapshot: validSnapshot, isEscape: false)
-            isTravelling = true
-            nextWander = max(nextWander, now + 14.0 + Double(seed % 8))
-            return origin
-        }
-
-        // 3. Fallback Micro-Roam (only into verified clear space)
-        let microDist: CGFloat = 16.0
-        let microCandidates: [CGPoint] = [
-            CGPoint(x: origin.x + toCenterX * microDist, y: origin.y),
-            CGPoint(x: origin.x, y: origin.y + toCenterY * microDist),
-            CGPoint(x: origin.x - toCenterX * microDist, y: origin.y),
-            CGPoint(x: origin.x, y: origin.y - toCenterY * microDist)
-        ]
-        for target in microCandidates {
-            let clamped = Self.clamp(target, to: bounds)
-            let distance = hypot(clamped.x - origin.x, clamped.y - origin.y)
-            let targetRect = CGRect(origin: clamped, size: frame.size)
-            guard distance >= 10, Self.clear(targetRect, regions: regions) else { continue }
-            let endCenter = CGPoint(x: clamped.x + frame.width / 2, y: clamped.y + frame.height / 2)
-            guard hypot(cursor.x - endCenter.x, cursor.y - endCenter.y) >= 70 else { continue }
-            trip = Trip(start: origin, target: clamped, snapshot: validSnapshot, isEscape: false)
-            isTravelling = true
-            nextWander = max(nextWander, now + 14.0 + Double(seed % 8))
-            return origin
-        }
-        nextWander = max(nextWander, now + 5.0)
         return origin
     }
 }

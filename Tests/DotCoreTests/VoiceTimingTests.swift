@@ -639,6 +639,22 @@ final class CapturedPCMTimingTests: XCTestCase {
         XCTAssertEqual(after.take().count, 3_200, "Pre-switch and post-switch audio are both preserved")
     }
 
+    /// voice-listen-02: a successful route-change re-arm keeps the turn on the
+    /// migrated store and deactivates the old one. The coordinator's tick must
+    /// return early after the re-arm: polling the old store now reads `.cancelled`,
+    /// so acting on it would silently cancel a turn that just re-armed.
+    func testSuccessfulRearmDeactivatesTheOldStoreSoItCannotCancelTheTurn() {
+        let old = CapturedPCM(rate: 8_000)
+        old.begin(at: 700, silence: 3, invitation: nil)
+        append(old, at: 700.0, amplitude: 0.1)
+        XCTAssertEqual(old.poll(at: 700.2).decision, .listening)
+
+        let migrated = CapturedPCM(rate: 16_000, migrating: old, at: 700.7)
+        XCTAssertEqual(migrated.poll(at: 700.9).decision, .listening, "The re-armed turn stays alive")
+        XCTAssertEqual(old.poll(at: 700.9).decision, .cancelled,
+                       "The old store is deactivated by the re-arm and must not be polled as the live turn")
+    }
+
     func testReArmedCaptureKeepsItsOriginalFiveMinuteBound() {
         let pcm = CapturedPCM(rate: 8_000)
         pcm.begin(at: 800, silence: 3, invitation: nil)
@@ -696,5 +712,17 @@ final class VoicePermissionMessageTests: XCTestCase {
         let message = VoiceCaptureEndReason.permissionLost.recoveryMessage ?? ""
         XCTAssertTrue(message.contains("restricted"))
         XCTAssertTrue(message.contains("Screen Time"))
+    }
+
+    /// F6: the restricted state maps explicitly to its own Screen Time notice, and
+    /// the notice is the exact string the production readiness branch speaks — never
+    /// the plain denial hint.
+    func testRestrictedMapsExplicitlyToTheExactScreenTimeNotice() {
+        XCTAssertEqual(VoiceMicrophonePermission.restricted.notReadyNotice,
+                       "Microphone access is restricted by Screen Time or a device-management profile. Ask the Mac's administrator to allow Dot, then click me again.")
+        XCTAssertEqual(VoiceMicrophonePermission.denied.notReadyNotice,
+                       "Microphone access is off. Enable Dot in System Settings > Privacy & Security > Microphone, then click me again.")
+        XCTAssertNil(VoiceMicrophonePermission.authorized.notReadyNotice)
+        XCTAssertNil(VoiceMicrophonePermission.undetermined.notReadyNotice)
     }
 }

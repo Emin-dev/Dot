@@ -5,14 +5,14 @@ cd "$(dirname "$0")"
 APP=build/Dot.app
 SOURCE_COMMIT=$(git rev-parse HEAD)
 SOURCE_DIRTY=false
-if [[ -n "$(git status --porcelain --untracked-files=all -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh icon.png)" || \
-      -n "$(git ls-files --others -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh icon.png)" ]]; then
+if [[ -n "$(git status --porcelain --untracked-files=all -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh icon.png crates Cargo.toml Cargo.lock packaging)" || \
+      -n "$(git ls-files --others -- src Resources scripts Tests Dot.xcodeproj Package.swift build.sh icon.png crates Cargo.toml Cargo.lock packaging)" ]]; then
   SOURCE_DIRTY=true
 fi
 INTENTS_BUILD=$(mktemp -d "${TMPDIR:-/tmp}/dot-intents.XXXXXX")
 STAGE=""
 trap 'rm -rf "$INTENTS_BUILD"; if [[ -n "$STAGE" ]]; then rm -rf "$STAGE"; fi' EXIT
-TARGET="$(uname -m)-apple-macosx15.0"
+TARGET="$(uname -m)-apple-macosx26.4"
 SOURCES=(src/*.swift)
 # The runtime is Rust-only. Build the binaries first so the bundle always carries
 # them; an absent binary would otherwise silently change runtime behaviour.
@@ -46,6 +46,8 @@ cp Resources/bundled-models.json "$APP/Contents/Resources/"
 cp -R Resources/Research "$APP/Contents/Resources/"
 cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
+# One minimum-OS policy (macOS 26.4), the same override build_complete.sh applies.
+/usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
 ICONSET=build/Icon.iconset
 mkdir -p "$ICONSET"
 for s in 16 32 128 256 512; do
@@ -55,10 +57,10 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Icon.icns"
 python3 -B scripts/package_app_intents.py extract --work-dir "$INTENTS_BUILD" --app "$APP" \
-  --target "$TARGET" --deployment-target 15.0
+  --target "$TARGET" --deployment-target 26.4
 python3 -B - "$APP" "$SOURCE_COMMIT" "$SOURCE_DIRTY" <<'PYCODE'
 import json, pathlib, subprocess, sys
-paths = ['src', 'Resources', 'scripts', 'Tests', 'Dot.xcodeproj', 'Package.swift', 'build.sh', 'icon.png']
+paths = ['src', 'Resources', 'scripts', 'Tests', 'Dot.xcodeproj', 'Package.swift', 'build.sh', 'icon.png', 'crates', 'Cargo.toml', 'Cargo.lock', 'packaging']
 changed = subprocess.check_output(['git', 'status', '--porcelain', '--untracked-files=all', '--', *paths], text=True)
 untracked = subprocess.check_output(['git', 'ls-files', '--others', '--', *paths], text=True)
 current = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()

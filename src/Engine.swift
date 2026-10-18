@@ -543,18 +543,27 @@ final class EngineManager: ObservableObject {
             onReadinessStage?("Checking local engine")
         } else {
             onReadinessStage?("Starting local engine")
-            let connection = try await BundledSplash.shared.connection()
-            try Task.checkCancellation()
-            guard !inferenceClosed else { throw CancellationError() }
-            base = connection.url; ownedPID = connection.pid; identityPort = connection.backendPort; model = BundledSplash.model
-            if certificateSHA256 != connection.certificateSHA256 {
-                currentSession?.invalidateAndCancel(); currentSession = nil
-                certificateSHA256 = connection.certificateSHA256
+            do {
+                let connection = try await BundledSplash.shared.connection()
+                try Task.checkCancellation()
+                guard !inferenceClosed else { throw CancellationError() }
+                base = connection.url; ownedPID = connection.pid; identityPort = connection.backendPort; model = BundledSplash.model
+                if certificateSHA256 != connection.certificateSHA256 {
+                    currentSession?.invalidateAndCancel(); currentSession = nil
+                    certificateSHA256 = connection.certificateSHA256
+                }
+            } catch {
+                // The default "cancelled" hid every preparation and runtime failure;
+                // classify the real exit class before rethrowing.
+                outcome = error is CancellationError ? "cancelled" : "failed"
+                throw error
             }
         }
         onReadinessStage?("Loading local model")
         let attempts = ownedPID == nil ? 1 : 900
         let readinessDeadline = ProcessInfo.processInfo.systemUptime + 180
+        var terminalError: Error? = nil
+        var consecutiveProbeFailures = 0
         for attempt in 0..<attempts {
             try Task.checkCancellation()
             guard !inferenceClosed else { throw CancellationError() }
@@ -581,15 +590,36 @@ final class EngineManager: ObservableObject {
                 try Task.checkCancellation()
                 guard !inferenceClosed else { throw CancellationError() }
                 if attempt == attempts - 1 || ProcessInfo.processInfo.systemUptime >= readinessDeadline {
-                    outcome = ownedPID == nil ? "failed" : "timeout"
-                    let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: ownedPID == nil ? .failed : .timeout)
-                    Self.log.error("\(diagnostic.logLine, privacy: .public)")
-                    throw (error as? EngineError) ?? EngineError.unavailable
+                    terminalError = error
+                    break
+                }
+                // A healthy cold load answers nothing until its accept loop starts,
+                // so request timeouts are load progress, not liveness evidence. An
+                // engine that answers (or a transport that refuses) and fails a few
+                // probes in a row is wedged: restart it instead of reusing the cached
+                // connection for the rest of the poll window.
+                if ownedPID != nil, (error as? URLError)?.code != .timedOut {
+                    consecutiveProbeFailures += 1
+                    if consecutiveProbeFailures >= 3 {
+                        outcome = "timeout"
+                        Self.log.error("\(PipelineDiagnostic(stage: .readiness, outcome: .timeout).logLine, privacy: .public)")
+                        BundledSplash.shared.shutdown()
+                        throw EngineStalled()
+                    }
+                } else {
+                    consecutiveProbeFailures = 0
                 }
                 try await Task.sleep(nanoseconds: 200_000_000)
             }
         }
-        throw EngineError.unavailable
+        outcome = ownedPID == nil ? "failed" : "timeout"
+        let diagnostic = PipelineDiagnostic(stage: .readiness, outcome: ownedPID == nil ? .failed : .timeout)
+        Self.log.error("\(diagnostic.logLine, privacy: .public)")
+        if ownedPID == nil { throw (terminalError as? EngineError) ?? EngineError.unavailable }
+        // The owned engine stopped answering: shut it down once so the next click
+        // relaunches a fresh runtime instead of stalling against the wedged one.
+        BundledSplash.shared.shutdown()
+        throw EngineStalled()
     }
 
     @discardableResult
@@ -1029,4 +1059,11 @@ final class TurnWarmup {
         guard self.turn == turn else { throw CancellationError() }
     }
     func cancel() { turn = nil; work?.cancel(); work = nil }
+}
+
+/// The owned engine stopped answering and was shut down for a bounded restart;
+/// the next click relaunches. Kept outside EngineError so ChatView's exhaustive
+/// failure switch stays untouched.
+private struct EngineStalled: LocalizedError {
+    var errorDescription: String? { "My local engine stopped answering and is restarting. Click me to try again." }
 }

@@ -289,12 +289,17 @@ actor SearchResultCache {
     func lookup(query: String, limit: Int, now: Date = Date()) -> WebSearchResponse? {
         loadIfNeeded()
         guard let entry = entries[key(query: query, limit: limit)] else { return nil }
-        guard now.timeIntervalSince(entry.storedAt) <= ttl else { return nil }
+        // Only a complete response serves the full TTL; a partial entry is revalidated
+        // against the live runtime so a recovered engine is never misreported, and
+        // unavailable engine IDs are never reused across cache hits.
+        guard entry.coverage == .complete, now.timeIntervalSince(entry.storedAt) <= ttl else { return nil }
         return WebSearchResponse(results: entry.results, coverage: entry.coverage,
-                                 unavailableEngineIDs: entry.unavailableEngineIDs)
+                                 unavailableEngineIDs: [])
     }
 
     func store(query: String, limit: Int, response: WebSearchResponse, now: Date = Date()) {
+        // Partial responses carry unavailable engines; never persist them for reuse.
+        guard response.coverage == .complete else { return }
         loadIfNeeded()
         entries[key(query: query, limit: limit)] = Entry(results: response.results,
             coverage: response.coverage, unavailableEngineIDs: response.unavailableEngineIDs, storedAt: now)
@@ -332,9 +337,12 @@ final class LocalDotSearchProvider: WebSearchProvider, Sendable {
     static let maximumQueryBytes = 2_048
     static let maximumResponseBytes = 1_048_576
     /// The engines the shipped runtime is reviewed to query with keyless access.
-    static let reviewedEngineIDs: Set<String> = ["duckduckgo", "wikipedia"]
+    /// The shipped runtime queries google-news on every search, so it stays in the
+    /// reviewed set even when only some searches surface news results.
+    static let reviewedEngineIDs: Set<String> = ["duckduckgo", "wikipedia", "google-news"]
     let providerID = "local-dot-search"
     let permitsResultPersistence = true
+    let isKeyless = true
     private let runner: LocalDotSearchRunner
     private let cache: SearchResultCache
 

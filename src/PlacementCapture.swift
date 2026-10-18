@@ -15,6 +15,14 @@ final class PlacementCapture {
         lastDiagnostic = value; onDiagnostic?(value)
         Self.log.notice("\(value.logLine, privacy: .public)")
     }
+    /// A read-and-clear failure surface for the App layer: taking the diagnostic
+    /// empties the slot, so a notice about repeated capture failures can be shown
+    /// exactly once per new report instead of on every movement tick.
+    func consumeLastDiagnostic() -> PlacementDiagnostic? {
+        let value = lastDiagnostic
+        lastDiagnostic = nil
+        return value
+    }
     private var work: Task<Void, Never>?
     var onCaptureChanged: ((Bool) -> Void)?
     var onSnapshotUpdated: ((PlacementSnapshot) -> Void)?

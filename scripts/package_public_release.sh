@@ -24,10 +24,32 @@ STAGE="/private/tmp/dot-public-$$"
 ZIP="$OUT/Dot.zip"
 
 fail() { echo "package_public_release: $*" >&2; exit 1; }
+
+# A public package must be signed with a Developer ID Application identity; an
+# Apple Development identity only authorises this Mac's personal installs.
+if [[ "$SIGN_IDENTITY" == *"Apple Development"* ]]; then
+  cat >&2 <<'EOF'
+================================================================
+NOT DISTRIBUTABLE: SIGN_IDENTITY is an Apple Development identity.
+Gatekeeper release is pending a Developer ID Application identity
+plus notarisation; an Apple Development-signed package is not a
+public release and must not be uploaded as one.
+================================================================
+EOF
+  fail 'refusing to package a public release with an Apple Development identity'
+fi
+
 [ -d "$APP" ] || fail "no app at $APP"
 [ -d "$APP/Contents/Resources/Offline" ] || fail "$APP has no Offline runtime"
 [ -d "$APP/Contents/Resources/OfflineModels" ] || fail "$APP has no model payload (nothing to strip)"
 [ -f "$APP/Contents/Resources/build-provenance.json" ] || fail "no provenance in $APP"
+
+# The package is cut from the installed app, so its binaries carry that app's
+# provenance. Never overwrite the commit field with a newer HEAD: that would
+# stamp a clean commit over old binaries.
+APP_COMMIT="$(/usr/bin/python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['commit'])" "$APP/Contents/Resources/build-provenance.json")"
+[ "$APP_COMMIT" = "$(git rev-parse HEAD)" ] \
+  || fail "installed app provenance ($APP_COMMIT) does not match HEAD; re-run install_local.sh first"
 
 echo "==> staging the runtime-only app"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
@@ -43,11 +65,12 @@ record = json.loads(path.read_text())
 record.update({
     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
     'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()),
-    'signing': 'apple-development',
+    'signing': 'developer-id',
     'notarized': False,
     'runtime_bundled': True,
     'models_bundled': False,
-    'models_downloaded': True,
+    'models_downloaded': False,
+    'llm_weights_download_on_first_launch': True,
 })
 record.pop('source_root', None)
 path.write_text(json.dumps(record, indent=2) + '\n')
@@ -56,7 +79,9 @@ PY
 
 echo "==> signing after removing the sealed model resources"
 xattr -cr "$STAGE/Dot.app"
-codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none "$STAGE/Dot.app"
+# Hardened runtime + secure timestamp are what notarytool requires; no --deep
+# (re-signing nested code corrupts the seal).
+codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$STAGE/Dot.app"
 codesign --verify --strict "$STAGE/Dot.app" || fail "staged signature did not verify"
 
 echo "==> creating $ZIP"

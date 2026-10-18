@@ -66,15 +66,15 @@ final class NativeSkinTests: XCTestCase {
     func testGlassFaceHasDualToneEdgeIndependentOfOSAppearance() {
         for skin in [DotSkin.dew, .ripple, .veil] {
             let appearance = NativeSkinAppearance.forSkin(skin)
-            let light = appearance.facialInk(darkAppearance: false, opaque: false)
-            let dark = appearance.facialInk(darkAppearance: true, opaque: false)
-            XCTAssertEqual(dark, light)
-            XCTAssertLessThan(dark.red, 0.25)
+            // Batch 5 removed `facialInk`; the shared dark ink is the single source,
+            // so it is asserted directly on the appearance instead of through the
+            // removed accessor. It stays a dark centre independent of OS appearance.
+            let ink = appearance.ink
+            XCTAssertLessThan(ink.red, 0.25)
             XCTAssertGreaterThanOrEqual(appearance.facialOutlineWidth(opaque: false), 1)
             XCTAssertGreaterThan(appearance.facialOutlineWidth(opaque: false, increasedContrast: true),
                                  appearance.facialOutlineWidth(opaque: false))
             XCTAssertEqual(appearance.facialOutlineWidth(opaque: true), 0)
-            XCTAssertEqual(appearance.facialInk(darkAppearance: true, opaque: true), light)
         }
     }
 

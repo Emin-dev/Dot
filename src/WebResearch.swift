@@ -5,6 +5,9 @@ protocol WebSearchProvider: Sendable {
     var providerID: String { get }
     /// Must be established from the selected plan's terms, not inferred from API access.
     var permitsResultPersistence: Bool { get }
+    /// Keyless providers have no keyed per-request spend, so an interrupted search
+    /// can be retried automatically on Resume without double-charging a usage ledger.
+    var isKeyless: Bool { get }
     func search(query: String, limit: Int) async throws -> [WebSearchResult]
     func searchResponse(query: String, limit: Int) async throws -> WebSearchResponse
 }
@@ -21,6 +24,7 @@ protocol WebSearchTemporarilyUnavailable: Error {
 }
 extension WebSearchProvider {
     var permitsResultPersistence: Bool { false }
+    var isKeyless: Bool { false }
     func searchResponse(query: String, limit: Int) async throws -> WebSearchResponse {
         WebSearchResponse(results: try await search(query: query, limit: limit), coverage: .complete, unavailableEngineIDs: [])
     }
@@ -82,7 +86,9 @@ enum WebResearchQueryStatus: String, Codable, Sendable { case pending, inFlight,
 enum WebResearchReadStatus: String, Codable, Sendable { case pending, inFlight, completed, failed }
 enum WebResearchFailure: String, Codable, Sendable { case provider, source, budget, interruptedOutcomeUnknown, providerCooldown }
 enum WebResearchRetryPolicy: String, Codable, Sendable {
-    /// Preserve unknown outcomes; a surrounding task can change its visible retry policy on Resume.
+    /// Preserve unknown outcomes for keyed providers; a keyless provider retries one
+    /// interrupted query per Resume within the persisted attempt cap. A surrounding
+    /// task can still change the visible retry policy on Resume.
     case preserveUncertain
     /// One retry per interrupted query, within the session's persisted total attempt cap.
     case retryUncertainWithinBudget
@@ -98,6 +104,9 @@ struct WebResearchQuery: Codable, Identifiable, Equatable, Sendable {
     var coverage: WebSearchCoverage?
     var unavailableEngineIDs: [String]?
     var failure: WebResearchFailure?
+    /// The persisted `errorDescription` of the error that failed this query; a
+    /// diagnostic hint for the owner, never provider content or a command.
+    var failureDetail: String? = nil
 }
 
 struct WebResearchRead: Codable, Identifiable, Equatable, Sendable {
@@ -336,6 +345,7 @@ struct WebResearchSession: Codable, Identifiable, Equatable, Sendable {
                   && ($0.status == .completed || $0.results.isEmpty)
                   && ($0.status != .completed || ($0.attempts > 0 && $0.completedAt != nil))
                   && ($0.status != .inFlight && $0.status != .uncertain || $0.attempts > 0)
+                  && ($0.failureDetail.map { !$0.isEmpty && $0.utf8.count <= 2_048 } ?? true)
                   && $0.results.allSatisfy({ Self.validResult($0, archived: true) }) }),
               searchAttempts <= limits.maxSearchAttempts,
               reads.allSatisfy({ read in
@@ -447,9 +457,18 @@ actor WebResearchWorkflow {
                 if session.queries[index].status == .inFlight { session.queries[index].status = .uncertain }
                 if session.queries[index].status == .uncertain {
                     session.queries[index].failure = .interruptedOutcomeUnknown
-                    if session.retryPolicy == .retryUncertainWithinBudget,
-                       session.queries[index].attempts < 2, session.searchAttempts < session.limits.maxSearchAttempts {
-                        session.queries[index].status = .pending
+                    // A keyless provider has no keyed per-request spend, so its unknown
+                    // outcome is retried once on Resume even under .preserveUncertain.
+                    // When no attempt budget remains, the query is finalized instead of
+                    // stranding the session in .paused forever.
+                    let keylessPreserve = session.retryPolicy == .preserveUncertain && provider.isKeyless
+                    if session.retryPolicy == .retryUncertainWithinBudget || keylessPreserve {
+                        if session.queries[index].attempts < 2, session.searchAttempts < session.limits.maxSearchAttempts {
+                            session.queries[index].status = .pending
+                        } else if keylessPreserve {
+                            session.queries[index].status = .failed
+                            session.queries[index].failure = .budget
+                        }
                     }
                 }
             }
@@ -492,6 +511,7 @@ actor WebResearchWorkflow {
                         return session
                     }
                     session.queries[index].status = .failed; session.queries[index].failure = .provider
+                    session.queries[index].failureDetail = (error as? any LocalizedError)?.errorDescription
                 }
                 try await checkpoint(&session, onCheckpoint)
             }

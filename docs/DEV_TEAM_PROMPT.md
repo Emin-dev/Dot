@@ -124,7 +124,10 @@ fire on the first interaction (both defects fixed and installed).
 
 1. QoS priority inversion: turn-pipeline task runs at Default priority while the UI
    waits at User-interactive — set `.userInitiated` and remove the gate's warning
-   filter in the same commit.
+   filter in the same commit. **Fixed 2026-10-18 (batch 9):** the turn task is
+   `.userInitiated` and both AppKit QoS warning filters were removed from
+   `scripts/verify_macos.sh`; no blanket class filter remains and every warning
+   diagnostic is fatal again.
 2. Placement validates a snapshot after its 10 s lifetime every cycle
    (`reason=expired elapsed≈10475ms`) — refresh before validating in the caller;
    never raise the lifetime.
@@ -136,7 +139,8 @@ fire on the first interaction (both defects fixed and installed).
    plus one bounded restart and an honest message.
 6. Memory: second SQLite connection (~120 lines via a `withConnection` accessor),
    heuristic capture (replaced by R5), concatenation ageing (replace with R5
-   summarisation).
+   summarisation). **Status 2026-10-18:** the second connection and heuristic capture
+   are gone (single store, R5 key points); **concatenation ageing remains open.**
 7. Diagnostic log lives in Downloads and only proves anything after a real session —
    move to Application Support, rotate, log every turn outcome.
 8. ~540 audited dead lines, in one verified batch of deletions per commit.
@@ -145,6 +149,12 @@ fire on the first interaction (both defects fixed and installed).
 10. Self-improvement "paste" types through Accessibility rather than pasting — under
     R9 this becomes self-application with diff approval; the paste offer can stay as
     a separate convenience.
+
+Remaining open exceptions recorded 2026-10-18 (batch 9-scripts-project-docs): the
+**61-second recognizer input bound** (`WhisperRecognizer` rejects audio past 61 s while the
+R1 listening cap is five minutes), **concatenation ageing** (item 6), **keyed providers**
+(R10/P6 optional keyed providers, not built) and **Rust-side items** (`crates/dot-runtime`
+slices 2–5; the shipped supervisor/TLS relay is still Python).
 
 ## 6. The failure class this team must keep hunting
 

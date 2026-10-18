@@ -46,8 +46,15 @@ def verify(app, receipt):
         raise ValueError('bounded regular acceptance record required')
     record = json.loads(receipt.read_text())
     provenance = json.loads((app / 'Contents/Resources/build-provenance.json').read_text())
-    if provenance.get('runtime_bundled') is not True or provenance.get('models_bundled') is not True or provenance.get('llm_weights_download_on_first_launch') is not False:
-        raise ValueError('complete offline provenance required')
+    download_on_first_launch = provenance.get('llm_weights_download_on_first_launch')
+    models_bundled = provenance.get('models_bundled')
+    if provenance.get('runtime_bundled') is not True:
+        raise ValueError('runtime provenance required')
+    complete_offline = models_bundled is True and download_on_first_launch is False
+    first_launch_download = models_bundled is False \
+        and provenance.get('models_downloaded') is not True and download_on_first_launch is True
+    if not (complete_offline or first_launch_download):
+        raise ValueError('complete offline or first-launch-download provenance required')
     if record.get('schema_version') != 1 or record.get('commit') != provenance.get('commit'):
         raise ValueError('acceptance source mismatch')
     if record.get('app_fingerprint_sha256') != fingerprint(app): raise ValueError('acceptance app mismatch')

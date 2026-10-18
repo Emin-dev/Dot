@@ -157,7 +157,7 @@ final class RoamingTests: XCTestCase {
         XCTAssertEqual(RoamingCore.distanceToSegment(CGPoint(x: 50, y: 150), .zero, CGPoint(x: 100, y: 0)), 150)
     }
     func testNoAnalysisNeverMovesEvenOutsideCurrentDisplay() {
-        var planner = RoamingCore(seed: 42, now: 0)
+        var planner = RoamingCore()
         let elsewhere = CGRect(x: 5000, y: 5000, width: 148, height: 156)
         for time in [9.0, 100.0, 10000.0] {
             XCTAssertEqual(planner.step(frame: elsewhere, visible: visible, cursor: cursor, paused: false, now: time), elsewhere.origin)
@@ -165,12 +165,12 @@ final class RoamingTests: XCTestCase {
         }
     }
     func testClearCurrentPositionStaysRatherThanRandomlyWandering() {
-        var planner = RoamingCore(seed: 42, now: 0)
+        var planner = RoamingCore()
         XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map([])), frame.origin)
         XCTAssertFalse(planner.isTravelling)
     }
     func testShortEscapeReducesExistingOverlapWithoutCrossingContent() {
-        var planner = RoamingCore(seed: 42, now: 0), moving = frame
+        var planner = RoamingCore(), moving = frame
         let snapshot = map(); var priorArea = frame.intersection(obstacle).width * frame.intersection(obstacle).height
         for tick in 0...40 {
             let now = 9 + Double(tick) / 60
@@ -193,13 +193,13 @@ final class RoamingTests: XCTestCase {
                        "A diagonal swept box may not cross content")
     }
     func testNoClearAreaHasNoFallback() {
-        var planner = RoamingCore(seed: 1, now: 0)
+        var planner = RoamingCore()
         XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map([visible])), frame.origin)
         XCTAssertFalse(planner.isTravelling)
     }
     func testPausePointerStaleAndWrongDisplayStopAtPresentedPosition() {
         for reason in 0..<5 {
-            var planner = RoamingCore(seed: 42, now: 0), moving = frame
+            var planner = RoamingCore(), moving = frame
             let snapshot = map()
             _ = planner.step(frame: moving, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: snapshot)
             XCTAssertTrue(planner.isTravelling)
@@ -210,13 +210,13 @@ final class RoamingTests: XCTestCase {
         }
     }
     func testChangedDisplayGeometryDoesNotUnsafelyClamp() {
-        var planner = RoamingCore(seed: 42, now: 0)
+        var planner = RoamingCore()
         _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map())
         XCTAssertEqual(planner.step(frame: frame, visible: CGRect(x: 0, y: 0, width: 1200, height: 900), cursor: cursor, paused: false, now: 9.1, displayID: 7, snapshot: map()), frame.origin)
         XCTAssertFalse(planner.isTravelling)
     }
     func testLongWakeIntervalRejectsExpiredMapInsteadOfTeleporting() {
-        var planner = RoamingCore(seed: 42, now: 0)
+        var planner = RoamingCore()
         _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map())
         XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 10000, displayID: 7, snapshot: map()), frame.origin)
     }
@@ -234,30 +234,53 @@ final class RoamingTests: XCTestCase {
         XCTAssertNil(PlacementSnapshot.visionRect(CGRect(x: -0.1, y: 0, width: 0.5, height: 0.5), display: visible))
     }
     func testPetWandersAfterQuietMinute() {
-        var planner = RoamingCore(seed: 42, now: 0)
-        XCTAssertEqual(planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 9, displayID: 7, snapshot: map([], at: 9)), frame.origin)
-        XCTAssertFalse(planner.isTravelling)
-        for t in stride(from: 10.0, to: 45.0, by: 1.0) {
-            _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: t, displayID: 7, snapshot: map([], at: t))
+        // The old quiet-minute cadence is gone. The owner's cadence gates every
+        // autonomous move to at most once per two minutes, and interaction or a
+        // missing verified map never moves Dot.
+        let lastMoveAt = 9.0
+        XCTAssertFalse(RoamingCore.autonomousMoveAllowed(now: lastMoveAt + 60, lastMoveAt: lastMoveAt),
+                       "A quiet minute is no longer enough for an autonomous move")
+        XCTAssertTrue(RoamingCore.autonomousMoveAllowed(now: lastMoveAt + RoamingCore.minimumAutonomousMoveInterval,
+                                                        lastMoveAt: lastMoveAt))
+        // Interaction never moves Dot, even when the current spot is covered.
+        var interacting = RoamingCore()
+        for t in stride(from: 9.0, through: 130.0, by: 1.0) {
+            XCTAssertEqual(interacting.step(frame: frame, visible: visible, cursor: cursor, paused: true, now: t,
+                                            displayID: 7, snapshot: map(at: t)), frame.origin)
+            XCTAssertFalse(interacting.isTravelling)
         }
-        _ = planner.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: 45.0, displayID: 7, snapshot: map([], at: 45.0))
-        XCTAssertTrue(planner.isTravelling)
+        // An unverified map means no autonomous wander, no matter how long the quiet.
+        var idle = RoamingCore()
+        for t in stride(from: 9.0, through: 45.0, by: 1.0) {
+            XCTAssertEqual(idle.step(frame: frame, visible: visible, cursor: cursor, paused: false, now: t,
+                                     displayID: 7, snapshot: map([], at: t)), frame.origin)
+            XCTAssertFalse(idle.isTravelling)
+        }
     }
     func testPetWandersSmoothlyAcrossSnapshotRefreshesAndObstacles() {
-        var planner = RoamingCore(seed: 42, now: 0)
+        // A covered spot triggers one smooth escape: each snapshot refresh keeps
+        // the glide going, the protected obstacle is never crossed, and the
+        // arrival point stays clear of content.
+        var planner = RoamingCore()
         var currentFrame = frame
-        let nonOverlappingObstacle = CGRect(x: 100, y: 100, width: 200, height: 200)
-        var moved = false
-        for t in stride(from: 0.0, through: 50.0, by: 0.5) {
-            let snap = map([nonOverlappingObstacle], at: t)
-            let nextOrigin = planner.step(frame: currentFrame, visible: visible, cursor: cursor, paused: false, now: t, displayID: 7, snapshot: snap)
+        var distinct = Set<String>()
+        var maximumStep: CGFloat = 0
+        for t in stride(from: 0.0, through: 40.0, by: 0.5) {
+            let nextOrigin = planner.step(frame: currentFrame, visible: visible, cursor: cursor, paused: false,
+                                          now: t, displayID: 7, snapshot: map([obstacle], at: t))
             if nextOrigin != currentFrame.origin {
-                moved = true
+                maximumStep = max(maximumStep,
+                                  hypot(nextOrigin.x - currentFrame.origin.x, nextOrigin.y - currentFrame.origin.y))
                 currentFrame.origin = nextOrigin
+                distinct.insert("\(Int(nextOrigin.x)),\(Int(nextOrigin.y))")
             }
         }
-        XCTAssertTrue(moved)
         XCTAssertNotEqual(currentFrame.origin, frame.origin)
+        XCTAssertTrue(RoamingCore.clear(currentFrame, regions: [obstacle]),
+                      "The escape must end on a spot clear of the covered content")
+        XCTAssertTrue(visible.contains(currentFrame))
+        XCTAssertGreaterThanOrEqual(distinct.count, 3, "The glide crosses the screen step by step, never teleporting")
+        XCTAssertLessThanOrEqual(maximumStep, 10, "Each snapshot refresh advances the glide smoothly")
     }
     func testFindRandomEmptySpaceNeverReturnsAnOverlappingSpot() {
         let bounds = RoamingCore.originBounds(window: frame.size, visible: visible)!
@@ -560,8 +583,8 @@ final class ResponseBoundaryTests: XCTestCase {
 
 final class CompanionDragTests: XCTestCase {
     func testDragCooldownSurvivesPausedToUnpausedTransition() {
-        for seed in 1...20 {
-            var roam = RoamingCore(seed: UInt64(seed), now: 0)
+        for _ in 1...20 {
+            var roam = RoamingCore()
             let frame = CGRect(x: 200, y: 200, width: 148, height: 156)
             let visible = CGRect(x: 0, y: 0, width: 1440, height: 900)
             let cursor = CGPoint(x: 5000, y: 5000)
@@ -633,6 +656,19 @@ final class RuntimeDiagnosticTests: XCTestCase {
         let value = try XCTUnwrap(RuntimeDiagnostic.parse(data))
         XCTAssertFalse(value.logLine.contains("SECRET"))
         XCTAssertTrue(value.localizedDescription.contains("exit -9"))
+    }
+    /// SUP-1: the Rust supervisor slice prints exactly this line until the port is
+    /// complete. The Swift side must parse it and round-trip it as the bounded
+    /// not-implemented diagnostic instead of dropping it as an unknown reason.
+    func testNotImplementedSupervisorLineRoundTrips() throws {
+        let line = Data(#"{"event":"failed","protocol":1,"stage":"supervisor","reason":"not-implemented"}"#.utf8)
+        let diagnostic = try XCTUnwrap(RuntimeDiagnostic.parse(line))
+        XCTAssertEqual(diagnostic.stage, .supervisor)
+        XCTAssertEqual(diagnostic.reason, .notImplemented)
+        XCTAssertNil(diagnostic.exitStatus)
+        XCTAssertEqual(diagnostic.logLine, "stage=supervisor reason=not-implemented exit=unknown")
+        XCTAssertTrue(diagnostic.localizedDescription.hasPrefix("Splash supervisor"))
+        XCTAssertFalse(diagnostic.localizedDescription.isEmpty)
     }
 }
 
@@ -732,6 +768,113 @@ final class ScreenPermissionTurnTests: XCTestCase {
         var permission = ScreenPermissionTurn(); let turn = UUID()
         XCTAssertTrue(permission.prepare(turn: turn, enabled: false, preflight: { XCTFail("unexpected check"); return false }, request: { XCTFail("unexpected prompt"); return false }))
         XCTAssertFalse(permission.mayCapture(turn: turn, preflight: { XCTFail("unexpected check"); return true }))
+    }
+}
+
+/// F2: `ScreenContext.prepare` must consult only its injected defaults, marker root
+/// and preflight/request doubles, so a fixture can record which branch ran without
+/// writing the real `UserDefaults.standard` or the real Application Support marker.
+@MainActor
+final class ScreenPreparationIsolationTests: XCTestCase {
+    func testPrepareBranchesUseInjectedStateAndLeaveRealPersistenceUntouched() throws {
+        let suite = "dot.screen.isolation." + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let markerRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dot-screen-isolation-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: markerRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: markerRoot) }
+
+        let standard = UserDefaults.standard
+        let requestedBefore = standard.object(forKey: "dot.screenAccessRequested")
+        let grantedBefore = standard.object(forKey: "dot.screenAccessGrantedInSettings")
+        let support = try XCTUnwrap(FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first)
+        let realMarker = support.appendingPathComponent("Dot/.screen_permission_configured")
+        let realMarkerExisted = FileManager.default.fileExists(atPath: realMarker.path)
+
+        let screen = ScreenContext()
+        screen.enabled = true
+        let injectedMarker = markerRoot.appendingPathComponent("Dot/.screen_permission_configured")
+        var preflights = 0
+        let realPreflight = ScreenContext.preflight
+        let realDefaults = ScreenContext.defaults
+        let realMarkerRoot = ScreenContext.markerRoot
+        defer {
+            ScreenContext.preflight = realPreflight
+            ScreenContext.defaults = realDefaults
+            ScreenContext.markerRoot = realMarkerRoot
+        }
+        ScreenContext.defaults = defaults
+        ScreenContext.markerRoot = markerRoot
+
+        // isPermanentlyConfigured validates preflight against BOTH persisted records
+        // and clears stale ones instead of letting them suppress the next prompt.
+        defaults.set(true, forKey: "dot.screenAccessRequested")
+        ScreenContext.preflight = { preflights += 1; return false }
+        XCTAssertFalse(ScreenContext.isPermanentlyConfigured)
+        XCTAssertFalse(defaults.bool(forKey: "dot.screenAccessRequested"),
+                       "A requested flag that preflight disagrees with is stale and cleared")
+        defaults.set(true, forKey: "dot.screenAccessRequested")
+        defaults.set(true, forKey: "dot.screenAccessGrantedInSettings")
+        try FileManager.default.createDirectory(at: injectedMarker.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: injectedMarker)
+        XCTAssertFalse(ScreenContext.isPermanentlyConfigured)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: injectedMarker.path),
+                       "A marker that preflight disagrees with is stale and cleared")
+        XCTAssertFalse(defaults.bool(forKey: "dot.screenAccessRequested"))
+        XCTAssertFalse(defaults.bool(forKey: "dot.screenAccessGrantedInSettings"))
+        try Data().write(to: injectedMarker)
+        ScreenContext.preflight = { preflights += 1; return true }
+        XCTAssertTrue(ScreenContext.isPermanentlyConfigured,
+                      "A marker survives only while preflight keeps confirming access")
+
+        // Branch 2: already requested (legacy granted flag present) -> never prompts, no writes.
+        try FileManager.default.removeItem(at: injectedMarker)
+        defaults.set(true, forKey: "dot.screenAccessRequested")
+        defaults.set(true, forKey: "dot.screenAccessGrantedInSettings")
+        ScreenContext.preflight = { preflights += 1; return false }
+        try screen.prepare(turn: UUID(), requestPermission: true)
+        XCTAssertGreaterThanOrEqual(preflights, 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: injectedMarker.path))
+        XCTAssertEqual(defaults.bool(forKey: "dot.screenAccessRequested"), true)
+        XCTAssertEqual(defaults.bool(forKey: "dot.screenAccessGrantedInSettings"), true)
+
+        // Branch 1: preflight grants -> recorded in the injected state only.
+        defaults.removeObject(forKey: "dot.screenAccessRequested")
+        defaults.removeObject(forKey: "dot.screenAccessGrantedInSettings")
+        ScreenContext.preflight = { preflights += 1; return true }
+        try screen.prepare(turn: UUID(), requestPermission: true)
+        XCTAssertEqual(defaults.bool(forKey: "dot.screenAccessRequested"), true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: injectedMarker.path))
+
+        // Branch 3: the first ask marks configured before the single prompt. A host
+        // that still refuses Screen Recording surfaces the honest .permission
+        // failure; a host that has already granted it completes silently.
+        defaults.removeObject(forKey: "dot.screenAccessRequested")
+        try? FileManager.default.removeItem(at: injectedMarker)
+        ScreenContext.preflight = { preflights += 1; return false }
+        if CGPreflightScreenCaptureAccess() {
+            try screen.prepare(turn: UUID(), requestPermission: true)
+        } else {
+            XCTAssertThrowsError(try screen.prepare(turn: UUID(), requestPermission: true)) {
+                XCTAssertEqual($0 as? ScreenContext.ScreenFailure, .permission)
+            }
+        }
+        XCTAssertEqual(defaults.bool(forKey: "dot.screenAccessRequested"), true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: injectedMarker.path))
+
+        // The real stores never gained or lost anything.
+        XCTAssertTrue(Self.equalPersisted(requestedBefore, standard.object(forKey: "dot.screenAccessRequested")))
+        XCTAssertTrue(Self.equalPersisted(grantedBefore, standard.object(forKey: "dot.screenAccessGrantedInSettings")))
+        XCTAssertEqual(FileManager.default.fileExists(atPath: realMarker.path), realMarkerExisted)
+    }
+
+    private static func equalPersisted(_ before: Any?, _ after: Any?) -> Bool {
+        switch (before, after) {
+        case (nil, nil): return true
+        case (let a as NSObject, let b as NSObject): return a.isEqual(b)
+        default: return false
+        }
     }
 }
 
@@ -958,9 +1101,15 @@ extension QuestionReplyGateTests {
         }
     }
     func testCopiedDiagnosticCannotContainRawErrorPayload() {
-        let summary = CompanionIssue.copiedDiagnostic(readiness: .unavailable("/private/secret user transcript token=ABC"), issue: .voice)
-        XCTAssertEqual(summary, "Dot diagnostic summary\nPreparation: unavailable\nIssue: Voice unavailable")
+        // CompanionReadiness.unavailable(message) carries the actionable remediation
+        // instruction; the copied diagnostic must include it verbatim, while raw
+        // error payload details must never cross this boundary.
+        let remediation = "Enable Screen Recording in System Settings, then retry Dot."
+        let summary = CompanionIssue.copiedDiagnostic(readiness: .unavailable(remediation), issue: .voice)
+        XCTAssertEqual(summary, "Dot diagnostic summary\nPreparation: unavailable\nIssue: \(remediation)")
+        XCTAssertTrue(summary.contains(remediation))
         XCTAssertFalse(summary.contains("secret")); XCTAssertFalse(summary.contains("ABC"))
+        XCTAssertFalse(summary.contains("/private/"))
     }
 }
 
@@ -1405,6 +1554,46 @@ final class SmartTimerTests: XCTestCase {
         _ = scheduler.cancelAll()
     }
 
+    /// CA-3/DC-6/C3: a pre-wake fires a due timer through the wake path while its
+    /// firing task loses the cancel race around the claim. The timer must fire
+    /// exactly once — never twice from wake + task — and a future timer rescheduled
+    /// by a wake must survive in the active set.
+    func testPreWakeFiresExactlyOnceAndRescheduledFutureEntrySurvives() async {
+        final class FiredBox: @unchecked Sendable {
+            private let lock = NSLock(); private var value = 0
+            var count: Int { lock.lock(); defer { lock.unlock() }; return value }
+            func record() { lock.lock(); value += 1; lock.unlock() }
+        }
+        let box = FiredBox()
+        let scheduler = SmartTimerScheduler.shared
+        _ = scheduler.cancelAll()
+
+        let due = scheduler.schedule(seconds: 0.05, label: "Due") { _ in box.record() }
+        scheduler.handleWake(now: due.fireDate.addingTimeInterval(60))
+        XCTAssertEqual(box.count, 1)
+        XCTAssertEqual(scheduler.activeTimers().count, 0)
+
+        // Repeated wakes across the original task's natural fire window can neither
+        // re-fire the claimed entry nor let the racing task add a second fire.
+        for _ in 0..<20 {
+            scheduler.handleWake(now: due.fireDate.addingTimeInterval(60))
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertEqual(box.count, 1)
+
+        // A future timer is rescheduled (not dropped) by a pre-deadline wake.
+        let future = scheduler.schedule(seconds: 100, label: "Future") { _ in box.record() }
+        scheduler.handleWake(now: Date())
+        XCTAssertEqual(scheduler.activeTimers().map(\.id), [future.id])
+        XCTAssertEqual(box.count, 1)
+
+        // The rescheduled entry itself fires exactly once when its deadline passes.
+        scheduler.handleWake(now: future.fireDate.addingTimeInterval(60))
+        XCTAssertEqual(box.count, 2)
+        XCTAssertEqual(scheduler.activeTimers().count, 0)
+        _ = scheduler.cancelAll()
+    }
+
     func testDurationFormatting() {
         XCTAssertEqual(SmartTimerScheduler.formatDuration(30), "30 seconds")
         XCTAssertEqual(SmartTimerScheduler.formatDuration(60), "1 minute")
@@ -1539,6 +1728,10 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("rm -rf /tmp/test"))
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("sudo make install"))
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("git reset --hard HEAD~1"))
+        // CORE-2: a `-C <path>` flag argument must not hide the destructive
+        // subcommand, but the same flag on a read-only command stays harmless.
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("git -C /tmp/repo reset --hard"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("git -C /tmp/repo status"))
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("killall Dot"))
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("git status"))
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("ls -la"))
@@ -1566,6 +1759,12 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("shutdown -h now"))
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("diskutil eraseDisk JHFS+ x /dev/disk2"))
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("pkill -9 -f Dot"))
+        // CORE-1: command substitutions hide the real command from a plain substring
+        // check; backtick and $(...) bodies must be judged like their own commands.
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("echo `rm -rf /`"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("echo `sudo shutdown -h now`"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("echo $(rm -rf /tmp/x)"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("echo $(git reset --hard HEAD~1)"))
 
         // Quoting, plain reads and file-descriptor duplication stay non-destructive.
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("echo 'x > y'"))

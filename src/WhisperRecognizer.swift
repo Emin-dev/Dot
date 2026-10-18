@@ -15,11 +15,12 @@ final class RecognitionCancellation: @unchecked Sendable {
 }
 
 enum RecognitionFailure: LocalizedError {
-    case unavailable, format, failed, empty
+    case unavailable, format, tooLong, failed, empty
     var errorDescription: String? {
         switch self {
         case .unavailable: return "This installation is missing its bundled English voice recognizer. Please install the complete Dot build."
         case .format: return "I couldn't read that microphone format. Try another microphone."
+        case .tooLong: return "That recording was too long to transcribe locally. Click me and try again with a shorter turn."
         case .failed: return "Local transcription stopped. Click me to try again."
         case .empty: return "I didn't catch any words. Click me and try again."
         }
@@ -104,11 +105,14 @@ final class WhisperRecognizer: @unchecked Sendable {
     }
     private static func convert(_ samples: [Float], sampleRate: Double) throws -> [Float] {
         guard sampleRate.isFinite, (8000...96000).contains(sampleRate), !samples.isEmpty,
-              samples.count <= Int(sampleRate * 61), samples.allSatisfy(\.isFinite),
+              samples.allSatisfy(\.isFinite),
               let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
               let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
               let input = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(samples.count)),
               let destination = input.floatChannelData?.pointee else { throw RecognitionFailure.format }
+        // The 61-second bound is unchanged; exceeding it is reported honestly as a
+        // recording that was too long, not as an unreadable microphone format.
+        guard samples.count <= Int(sampleRate * 61) else { throw RecognitionFailure.tooLong }
         input.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { if let source = $0.baseAddress { destination.update(from: source, count: samples.count) } }
         guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat),
@@ -120,7 +124,8 @@ final class WhisperRecognizer: @unchecked Sendable {
             supplied = true; flag.pointee = .haveData; return input
         }
         guard error == nil, status != .error, let data = output.floatChannelData?.pointee,
-              output.frameLength > 0, output.frameLength <= 16000 * 61 else { throw RecognitionFailure.format }
+              output.frameLength > 0 else { throw RecognitionFailure.format }
+        guard output.frameLength <= 16000 * 61 else { throw RecognitionFailure.tooLong }
         return Array(UnsafeBufferPointer(start: data, count: Int(output.frameLength)))
     }
 }

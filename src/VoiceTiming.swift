@@ -343,7 +343,21 @@ struct VoiceCaptureDeadline: Sendable {
     }
 }
 
-enum VoiceMicrophonePermission: Sendable { case authorized, undetermined, denied }
+enum VoiceMicrophonePermission: Sendable { case authorized, undetermined, denied, restricted
+    /// The exact owner-facing notice for the readiness branch. `restricted` must never
+    /// fall into the plain denial hint: Screen Time is an administrator matter, not a
+    /// Settings pane the owner can flip.
+    var notReadyNotice: String? {
+        switch self {
+        case .restricted:
+            return "Microphone access is restricted by Screen Time or a device-management profile. Ask the Mac's administrator to allow Dot, then click me again."
+        case .denied:
+            return "Microphone access is off. Enable Dot in System Settings > Privacy & Security > Microphone, then click me again."
+        case .authorized, .undetermined:
+            return nil
+        }
+    }
+}
 enum VoiceCaptureAccessPolicy {
     static func shouldRequestPermission(invitation: Bool, permission: VoiceMicrophonePermission) -> Bool {
         !invitation && permission == .undetermined

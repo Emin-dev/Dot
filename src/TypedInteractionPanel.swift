@@ -99,7 +99,11 @@ final class TypedInteractionPanel: NSObject, NSWindowDelegate {
 
     func show(model: ChatModel, anchorFrame: NSRect? = nil) {
         let panel = prepare(model: model)
-        let width: CGFloat = 340, height: CGFloat = 56
+        // The panel is created and held at 420x400 so the refusal/readiness
+        // feedback has a real area below the input strip. The anchor math must
+        // use that actual size, never the old 340x56 strip, or the panel lands
+        // over the pet and the feedback area it promises is clipped away.
+        let width = panel.frame.width, height = panel.frame.height
         if let anchor = anchorFrame, let screen = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) ?? NSScreen.main {
             let visible = screen.visibleFrame
             var x = anchor.midX - width / 2
@@ -158,68 +162,94 @@ struct TypedInteractionView: View {
     private var canSend: Bool { model.canSubmitTyped && input.inputProblem == nil && !input.message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.secondary)
-                .padding(.leading, 12)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .padding(.leading, 12)
 
-            TextField("Ask or tell Dot anything…", text: $input.message)
-                .textFieldStyle(.plain)
-                .font(.system(size: 13, weight: .regular))
-                .focused($focused)
-                .onSubmit {
+                TextField("Ask or tell Dot anything…", text: $input.message)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13, weight: .regular))
+                    .focused($focused)
+                    .onSubmit {
+                        if canSend {
+                            if input.submit(model: model) {
+                                onDismiss?()
+                            }
+                        }
+                    }
+                    .accessibilityLabel("Message to dot")
+                    .accessibilityIdentifier("dot.typed.message")
+
+                Button(action: {
                     if canSend {
                         if input.submit(model: model) {
                             onDismiss?()
                         }
                     }
+                }) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 22))
+                        .foregroundColor(canSend ? .primary : Color.secondary.opacity(0.35))
                 }
-                .accessibilityLabel("Message to dot")
-                .accessibilityIdentifier("dot.typed.message")
+                .buttonStyle(.plain)
+                .disabled(!canSend)
+                .accessibilityIdentifier("dot.typed.send")
+                .padding(.trailing, 8)
 
-            Button(action: {
-                if canSend {
-                    if input.submit(model: model) {
-                        onDismiss?()
-                    }
+                // Hidden accessibility contract helpers preserving all 52 static contracts and unit tests
+                Group {
+                    Button("Stop", action: model.stopCurrentTurn)
+                        .accessibilityIdentifier("dot.typed.stop")
+                    Button("Options") { model.dismissFirstUseHint(); model.showOptions?() }
+                        .accessibilityIdentifier("dot.typed.options")
+                    Text(model.answer.isEmpty ? "Your reply will appear here." : model.answer)
+                        .accessibilityIdentifier("dot.typed.reply")
                 }
-            }) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 22))
-                    .foregroundColor(canSend ? .primary : Color.secondary.opacity(0.35))
+                .frame(width: 0, height: 0)
+                .clipped()
+                .opacity(0)
+                .accessibilityHidden(false)
             }
-            .buttonStyle(.plain)
-            .disabled(!canSend)
-            .accessibilityIdentifier("dot.typed.send")
-            .padding(.trailing, 8)
+            .frame(width: 340, height: 48)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
+                    )
+                    .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
+            )
+            .padding(4)
 
-            // Hidden accessibility contract helpers preserving all 52 static contracts and unit tests
-            Group {
-                Button("Stop", action: model.stopCurrentTurn)
-                    .accessibilityIdentifier("dot.typed.stop")
-                Button("Options") { model.dismissFirstUseHint(); model.showOptions?() }
-                    .accessibilityIdentifier("dot.typed.options")
-                Text(model.answer.isEmpty ? "Your reply will appear here." : model.answer)
-                    .accessibilityIdentifier("dot.typed.reply")
-            }
-            .frame(width: 0, height: 0)
-            .clipped()
-            .opacity(0)
-            .accessibilityHidden(false)
+            feedbackView
+                .padding(.horizontal, 16)
         }
-        .frame(width: 340, height: 48)
-        .background(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 24, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.35), lineWidth: 1)
-                )
-                .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 4)
-        )
-        .padding(4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { focused = true }
         .onChange(of: input.focusRequest) { _, _ in focused = true }
+    }
+
+    /// A rejected submission or an unready engine must be visible text, never a
+    /// silent no-op: the readiness message shows whenever typed submission is
+    /// blocked, and a submission's own feedback takes precedence while present.
+    @ViewBuilder private var feedbackView: some View {
+        if let feedback = input.submissionFeedback {
+            Text(feedback)
+                .font(.system(size: 12))
+                .foregroundStyle(.orange)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("dot.typed.feedback")
+        } else if !model.canSubmitTyped,
+                  let readiness = TypedInteractionStatus.unavailable(canSubmit: model.canSubmitTyped, preparation: preparation.state) {
+            Text(readiness)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("dot.typed.feedback")
+        }
     }
 }

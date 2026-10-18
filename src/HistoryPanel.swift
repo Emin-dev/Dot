@@ -53,6 +53,10 @@ final class ConversationHistoryModel: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var closing = false
     var onDelete: (() -> Void)?
+    /// Called when a write revokes the pending deletion, so the panel can take
+    /// the presented sheet down with it instead of leaving a Delete button on
+    /// screen that can no longer confirm anything.
+    var onDeletionInvalidated: (() -> Void)?
     private let store: ConversationHistoryStore?
     private let copyText: (String) -> Void
     private var writes: Task<Void, Never>?
@@ -102,9 +106,17 @@ final class ConversationHistoryModel: ObservableObject {
     }
     func cancelDeletion() { pendingDeletion = nil }
     @discardableResult func confirmDeletion(_ prompt: UUID) -> Bool {
-        guard let request = pendingDeletion, request.prompt == prompt else { return false }
+        guard let request = pendingDeletion, request.prompt == prompt else {
+            // A stale or repeated confirmation must say why nothing was deleted
+            // instead of silently returning false and appearing to do nothing.
+            error = "The deletion was cancelled because the history changed. Try the Delete action again."
+            return false
+        }
         pendingDeletion = nil
-        guard !closing, revision == request.revision else { return false }
+        guard !closing, revision == request.revision else {
+            error = "The deletion was cancelled because the history changed. Try the Delete action again."
+            return false
+        }
         switch request.target {
         case .record(let id): delete(id: id)
         case .all: clear()
@@ -143,7 +155,13 @@ final class ConversationHistoryModel: ObservableObject {
     }
     private func enqueue(_ operation: @escaping @MainActor (ConversationHistoryStore) async throws -> Void) {
         guard let store, !closing else { return }
-        cancelDeletion()
+        if pendingDeletion != nil {
+            // A new write revokes the pending deletion; the presented sheet must
+            // come down with it so its Delete button can never sit there unable
+            // to confirm anything.
+            cancelDeletion()
+            onDeletionInvalidated?()
+        }
         let previous = writes; busy = true
         let expected = UUID(); revision = expected
         writes = Task { [weak self] in
@@ -178,6 +196,9 @@ final class ConversationHistoryPanel: NSObject, NSWindowDelegate {
         invalidateDeletion()
         let changedModel = self.model !== model
         self.model = model
+        // When a write revokes the pending deletion the presented sheet must
+        // disappear with it; otherwise its Delete button silently does nothing.
+        model.onDeletionInvalidated = { [weak self] in self?.confirmation.invalidate() }
         host.window(delegate: self) {
             NSHostingView(rootView: ConversationHistoryView(model: model,
                 delete: { [weak self] id in self?.requestDeletion(id: id) },

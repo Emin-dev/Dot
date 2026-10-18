@@ -641,7 +641,11 @@
 				CODE_SIGN_STYLE = Manual;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
-				ENABLE_HARDENED_RUNTIME = NO;
+				/* Dev-only target: the shipped release is assembled by scripts/build_complete.sh
+				   (DOT_COMPLETE_BUNDLE + verified whisper.framework, macOS 26.4). This Xcode
+				   target builds the development configuration; the gate's Release build is a
+				   warning-clean compile check, not the artifact anyone ships. */
+				ENABLE_HARDENED_RUNTIME = YES;
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 				);

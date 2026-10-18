@@ -137,6 +137,10 @@ final class ChatModel: ObservableObject {
     @Published private(set) var visionNotice: String?
     /// Screen off or locked: no turns, speech, captures, proactive work or movement.
     @Published private(set) var screenPaused = false
+    /// R12: the wake greeting is spoken once, when the display is actually back.
+    private var wakeGreeted = false
+    /// PERM-5: the calendar-denial notice is raised once per session, not every tick.
+    private var calendarAccessNoticeShown = false
     private var taskProgress = ResearchTaskProgress()
     private var activeSpeechUpdateID: UUID?
     private var taskProgressTicker: Task<Void, Never>?
@@ -190,8 +194,12 @@ final class ChatModel: ObservableObject {
                 block("I need Accessibility access before I can paste into your app.", issue: .unknown)
                 return
             }
-            _ = InPlaceAppTyping.type(text: req.command)
-            respondDirectly("Pasted my suggestion into the app you are using.", id: cancelTurn())
+            // The suggestion is already on the clipboard: focus the owner's app and
+            // paste it there, then report what actually happened.
+            _ = InPlaceAppTyping.prepareFocusedTargetApp()
+            let pasted = InPlaceAppTyping.sendKey("Cmd+V")
+            respondDirectly(pasted ? "Pasted my suggestion into the app you are using."
+                : "I could not paste the suggestion into your app.", id: cancelTurn())
             return
         }
         if let appAction = req.appAction {
@@ -519,9 +527,18 @@ final class ChatModel: ObservableObject {
                 missingCapability: "Corrective movement dispatch on feedback",
                 proposedFix: "Execute immediate corrective relocation"
             )
+            // Store the extracted rule once and supersede the previous movement rule
+            // instead of appending a new core record per complaint.
             Task { [weak self] in
-                _ = try? await self?.ftsStore.saveMemory(category: .userCorrection, fact: "User instructed: \(text). Always execute movement immediately when asked.", isCorrection: true)
-                _ = try? await self?.memory?.remember(text: "User instructed: \(text)", tier: .core, source: .userStated, now: Date())
+                guard let self else { return }
+                let rule = "Always execute movement immediately when asked."
+                var supersedes: UUID?
+                if let memory = self.memory,
+                   let core = try? await memory.records(tier: .core, limit: 100, includeSuperseded: false) {
+                    supersedes = core.first(where: { $0.text == rule || $0.text.contains("movement immediately") })?.id
+                }
+                _ = try? await self.ftsStore.saveMemory(category: .userCorrection, fact: rule, isCorrection: true, supersedesID: supersedes)
+                _ = try? await self.memory?.remember(text: rule, tier: .core, source: .userStated, supersedes: supersedes, now: Date())
             }
             if let reply = self.onMove?(.center) ?? self.onMove?(.random) {
                 return "I apologize! " + reply
@@ -564,8 +581,11 @@ final class ChatModel: ObservableObject {
             let digits = clean.components(separatedBy: CharacterSet.decimalDigits.inverted).filter { !$0.isEmpty }.first
             if let digits, let level = Int(digits), (0...100).contains(level) {
                 var err: NSDictionary?
-                _ = NSAppleScript(source: "set volume output volume \(level)")?.executeAndReturnError(&err)
-                return "Set volume to \(level)%."
+                let descriptor = NSAppleScript(source: "set volume output volume \(level)")?.executeAndReturnError(&err)
+                if descriptor != nil, err == nil {
+                    return "Set volume to \(level)%."
+                }
+                return "I could not change the volume."
             }
         }
 
@@ -575,8 +595,9 @@ final class ChatModel: ObservableObject {
                let sources = IOPSCopyPowerSourcesList(blob)?.takeRetainedValue() as? [AnyObject] {
                 for s in sources {
                     if let desc = IOPSGetPowerSourceDescription(blob, s)?.takeUnretainedValue() as? [String: Any],
-                       let current = desc[kIOPSCurrentCapacityKey] as? Int {
-                        let isCharging = desc[kIOPSIsChargingKey] as? Bool ?? false
+                       (desc[kIOPSTypeKey as String] as? String) == (kIOPSInternalBatteryType as String),
+                       let current = desc[kIOPSCurrentCapacityKey as String] as? Int {
+                        let isCharging = desc[kIOPSIsChargingKey as String] as? Bool ?? false
                         return "Battery is at \(current)% (\(isCharging ? "charging" : "on battery"))."
                     }
                 }
@@ -723,7 +744,7 @@ final class ChatModel: ObservableObject {
            clean == "check screen permission" || clean == "permission status" {
             let hasAccess = CGPreflightScreenCaptureAccess()
             if hasAccess {
-                return "I already have Screen Recording permission granted on this Mac! I can see your screen whenever screen context is enabled, and I never re-prompt for permission."
+                return "I already have Screen Recording permission granted on this Mac! I can see your screen whenever screen context is enabled, and I will ask again if that access is ever revoked."
             } else {
                 return "Screen Recording permission is not granted yet in macOS System Settings. If you'd like me to see your screen, you can enable Dot in System Settings → Privacy & Security → Screen Recording."
             }
@@ -910,7 +931,7 @@ final class ChatModel: ObservableObject {
     private func pollTaskSpeech(now: Double) {
         var context = LongTaskProgress.SpeechContext()
         context.ready = runtime.isReady()
-        context.muted = defaults.bool(forKey: "voiceMuted")
+        context.muted = SystemAudioState.isOutputMuted()
         context.userSpeaking = stt.recording && stt.level > 0.15
         context.listening = stt.recording || stt.transcribing
         context.voiceBusy = runtime.ttsSpeaking() && (activeSpeechUpdateID == nil)
@@ -920,6 +941,9 @@ final class ChatModel: ObservableObject {
         _ = taskProgress.setSpeechContext(context)
 
         guard activeSpeechUpdateID == nil else { return }
+        // Same per-turn video-mute rule as ordinary answers: never speak task
+        // progress over video, and never consume the update unheard.
+        guard videoMuteCheck() else { return }
         guard let speech = taskProgress.takeSpeech(now: now) else { return }
         activeSpeechUpdateID = speech.id
         DiagnosticChatLogger.record(role: "dot (task)", text: speech.text)
@@ -1006,8 +1030,18 @@ final class ChatModel: ObservableObject {
         self.videoPlayback = videoPlayback
         self.engine = engine ?? EngineManager()
         self.textHistory = textHistory ?? ConversationHistoryModel()
-        self.ftsStore = (try? LocalFTSStore()) ?? (try! LocalFTSStore(inMemory: true))
-        self.memory = try? MemoryTierStore()
+        do {
+            self.ftsStore = try LocalFTSStore()
+        } catch {
+            // A failed store must be visible, not a silent in-memory substitute:
+            // record the failure and label the app honestly.
+            DiagnosticChatLogger.recordFailure(task: "local_memory_store", reason: "\(error)",
+                missingCapability: "Persistent conversation and memory store",
+                proposedFix: "Repair the Application Support/Dot store directory")
+            self.issue = .files
+            self.ftsStore = try! LocalFTSStore(inMemory: true)
+        }
+        self.memory = MemoryTierStore(facts: self.ftsStore)
         if let memory { Task { _ = try? await memory.age(now: Date()) } }
         self.defaults = defaults
         voiceTiming = VoiceTimingSettings(defaults: defaults)
@@ -1034,9 +1068,11 @@ final class ChatModel: ObservableObject {
             guard let self else { return .init(ready: false, microphoneAuthorized: false, screenAuthorized: false, interacting: true) }
             let current = self.runtime.currentRoute()
             let routeMatches = (self.voiceRoute == nil || current == nil || (self.voiceRoute?.input == current?.input && self.voiceRoute?.output == current?.output))
-            return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing() && routeMatches,
+            // The invite preconditions live here, before the follow-up consumes the
+            // invitation: a veto defers the poll instead of losing the invite unheard.
+            return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing() && routeMatches && !videoPlayback(),
                 microphoneAuthorized: self.runtime.microphoneAuthorized(),
-                screenAuthorized: true,
+                screenAuthorized: CGPreflightScreenCaptureAccess(),
                 interacting: self.interactionPaused || self.historyPresented || self.controlInteraction)
         }
         followup.onInvite = { [weak self] previous, continuation in
@@ -1105,7 +1141,19 @@ final class ChatModel: ObservableObject {
             }
         }
         tts.onError = { [weak self] id, message in
-            guard let self, self.gate.accepts(id) else { return }
+            guard let self else { return }
+            // A failed task-speech update owns no gate id: clear it before the gate
+            // check so one failure cannot wedge task speech for the session.
+            if id == self.activeSpeechUpdateID {
+                self.taskProgress.finishSpeech(id: id)
+                self.activeSpeechUpdateID = nil
+                DiagnosticChatLogger.recordFailure(task: "task_speech", reason: message,
+                    missingCapability: "Task progress speech playback",
+                    proposedFix: "Retry the update on the next progress tick")
+                self.showCaptureOutcome("Speech update failed.")
+                return
+            }
+            guard self.gate.accepts(id) else { return }
             if self.currentTurnIsTyped { self.continueTypedWithoutVoice(id: id); return }
             let diagnostic = PipelineDiagnostic(stage: .voice, outcome: .failed, reason: .voiceFailed)
             Self.runtimeLog.error("\(diagnostic.logLine, privacy: .public)")
@@ -1241,8 +1289,13 @@ final class ChatModel: ObservableObject {
         guard memory != nil else { return }
         memorySummaryTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 20_000_000_000)
-            guard !Task.isCancelled, let self, !self.shuttingDown,
-                  self.phase == .idle, !self.generating, !self.runtime.ttsSpeaking() else { return }
+            guard !Task.isCancelled, let self, !self.shuttingDown else { return }
+            guard self.phase == .idle, !self.generating, !self.runtime.ttsSpeaking() else {
+                // The lull was interrupted before the summary could run: re-arm the
+                // debounce instead of dropping it.
+                self.scheduleMemorySummary()
+                return
+            }
             await self.summariseConversationIntoKeyPoints()
         }
     }
@@ -1256,7 +1309,10 @@ final class ChatModel: ObservableObject {
             _ = try await engine.chat(history: prompt.map { ChatMessage(role: $0.role, content: $0.text) },
                                       purpose: .background,
                                       onDelta: { delta in output += delta })
-        } catch { return }
+        } catch {
+            logFailure(error, stage: .response)
+            return
+        }
         let points = MemoryKeyPointExtractor.parse(output)
         guard !points.isEmpty else { return }
         for point in points {
@@ -1275,10 +1331,17 @@ final class ChatModel: ObservableObject {
     }
 
     /// The display is off or the Mac is locked: stop all autonomous work and audio.
+    /// Never speak task progress over a playing video: the same per-turn rule
+    /// ordinary answers follow, so the update is never consumed unheard.
+    private func videoMuteCheck() -> Bool {
+        !videoPlayback()
+    }
+
     /// The engine process stays resident; this is a pause, not a shutdown.
     func pauseForScreenOff() {
         guard !screenPaused else { return }
         screenPaused = true
+        wakeGreeted = false
         cancelTurn()
         stopProactivity()
         followup.cancel()
@@ -1295,6 +1358,10 @@ final class ChatModel: ObservableObject {
         startAdaptiveScreenWatch()
         startPrewarmIfEnabled()
         DiagnosticChatLogger.record(role: "system", text: "Resumed after display wake/unlock.")
+        // R12: the greeting is spoken when the display is actually back (including
+        // the locked-wake path, where handleSystemWake runs before the unlock).
+        speakDirect("I'm back.")
+        wakeGreeted = true
     }
     func stopProactivity() {
         proactive.stop()
@@ -1348,6 +1415,18 @@ final class ChatModel: ObservableObject {
                         if let stuckEvent = StuckTaskDetector.shared.evaluate(appName: desktop.appName, windowTitle: desktop.windowTitle, ocrText: self.lastStuckOCR, now: now) {
                             self.speakDirect(stuckEvent.guidance)
                             DiagnosticChatLogger.record(role: "dot (stuck-guidance)", text: stuckEvent.guidance)
+                        } else if !CalendarMeetingAssistant.shared.hasAccess() {
+                            // PERM-5: the first proactive tick must not silently return
+                            // an empty meeting list because Calendars access is off.
+                            if !self.calendarAccessNoticeShown {
+                                self.calendarAccessNoticeShown = true
+                                let granted = await CalendarMeetingAssistant.shared.requestAccess()
+                                if !granted {
+                                    self.showCaptureOutcome("Grant Calendars access in System Settings for meeting reminders.")
+                                    DiagnosticChatLogger.record(role: "system",
+                                        text: "Meeting reminders skipped: Calendars access is off.")
+                                }
+                            }
                         } else if let next = CalendarMeetingAssistant.shared.fetchNextMeeting() {
                             let interval = next.startDate.timeIntervalSinceNow
                             if interval >= 240 && interval <= 330 && self.lastNotifiedMeetingID != next.id {
@@ -1458,12 +1537,14 @@ final class ChatModel: ObservableObject {
         clickedAt = now; firstReasoning = false; firstAnswer = false; firstAudio = false
         speechEndedAt = nil; silenceSatisfiedAt = nil; answer = ""; displayedAnswerTurn = nil; automaticReply = false
         currentTurnIsTyped = false; voiceDeliveryFailed = false; voiceDeliveryNotice = nil
+        videoSpeechChecked = false; videoSpeechMuted = false
         screenContextUsed = false; generating = true; phase = .thinking
         var promptText = ProactiveReplyBuffer.prompt
         let workspaceSnapshot = AutonomousMacAgent.shared.observeAndMaintainWorkspace()
         promptText += "\n[Live Autonomous Workspace Observation:\n\(workspaceSnapshot.promptSummary)]"
         let snapshot = Array(history.suffix(10)) + [ChatMessage(role: "user", content: promptText)]
-        work = Task(priority: .utility) { [weak self] in
+        // The answer is spoken and streamed: never .utility for a turn the owner waits on.
+        work = Task(priority: .userInitiated) { [weak self] in
             guard let self, self.gate.accepts(id), !Task.isCancelled else { return }
             var buffer = ProactiveReplyBuffer()
             var failureStage = ConversationHistoryFailureStage.generation
@@ -1514,13 +1595,18 @@ final class ChatModel: ObservableObject {
                         self.followup.generationFinished(turn: id, hasQuestion: question != nil)
                     }
                     var sentences = SentenceBuffer()
-                    for sentence in sentences.feed(content) { self.runtime.enqueueVoice(sentence, id) }
-                    if let tail = sentences.flush() { self.runtime.enqueueVoice(tail, id) }
-                    if let question, !question.isEmpty, !content.contains(question) { self.runtime.enqueueVoice(question, id) }
+                    for sentence in sentences.feed(content) { self.enqueueVoice(sentence, id: id) }
+                    if let tail = sentences.flush() { self.enqueueVoice(tail, id: id) }
+                    if let question, !question.isEmpty, !content.contains(question) { self.enqueueVoice(question, id: id) }
                     self.runtime.completeVoice(id)
                 } catch {
-                    // Same rule as speakDirect: report, never swap in a system voice.
+                    // Same rule as speakDirect: report, never swap in a system voice,
+                    // and never fail silently.
                     self.logFailure(error, stage: .voice)
+                    self.voiceDeliveryFailed = true
+                    self.voiceDeliveryNotice = "Voice unavailable. This reply is text only; automatic reply listening is off."
+                    self.followup.cancel(); self.automaticReply = false
+                    self.runtime.stopVoice()
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.answer = result.text
@@ -1572,7 +1658,8 @@ final class ChatModel: ObservableObject {
         // behind readiness and screen preparation, so in practice it never fired and
         // every turn reported "microphone access is off". Ask here instead, on the
         // owner's first explicit interaction, regardless of readiness.
-        Task { await Self.requestPermissionsIfNeeded() }
+        let wantsScreen = screenEnabled
+        Task { await Self.requestPermissionsIfNeeded(screenEnabled: wantsScreen) }
         if !OfflinePreparation.shared.ready && OfflinePreparation.shared.state == .paused {
             OfflinePreparation.shared.retry()
             expressionRevision &+= 1
@@ -1724,11 +1811,12 @@ final class ChatModel: ObservableObject {
     private static func batterySnapshot() -> (percent: Int, charging: Bool, onAC: Bool)? {
         guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let list = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef],
-              let source = list.first,
-              let info = IOPSGetPowerSourceDescription(snapshot, source)?.takeUnretainedValue() as? [String: Any] else {
+              let info = list.lazy
+                  .compactMap({ IOPSGetPowerSourceDescription(snapshot, $0)?.takeUnretainedValue() as? [String: Any] })
+                  .first(where: { ($0[kIOPSTypeKey as String] as? String) == (kIOPSInternalBatteryType as String) }) else {
             return nil
         }
-        let percent = info[kIOPSCurrentCapacityKey as String] as? Int ?? 0
+        guard let percent = info[kIOPSCurrentCapacityKey as String] as? Int else { return nil }
         let charging = info[kIOPSIsChargingKey as String] as? Bool ?? false
         let onAC = (info[kIOPSPowerSourceStateKey as String] as? String) == (kIOPSACPowerValue as String)
         return (percent, charging, onAC)
@@ -1739,8 +1827,10 @@ final class ChatModel: ObservableObject {
     }
     /// R14: optional, off by default. Called from the idle ticker; the policy keeps a
     /// low notice to once per discharge and a charging notice to once per plug-in.
+    /// The alert is only evaluated while it can actually be spoken, so a busy turn
+    /// can never consume the once-per-discharge notice unheard.
     @discardableResult private func checkBatteryAlerts() -> Bool {
-        guard batteryAlerts.enabled, let battery = Self.batterySnapshot() else { return false }
+        guard batteryAlerts.enabled, phase == .idle, let battery = Self.batterySnapshot() else { return false }
         guard let alert = batteryPolicy.evaluate(percent: battery.percent, charging: battery.charging,
                                                  enabled: true, lowThreshold: batteryAlerts.lowThreshold,
                                                  chargingAlerts: batteryAlerts.chargingAlerts) else { return false }
@@ -1760,13 +1850,15 @@ final class ChatModel: ObservableObject {
     /// Ask for the two prompts the app cannot work without, once each. Waiting on the
     /// microphone answer keeps the "granted" path honest; the screen request returns a
     /// Bool that is only advisory - the authoritative check stays CGPreflightScreenCaptureAccess.
-    static func requestPermissionsIfNeeded() async {
+    /// With Screen awareness off the screen request is skipped entirely, so an opted-out
+    /// owner never sees the OS prompt.
+    static func requestPermissionsIfNeeded(screenEnabled: Bool = true) async {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
             _ = await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { continuation.resume(returning: $0) }
             }
         }
-        if !CGPreflightScreenCaptureAccess() {
+        if screenEnabled, !CGPreflightScreenCaptureAccess() {
             _ = CGRequestScreenCaptureAccess()
         }
     }
@@ -1786,26 +1878,45 @@ final class ChatModel: ObservableObject {
                 issue: .speech)
             return
         }
+        // Not-ready states carry their own preparing/paused label from the readiness
+        // caption, never the misleading "App files need repair" issue.
         let state = OfflinePreparation.shared.state
-        block(state.detail ?? state.caption, issue: .files)
+        switch state {
+        case .paused:
+            block("Dot is paused — right-click to resume the file check.", issue: .unknown)
+        case .checking:
+            block("Dot is still preparing — try again in a moment.", issue: .unknown)
+        case .unavailable(let message):
+            block(message, issue: .files)
+        case .ready:
+            break
+        }
     }
 
     private var pushToTalkActive = false
     private var pushToTalkStart: Double = 0
 
     func beginPushToTalk() {
-        Task { await Self.requestPermissionsIfNeeded() }
+        let wantsScreen = screenEnabled
+        Task { await Self.requestPermissionsIfNeeded(screenEnabled: wantsScreen) }
+        if !OfflinePreparation.shared.ready && OfflinePreparation.shared.state == .paused {
+            OfflinePreparation.shared.retry()
+            expressionRevision &+= 1
+            return
+        }
         guard !shuttingDown, runtime.isReady() else {
             reportNotReady()
             return
         }
-        pushToTalkActive = true
         pushToTalkStart = ProcessInfo.processInfo.systemUptime
         dismissFirstUseHint()
         if phase == .speaking || runtime.ttsSpeaking() || generating {
             stopCurrentTurn()
         }
         beginListening(continuation: nil)
+        // Armed only after beginListening's cancelTurn reset it, so the flag can
+        // never describe a dead turn.
+        pushToTalkActive = true
     }
 
     func finishPushToTalk() {
@@ -1970,7 +2081,7 @@ final class ChatModel: ObservableObject {
         // Searching file contents, as opposed to the existing name search: "search my
         // files for X" reports where X appears instead of only where it is named.
         if pendingApproval == nil, let query = Self.fileSearchRequest(from: copyPhrase) {
-            let matches = SystemControlSuite.searchFileContents(query, limit: 5)
+            let matches = (try? SystemControlSuite.searchFileContents(query, limit: 5)) ?? []
             respondDirectly(matches.isEmpty
                 ? "I found nothing indexed that mentions \"\(query)\"."
                 : "Files mentioning \"\(query)\":\n" + matches.map { "• \($0)" }.joined(separator: "\n"),
@@ -1993,7 +2104,7 @@ final class ChatModel: ObservableObject {
                     // Ask before reading a different file rather than failing at once.
                     let query = Self.spotlightNameQuery(from: expanded)
                     if !query.isEmpty,
-                       let match = SystemControlSuite.findFilesSpotlight(named: query, limit: 1).first {
+                       let match = (try? SystemControlSuite.findFilesSpotlight(named: query, limit: 1))?.first {
                         self.respondDirectly("I couldn't find \(expanded). Did you mean \(match)? Say \"read file \(match)\" and I'll read it.", id: id)
                     } else {
                         self.respondDirectly("I cannot find a file at \(expanded), and Spotlight has no name match for \"\(query)\".", id: id)
@@ -2020,13 +2131,14 @@ final class ChatModel: ObservableObject {
         // missing Accessibility/Automation grant or an app that exposes no readable
         // text; neither may look like a successful empty answer.
         if pendingApproval == nil, Self.isPageReadRequest(copyPhrase) {
-            if let page = WholeContextExtractor.shared.extractActiveDocumentOrWebpageText() {
-                let clipped = page.content.count > 4_000
-                    ? String(page.content.prefix(4_000)) + "\n… (truncated)" : page.content
-                respondDirectly("\(page.source):\n\(clipped)", id: id)
-            } else if !InPlaceAppTyping.isAccessibilityTrusted() {
+            switch WholeContextExtractor.shared.extractActiveDocumentOrWebpageText() {
+            case .text(let source, let content):
+                let clipped = content.count > 4_000
+                    ? String(content.prefix(4_000)) + "\n… (truncated)" : content
+                respondDirectly("\(source):\n\(clipped)", id: id)
+            case .permissionDenied:
                 respondDirectly("I could not read the active page because Accessibility access is off. Enable Dot in System Settings > Privacy & Security > Accessibility, then ask again.", id: id)
-            } else {
+            case .noText:
                 respondDirectly("I could not read the front app's document or page. It may need Automation access, or it may not expose readable text. Try a Safari or Chrome tab, a TextEdit document, or another document-based app.", id: id)
             }
             return
@@ -2131,7 +2243,7 @@ final class ChatModel: ObservableObject {
         if voiceDeliveryFailed { textHistory.recordAssistant(turn: id, event: .voiceFailedContinuing) }
         let underMemoryPressure = DotSoulManager.shared.cleanContextIfMemoryPressure()
         if underMemoryPressure || history.count > ExpandedContextWindow.maxHistoryMessages {
-            DotSoulManager.shared.archiveCurrentState(reason: "history_compaction")
+            _ = try? DotSoulManager.shared.archiveCurrentState(reason: "history_compaction")
             if history.count > ExpandedContextWindow.maxHistoryMessages {
                 history.removeFirst(history.count - ExpandedContextWindow.maxHistoryMessages)
             }

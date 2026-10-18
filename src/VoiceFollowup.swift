@@ -57,13 +57,19 @@ final class VoiceFollowup {
     /// Also used by deterministic tests; all deadlines use the monotonic clock.
     func poll() {
         guard let turn, question != nil, let playedAt else { return }
-        let elapsed = clock() - playedAt
+        let now = clock()
+        let elapsed = now - playedAt
         guard elapsed.isFinite, elapsed <= QuestionReplyGate.invitationLifetimeSeconds else {
             cancelInvitation(reason: "expired"); return
         }
         guard elapsed >= QuestionReplyGate.playbackSettleSeconds else {
             noteWaiting("settling"); retryAfter(QuestionReplyGate.playbackSettleSeconds - elapsed); return
         }
+        // Invite-accept preconditions run before the gate is touched: a failing
+        // environment defers the invitation without consuming the reply, so the
+        // gate is consumed only when the invitation is genuinely armed. The same
+        // `now` that validated the lifetime here is handed to the gate, so its
+        // internal lifetime check can never disagree with this poll's.
         let value = environment()
         guard value.microphoneAuthorized else { cancelInvitation(reason: "microphone"); return }
         guard value.screenAuthorized else { cancelInvitation(reason: "screen"); return }
@@ -72,7 +78,7 @@ final class VoiceFollowup {
             retryAfter(0.2)
             return
         }
-        guard let continuation = policy.consume(turn: turn, now: clock(), ready: value.ready,
+        guard let continuation = policy.consume(turn: turn, now: now, ready: value.ready,
             microphoneAuthorized: value.microphoneAuthorized, screenAuthorized: value.screenAuthorized,
             interacting: value.interacting) else {
             // A transient case was handled above; anything here is a hard

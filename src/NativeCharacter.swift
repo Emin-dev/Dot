@@ -139,9 +139,12 @@ private struct OriginalPetCharacter: View {
             let tilt = 1.2
             return (bob, tilt, 1.0)
         case .speaking:
+            // Same gate as the mouth: while the playback envelope is silent the
+            // bob must not follow the synthetic syllable.
+            let envelope = playbackLevel.map(NativeFacePose.unit) ?? 0.20
             let wave1 = abs(sin(time * 13.0))
             let wave2 = abs(sin(time * 21.0 + 1.1))
-            let cadence = (wave1 * 0.65 + wave2 * 0.35)
+            let cadence = envelope == 0 ? 0 : (wave1 * 0.65 + wave2 * 0.35)
             let bob = (cadence * 2.2 - 0.8) * motionScale
             let tilt = sin(time * 3.5) * 1.8 * motionScale
             return (bob, tilt, 1.0 + cadence * 0.02)
@@ -241,7 +244,11 @@ private struct OriginalPetCharacter: View {
             case .listening: return -2.5
             case .thinking: return side == -1.0 ? -3.5 : 0.5
             case .working: return -1.0
-            case .speaking: return -1.0 + CGFloat(sin(time * 16.0) * 0.8)
+            case .speaking:
+                // Same envelope gate as the mouth and the speaking bob: no
+                // synthetic syllable motion while playback is silent.
+                let envelope = playbackLevel.map(NativeFacePose.unit) ?? 0.20
+                return envelope == 0 ? -1.0 : -1.0 + CGFloat(sin(time * 16.0) * 0.8)
             case .puzzled: return side == -1.0 ? -3.0 : 0
             }
         }()
@@ -327,12 +334,12 @@ private struct OriginalSpeakingMouth: View {
 
     var body: some View {
         let level = playbackLevel.map(NativeFacePose.unit) ?? 0.20
-        let wave1 = abs(sin(time * 13.0))
-        let wave2 = abs(sin(time * 21.0 + 1.1))
-        let syllable = (wave1 * 0.65 + wave2 * 0.35)
-        let cadence = still ? 0.45 : syllable
-        let openFraction = still ? 0.35 : max(0.12, level * 0.70 + cadence * (level > 0.05 ? 0.50 : 0.25))
-        let width = still ? 11.0 : (8.5 + openFraction * 8.5 - abs(sin(time * 10.0)) * 1.5)
+        // The mouth articulates strictly inside the real playback envelope. The
+        // synthetic syllable cadence and the width oscillation are gone, so total
+        // silence (level == 0) holds the fixed resting aperture instead of
+        // mouthing syllables nobody hears.
+        let openFraction = still ? 0.35 : max(0.12, level * 0.70)
+        let width = still ? 11.0 : (8.5 + openFraction * 8.5)
         let height = still ? 6.0 : (2.5 + openFraction * 13.5)
 
         ZStack {
@@ -386,12 +393,6 @@ struct NativeSkinAppearance: Equatable {
     let eyeWidth: Double
     let eyeHeight: Double
 
-    func facialInk(darkAppearance: Bool, opaque: Bool) -> NativeSkinColor {
-        // A transparent companion can cross either a light or a dark window,
-        // independent of the OS appearance. Keep a dark centre plus a solid
-        // light edge instead of guessing the pixels behind it from colorScheme.
-        ink
-    }
     func facialOutlineWidth(opaque: Bool, increasedContrast: Bool = false) -> Double {
         material == .glass && !opaque ? (increasedContrast ? 1.8 : 1.2) : 0
     }
@@ -471,14 +472,18 @@ struct NativeFacePose: Equatable {
         // The mouth articulates strictly inside the real playback envelope: silence
         // closes it and unknown playback uses the resting opening. A cadence-driven
         // oscillation here kept the mouth moving while no audio was playing, which
-        // contradicts "synchronize speaking to playback". When expression motion is
-        // disabled (Reduce Motion or still) the aperture stays at the static resting
-        // value instead of following playback, so the face never articulates.
+        // contradicts "synchronize speaking to playback". Total silence also holds
+        // the resting mouth width instead of letting recipe keyframes keep
+        // animating it. When expression motion is disabled (Reduce Motion or still)
+        // the aperture stays at the static resting value instead of following
+        // playback, so the face never articulates.
         let opening = speaking ? (amount == 0 ? 0.12 : min(1, max(0, playbackLevel.map(unit) ?? 0.12))) : 0
         let listening = state == .listening && amount > 0 ? unit(inputLevel) : 0
         return Self(bob: expression.lift, tilt: expression.tilt * 1.2, blink: blink,
                     gazeX: expression.gazeX * 1.3, gazeY: expression.gazeY * 1.3, browTilt: -4,
-                    mouthWidth: speaking ? expression.mouthWidth * (1 + opening * 0.8) : expression.mouthWidth * 1.22,
+                    mouthWidth: speaking
+                        ? (opening == 0 ? NativeExpressionPose.rest.mouthWidth : expression.mouthWidth * (1 + opening * 0.8))
+                        : expression.mouthWidth * 1.22,
                     mouthHeight: speaking ? 2 + opening * 12 : 1,
                     mouthCurve: expression.smile, speakingOpening: opening, listeningLevel: listening,
                     eyes: expression.eyes, browLift: expression.browLift * 1.5, browAsymmetry: expression.browAsymmetry,

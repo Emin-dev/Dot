@@ -11,6 +11,9 @@ final class TTSManager: ObservableObject {
     var onFinalPlayback: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
+    /// Non-fatal delivery notice (for example a chunk dropped under backpressure).
+    /// Unlike `onError`, it never ends the turn's voice session.
+    var onDeliveryNotice: ((UUID, String) -> Void)?
     private let bionic = BionicVoice()
     private var root: String { Bundle.main.resourceURL?.appendingPathComponent("Offline/Voice").path ?? "" }
     var speaking: Bool { bionic.speaking }
@@ -32,6 +35,10 @@ final class TTSManager: ObservableObject {
         bionic.onError = { [weak self] id, message in
             guard let self, self.generation == id else { return }
             self.playbackLevel = 0; self.onError?(id, message)
+        }
+        bionic.onDeliveryNotice = { [weak self] id, message in
+            guard let self, self.generation == id else { return }
+            self.onDeliveryNotice?(id, message)
         }
     }
     func start(id: UUID) throws {
@@ -60,6 +67,9 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
     var onFinalPlayback: ((UUID) -> Void)?
     var onStarted: ((UUID) -> Void)?
     var onError: ((UUID, String) -> Void)?
+    /// Non-fatal delivery notice (a chunk dropped under backpressure). It never
+    /// ends the voice session the way `onError` does.
+    var onDeliveryNotice: ((UUID, String) -> Void)?
     private(set) var speaking = false
     private var process: Process?
     private var input: VoicePipeWriter?
@@ -70,6 +80,18 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
     private var ready = false
     private var pending: Set<UUID> = []
     private var unsent: [(UUID, String)] = []
+    /// Chunks waiting for the synthesis queue to drain (backpressure). They are
+    /// retried by the tick and dropped with a notice after a bounded wait.
+    private var deferred: [(turn: UUID, text: String)] = []
+    private var deferredDeadline = 0.0
+    /// `markGenerationComplete` arrived while chunks were deferred; the final
+    /// barrier seals only after those chunks are enqueued (or dropped).
+    private var pendingSeal = false
+    /// How long a saturated queue may delay new chunks before they are dropped.
+    static let queueWaitSeconds = 10.0
+    /// Per-request bound for the Rust synth engine; longer text is split at
+    /// sentence boundaries instead of being rejected.
+    static let maximumRequestLength = 1000
     private var audio: [(UUID, Data)] = []
     private var loads: [UUID: Task<Void, Never>] = [:]
     private var audioOrder: [UUID] = []
@@ -151,12 +173,58 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         guard generation == id else { return }
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return }
-        guard value.count <= 1000, audio.count + audioOrder.count + (player == nil ? 0 : 1) < 24, loads.count < 24 else {
-            fail("Bionic voice queue reached its safe limit. Click to start again."); return
-        }
         ensureTimer()
+        for chunk in Self.synthesisChunks(value, limit: Self.maximumRequestLength) {
+            enqueueChunk(chunk, id: id)
+        }
+    }
+    /// Split text at sentence boundaries so no synthesis request exceeds `limit`.
+    /// A sentence longer than the limit is cut at a word boundary; a single word
+    /// longer than the limit is cut at the limit. Short text passes through.
+    static func synthesisChunks(_ text: String, limit: Int) -> [String] {
+        guard text.count > limit else { return [text] }
+        var chunks: [String] = []
+        var rest = Substring(text)
+        while !rest.isEmpty {
+            if rest.count <= limit {
+                let tail = rest.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !tail.isEmpty { chunks.append(tail) }
+                break
+            }
+            let prefix = rest.prefix(limit)
+            let cut: String.Index
+            if let sentence = prefix.range(of: #"[.!?…](?:["”']?\s+)"#, options: [.regularExpression, .backwards]) {
+                cut = sentence.upperBound
+            } else if let whitespace = prefix.lastIndex(where: { $0.isWhitespace }) {
+                cut = rest.index(after: whitespace)
+            } else {
+                cut = rest.index(rest.startIndex, offsetBy: limit)
+            }
+            let chunk = String(rest[..<cut]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !chunk.isEmpty { chunks.append(chunk) }
+            rest = rest[cut...]
+        }
+        return chunks
+    }
+    private var queueHasRoom: Bool {
+        audio.count + audioOrder.count + (player == nil ? 0 : 1) < 24 && loads.count < 24
+    }
+    private func enqueueChunk(_ value: String, id: UUID) {
+        guard generation == id else { return }
+        guard queueHasRoom else {
+            // Backpressure: the synthesis queue is busy. Wait a bounded time for
+            // it to drain; if it stays saturated, drop the chunk with a notice
+            // instead of failing the whole voice session mid-answer.
+            if deferred.isEmpty { deferredDeadline = clock() + Self.queueWaitSeconds }
+            deferred.append((id, value))
+            ensureTimer()
+            return
+        }
         let request = UUID()
         guard finalPlayback.enqueue(turn: id, request: request) else {
+            // The barrier is sealed. `markGenerationComplete` only seals after any
+            // deferred chunks are enqueued, so a sentence here really is after the
+            // final response: a protocol violation, not backpressure.
             fail("Bionic voice received a sentence after its final response."); return
         }
         pending.insert(request); audioOrder.append(request); speaking = true
@@ -166,7 +234,31 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
     }
     func markGenerationComplete(id: UUID) {
         guard generation == id else { return }
+        if deferred.isEmpty { completeGeneration(id) }
+        else { pendingSeal = true }
+    }
+    private func completeGeneration(_ id: UUID) {
+        guard generation == id else { return }
         if let completed = finalPlayback.generationComplete(turn: id) { onFinalPlayback?(completed) }
+    }
+    private static let queueBusyNotice = "The voice queue stayed busy, so part of the reply was not spoken. The full text is still shown."
+    /// The `unavailable` event is a terminal exit of the Rust engine. Its `code`
+    /// says why: report that honestly instead of one generic missing-files claim.
+    private static func eventCode(in data: Data) -> String? {
+        guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return value["code"] as? String
+    }
+    private static func unavailableMessage(code: String?) -> String {
+        switch code {
+        case "missing_root_argument", "missing_output_argument":
+            return "The bundled voice engine was launched without its model paths. A repaired complete app is required."
+        case "local_voice_setup_failed":
+            return "The bundled voice engine could not load its local voice model. A repaired complete app is required."
+        case "invalid_protocol_request", "unsupported_protocol":
+            return "The bundled voice engine rejected the speech protocol. A repaired complete app is required."
+        default:
+            return "The bundled voice files are missing or incompatible. A repaired complete app is required."
+        }
     }
     private func send(request: UUID, text: String, turn: UUID) {
         write(["protocol": 1, "type": "speak", "id": request.uuidString, "turn": turn.uuidString, "text": text])
@@ -189,7 +281,8 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
                 let waiting = unsent; unsent.removeAll()
                 if let id = generation { for (request, text) in waiting { send(request: request, text: text, turn: id) } }
             } else if event.kind == "unavailable" {
-                fail("The bundled voice files are missing or incompatible. A repaired complete app is required."); return
+                fail(Self.unavailableMessage(code: Self.eventCode(in: line)))
+                return
             } else if event.kind == "audio", let filename = event.filename, let dir = directory {
                 let url = dir.appendingPathComponent(filename)
                 guard ready, event.turn == generation, let request = event.request, pending.remove(request) != nil else {
@@ -219,6 +312,19 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         if buffer.count > 8192 { fail("Bionic voice response exceeded its safe limit.") }
     }
     private func tick() {
+        if !deferred.isEmpty {
+            if queueHasRoom {
+                let waiting = deferred; deferred.removeAll()
+                for (turn, text) in waiting where generation == turn { enqueueChunk(text, id: turn) }
+                if deferred.isEmpty, pendingSeal, let id = generation { pendingSeal = false; completeGeneration(id) }
+            } else if clock() > deferredDeadline {
+                let dropped = deferred.count
+                deferred.removeAll()
+                Self.log.warning("Dropped \(dropped) deferred voice chunk(s): the synthesis queue stayed busy.")
+                if let id = generation { onDeliveryNotice?(id, Self.queueBusyNotice) }
+                if pendingSeal, let id = generation { pendingSeal = false; completeGeneration(id) }
+            }
+        }
         if (!ready || !pending.isEmpty || !audioOrder.isEmpty) && clock() > deadline { fail("Bionic voice timed out."); return }
         // isPlaying becoming false also describes interruptions and errors. Only the
         // delegate's successful completion can satisfy the final audible barrier.
@@ -236,7 +342,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
             }
             onPlaybackLevel?(id, level)
         }
-        if ready && pending.isEmpty && audioOrder.isEmpty && audio.isEmpty && player == nil {
+        if ready && pending.isEmpty && audioOrder.isEmpty && audio.isEmpty && player == nil && deferred.isEmpty {
             timer?.invalidate(); timer = nil
         }
     }
@@ -289,6 +395,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         if let id = generation { onPlaybackLevel?(id, 0) }
         finalPlayback.cancel()
         generation = nil; pending.removeAll(); unsent.removeAll(); audio.removeAll()
+        deferred.removeAll(); pendingSeal = false
         for task in loads.values { task.cancel() }
         loads.removeAll()
         audioOrder.removeAll(); loaded.removeAll()
@@ -307,6 +414,7 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         session = UUID(); generation = nil; ready = false; finalPlayback.cancel()
         timer?.invalidate(); timer = nil
         pending.removeAll(); unsent.removeAll(); audio.removeAll(); buffer = Data()
+        deferred.removeAll(); pendingSeal = false
         for task in loads.values { task.cancel() }
         loads.removeAll()
         audioOrder.removeAll(); loaded.removeAll()

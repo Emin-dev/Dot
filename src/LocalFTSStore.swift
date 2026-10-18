@@ -78,6 +78,9 @@ actor LocalFTSStore {
         }
         db = handle
         guard let handle else { throw LocalFTSError.closed }
+        // MS-5: a busy writer is normal under WAL; wait up to 5 s instead of failing
+        // the step, so tier writes and fact writes on the shared file never race.
+        sqlite3_busy_timeout(handle, 5_000)
         try Self.execute(db: handle, sql: "PRAGMA journal_mode = WAL;")
         try Self.execute(db: handle, sql: "PRAGMA synchronous = NORMAL;")
         try Self.createSchema(db: handle)
@@ -108,6 +111,19 @@ actor LocalFTSStore {
 
     private func execute(sql: String) throws {
         try Self.execute(db: db, sql: sql)
+    }
+
+    /// MS-5: runs a statement to completion and reports any step failure to the
+    /// diagnostic log, so a discarded step result can never pass silently as success.
+    @discardableResult
+    private func stepLogged(_ stmt: OpaquePointer?, context: String) -> Bool {
+        let result = sqlite3_step(stmt)
+        guard result == SQLITE_DONE else {
+            let message = db.flatMap { sqlite3_errmsg($0).map(String.init(cString:)) } ?? "unknown error"
+            DiagnosticChatLogger.record(role: "memory", text: "SQLite \(context) failed (code \(result)): \(message)")
+            return false
+        }
+        return true
     }
 
     private static func createSchema(db: OpaquePointer) throws {
@@ -189,9 +205,10 @@ actor LocalFTSStore {
         try execute(db: db, sql: schema)
     }
 
-    /// R5/B4: the tier store shares this single connection so one database has one
-    /// owner. The closure runs on this actor's executor, so tier writes serialize
-    /// with fact writes instead of racing a second handle.
+    /// R5/B4: the tier store is constructed with this store — the app's single handle —
+    /// rather than opening its own connection, so one database keeps one owner. The
+    /// closure runs on this actor's executor, so tier writes serialize with fact writes
+    /// instead of racing a second handle.
     func withMemoryConnection<T>(_ body: (OpaquePointer) throws -> T) throws -> T {
         guard let db else { throw LocalFTSError.closed }
         return try body(db)
@@ -233,7 +250,7 @@ actor LocalFTSStore {
         var delStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, ftsDelete, -1, &delStmt, nil) == SQLITE_OK {
             sqlite3_bind_text(delStmt, 1, record.id.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(delStmt)
+            _ = stepLogged(delStmt, context: "conversation FTS delete")
             sqlite3_finalize(delStmt)
         }
 
@@ -243,7 +260,7 @@ actor LocalFTSStore {
             sqlite3_bind_text(ftsStmt, 1, record.id.uuidString, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 2, record.text, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 3, record.role.rawValue, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(ftsStmt)
+            _ = stepLogged(ftsStmt, context: "conversation FTS insert")
             sqlite3_finalize(ftsStmt)
         }
     }
@@ -324,9 +341,15 @@ actor LocalFTSStore {
         var effectiveID = id
         var effectiveCreatedAt = now
         var effectiveConfidence = confidence
+        var effectiveCategory = category
+        var effectiveIsCorrection = isCorrection
+        var effectiveSupersedesID = supersedesID
 
         if supersedesID == nil {
-            let checkSQL = "SELECT id, created_at, confidence FROM memory_facts WHERE LOWER(TRIM(fact)) = LOWER(TRIM(?)) AND is_stale = 0 LIMIT 1;"
+            // MS-2: an identical-text write dedups onto the existing live row and keeps
+            // that row's category and supersession, so a re-stated fact never demotes a
+            // stored record back to this call's defaults.
+            let checkSQL = "SELECT id, category, is_correction, supersedes_id, created_at, confidence FROM memory_facts WHERE LOWER(TRIM(fact)) = LOWER(TRIM(?)) AND is_stale = 0 LIMIT 1;"
             var checkStmt: OpaquePointer?
             if sqlite3_prepare_v2(db, checkSQL, -1, &checkStmt, nil) == SQLITE_OK {
                 sqlite3_bind_text(checkStmt, 1, fact, -1, Self.SQLITE_TRANSIENT)
@@ -334,8 +357,14 @@ actor LocalFTSStore {
                    let existingIDStr = sqlite3_column_text(checkStmt, 0),
                    let existingUUID = UUID(uuidString: String(cString: existingIDStr)) {
                     effectiveID = existingUUID
-                    effectiveCreatedAt = Date(timeIntervalSince1970: sqlite3_column_double(checkStmt, 1))
-                    effectiveConfidence = max(confidence, sqlite3_column_double(checkStmt, 2))
+                    if let existingCategoryStr = sqlite3_column_text(checkStmt, 1),
+                       let existingCategory = MemoryFactCategory(rawValue: String(cString: existingCategoryStr)) {
+                        effectiveCategory = existingCategory
+                    }
+                    effectiveIsCorrection = sqlite3_column_int(checkStmt, 2) != 0
+                    effectiveSupersedesID = sqlite3_column_text(checkStmt, 3).flatMap { UUID(uuidString: String(cString: $0)) }
+                    effectiveCreatedAt = Date(timeIntervalSince1970: sqlite3_column_double(checkStmt, 4))
+                    effectiveConfidence = max(confidence, sqlite3_column_double(checkStmt, 5))
                 }
                 sqlite3_finalize(checkStmt)
             }
@@ -344,11 +373,14 @@ actor LocalFTSStore {
         if let supersedes = supersedesID {
             let staleSQL = "UPDATE memory_facts SET is_stale = 1, updated_at = ? WHERE id = ?;"
             var staleStmt: OpaquePointer?
-            if sqlite3_prepare_v2(db, staleSQL, -1, &staleStmt, nil) == SQLITE_OK {
-                sqlite3_bind_double(staleStmt, 1, now.timeIntervalSince1970)
-                sqlite3_bind_text(staleStmt, 2, supersedes.uuidString, -1, Self.SQLITE_TRANSIENT)
-                _ = sqlite3_step(staleStmt)
-                sqlite3_finalize(staleStmt)
+            guard sqlite3_prepare_v2(db, staleSQL, -1, &staleStmt, nil) == SQLITE_OK else {
+                throw LocalFTSError.prepareFailed("Failed to prepare supersede stale mark")
+            }
+            defer { sqlite3_finalize(staleStmt) }
+            sqlite3_bind_double(staleStmt, 1, now.timeIntervalSince1970)
+            sqlite3_bind_text(staleStmt, 2, supersedes.uuidString, -1, Self.SQLITE_TRANSIENT)
+            guard stepLogged(staleStmt, context: "supersede stale mark") else {
+                throw LocalFTSError.executionFailed("Supersede stale mark failed")
             }
         }
 
@@ -363,7 +395,7 @@ actor LocalFTSStore {
         defer { sqlite3_finalize(stmt) }
 
         sqlite3_bind_text(stmt, 1, effectiveID.uuidString, -1, Self.SQLITE_TRANSIENT)
-        sqlite3_bind_text(stmt, 2, category.rawValue, -1, Self.SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 2, effectiveCategory.rawValue, -1, Self.SQLITE_TRANSIENT)
         sqlite3_bind_text(stmt, 3, fact, -1, Self.SQLITE_TRANSIENT)
         if let passage = sourcePassage {
             sqlite3_bind_text(stmt, 4, passage, -1, Self.SQLITE_TRANSIENT)
@@ -381,8 +413,8 @@ actor LocalFTSStore {
             sqlite3_bind_null(stmt, 6)
         }
         sqlite3_bind_double(stmt, 7, effectiveConfidence)
-        sqlite3_bind_int(stmt, 8, isCorrection ? 1 : 0)
-        if let supersedes = supersedesID {
+        sqlite3_bind_int(stmt, 8, effectiveIsCorrection ? 1 : 0)
+        if let supersedes = effectiveSupersedesID {
             sqlite3_bind_text(stmt, 9, supersedes.uuidString, -1, Self.SQLITE_TRANSIENT)
         } else {
             sqlite3_bind_null(stmt, 9)
@@ -400,7 +432,7 @@ actor LocalFTSStore {
         var delStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, ftsDelete, -1, &delStmt, nil) == SQLITE_OK {
             sqlite3_bind_text(delStmt, 1, effectiveID.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(delStmt)
+            _ = stepLogged(delStmt, context: "memory FTS delete")
             sqlite3_finalize(delStmt)
         }
 
@@ -409,23 +441,23 @@ actor LocalFTSStore {
         var ftsStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, ftsInsert, -1, &ftsStmt, nil) == SQLITE_OK {
             sqlite3_bind_text(ftsStmt, 1, effectiveID.uuidString, -1, Self.SQLITE_TRANSIENT)
-            sqlite3_bind_text(ftsStmt, 2, category.rawValue, -1, Self.SQLITE_TRANSIENT)
+            sqlite3_bind_text(ftsStmt, 2, effectiveCategory.rawValue, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 3, fact, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 4, sourcePassage ?? "", -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(ftsStmt)
+            _ = stepLogged(ftsStmt, context: "memory FTS insert")
             sqlite3_finalize(ftsStmt)
         }
 
         return MemoryFactRecord(
             id: effectiveID,
-            category: category,
+            category: effectiveCategory,
             fact: fact,
             sourcePassage: sourcePassage,
             sourceURL: sourceURL,
             sourceSHA256: sourceSHA256,
             confidence: effectiveConfidence,
-            isCorrection: isCorrection,
-            supersedesID: supersedesID,
+            isCorrection: effectiveIsCorrection,
+            supersedesID: effectiveSupersedesID,
             isStale: false,
             createdAt: effectiveCreatedAt,
             updatedAt: now
@@ -539,24 +571,45 @@ actor LocalFTSStore {
         defer { sqlite3_finalize(stmt) }
         sqlite3_bind_double(stmt, 1, Date().timeIntervalSince1970)
         sqlite3_bind_text(stmt, 2, id.uuidString, -1, Self.SQLITE_TRANSIENT)
-        _ = sqlite3_step(stmt)
+        guard stepLogged(stmt, context: "mark memory stale") else {
+            throw LocalFTSError.executionFailed("Mark memory stale failed")
+        }
     }
 
     func deleteMemory(id: UUID) throws {
         guard let db else { throw LocalFTSError.closed }
-        let sql1 = "DELETE FROM memory_facts WHERE id = ?;"
-        var stmt1: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql1, -1, &stmt1, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt1, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(stmt1)
-            sqlite3_finalize(stmt1)
+        // MS-5/MS-6: drop the FTS row first so a failure can never leave the raw text
+        // orphaned in the index after the fact row is gone, and throw on step failure
+        // so a caller (forget) can never report success it did not achieve.
+        let ftsSQL = "DELETE FROM fts_memories WHERE id = ?;"
+        var ftsStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, ftsSQL, -1, &ftsStmt, nil) == SQLITE_OK else {
+            throw LocalFTSError.prepareFailed("Failed to prepare memory FTS delete")
         }
-        let sql2 = "DELETE FROM fts_memories WHERE id = ?;"
-        var stmt2: OpaquePointer?
-        if sqlite3_prepare_v2(db, sql2, -1, &stmt2, nil) == SQLITE_OK {
-            sqlite3_bind_text(stmt2, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(stmt2)
-            sqlite3_finalize(stmt2)
+        defer { sqlite3_finalize(ftsStmt) }
+        sqlite3_bind_text(ftsStmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        guard stepLogged(ftsStmt, context: "memory FTS delete") else {
+            throw LocalFTSError.executionFailed("Memory FTS delete failed")
+        }
+
+        let factSQL = "DELETE FROM memory_facts WHERE id = ?;"
+        var factStmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, factSQL, -1, &factStmt, nil) == SQLITE_OK else {
+            throw LocalFTSError.prepareFailed("Failed to prepare memory delete")
+        }
+        defer { sqlite3_finalize(factStmt) }
+        sqlite3_bind_text(factStmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+        guard stepLogged(factStmt, context: "memory delete") else {
+            throw LocalFTSError.executionFailed("Memory delete failed")
+        }
+
+        // MS-6: a deleted id must not linger as another record's supersedes pointer.
+        let unlinkSQL = "UPDATE memory_facts SET supersedes_id = NULL WHERE supersedes_id = ?;"
+        var unlinkStmt: OpaquePointer?
+        if sqlite3_prepare_v2(db, unlinkSQL, -1, &unlinkStmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(unlinkStmt, 1, id.uuidString, -1, Self.SQLITE_TRANSIENT)
+            _ = stepLogged(unlinkStmt, context: "supersedes pointer cleanup")
+            sqlite3_finalize(unlinkStmt)
         }
     }
 
@@ -597,7 +650,7 @@ actor LocalFTSStore {
         var delStmt: OpaquePointer?
         if sqlite3_prepare_v2(db, ftsDelete, -1, &delStmt, nil) == SQLITE_OK {
             sqlite3_bind_text(delStmt, 1, source.id.uuidString, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(delStmt)
+            _ = stepLogged(delStmt, context: "evidence FTS delete")
             sqlite3_finalize(delStmt)
         }
 
@@ -607,7 +660,7 @@ actor LocalFTSStore {
             sqlite3_bind_text(ftsStmt, 1, source.id.uuidString, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 2, source.title, -1, Self.SQLITE_TRANSIENT)
             sqlite3_bind_text(ftsStmt, 3, source.text, -1, Self.SQLITE_TRANSIENT)
-            _ = sqlite3_step(ftsStmt)
+            _ = stepLogged(ftsStmt, context: "evidence FTS insert")
             sqlite3_finalize(ftsStmt)
         }
     }
@@ -678,6 +731,7 @@ actor LocalFTSStore {
         DELETE FROM fts_conversations;
         DELETE FROM memory_facts;
         DELETE FROM fts_memories;
+        DELETE FROM memory_tier_state;
         DELETE FROM document_evidence;
         DELETE FROM fts_evidence;
         """)

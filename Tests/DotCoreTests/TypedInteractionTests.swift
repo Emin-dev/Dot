@@ -436,8 +436,9 @@ final class TypedInteractionTests: XCTestCase {
 
         f.model.resumeAfterScreenOn()
         XCTAssertFalse(f.model.screenPaused)
-        f.model.speakDirect("back")
-        XCTAssertTrue(f.enqueued.contains("back"))
+        // R12: resume greets on its own, and the voice path is live again afterwards.
+        XCTAssertTrue(f.enqueued.contains("I'm back."), "Resume must speak the wake greeting")
+        guard case .speaking = f.model.phase else { return XCTFail("The greeting must start playback") }
     }
 
     @MainActor func testSystemWakeClearsTheSleepBlockAndSaysItIsBack() async throws {

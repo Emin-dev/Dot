@@ -32,20 +32,21 @@ final class BundledSplash {
     private var state: URL?
     private var token = UUID()
     private var bytes = Data()
+    private var protocolOverflowReported = false
     private(set) var port: Int?
     private(set) var backendPort: Int?
     private(set) var certificateSHA256: String?
     private(set) var serverPID: Int?
     private(set) var apiKey: String?
-    /// One automatic restart per connection attempt. A successful connection refills
-    /// the budget; a failed restart leaves it empty, so the same attempt cannot loop.
+    /// One automatic restart per connection attempt. The budget refills at the start
+    /// of every attempt; a failed restart leaves it empty so the same attempt cannot
+    /// loop, while the next separate attempt starts with a fresh restart.
     private var restartBudget = 1
     struct Connection { let url: URL; let pid: Int; let backendPort: Int; let certificateSHA256: String }
     func connection() async throws -> Connection {
+        restartBudget = 1
         do {
-            let value = try await openConnection()
-            restartBudget = 1
-            return value
+            return try await openConnection()
         } catch {
             guard !(error is CancellationError), !Task.isCancelled, restartBudget > 0 else { throw error }
             restartBudget -= 1
@@ -55,9 +56,7 @@ final class BundledSplash {
             // failure until the whole app is relaunched.
             shutdown()
             do {
-                let value = try await openConnection()
-                restartBudget = 1
-                return value
+                return try await openConnection()
             } catch {
                 shutdown()
                 throw error
@@ -93,7 +92,7 @@ final class BundledSplash {
                 throw OfflineFailure.runtime
             }
             let child = Process(), input = Pipe(), stdout = Pipe(), generation = UUID()
-            token = generation; diagnostic = nil; exitState = RuntimeExitState(); bytes = Data(); port = nil; backendPort = nil; certificateSHA256 = nil; serverPID = nil; apiKey = nil
+            token = generation; diagnostic = nil; exitState = RuntimeExitState(); bytes = Data(); protocolOverflowReported = false; port = nil; backendPort = nil; certificateSHA256 = nil; serverPID = nil; apiKey = nil
             // The stdlib-only bootstrap binds both sockets, then execs the sandbox
             // with exact endpoints and retained FDs before any model/runtime import.
             child.executableURL = URL(fileURLWithPath: launchPaths.python)
@@ -157,8 +156,25 @@ final class BundledSplash {
             output?.readabilityHandler = nil; try? output?.close(); output = nil
             return
         }
-        guard bytes.count + data.count <= 8192 else { return }
-        bytes.append(data)
+        if bytes.count + data.count > 8192 {
+            // An over-long line must not silently wedge the parser and hide the
+            // 'started' event. Report one bounded diagnostic per generation, then
+            // discard up to the next newline so parsing resyncs on a line boundary.
+            if !protocolOverflowReported {
+                protocolOverflowReported = true
+                Self.log.error("stage=splash_protocol reason=line_overflow")
+            }
+            var combined = bytes
+            combined.append(data)
+            if let end = combined.firstIndex(of: 10) {
+                combined.removeSubrange(...end)
+                bytes = combined
+            } else {
+                bytes = Data()
+            }
+        } else {
+            bytes.append(data)
+        }
         while let end = bytes.firstIndex(of: 10) {
             let line = Data(bytes[..<end]); bytes.removeSubrange(...end)
             if let diagnostic = RuntimeDiagnostic.parse(line) {

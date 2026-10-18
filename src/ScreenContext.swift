@@ -11,35 +11,49 @@ final class ScreenContext {
     private var gate = ScreenContextGate()
     private var permission = ScreenPermissionTurn()
     private var encoding: (turn: UUID, task: Task<Data?, Never>)?
+
+    /// Test seams: fixtures inject an isolated defaults suite, a scratch marker
+    /// root and a fake preflight so they never write the owner's preferences or
+    /// consult the real Screen Recording (TCC) state.
+    static var defaults: UserDefaults = .standard
+    static var markerRoot: URL? = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    static var preflight: () -> Bool = { CGPreflightScreenCaptureAccess() }
+
     static var hasRequestedAccess: Bool {
-        get { UserDefaults.standard.bool(forKey: "dot.screenAccessRequested") }
+        get { defaults.bool(forKey: "dot.screenAccessRequested") }
         set {
-            UserDefaults.standard.set(newValue, forKey: "dot.screenAccessRequested")
-            UserDefaults.standard.synchronize()
+            defaults.set(newValue, forKey: "dot.screenAccessRequested")
+            defaults.synchronize()
         }
     }
     private static var cachedAccessStatus: Bool? = nil
     private static var lastPreflightCheck: Double = 0
 
     static var isPermanentlyConfigured: Bool {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        let marker = support?.appendingPathComponent("Dot/.screen_permission_configured")
+        let marker = markerRoot?.appendingPathComponent("Dot/.screen_permission_configured")
         if let marker, FileManager.default.fileExists(atPath: marker.path) {
             // The marker only records that the prompt was offered, and older builds wrote
             // it before the owner answered. While preflight still disagrees it is not
             // evidence of a decision, so clear it and let the next interaction ask again.
-            guard CGPreflightScreenCaptureAccess() else {
+            guard Self.preflight() else {
                 try? FileManager.default.removeItem(at: marker)
-                UserDefaults.standard.removeObject(forKey: "dot.screenAccessRequested")
-                UserDefaults.standard.removeObject(forKey: "dot.screenAccessGrantedInSettings")
+                defaults.removeObject(forKey: "dot.screenAccessRequested")
+                defaults.removeObject(forKey: "dot.screenAccessGrantedInSettings")
                 return false
             }
             return true
         }
-        if UserDefaults.standard.bool(forKey: "dot.screenAccessGrantedInSettings") {
-            return CGPreflightScreenCaptureAccess()
+        if defaults.bool(forKey: "dot.screenAccessGrantedInSettings") {
+            return Self.preflight()
         }
-        if UserDefaults.standard.bool(forKey: "dot.screenAccessRequested") {
+        if defaults.bool(forKey: "dot.screenAccessRequested") {
+            // Same honesty rule as the marker branch: this key only records that
+            // the prompt was offered, so while preflight still disagrees it must
+            // not suppress the next prompt. Clear it and ask again.
+            guard Self.preflight() else {
+                defaults.removeObject(forKey: "dot.screenAccessRequested")
+                return false
+            }
             return true
         }
         return false
@@ -51,14 +65,22 @@ final class ScreenContext {
     /// app then never asked - the microphone failure again, but persisted to disk.
     static func markPermanentlyConfigured() {
         hasRequestedAccess = true
-        UserDefaults.standard.set(true, forKey: "dot.screenAccessRequested")
-        UserDefaults.standard.synchronize()
-        if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+        defaults.set(true, forKey: "dot.screenAccessRequested")
+        defaults.synchronize()
+        if let support = markerRoot {
             let dotDir = support.appendingPathComponent("Dot")
-            try? FileManager.default.createDirectory(at: dotDir, withIntermediateDirectories: true)
             let marker = dotDir.appendingPathComponent(".screen_permission_configured")
             if !FileManager.default.fileExists(atPath: marker.path) {
-                try? Data().write(to: marker)
+                do {
+                    try FileManager.default.createDirectory(at: dotDir, withIntermediateDirectories: true)
+                    try Data().write(to: marker)
+                } catch {
+                    // The flag and the marker must never diverge silently: a marker
+                    // that could not be written would otherwise make the next launch
+                    // believe the prompt was never offered while the flag says it was.
+                    DiagnosticChatLogger.recordEvent(category: "screen_permission",
+                        message: "Screen-permission marker could not be written at \(marker.path): \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -68,7 +90,7 @@ final class ScreenContext {
         if !refresh, let cached = cachedAccessStatus, (now - lastPreflightCheck) < 5.0 {
             return cached
         }
-        let access = CGPreflightScreenCaptureAccess()
+        let access = Self.preflight()
         cachedAccessStatus = access
         lastPreflightCheck = now
         if access {
@@ -80,17 +102,22 @@ final class ScreenContext {
     func prepare(turn: UUID, requestPermission: Bool = true) throws {
         try Task.checkCancellation()
         // 1. If already authorized or permanently configured, never prompt or request access.
-        if Self.isPermanentlyConfigured || Self.hasScreenAccess(refresh: true) || CGPreflightScreenCaptureAccess() {
+        if Self.isPermanentlyConfigured || Self.hasScreenAccess(refresh: true) || Self.preflight() {
             Self.markPermanentlyConfigured()
-            _ = permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                   request: { false && (requestPermission && CGRequestScreenCaptureAccess()) })
+            // This branch never prompts: access is already granted or the prompt was
+            // already offered, and a second prompt could let a lost answer suppress
+            // every future ask. The explicit `false` is intentional dead logic.
+            _ = permission.prepare(turn: turn, enabled: enabled, preflight: Self.preflight,
+                                   request: { false })
             try Task.checkCancellation()
             return
         }
         // 2. If access was already requested in the past or permission prompt is suppressed, do not prompt.
         if Self.hasRequestedAccess || !requestPermission {
-            _ = permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
-                                   request: { false && (requestPermission && CGRequestScreenCaptureAccess()) })
+            // Never prompts by design (already asked or suppressed at this site);
+            // the explicit `false` keeps that decision visible instead of hidden.
+            _ = permission.prepare(turn: turn, enabled: enabled, preflight: Self.preflight,
+                                   request: { false })
             try Task.checkCancellation()
             return
         }
@@ -98,7 +125,7 @@ final class ScreenContext {
         Self.markPermanentlyConfigured()
         guard permission.prepare(turn: turn, enabled: enabled, preflight: CGPreflightScreenCaptureAccess,
                                  request: { requestPermission && CGRequestScreenCaptureAccess() }) else {
-            throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission
+            throw Self.preflight() ? ScreenFailure.unavailable : ScreenFailure.permission
         }
         try Task.checkCancellation()
     }
@@ -190,8 +217,8 @@ final class ScreenContext {
         try Task.checkCancellation()
         try gate.validateCapture(turn: turn)
         guard enabled else { throw ScreenContextGate.Failure.disabled }
-        guard permission.mayCapture(turn: turn, preflight: CGPreflightScreenCaptureAccess) else {
-            throw CGPreflightScreenCaptureAccess() ? ScreenFailure.unavailable : ScreenFailure.permission
+        guard permission.mayCapture(turn: turn, preflight: Self.preflight) else {
+            throw Self.preflight() ? ScreenFailure.unavailable : ScreenFailure.permission
         }
     }
     func extractVisibleScreenText() async throws -> [ScreenOCRLine] {
@@ -216,7 +243,7 @@ final class ScreenContext {
         configuration.capturesAudio = false
         let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
         #if canImport(Vision) && canImport(CoreGraphics)
-        let lines = await NativeScreenOCR.recognizeText(in: image)
+        let lines = try await NativeScreenOCR.recognizeText(in: image)
         let screen = NSScreen.screens.first { screen in
             (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
         } ?? selected
@@ -228,7 +255,7 @@ final class ScreenContext {
     /// R8: a cheap 32x24 grayscale fingerprint used to decide whether the screen is
     /// changing. No OCR and no model payload; the cursor is excluded.
     func captureFingerprint() async -> UInt64? {
-        guard enabled, CGPreflightScreenCaptureAccess() else { return nil }
+        guard enabled, Self.preflight() else { return nil }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
@@ -262,7 +289,7 @@ final class ScreenContext {
     }
 
     func captureSilentScreenSnapshot() async {
-        guard enabled, CGPreflightScreenCaptureAccess() else { return }
+        guard enabled, Self.preflight() else { return }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             let selected = NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main

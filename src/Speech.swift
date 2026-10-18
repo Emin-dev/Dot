@@ -169,6 +169,7 @@ final class STTManager: ObservableObject {
         let mic: Bool
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: mic = true
+        case .restricted: mic = false
         case .notDetermined:
             guard VoiceCaptureAccessPolicy.shouldRequestPermission(invitation: invitation, permission: .undetermined) else {
                 endCapture(id, reason: .permissionLost); return
@@ -214,6 +215,11 @@ final class STTManager: ObservableObject {
         if !routeMatches {
             handleAudioRouteChange(id)
             guard routeMatches && engine.isRunning else { endCapture(id, reason: .routeChanged); return }
+            // The capture store was replaced by the migration. Never poll the
+            // deactivated old store here: its cleared deadline reads as
+            // .cancelled/.invalidAudio and would end the just re-armed turn.
+            // The next tick polls the migrated store.
+            return
         }
         guard engine.isRunning else { endCapture(id, reason: .missingAudio); return }
         let observation = pcm.poll(at: ProcessInfo.processInfo.systemUptime)
@@ -278,6 +284,7 @@ final class STTManager: ObservableObject {
             } catch {
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
                 if case RecognitionFailure.empty = error { self.endCapture(id, reason: .noRecognizedWords) }
+                else if case RecognitionFailure.tooLong = error { self.fail(id, error.localizedDescription) }
                 else if error is CancellationError { self.endCapture(id, reason: .intentionalCancellation) }
                 else { self.fail(id, error.localizedDescription) }
             }
@@ -287,6 +294,7 @@ final class STTManager: ObservableObject {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: return .authorized
         case .notDetermined: return .undetermined
+        case .restricted: return .restricted
         default: return .denied
         }
     }
@@ -342,7 +350,10 @@ final class STTManager: ObservableObject {
         }
         observers.append((NotificationCenter.default, routeToken))
         observe(.default, AVCaptureDevice.wasDisconnectedNotification, reason: .routeChanged)
-        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.willSleepNotification, reason: .systemSleep)
+        // App's cancelForEnvironment owns the sleep handoff and its visible block
+        // card (App.swift observes willSleep at startup). Ending the capture here
+        // too would race that handoff with a second .systemSleep end, and its
+        // .speech card would outlive the wake greeting.
     }
     private func continueStarting(_ id: UUID) -> Bool {
         guard capture == id else { return false }

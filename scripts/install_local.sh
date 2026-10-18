@@ -42,8 +42,17 @@ sleep 3
 if pgrep -x Dot >/dev/null; then pkill -x Dot; sleep 2; fi
 
 echo "==> building (Rust binaries + app, recognizer embedded)"
-DOT_WHISPER_FRAMEWORK="$FRAMEWORK" bash build.sh >/tmp/dot-install-build.log 2>&1 || true
+# Freshness guard: a failed or silently no-op build must never install stale
+# binaries and stamp them with today's provenance.
+if [ -f build/Dot.app/Contents/MacOS/Dot ]; then
+  PRE_EXEC_HASH="$(shasum -a 256 build/Dot.app/Contents/MacOS/Dot | awk '{print $1}')"
+else
+  PRE_EXEC_HASH=""
+fi
+DOT_WHISPER_FRAMEWORK="$FRAMEWORK" bash build.sh >/tmp/dot-install-build.log 2>&1 || fail "build.sh failed (see /tmp/dot-install-build.log)"
 [ -x build/Dot.app/Contents/MacOS/Dot ] || fail "build produced no executable (see /tmp/dot-install-build.log)"
+[ "$(shasum -a 256 build/Dot.app/Contents/MacOS/Dot | awk '{print $1}')" != "$PRE_EXEC_HASH" ] \
+  || fail "build.sh left the app binary unchanged; refusing to install stale binaries (see /tmp/dot-install-build.log)"
 
 echo "==> assembling the complete bundle in $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
@@ -54,6 +63,10 @@ for item in Offline OfflineModels; do
   cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
     || cp -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item"
 done
+
+# One minimum-OS policy (macOS 26.4), the same override build_complete.sh applies;
+# the installed app must carry it even if build.sh's copy ever drifted.
+/usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$STAGE/Dot.app/Contents/Info.plist"
 
 echo "==> provenance"
 /usr/bin/python3 - "$STAGE/Dot.app/Contents/Resources/build-provenance.json" <<'PY'
@@ -78,7 +91,8 @@ echo "==> signing with $SIGN_IDENTITY"
 # A cloud-synced checkout gets Finder/FileProvider attributes that codesign
 # rejects ("resource fork, Finder information, or similar detritus not allowed").
 xattr -cr "$STAGE/Dot.app"
-codesign --force --deep --sign "$SIGN_IDENTITY" --timestamp=none "$STAGE/Dot.app"
+# No --deep: re-signing nested code corrupts the seal and blocks notarytool.
+codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$STAGE/Dot.app"
 codesign --verify --strict "$STAGE/Dot.app" || fail "staged signature did not verify"
 
 echo "==> swapping in (previous app kept at $BACKUP)"

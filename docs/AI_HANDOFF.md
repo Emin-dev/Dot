@@ -151,8 +151,9 @@ PATH=/private/tmp/dot-py313/bin:$PATH bash scripts/verify_macos.sh
   `DOT_LIVE_MODEL_TEST=1`; it is skipped in the normal lane.
 - Timer/search tests can flake under heavy load or a locked display; rerun isolated before treating as
   a regression (they pass alone and in a clean full lane).
-- The runtime-finalizer canary is a mandated failure on hosted toolchains; do not remove it or widen
-  the warning filter.
+- The runtime-finalizer canary is a mandated failure on hosted toolchains; do not remove it. The
+  warning gates are unfiltered: every warning line is fatal, and if the AppKit test-process QoS
+  advisory recurs, record the exact line with a dated removal condition — never a blanket class filter.
 
 ## Where things live
 
@@ -167,6 +168,21 @@ PATH=/private/tmp/dot-py313/bin:$PATH bash scripts/verify_macos.sh
 - `src/VoiceTiming.swift`, `src/Speech.swift`, `src/VoiceFollowup.swift`: listening/follow-up.
 - `src/MemoryTiers.swift`, `src/LocalFTSStore.swift`: memory tiers + single SQLite connection.
 - `scripts/`: install, verification, public DMG/zip, release publishing, token storage.
+
+## Data layout under Application Support
+
+All durable Dot state lives under `~/Library/Application Support/Dot/` (mode 0700), never `~/Downloads`
+(which a notarised/sandboxed build cannot write):
+
+- `Dot/Soul/` — soul archives: compaction snapshots and the export/import targets (`DotSoulManager`).
+- `Dot/Logs/dot_chat_log.txt` — the conversation log every turn writes (`DiagnosticChatLogger`),
+  rotated at 2 MB to `dot_chat_log.1.txt`; migrated once from the old Downloads location. The
+  10-minute self-reflection reads only this file.
+- `Dot/.screen_permission_configured` — marker that the Screen Recording prompt was *offered*, never
+  evidence of a grant; the re-ask-after-denial guard clears it while access is still ungranted.
+- `Dot/Models/` — the first-launch `ModelProvisioner` download target for the manifest-verified weights.
+- The self-reflections file (`dot_self_reflections.txt`) is being relocated from `~/Downloads` under
+  this root by the reflections batch; until that lands, no section of this file pins its old location.
 
 ## Recent commits (newest first)
 
