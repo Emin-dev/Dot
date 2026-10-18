@@ -110,9 +110,10 @@ final class WhisperRecognizer: @unchecked Sendable {
               let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
               let input = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(samples.count)),
               let destination = input.floatChannelData?.pointee else { throw RecognitionFailure.format }
-        // The 61-second bound is unchanged; exceeding it is reported honestly as a
-        // recording that was too long, not as an unreadable microphone format.
-        guard samples.count <= Int(sampleRate * 61) else { throw RecognitionFailure.tooLong }
+        // R1: turns may listen for five minutes, so the recognizer must accept the
+        // same window; exceeding it is reported honestly as a recording that was too
+        // long, not as an unreadable microphone format.
+        guard samples.count <= Int(sampleRate * 301) else { throw RecognitionFailure.tooLong }
         input.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { if let source = $0.baseAddress { destination.update(from: source, count: samples.count) } }
         guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat),
@@ -125,7 +126,7 @@ final class WhisperRecognizer: @unchecked Sendable {
         }
         guard error == nil, status != .error, let data = output.floatChannelData?.pointee,
               output.frameLength > 0 else { throw RecognitionFailure.format }
-        guard output.frameLength <= 16000 * 61 else { throw RecognitionFailure.tooLong }
+        guard output.frameLength <= 16000 * 301 else { throw RecognitionFailure.tooLong }
         return Array(UnsafeBufferPointer(start: data, count: Int(output.frameLength)))
     }
 }
