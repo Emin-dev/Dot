@@ -83,15 +83,14 @@ until codesign --force --sign - "$APP" 2>/dev/null; do
     sleep 1
     xattr -cr "$APP" 2>/dev/null || true
 done
-# Verify can race the same File Provider re-application; clear and retry once more.
-xattr -cr "$APP" 2>/dev/null || true
-vattempt=1
-until codesign --verify --strict "$APP" 2>/dev/null; do
-    vattempt=$((vattempt + 1))
-    [ "$vattempt" -le 3 ] || { echo "codesign verify failed after retries" >&2; exit 1; }
-    sleep 1
-    xattr -cr "$APP" 2>/dev/null || true
-done
+# Verify a byte-identical copy in TMPDIR: the synced checkout's File Provider can
+# keep re-applying attributes to the in-tree bundle indefinitely, and verifying the
+# clean copy proves the seal without racing the sync daemon.
+VERIFY_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-verify.XXXXXX")
+cp -R "$APP" "$VERIFY_STAGE/Dot.app"
+xattr -cr "$VERIFY_STAGE/Dot.app" 2>/dev/null || true
+codesign --verify --strict "$VERIFY_STAGE/Dot.app"
+rm -rf "$VERIFY_STAGE"
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-stage.XXXXXX")
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
