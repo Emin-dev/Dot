@@ -79,7 +79,14 @@ xattr -cr "$APP" 2>/dev/null || true
 attempt=1
 until codesign --force --sign - "$APP" 2>/dev/null; do
     attempt=$((attempt + 1))
-    [ "$attempt" -le 3 ] || { echo "codesign failed after retries (detritus reapplied)" >&2; exit 1; }
+    [ "$attempt" -le 6 ] || {
+        # The File Provider can keep re-applying attributes to the in-tree bundle for
+        # minutes. This sign is a convenience copy: install_local.sh signs and verifies
+        # the staged copy in TMPDIR (outside the sync root) with --strict, and fails the
+        # install if THAT fails. Warn and continue instead of failing a healthy build.
+        echo "warning: in-tree ad-hoc sign kept failing (detritus reapplied); the staged copy is signed and verified by install_local.sh" >&2
+        break
+    }
     sleep 1
     xattr -cr "$APP" 2>/dev/null || true
 done
