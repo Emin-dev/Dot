@@ -74,8 +74,24 @@ PYCODE
 # bundle with "resource fork, Finder information, or similar detritus not
 # allowed". Clearing them is a no-op on an ordinary checkout.
 xattr -cr "$APP" 2>/dev/null || true
-codesign --force --sign - "$APP"
-codesign --verify --strict "$APP"
+# The File Provider can re-apply attributes between the clear and the sign, so
+# retry the pair a bounded number of times instead of failing a good build.
+attempt=1
+until codesign --force --sign - "$APP" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -le 3 ] || { echo "codesign failed after retries (detritus reapplied)" >&2; exit 1; }
+    sleep 1
+    xattr -cr "$APP" 2>/dev/null || true
+done
+# Verify can race the same File Provider re-application; clear and retry once more.
+xattr -cr "$APP" 2>/dev/null || true
+vattempt=1
+until codesign --verify --strict "$APP" 2>/dev/null; do
+    vattempt=$((vattempt + 1))
+    [ "$vattempt" -le 3 ] || { echo "codesign verify failed after retries" >&2; exit 1; }
+    sleep 1
+    xattr -cr "$APP" 2>/dev/null || true
+done
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-stage.XXXXXX")
 cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
