@@ -598,7 +598,7 @@ final class EngineManager: ObservableObject {
                 // engine that answers (or a transport that refuses) and fails a few
                 // probes in a row is wedged: restart it instead of reusing the cached
                 // connection for the rest of the poll window.
-                if ownedPID != nil, (error as? URLError)?.code != .timedOut {
+                if ownedPID != nil, Self.isLivenessFailure(error) {
                     consecutiveProbeFailures += 1
                     if consecutiveProbeFailures >= 3 {
                         outcome = "timeout"
@@ -620,6 +620,23 @@ final class EngineManager: ObservableObject {
         // relaunches a fresh runtime instead of stalling against the wedged one.
         BundledSplash.shared.shutdown()
         throw EngineStalled()
+    }
+
+    /// Errors that prove the engine answered but is wedged — the only evidence the
+    /// liveness counter may act on. Connection-level races during a cold load
+    /// (refused, cannot connect, reset, DNS) are load progress exactly like timeouts:
+    /// the supervisor binds its listener late, and killing the engine three refusals
+    /// into its own startup loops forever — every turn dies before the model loads.
+    private static func isLivenessFailure(_ error: Error) -> Bool {
+        if error is EngineError { return true }
+        guard let urlError = error as? URLError else { return true }
+        switch urlError.code {
+        case .timedOut, .cannotConnectToHost, .cannotFindHost,
+             .networkConnectionLost, .notConnectedToInternet, .dataNotAllowed, .dnsLookupFailed:
+            return false
+        default:
+            return true
+        }
     }
 
     @discardableResult
