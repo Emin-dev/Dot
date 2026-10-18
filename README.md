@@ -4,6 +4,10 @@
 > verified gates, what works/partial/missing and the next steps. Older planning documents are dated
 > history and may be superseded.
 
+See **[docs/ROADMAP.md](docs/ROADMAP.md)** for current plans, goals and the new
+per-Dot GitHub log system; **[docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md)** carries the
+binding rules R1–R16.
+
 ## Install Dot
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)

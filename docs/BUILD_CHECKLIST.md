@@ -609,13 +609,19 @@ app or browser; keep the reply as text and suppress proactive/follow-up speech. 
   full text in a separate searchable archive; voice-only interface. Implemented 2026-10-17: 20 s
   debounce, local-model summary, key-points tier T3, bullet parser/dedupe/cap. B4 fixed 2026-10-17:
   one `LocalFTSStore` connection for facts and tier state.
-- Files: **full autonomy** — create/write/rename/move/delete automatically, without asking (this
-  overrides the earlier "card for destructive actions" rule for file operations; implemented
-  2026-10-17 for simple file utilities and `delete_file`, while shells/sudo/substitutions still card);
-  proactive
-  suggestions from everything Dot sees. Implemented 2026-10-17 (bounded): recent-file scan of
-  Desktop/Documents/Downloads (24 h, names/folders/ages/WIP only) feeds the proactive prompt and
-  triggers on a changed newest file; full disk index/content search still open.
+- Files (R7 revised 2026-10-19): **supervised autonomy** — every file/shell action is decided by a
+  small on-device safety model (R16, Gemma-3-4B Q4) that receives the full conversation and the exact
+  commands and answers yes/no; on "no" Dot searches for a safer solution and re-asks; after three
+  failed attempts Dot stops and asks the owner next time. This supersedes the earlier "without
+  asking" wording. Implemented so far: simple file utilities and `delete_file`, while shells/sudo/
+  substitutions still card; proactive suggestions from a recent-file scan of Desktop/Documents/
+  Downloads; full disk index/content search still open.
+- **R16 (2026-10-19):** an auxiliary small local model — Gemma-3-4B Q4 — for fast narrow tasks and as
+  the R7 safety approver. The main engine/model stays Splash + Qwen3.8 27B Q4 with its DFlash draft.
+- **R4 revised (2026-10-19):** voice quality evaluation first — identical samples from Kokoro
+  (British), Chatterbox and Orpheus 3B; the owner listens and picks the winner.
+- **R10 revised (2026-10-19):** every free, keyless source plus a local Rust metasearch now; an
+  optional vendored SearXNG instance later.
 - Screen: **adaptive watching** — idle snapshot every few minutes; on screen change or mouse movement,
   continuous capture for 10–50 s (extended while changing); battery-aware; visible pause switch.
   Implemented 2026-10-17: 3-min fingerprint, 10–50 s watch, 4 s settle, 60 s cooldown, low-power and
