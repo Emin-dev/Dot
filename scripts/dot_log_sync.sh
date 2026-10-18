@@ -24,6 +24,9 @@ trap 'rm -rf "$WORK"' EXIT
 # The token goes through an in-memory git config in a throwaway HOME, so it never
 # touches the shell history or a persistent config file.
 export HOME="$WORK"
+# Work entirely inside the throwaway directory so the clone never lands in the
+# caller's working tree.
+cd "$WORK"
 git config --global user.name  "$DOT_ID"
 git config --global user.email "$DOT_ID@dot.local"
 git config --global credential.helper "!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f"
