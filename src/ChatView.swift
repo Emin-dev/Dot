@@ -1216,7 +1216,10 @@ final class ChatModel: ObservableObject {
             self.proactiveContextChangedAfterUser = true
             self.updateProactiveContext()
         }
-        self.engine.onReadinessStage = { [weak self] stage in self?.engineStage = stage }
+        self.engine.onReadinessStage = { [weak self] stage in
+            self?.engineStage = stage
+            self?.publishHealthSnapshot()
+        }
         startPrewarmIfEnabled()
         startAdaptiveScreenWatch()
     }
@@ -1793,6 +1796,41 @@ final class ChatModel: ObservableObject {
         }
         let trimmed = fact.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// A machine-readable health snapshot, rewritten on every readiness-stage change
+    /// and every blocked state, so an external agent (or Dot itself) can tell what is
+    /// broken without parsing the chat log — engine stage, permissions, last error,
+    /// phase and commit.
+    private func publishHealthSnapshot() {
+        let micStatus: String
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: micStatus = "authorized"
+        case .denied: micStatus = "denied"
+        case .restricted: micStatus = "restricted"
+        default: micStatus = "undetermined"
+        }
+        let payload: [String: Any] = [
+            "schema_version": 1,
+            "updated_at": Date().timeIntervalSince1970,
+            "app": "dot",
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "engine_stage": engineStage ?? "unknown",
+            "engine_ready": runtime.isReady(),
+            "mic": micStatus,
+            "screen": CGPreflightScreenCaptureAccess(),
+            "accessibility": InPlaceAppTyping.isAccessibilityTrusted(),
+            "phase": String(describing: phase),
+            "issue": issue?.title ?? "",
+            "last_error": issue?.title ?? "",
+            "memory_records": memory.map { _ in 0 } as Any,
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
+            let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("Dot/dot-health.json")
+            if let url { try? data.write(to: url, options: .atomic) }
+        }
+        DiagnosticChatLogger.record(role: "system", text: "[HEALTH] engine=\(engineStage ?? "unknown") ready=\(runtime.isReady()) mic=\(micStatus) screen=\(CGPreflightScreenCaptureAccess())")
     }
 
     /// The subject of an explicit "forget ..." request, or nil when the turn is not one.
@@ -3129,6 +3167,7 @@ final class ChatModel: ObservableObject {
     private func block(_ message: String, issue: CompanionIssue) {
         DiagnosticChatLogger.record(role: "dot (error)", text: "\(message) [\(issue)]")
         self.issue = issue; phase = .blocked(message)
+        publishHealthSnapshot()
     }
 
     private func enqueueVoice(_ text: String, id: UUID) {
