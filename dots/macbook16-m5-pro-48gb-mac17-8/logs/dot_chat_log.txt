@@ -3941,3 +3941,19 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T13:14:49.594Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
 [2026-10-19T13:17:29.094Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
 [2026-10-19T13:22:32.329Z] [SYSTEM] [SYNC] pushed 1 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T13:27:35.467Z] [SYSTEM] [SYNC] pushed 1 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T13:29:07.322Z] [SYSTEM] [CLICK] preparation=ready engine=true
+[2026-10-19T13:29:07.462Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:29:07.463Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:29:07.465Z] [SYSTEM] [HEALTH] engine=Loading local model ready=true mic=authorized screen=true
+[2026-10-19T13:29:07.478Z] [DOT (ERROR)] The bundled voice engine could not load its local voice model. A repaired complete app is required. [voice]
+[2026-10-19T13:29:07.479Z] [SYSTEM] [HEALTH] engine=Loading local model ready=true mic=authorized screen=true
+[2026-10-19T13:29:07.486Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
+[2026-10-19T13:29:10.339Z] [SYSTEM] [CLICK] preparation=ready engine=true
+[2026-10-19T13:29:10.439Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:29:10.441Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:29:10.451Z] [DOT (ERROR)] The bundled voice engine could not load its local voice model. A repaired complete app is required. [voice]
+[2026-10-19T13:29:10.454Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:29:10.456Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
+[2026-10-19T13:34:28.844Z] [SYSTEM] Dot application started
+[2026-10-19T13:34:28.848Z] [SYSTEM] App session started
