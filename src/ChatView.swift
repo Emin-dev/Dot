@@ -1847,6 +1847,32 @@ final class ChatModel: ObservableObject {
         return nil
     }
 
+    private enum BatteryAlertCommand: Equatable {
+        case enable(threshold: Int?)
+        case disable
+        case status
+    }
+
+    /// The owner's spoken battery-alert configuration, or nil when the turn is not
+    /// about it. The threshold is bounded to 5-50 by the settings object.
+    private static func batteryAlertCommand(from phrase: String) -> BatteryAlertCommand? {
+        if ["stop battery alerts", "disable battery alerts", "battery alerts off",
+            "turn off battery alerts"].contains(phrase) { return .disable }
+        if ["battery alerts", "show battery alerts", "battery alerts status",
+            "are battery alerts on"].contains(phrase) { return .status }
+        if ["alert me when battery is low", "battery alerts on", "enable battery alerts",
+            "warn me when battery is low"].contains(phrase) { return .enable(threshold: nil) }
+        for prefix in ["alert me when battery drops below ", "alert me when the battery drops below ",
+                       "warn me when battery drops below "] where phrase.hasPrefix(prefix) {
+            let rest = phrase.dropFirst(prefix.count)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: " percent", with: "")
+                .replacingOccurrences(of: "%", with: "")
+            if let value = Int(rest) { return .enable(threshold: value) }
+        }
+        return nil
+    }
+
     /// Battery state from IOKit's power-source description; no permission and no
     /// polling, and honest when the machine has no battery to report.
     private static func batterySnapshot() -> (percent: Int, charging: Bool, onAC: Bool)? {
@@ -2206,6 +2232,25 @@ final class ChatModel: ObservableObject {
                     ? "I found nothing stored about \"\(subject)\"."
                     : "Forgot \(removed) memory record\(removed == 1 ? "" : "s") about \"\(subject)\".",
                     id: id)
+            }
+            return
+        }
+
+        // R14 configuration, before the level answer: "battery alerts" must configure,
+        // not report the level.
+        if pendingApproval == nil, let command = Self.batteryAlertCommand(from: copyPhrase) {
+            switch command {
+            case .enable(let threshold):
+                batteryAlerts.enabled = true
+                if let threshold { batteryAlerts.lowThreshold = threshold }
+                respondDirectly("Battery alerts are on. I will tell you once when the battery drops below \(batteryAlerts.lowThreshold)%, and when charging starts. Say \"stop battery alerts\" to turn them off.", id: id)
+            case .disable:
+                batteryAlerts.enabled = false
+                respondDirectly("Battery alerts are off.", id: id)
+            case .status:
+                respondDirectly(batteryAlerts.enabled
+                    ? "Battery alerts are on: low warning below \(batteryAlerts.lowThreshold)%, charging notices \(batteryAlerts.chargingAlerts ? "on" : "off")."
+                    : "Battery alerts are off. Say \"alert me when battery is low\" to turn them on.", id: id)
             }
             return
         }
