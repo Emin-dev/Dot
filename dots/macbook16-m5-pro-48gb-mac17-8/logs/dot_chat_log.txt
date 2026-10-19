@@ -3966,3 +3966,16 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T13:47:13.019Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
 [2026-10-19T13:50:55.144Z] [SYSTEM] Dot application started
 [2026-10-19T13:50:55.148Z] [SYSTEM] App session started
+[2026-10-19T13:50:59.036Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T13:52:07.954Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:52:07.955Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:52:08.278Z] [SYSTEM] [HEALTH] engine=Loading local model ready=true mic=authorized screen=true
+[2026-10-19T13:53:12.916Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
+[2026-10-19T13:53:13.095Z] [SCREEN] ACTIVE_APP: "DeepSeek Harness" | OCR_LINES: 43 | LATENCY: 135.4ms
+[2026-10-19T13:53:32.205Z] [DOT (PROACTIVE)] Your audit swarm is deep-diving on the voice/manifest fixes right now, and I noticed you've got fresh bf_alice and bf_lily voice files in Downloads — exactly the kind of added voices the new installer auto-patches the manifest for. Want me to check that those new alice and lily voice files are actually registered in the manifest once the audit finishes?
+[2026-10-19T13:53:32.654Z] [DOT (ERROR)] Unsupported Bionic voice protocol. [voice]
+[2026-10-19T13:53:32.655Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
+[2026-10-19T13:54:47.745Z] [SYSTEM] Paused: display is off or locked.
+[2026-10-19T13:54:47.938Z] [DOT (ERROR)] Listening stopped when your Mac went to sleep. Click me when you're ready. [voice]
+[2026-10-19T13:54:47.940Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
+[2026-10-19T14:05:30.490Z] [SYSTEM] Resumed after display wake/unlock.
