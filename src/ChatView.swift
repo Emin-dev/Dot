@@ -1218,11 +1218,26 @@ final class ChatModel: ObservableObject {
             self.updateProactiveContext()
         }
         self.engine.onReadinessStage = { [weak self] stage in
-            self?.engineStage = stage
-            self?.publishHealthSnapshot()
+            guard let self else { return }
+            self.engineStage = stage
+            self.publishHealthSnapshot()
+            // R11: live progress — while the pet is blocked because the engine is not
+            // ready, the message follows the stages instead of staying static.
+            if case .blocked = self.phase, self.issue == .files || self.issue == .unknown {
+                self.block(Self.progressMessage(for: stage ?? ""), issue: .unknown)
+            }
         }
         startPrewarmIfEnabled()
         startAdaptiveScreenWatch()
+    }
+
+    /// R11: the owner-facing words for each engine stage during a cold start.
+    private static func progressMessage(for stage: String) -> String {
+        switch stage {
+        case "Starting local engine": return "Starting Dot's engine…"
+        case "Loading local model": return "Loading the local model — about a minute the first time…"
+        default: return "Checking the local engine…"
+        }
     }
 
     /// R11: optional prewarm. Off by default; when enabled, waits for the payload
@@ -1836,6 +1851,12 @@ final class ChatModel: ObservableObject {
         DotLogSync.shared.requestSync(reason: "health-change")
     }
 
+    private static func isPrewarmCommand(_ phrase: String) -> Bool {
+        ["prewarm", "prewarm on", "prewarm at login", "prewarm when you start",
+         "prewarm when dot starts", "stop prewarming", "prewarm off"].contains(phrase)
+            || phrase.hasPrefix("prewarm")
+    }
+
     /// The subject of an explicit "forget ..." request, or nil when the turn is not one.
     /// A bare "everything" becomes an empty subject so the caller asks instead of wiping.
     private static func forgetSubject(from phrase: String) -> String? {
@@ -2232,6 +2253,19 @@ final class ChatModel: ObservableObject {
                     ? "I found nothing stored about \"\(subject)\"."
                     : "Forgot \(removed) memory record\(removed == 1 ? "" : "s") about \"\(subject)\".",
                     id: id)
+            }
+            return
+        }
+
+        // R11 toggle: prewarm at login, off by default.
+        if pendingApproval == nil, Self.isPrewarmCommand(copyPhrase) {
+            if copyPhrase.hasPrefix("stop prewarm") || copyPhrase == "prewarm off" {
+                defaults.set(false, forKey: Self.prewarmDefaultsKey)
+                respondDirectly("Prewarm is off. Dot will prepare when you first use it.", id: id)
+            } else if copyPhrase.hasPrefix("prewarm") {
+                defaults.set(true, forKey: Self.prewarmDefaultsKey)
+                startPrewarmIfEnabled()
+                respondDirectly("Prewarm is on. Dot will get ready in the background at launch, so it answers sooner.", id: id)
             }
             return
         }
