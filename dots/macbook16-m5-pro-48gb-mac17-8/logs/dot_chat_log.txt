@@ -3907,3 +3907,12 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T12:18:06.050Z] [DOT (ERROR)] Listening stopped when your Mac went to sleep. Click me when you're ready. [voice]
 [2026-10-19T12:18:06.052Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
 [2026-10-19T12:38:02.468Z] [SYSTEM] Resumed after display wake/unlock.
+[2026-10-19T12:39:38.674Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T12:40:13.958Z] [DOT (ERROR)] Dot is still preparing — try again in a moment. [unknown]
+[2026-10-19T12:40:13.960Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
+[2026-10-19T12:40:15.441Z] [DOT (ERROR)] Dot is still preparing — try again in a moment. [unknown]
+[2026-10-19T12:40:15.444Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
+[2026-10-19T12:40:16.566Z] [DOT (ERROR)] Dot is still preparing — try again in a moment. [unknown]
+[2026-10-19T12:40:16.569Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
+[2026-10-19T12:48:46.642Z] [SYSTEM] Dot application started
+[2026-10-19T12:48:46.645Z] [SYSTEM] App session started
