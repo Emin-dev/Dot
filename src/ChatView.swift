@@ -1339,6 +1339,9 @@ final class ChatModel: ObservableObject {
         }
         DiagnosticChatLogger.record(role: "system",
             text: "Memory: stored \(points.count) conversation key point(s).")
+        // R5: the owner asked that capture be announced, so the memory never fills
+        // without Dot saying so. Short and checkable: "what do you remember" lists it.
+        speakDirect("I'll remember \(points.count) things from our conversation. Ask me what I remember to see them.")
     }
 
     func startProactivity() {
