@@ -620,7 +620,8 @@ app or browser; keep the reply as text and suppress proactive/follow-up speech. 
   the R7 safety approver. The main engine/model stays Splash + Qwen3.8 27B Q4 with its DFlash draft.
 - **R4 revised (2026-10-19):** voice quality evaluation first — identical samples from Kokoro
   (British), Chatterbox and Orpheus 3B; the owner listens and picks the winner.
-- **R10 revised (2026-10-19):** every free, keyless source plus a local Rust metasearch now; an
+- **R10 revised (2026-10-19):** keyless metasearch shipping DuckDuckGo + Google News + Wikipedia +
+  arXiv (Mojeek and Marginalia blocked automation and were dropped; optional SearXNG later); an
   optional vendored SearXNG instance later.
 - Screen: **adaptive watching** — idle snapshot every few minutes; on screen change or mouse movement,
   continuous capture for 10–50 s (extended while changing); battery-aware; visible pause switch.

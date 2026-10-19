@@ -20,6 +20,14 @@ Rust; the only Python left is inside the vendored Splash engine.
   Orpheus 3B, the owner listens and picks the winner (R4); live cold-start progress
   + optional login prewarm (R11); optional battery/charging alerts (R14); placement
   refresh-before-validate; ~540 audited dead lines; the load-flaky search test.
+**R10 status (2026-10-19):** the keyless metasearch ships four live, verified
+sources — DuckDuckGo, Google News (RSS), Wikipedia and arXiv — merged with dedup
+and the eight-result bound. Mojeek (403 to automated queries) and Marginalia
+(no parseable results for automated requests) were tried and dropped; both are
+recorded here so nobody re-attempts them. The optional vendored SearXNG instance
+remains a documented later slice per the owner's "both" answer, and keyed
+providers stay off unless the owner supplies keys.
+
 **R16 slice plan:** (1) model — Gemma-3-4B Q4_K_M GGUF into
 `OfflineModels/aux/`, fetched or copied by install_local.sh, pinned HF source ✅;
 (2) harness — a `dot-safety` Rust binary (llama.cpp via the `llama-cpp-2` crate,
