@@ -1,5 +1,5 @@
 [workspace]
 members = [
-    "crates/dot-research", "crates/dot-voice", "crates/dot-runtime",
+    "crates/dot-research", "crates/dot-voice", "crates/dot-runtime", "crates/dot-safety",
 ]
 resolver = "2"

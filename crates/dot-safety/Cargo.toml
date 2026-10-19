@@ -1,0 +1,13 @@
+[package]
+name = "dot-safety"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "dot-safety"
+path = "src/main.rs"
+
+[dependencies]
+llama-cpp-2 = { version = "0.1", features = ["metal"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

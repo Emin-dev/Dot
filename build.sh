@@ -17,7 +17,7 @@ SOURCES=(src/*.swift)
 # The runtime is Rust-only. Build the binaries first so the bundle always carries
 # them; an absent binary would otherwise silently change runtime behaviour.
 command -v cargo >/dev/null || { echo 'cargo is required to build the Dot runtime' >&2; exit 1; }
-cargo build --release --manifest-path Cargo.toml --bin dot-voice --bin dot-search --bin dot-fetch
+cargo build --release --manifest-path Cargo.toml --bin dot-voice --bin dot-search --bin dot-fetch --bin dot-safety
 python3 -B scripts/package_app_intents.py prepare --work-dir "$INTENTS_BUILD" "${SOURCES[@]}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # The speech recognizer is a compile-time branch (`#if canImport(whisper)`), so a
@@ -39,7 +39,7 @@ xcrun swiftc -O -warnings-as-errors -module-name Dot -target "$TARGET" \
   -output-file-map "$INTENTS_BUILD/output-map.json" -o "$APP/Contents/MacOS/Dot" "${SOURCES[@]}" \
   -framework SwiftUI -framework AppKit -framework AVFoundation -framework ScreenCaptureKit -framework Vision -framework CryptoKit -framework EventKit \
   ${WHISPER_FLAGS[@]+"${WHISPER_FLAGS[@]}"}
-cp target/release/dot-voice target/release/dot-search target/release/dot-fetch "$APP/Contents/MacOS/"
+cp target/release/dot-voice target/release/dot-search target/release/dot-fetch target/release/dot-safety "$APP/Contents/MacOS/"
 mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
 cp Resources/bundled-models.json "$APP/Contents/Resources/"
