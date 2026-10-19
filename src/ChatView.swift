@@ -1397,6 +1397,9 @@ final class ChatModel: ObservableObject {
     func resumeAfterScreenOn() {
         guard screenPaused else { return }
         screenPaused = false
+        // A display pause can cancel payload verification mid-flight; without this,
+        // the pet stayed "still preparing" forever after wake.
+        if !OfflinePreparation.shared.ready { OfflinePreparation.shared.retry() }
         startProactivity()
         startAdaptiveScreenWatch()
         startPrewarmIfEnabled()
@@ -1696,6 +1699,10 @@ final class ChatModel: ObservableObject {
 
     /// Manual clicks interrupt; automatic capture requires the same-turn final-question gate.
     func clicked() {
+        // Every click is recorded first, before any guard, so a silent click can
+        // never again be indistinguishable from a click that never arrived.
+        DiagnosticChatLogger.record(role: "system",
+            text: "[CLICK] preparation=\(OfflinePreparation.shared.state) engine=\(runtime.isReady())")
         // The OS only prompts while a permission is undetermined, and only for the
         // process that asks. The prompt used to live deep inside the capture path,
         // behind readiness and screen preparation, so in practice it never fired and
