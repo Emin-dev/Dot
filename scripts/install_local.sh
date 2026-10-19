@@ -67,11 +67,11 @@ cp -c -R build/Dot.app "$STAGE/Dot.app" 2>/dev/null || cp -R build/Dot.app "$STA
 # upgrades copy it from the app being replaced; a fresh install fetches it from the
 # pinned Hugging Face repo. Both paths verify size, and DOT_SKIP_VOICE_FETCH=1
 # skips the network entirely (voice replies then fall back to the system voice).
-VOICE_DIR="$STAGE/Dot.app/Contents/Resources/Voice"
+VOICE_DIR="$STAGE/Dot.app/Contents/Resources/Offline/Voice/model"
 if [ "${DOT_SKIP_VOICE_FETCH:-0}" != "1" ] && [ ! -f "$VOICE_DIR/kokoro-v1_0.pth" ]; then
-    if [ -f "$APP/Contents/Resources/Voice/kokoro-v1_0.pth" ]; then
+    if [ -f "$APP/Contents/Resources/Offline/Voice/model/kokoro-v1_0.pth" ]; then
         mkdir -p "$VOICE_DIR"
-        cp -c -R "$APP/Contents/Resources/Voice/." "$VOICE_DIR/" 2>/dev/null || cp -R "$APP/Contents/Resources/Voice/." "$VOICE_DIR/"
+        cp -c -R "$APP/Contents/Resources/Offline/Voice/model/." "$VOICE_DIR/" 2>/dev/null || cp -R "$APP/Contents/Resources/Offline/Voice/model/." "$VOICE_DIR/"
         echo "voice payload copied from the previous app"
     else
         mkdir -p "$VOICE_DIR/voices"
