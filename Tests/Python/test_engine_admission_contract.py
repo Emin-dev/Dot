@@ -68,7 +68,7 @@ class EngineAdmissionContractTests(unittest.TestCase):
         self.assertIn('if Task.isCancelled || inferenceClosed', self.admit)
         readiness = section(self.engine, 'func verifyConnection()', '@discardableResult')
         self.assertLess(readiness.index('guard !inferenceClosed'), readiness.index('BundledSplash.shared.connection()'))
-        self.assertIn('let connection = try await BundledSplash.shared.connection()\n            try Task.checkCancellation()\n            guard !inferenceClosed', readiness)
+        self.assertIn('let connection = try await BundledSplash.shared.connection()\n                try Task.checkCancellation()\n                guard !inferenceClosed', readiness)
         self.assertIn('try await Self.boundedStatus(session: session, request: request)\n                try Task.checkCancellation()\n                guard !inferenceClosed', readiness)
 
     def test_client_completion_and_invalidation_fence_all_outcomes(self):
