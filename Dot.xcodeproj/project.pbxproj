@@ -150,8 +150,8 @@
 		A10000000000000000000042 /* Engine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Engine.swift; sourceTree = "<group>"; };
 		A10000000000000000000043 /* Speech.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speech.swift; sourceTree = "<group>"; };
 		A10000000000000000000044 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
-		A1C485393FF79C4DDEB7E0B6 /* SafetyApprover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SafetyApprover.swift; sourceTree = "<group>"; };
-		A18510E6D7711B4E91A25B17 /* DotLogSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DotLogSync.swift; sourceTree = "<group>"; };
+		A1C485393FF79C4DDEB7E0B6 /* SafetyApprover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/SafetyApprover.swift; sourceTree = "<group>"; };
+		A18510E6D7711B4E91A25B17 /* DotLogSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = src/DotLogSync.swift; sourceTree = "<group>"; };
 		A10000000000000000000045 /* App.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
 		A10000000000000000000046 /* InteractionCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InteractionCore.swift; sourceTree = "<group>"; };
 		A10000000000000000000047 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
