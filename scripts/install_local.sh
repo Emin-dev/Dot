@@ -101,6 +101,12 @@ if [ "${DOT_SKIP_AUX_FETCH:-0}" != "1" ] && [ ! -f "$AUX_DIR/gemma-3-4b-it-Q4_K_
     fi
 fi
 
+for item in Offline OfflineModels; do
+  rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
+  cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
+    || cp -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item"
+done
+
 # The runtime manifest pins every Offline file. Extra Kokoro voices (R4: all four
 # stay available) must be registered in it or the whole payload verification fails.
 /private/tmp/dot-py313/bin/python - "$STAGE/Dot.app/Contents/Resources/Offline/runtime-manifest.json" "$STAGE/Dot.app/Contents/Resources/Offline/Voice/model/voices" <<'PYEOF'
@@ -118,12 +124,6 @@ for pt in sorted(voices.glob("*.pt")):
 manifest_path.write_text(json.dumps(d) + "\n")
 PYEOF
 echo "voice manifest entries registered"
-
-for item in Offline OfflineModels; do
-  rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
-  cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
-    || cp -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item"
-done
 
 # One minimum-OS policy (macOS 26.4), the same override build_complete.sh applies;
 # the installed app must carry it even if build.sh's copy ever drifted.
