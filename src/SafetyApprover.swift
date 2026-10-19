@@ -71,26 +71,21 @@ final class SafetyApprover: @unchecked Sendable {
         } catch {
             return .unavailable(reason: "could not start approver")
         }
-        return await withCheckedContinuation { continuation in
-            let deadline = DispatchWorkItem {
-                if process.isRunning {
-                    process.terminate()
-                    continuation.resume(returning: .unavailable(reason: "approver timed out"))
-                }
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 20, execute: deadline)
-            DispatchQueue.global().async {
-                let data = stdout.fileHandleForReading.readDataToEndOfFile()
-                process.waitUntilExit()
-                deadline.cancel()
-                guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let verdict = object["verdict"] as? String else {
-                    continuation.resume(returning: .unavailable(reason: "approver gave no verdict"))
-                    return
-                }
-                let reason = (object["reason"] as? String) ?? ""
-                continuation.resume(returning: verdict == "yes" ? .allowed : .denied(reason: reason))
-            }
+        // A hard 20-second watchdog; the blocking read below ends when the process
+        // exits or is terminated. This runs on the generic executor, never on the
+        // main actor, so a slow model load cannot freeze the pet.
+        let watchdog = Task {
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            if process.isRunning { process.terminate() }
         }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        watchdog.cancel()
+        process.waitUntilExit()
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let verdict = object["verdict"] as? String else {
+            return .unavailable(reason: "approver gave no verdict")
+        }
+        let reason = (object["reason"] as? String) ?? ""
+        return verdict == "yes" ? .allowed : .denied(reason: reason)
     }
 }
