@@ -244,6 +244,27 @@ final class ChatModel: ObservableObject {
 
         Task { @MainActor [weak self] in
             guard let self else { return }
+            // R7/R16: the small local approver decides every file and shell action.
+            // The R15 card still gates the action before this point; this is the
+            // model-based second gate. Fail closed: no approver, no execution.
+            let actionText = isDelete ? "delete file \(target)" : cmd
+            let conversation = self.history.suffix(10)
+                .map { "\($0.role): \($0.content)" }.joined(separator: "\n")
+            switch await SafetyApprover.shared.evaluate(conversation: conversation, action: actionText) {
+            case .allowed:
+                break
+            case .denied(let reason):
+                let strikes = SafetyApprover.shared.registerStrike(key: actionText)
+                if strikes >= 3 {
+                    self.block("The safety check refused this three times (\(reason)). It is your call now: say \"force it\" and approve again to run it as-is.", issue: .unknown)
+                } else {
+                    self.block("The safety check refused (\(reason)). I'll try a different approach next time.", issue: .unknown)
+                }
+                return
+            case .unavailable(let reason):
+                self.block("The safety check is unavailable (\(reason)), so I will not run this. Try again in a moment.", issue: .unknown)
+                return
+            }
             if isDelete {
                 do {
                     try FileManager.default.removeItem(atPath: target)
@@ -2257,6 +2278,13 @@ final class ChatModel: ObservableObject {
                     : "Forgot \(removed) memory record\(removed == 1 ? "" : "s") about \"\(subject)\".",
                     id: id)
             }
+            return
+        }
+
+        // R7 manual override: after three refusals the owner may force one action.
+        if pendingApproval == nil, copyPhrase == "force it" {
+            SafetyApprover.shared.forceNext = true
+            respondDirectly("The next approval will run without the safety check — your call.", id: id)
             return
         }
 
