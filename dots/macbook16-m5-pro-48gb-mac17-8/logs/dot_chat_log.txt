@@ -3930,3 +3930,12 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T13:07:56.760Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
 [2026-10-19T13:12:20.848Z] [SYSTEM] Dot application started
 [2026-10-19T13:12:20.851Z] [SYSTEM] App session started
+[2026-10-19T13:12:24.832Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T13:13:33.676Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:13:33.677Z] [SYSTEM] [HEALTH] engine=Starting local engine ready=true mic=authorized screen=true
+[2026-10-19T13:13:33.992Z] [SYSTEM] [HEALTH] engine=Loading local model ready=true mic=authorized screen=true
+[2026-10-19T13:14:32.571Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
+[2026-10-19T13:14:32.752Z] [SCREEN] ACTIVE_APP: "Safari" | OCR_LINES: 111 | LATENCY: 118.6ms
+[2026-10-19T13:14:49.582Z] [DOT (PROACTIVE)] I notice a cluster of cancelled top-ups on Oct 17 across Apple Pay, PayPal, and Card all within a few minutes — that pattern often points to a payment-method issue rather than individual mistakes, so worth a quick look. Want me to pull up the Refunds tab or check the Usage page to see if those cancellations affected your balance?
+[2026-10-19T13:14:49.593Z] [DOT (ERROR)] The bundled voice engine could not load its local voice model. A repaired complete app is required. [voice]
+[2026-10-19T13:14:49.594Z] [SYSTEM] [HEALTH] engine=unknown ready=true mic=authorized screen=true
