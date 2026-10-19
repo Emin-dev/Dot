@@ -915,7 +915,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func performIdleRoam() {
-        guard !screenIsOff, !isAnimatingRoam, let panel, let model else { return }
+        var refusal: String? = nil
+        defer {
+            if let refusal {
+                DiagnosticChatLogger.record(role: "system", text: "[ROAM] skip: \(refusal)")
+            }
+        }
+        guard !screenIsOff else { refusal = "display off"; return }
+        guard !isAnimatingRoam else { refusal = "already animating"; return }
+        guard let panel, let model else { refusal = "panel/model missing"; return }
         let cursor = NSEvent.mouseLocation
         if model.hovered && !panel.frame.insetBy(dx: -8, dy: -8).contains(cursor) {
             model.hovered = false
@@ -923,22 +931,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if model.interactionPaused && NSEvent.pressedMouseButtons == 0 {
             model.interactionPaused = false
         }
-        // The 2-minute roam respects the same invariants as the movement loop:
-        // screen awareness on, nothing presented or pending, and the same
-        // accessibility pauses.
-        guard model.phase == .idle, model.screenEnabled, !model.pinned, !model.hovered,
-              !model.interactionPaused, !model.historyPresented, !model.followupPending,
-              panel.isVisible, menuTracking == 0, NSEvent.pressedMouseButtons == 0,
-              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
-              !NSWorkspace.shared.isVoiceOverEnabled else { return }
+        if model.phase != .idle { refusal = "phase=\(model.phase)"; return }
+        if !model.screenEnabled { refusal = "screen awareness off"; return }
+        if model.pinned { refusal = "pinned"; return }
+        if model.hovered { refusal = "pointer on Dot"; return }
+        if model.interactionPaused { refusal = "interaction paused"; return }
+        if model.historyPresented { refusal = "history presented"; return }
+        if model.followupPending { refusal = "followup pending"; return }
+        if !panel.isVisible { refusal = "panel hidden"; return }
+        if menuTracking != 0 { refusal = "menu tracking"; return }
+        if NSEvent.pressedMouseButtons != 0 { refusal = "mouse button held"; return }
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { refusal = "reduce motion"; return }
+        if NSWorkspace.shared.isVoiceOverEnabled { refusal = "voiceover"; return }
         let now = ProcessInfo.processInfo.systemUptime
-        guard RoamingCore.autonomousMoveAllowed(now: now, lastMoveAt: lastRoamRelocationAt) else { return }
-        guard let screen = panel.screen ?? NSScreen.main else { return }
+        if !RoamingCore.autonomousMoveAllowed(now: now, lastMoveAt: lastRoamRelocationAt) {
+            refusal = "cadence (waited \(Int(now - lastRoamRelocationAt))s of 115s)"; return
+        }
+        guard let screen = panel.screen ?? NSScreen.main else { refusal = "no screen"; return }
         let visible = screen.visibleFrame
-        guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { return }
+        guard let bounds = RoamingCore.originBounds(window: panel.frame.size, visible: visible) else { refusal = "no bounds"; return }
 
         // No verified map means no autonomous move: a blind roam can cover content.
-        guard let snap = placementSnapshot(for: screen, eligible: model.screenEnabled) else { return }
+        guard let snap = placementSnapshot(for: screen, eligible: model.screenEnabled) else { refusal = "no verified placement map"; return }
         let protectedRegions = snap.protected
 
         // Roam on the agreed cadence to a clear safe zone. The destination must be
@@ -963,7 +977,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ).flatMap { candidate in
             RoamingCore.safePath(from: currentFrame, to: candidate, regions: protectedRegions) ? candidate : nil
         }
-        guard let target, target != currentOrigin else { return }
+        guard let target, target != currentOrigin else { refusal = "no clear safe spot (screen busy)"; return }
 
         self.isAnimatingRoam = true
         self.lastRoamRelocationAt = now
