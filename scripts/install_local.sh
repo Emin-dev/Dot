@@ -101,6 +101,24 @@ if [ "${DOT_SKIP_AUX_FETCH:-0}" != "1" ] && [ ! -f "$AUX_DIR/gemma-3-4b-it-Q4_K_
     fi
 fi
 
+# The runtime manifest pins every Offline file. Extra Kokoro voices (R4: all four
+# stay available) must be registered in it or the whole payload verification fails.
+/private/tmp/dot-py313/bin/python - "$STAGE/Dot.app/Contents/Resources/Offline/runtime-manifest.json" "$STAGE/Dot.app/Contents/Resources/Offline/Voice/model/voices" <<'PYEOF'
+import json, hashlib, pathlib, sys
+manifest_path = pathlib.Path(sys.argv[1]); voices = pathlib.Path(sys.argv[2])
+d = json.loads(manifest_path.read_text())
+known = {f["path"] for f in d["files"]}
+for pt in sorted(voices.glob("*.pt")):
+    rel = f"Voice/model/voices/{pt.name}"
+    if rel in known:
+        continue
+    data = pt.read_bytes()
+    d["files"].append({"path": rel, "kind": "file", "bytes": len(data),
+                       "sha256": hashlib.sha256(data).hexdigest()})
+manifest_path.write_text(json.dumps(d) + "\n")
+PYEOF
+echo "voice manifest entries registered"
+
 for item in Offline OfflineModels; do
   rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
   cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
