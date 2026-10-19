@@ -3921,3 +3921,12 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T12:54:28.245Z] [SYSTEM] App session started
 [2026-10-19T12:54:32.009Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
 [2026-10-19T12:59:34.628Z] [SYSTEM] [SYNC] pushed 1 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T13:04:37.243Z] [SYSTEM] [SYNC] pushed 1 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T13:07:34.212Z] [SYSTEM] [CLICK] preparation=checking engine=false
+[2026-10-19T13:07:34.213Z] [DOT (ERROR)] Dot is still preparing — try again in a moment. [unknown]
+[2026-10-19T13:07:34.215Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
+[2026-10-19T13:07:56.757Z] [SYSTEM] [CLICK] preparation=checking engine=false
+[2026-10-19T13:07:56.759Z] [DOT (ERROR)] Dot is still preparing — try again in a moment. [unknown]
+[2026-10-19T13:07:56.760Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
+[2026-10-19T13:12:20.848Z] [SYSTEM] Dot application started
+[2026-10-19T13:12:20.851Z] [SYSTEM] App session started
