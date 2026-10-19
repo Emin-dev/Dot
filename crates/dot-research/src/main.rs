@@ -364,7 +364,18 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
         results.extend(ddg_results);
     }
 
-    // 2. News enrichment (Google News RSS, no key). Deduplicated and bounded by
+    // 2. arXiv enrichment (independent scholarly index, keyless). Deduplicated and
+    // bounded by the same eight-result response.
+    if let Ok(arxiv_results) = search_arxiv(query, client).await {
+        for res in arxiv_results {
+            if !results.iter().any(|r| r.url == res.url) {
+                results.push(res);
+                if results.len() >= 8 { break; }
+            }
+        }
+    }
+
+    // 3. News enrichment (Google News RSS, no key). Deduplicated and bounded by
     // the same eight-result response as the web providers.
     if let Ok(news_results) = search_news(query, client).await {
         for res in news_results {
@@ -375,7 +386,7 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
         }
     }
 
-    // 3. Wikipedia search fallback / enrichment when the web providers are thin.
+    // 4. Wikipedia search fallback / enrichment when the web providers are thin.
     if results.len() < 3 {
         if let Ok(wiki_results) = search_wikipedia(query, client).await {
             for res in wiki_results {
@@ -388,6 +399,56 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
 
     results.truncate(8);
     results
+}
+
+/// arXiv: a keyless, bot-tolerant scholarly index (Atom XML). Mojeek was tried
+/// first but 403s automated queries, so scholarly results are the reliable
+/// independent source; each provider's failure never costs the others.
+async fn search_arxiv(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!(
+        "https://export.arxiv.org/api/query?search_query=all:{}&start=0&max_results=8",
+        urlencoding::encode(&format!("\"{}\"", query))
+    );
+    let body = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(8))
+        .send().await?
+        .error_for_status()?
+        .text().await?;
+    let mut results = Vec::new();
+    // Minimal Atom parsing by entry block; no XML dependency needed.
+    let mut rest = body.as_str();
+    while let Some(entry_start) = rest.find("<entry") {
+        let after = &rest[entry_start..];
+        let Some(entry_end) = after.find("</entry>") else { break };
+        let entry = &after[..entry_end];
+        rest = &after[entry_end..];
+        let title = tag_text(entry, "title").trim().to_string();
+        let url = tag_text(entry, "id").trim().to_string();
+        let summary = tag_text(entry, "summary").trim().to_string();
+        if !url.is_empty() && !title.is_empty() {
+            results.push(SearchResult {
+                url,
+                title,
+                content: summary.chars().take(400).collect(),
+                published_date: None,
+            });
+        }
+    }
+    Ok(results)
+}
+
+/// The first <name>...</name> text in a slice, tags stripped.
+fn tag_text(entry: &str, name: &str) -> String {
+    let open = format!("<{}>", name);
+    let close = format!("</{}>", name);
+    let Some(s) = entry.find(&open) else { return String::new() };
+    let after = &entry[s + open.len()..];
+    let Some(e) = after.find(&close) else { return String::new() };
+    after[..e]
+        .replace("\n", " ")
+        .trim()
+        .to_string()
 }
 
 async fn search_news(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {

@@ -339,7 +339,7 @@ final class LocalDotSearchProvider: WebSearchProvider, Sendable {
     /// The engines the shipped runtime is reviewed to query with keyless access.
     /// The shipped runtime queries google-news on every search, so it stays in the
     /// reviewed set even when only some searches surface news results.
-    static let reviewedEngineIDs: Set<String> = ["duckduckgo", "wikipedia", "google-news"]
+    static let reviewedEngineIDs: Set<String> = ["duckduckgo", "wikipedia", "google-news", "arxiv"]
     let providerID = "local-dot-search"
     let permitsResultPersistence = true
     let isKeyless = true
