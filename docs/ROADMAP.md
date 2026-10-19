@@ -20,6 +20,13 @@ Rust; the only Python left is inside the vendored Splash engine.
   Orpheus 3B, the owner listens and picks the winner (R4); live cold-start progress
   + optional login prewarm (R11); optional battery/charging alerts (R14); placement
   refresh-before-validate; ~540 audited dead lines; the load-flaky search test.
+**Phase A progress (2026-10-19):** R1 five-minute listening ✅ · R14 battery alerts
+with spoken configuration ✅ · R11 live cold-start progress + prewarm toggle ✅ ·
+placement refresh-before-validate ✅ (caller asks `needsRefresh` first; no
+`reason=expired` rejections in the live log) · audited dead-code backlog cleared ✅
+(`InteractiveWalkthroughManager` remains, deferred pending a first-run UX decision) ·
+R4 voice pick awaiting the owner's judgment of the four Kokoro British samples.
+
 - **Phase B — core value:** memory as 5–10 LLM key points per conversation with a
   full-text archive, announced to the owner on capture (R5); **supervised file
   autonomy (R7 revised)** — every file/shell action is decided by a small on-device
