@@ -335,8 +335,6 @@
 				A10000000000000000000045 /* App.swift */,
 				A10000000000000000000046 /* InteractionCore.swift */,
 				A10000000000000000000044 /* ChatView.swift */,
-				A1C485393FF79C4DDEB7E0B6 /* SafetyApprover.swift */,
-				A18510E6D7711B4E91A25B17 /* DotLogSync.swift */,
 				A10000000000000000000042 /* Engine.swift */,
 				A10000000000000000000041 /* Models.swift */,
 				A10000000000000000000043 /* Speech.swift */,
@@ -427,8 +425,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A1A5150F281F004736AAB9DA /* SafetyApprover.swift in Sources */,
-				A16BBDF4E3364F4154BFA1C8 /* DotLogSync.swift in Sources */,
 				A10000000000000000000057 /* Icon.icns in Resources */,
                 C10000000000000000000003, E20000000000000000000011, E20000000000000000000010, AE2000000000000000000003,
 			);
