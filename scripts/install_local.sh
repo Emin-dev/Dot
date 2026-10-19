@@ -16,6 +16,11 @@
 #                          replaced, so an existing installation is the source.
 #   DOT_INSTALL_PATH       optional; defaults to ~/Applications/Dot.app
 set -euo pipefail
+
+# dot-safety's llama.cpp dependency needs cmake at build time. A system cmake wins;
+# otherwise fall back to the locally fetched one this machine already uses.
+command -v cmake >/dev/null 2>&1 || PATH="/private/tmp/cmake/CMake.app/Contents/bin:$PATH"
+
 cd "$(dirname "$0")/.."
 
 APP="${DOT_INSTALL_PATH:-$HOME/Applications/Dot.app}"
