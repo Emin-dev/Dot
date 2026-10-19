@@ -58,6 +58,28 @@ echo "==> assembling the complete bundle in $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 # Clone (APFS copy-on-write) so the 20 GB payload is not duplicated on disk.
 cp -c -R build/Dot.app "$STAGE/Dot.app" 2>/dev/null || cp -R build/Dot.app "$STAGE/Dot.app"
+# The voice payload (Kokoro model + voices, ~330 MB) lives outside git. In-place
+# upgrades copy it from the app being replaced; a fresh install fetches it from the
+# pinned Hugging Face repo. Both paths verify size, and DOT_SKIP_VOICE_FETCH=1
+# skips the network entirely (voice replies then fall back to the system voice).
+VOICE_DIR="$STAGE/Dot.app/Contents/Resources/Voice"
+if [ "${DOT_SKIP_VOICE_FETCH:-0}" != "1" ] && [ ! -f "$VOICE_DIR/kokoro-v1_0.pth" ]; then
+    if [ -f "$APP/Contents/Resources/Voice/kokoro-v1_0.pth" ]; then
+        mkdir -p "$VOICE_DIR"
+        cp -c -R "$APP/Contents/Resources/Voice/." "$VOICE_DIR/" 2>/dev/null || cp -R "$APP/Contents/Resources/Voice/." "$VOICE_DIR/"
+        echo "voice payload copied from the previous app"
+    else
+        mkdir -p "$VOICE_DIR/voices"
+        curl -sL -o "$VOICE_DIR/kokoro-v1_0.pth" "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/kokoro-v1_0.pth"
+        curl -sL -o "$VOICE_DIR/config.json" "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json"
+        for v in bf_alice bf_emma bf_isabella bf_lily; do
+            curl -sL -o "$VOICE_DIR/voices/$v.pt" "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/voices/$v.pt"
+        done
+        [ "$(stat -f%z "$VOICE_DIR/kokoro-v1_0.pth" 2>/dev/null || echo 0)" -gt 300000000 ] || fail "voice model fetch incomplete"
+        echo "voice payload fetched (pinned HF source)"
+    fi
+fi
+
 for item in Offline OfflineModels; do
   rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
   cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \

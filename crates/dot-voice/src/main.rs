@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const PROTOCOL: i32 = 1;
-const VOICE: &str = "bf_isabella";
+const DEFAULT_VOICE: &str = "bf_isabella";
 const SAMPLE_RATE: u32 = 24000;
 const MAX_LINE: usize = 8192;
 
@@ -88,6 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut root_dir: Option<PathBuf> = None;
     let mut output_dir: Option<PathBuf> = None;
+    let mut voice: Option<String> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -96,6 +97,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             i += 2;
         } else if args[i] == "--output" && i + 1 < args.len() {
             output_dir = Some(PathBuf::from(&args[i + 1]));
+            i += 2;
+        } else if args[i] == "--voice" && i + 1 < args.len() {
+            voice = Some(args[i + 1].clone());
             i += 2;
         } else {
             i += 1;
@@ -158,6 +162,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let job_rx = Arc::new(Mutex::new(job_rx));
 
     // Spawn synthesis worker thread
+    let selected_voice = voice.unwrap_or_else(|| DEFAULT_VOICE.to_string());
+    let worker_voice = selected_voice.clone();
     let worker_model = Arc::clone(&model);
     let worker_epoch = Arc::clone(&current_epoch);
     let worker_output = output.clone();
@@ -168,7 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 continue;
             }
 
-            let req = SynthesisRequest::new(&job.text).with_voice(VOICE);
+            let req = SynthesisRequest::new(&job.text).with_voice(&worker_voice);
             match worker_model.synthesize(&req) {
                 Ok(audio) => {
                     if job.epoch != worker_epoch.load(Ordering::SeqCst) {
@@ -217,7 +223,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         protocol: PROTOCOL,
         event: "hello",
         engine: "kokoro",
-        voice: VOICE,
+        voice: &selected_voice,
         sample_rate: SAMPLE_RATE,
         offline: true,
     });
