@@ -80,6 +80,22 @@ if [ "${DOT_SKIP_VOICE_FETCH:-0}" != "1" ] && [ ! -f "$VOICE_DIR/kokoro-v1_0.pth
     fi
 fi
 
+# R16: the auxiliary small model (Gemma-3-4B Q4) powers the R7 safety approver.
+# Same copy-or-fetch policy as the voice payload; DOT_SKIP_AUX_FETCH=1 skips it.
+AUX_DIR="$STAGE/Dot.app/Contents/Resources/OfflineModels/aux"
+if [ "${DOT_SKIP_AUX_FETCH:-0}" != "1" ] && [ ! -f "$AUX_DIR/gemma-3-4b-it-Q4_K_M.gguf" ]; then
+    if [ -f "$APP/Contents/Resources/OfflineModels/aux/gemma-3-4b-it-Q4_K_M.gguf" ]; then
+        mkdir -p "$AUX_DIR"
+        cp -c -R "$APP/Contents/Resources/OfflineModels/aux/." "$AUX_DIR/" 2>/dev/null || cp -R "$APP/Contents/Resources/OfflineModels/aux/." "$AUX_DIR/"
+        echo "aux model copied from the previous app"
+    else
+        mkdir -p "$AUX_DIR"
+        curl -sL -o "$AUX_DIR/gemma-3-4b-it-Q4_K_M.gguf" "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf"
+        [ "$(stat -f%z "$AUX_DIR/gemma-3-4b-it-Q4_K_M.gguf" 2>/dev/null || echo 0)" -gt 2000000000 ] || fail "aux model fetch incomplete"
+        echo "aux model fetched (pinned HF source)"
+    fi
+fi
+
 for item in Offline OfflineModels; do
   rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
   cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \

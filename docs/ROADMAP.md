@@ -20,6 +20,14 @@ Rust; the only Python left is inside the vendored Splash engine.
   Orpheus 3B, the owner listens and picks the winner (R4); live cold-start progress
   + optional login prewarm (R11); optional battery/charging alerts (R14); placement
   refresh-before-validate; ~540 audited dead lines; the load-flaky search test.
+**R16 slice plan:** (1) model — Gemma-3-4B Q4_K_M GGUF into
+`OfflineModels/aux/`, fetched or copied by install_local.sh, pinned HF source ✅;
+(2) harness — a `dot-safety` Rust binary (llama.cpp via the `llama-cpp-2` crate,
+Metal) that reads a prompt (full conversation + proposed commands) and prints a
+strict yes/no; (3) gating — the R7 flow routes every file/shell action through it,
+re-asks with a safer solution on "no", and escalates to asking the owner after
+three failed attempts.
+
 **Phase A progress (2026-10-19):** R1 five-minute listening ✅ · R14 battery alerts
 with spoken configuration ✅ · R11 live cold-start progress + prewarm toggle ✅ ·
 placement refresh-before-validate ✅ (caller asks `needsRefresh` first; no
