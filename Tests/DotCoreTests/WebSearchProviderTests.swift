@@ -652,7 +652,7 @@ final class LocalDotSearchProviderTests: XCTestCase {
         // Every reviewed engine reported unavailable is a provider failure, not success.
         let down = try runtime(payload: response(["results": [],
                                                   "unresponsive_engines": [["duckduckgo", "timeout"], ["wikipedia", "timeout"],
-                                                                          ["google-news", "timeout"]]]),
+                                                                          ["google-news", "timeout"], ["arxiv", "timeout"]]]),
                                validPayload: valid)
         do { _ = try await down.search(query: "engines-down", limit: 1); XCTFail("Engine outage accepted") }
         catch { XCTAssertEqual(error as? SearchRuntimeFailure, .unavailable) }
