@@ -3855,3 +3855,12 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T01:01:31.929Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
 [2026-10-19T01:07:17.463Z] [SYSTEM] Dot application started
 [2026-10-19T01:07:17.466Z] [SYSTEM] App session started
+[2026-10-19T01:07:20.988Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T01:10:10.301Z] [SYSTEM] Paused: display is off or locked.
+[2026-10-19T01:10:14.216Z] [SYSTEM] Resumed after display wake/unlock.
+[2026-10-19T01:10:14.226Z] [DOT] I'm back.
+[2026-10-19T01:11:23.253Z] [DOT (ERROR)] Listening stopped when your Mac went to sleep. Click me when you're ready. [voice]
+[2026-10-19T01:11:23.254Z] [SYSTEM] [HEALTH] engine=unknown ready=false mic=authorized screen=true
+[2026-10-19T01:11:23.257Z] [SYSTEM] Paused: display is off or locked.
+[2026-10-19T01:17:56.938Z] [SYSTEM] Resumed after display wake/unlock.
+[2026-10-19T01:17:56.952Z] [DOT] I'm back.
