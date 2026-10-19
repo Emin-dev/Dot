@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "total_bytes": 19930313310,
+  "total_bytes": 22420071166,
   "files": [
     {
       "path": "llm-target/README.md",
@@ -76,6 +76,11 @@
       "path": "llm-draft/model.safetensors",
       "bytes": 3848817896,
       "sha256": "67fc76d68dc5a9415511a4f394ef744d67510cd20e93b37cc2cc7d28e4bab65c"
+    },
+    {
+      "path": "aux/gemma-3-4b-it-Q4_K_M.gguf",
+      "bytes": 2489757856,
+      "sha256": "882e8d2db44dc554fb0ea5077cb7e4bc49e7342a1f0da57901c0802ea21a0863"
     }
   ]
 }
