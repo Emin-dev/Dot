@@ -3797,3 +3797,7 @@ The file /Users/mac/Downloads/MAC-INSTALL.md does not exist.
 [2026-10-19T00:09:30.404Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
 [2026-10-19T00:13:28.867Z] [SYSTEM] Dot application started
 [2026-10-19T00:13:28.870Z] [SYSTEM] App session started
+[2026-10-19T00:13:28.877Z] [SYSTEM] Paused: display is off or locked.
+[2026-10-19T00:13:32.560Z] [SYSTEM] [SYNC] pushed 2 file(s) to Emin-dev/Dot dots/macbook16-m5-pro-48gb-mac17-8 (periodic)
+[2026-10-19T00:16:04.221Z] [SYSTEM] Dot application started
+[2026-10-19T00:16:04.224Z] [SYSTEM] App session started
