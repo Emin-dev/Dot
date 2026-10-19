@@ -6,11 +6,12 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 use any_tts::{load_model, ModelType, SynthesisRequest, TtsConfig};
+use any_tts::config::ModelAssetDir;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 const PROTOCOL: i32 = 1;
-const DEFAULT_VOICE: &str = "bf_isabella";
+const DEFAULT_VOICE: &str = "bf_emma";
 const SAMPLE_RATE: u32 = 24000;
 const MAX_LINE: usize = 8192;
 
@@ -141,7 +142,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         root.clone()
     };
 
-    let config = TtsConfig::new(ModelType::Kokoro).with_model_path(model_dir.to_string_lossy().to_string());
+    let selected_voice = voice.unwrap_or_else(|| DEFAULT_VOICE.to_string());
+    let mut config = TtsConfig::new(ModelType::Kokoro).with_model_path(model_dir.to_string_lossy().to_string());
+    // RAM discipline: load exactly the selected voice's embedding, never the whole
+    // voices directory. All four British voices stay available as options; only the
+    // chosen one occupies memory.
+    let voice_source = model_dir.join("voices").join(format!("{}.pt", selected_voice));
+    match std::fs::read(&voice_source) {
+        Ok(bytes) => {
+            let mut single = std::collections::BTreeMap::new();
+            single.insert(format!("{}.pt", selected_voice), std::sync::Arc::from(bytes));
+            config.files.voices_dir = Some(ModelAssetDir::from_bytes(single));
+        }
+        Err(e) => {
+            eprintln!("Voice '{}' not found at {}: {}", selected_voice, voice_source.display(), e);
+            emit_json(&ErrorEvent {
+                protocol: PROTOCOL,
+                event: "unavailable",
+                id: None,
+                turn: None,
+                code: "local_voice_setup_failed",
+            });
+            std::process::exit(2);
+        }
+    }
     let model = match load_model(config) {
         Ok(m) => Arc::new(m),
         Err(e) => {
@@ -162,7 +186,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let job_rx = Arc::new(Mutex::new(job_rx));
 
     // Spawn synthesis worker thread
-    let selected_voice = voice.unwrap_or_else(|| DEFAULT_VOICE.to_string());
     let worker_voice = selected_voice.clone();
     let worker_model = Arc::clone(&model);
     let worker_epoch = Arc::clone(&current_epoch);

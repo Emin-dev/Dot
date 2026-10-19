@@ -1875,6 +1875,25 @@ final class ChatModel: ObservableObject {
         DotLogSync.shared.requestSync(reason: "health-change")
     }
 
+    /// The four-voice surface: "use voice emma" / "change voice to alice" / "list
+    /// voices". Returns "?" for the status form or the chosen voice name.
+    private static func voiceCommand(from phrase: String) -> String? {
+        if ["list voices", "voices", "what voice do you use", "which voice"].contains(phrase) {
+            return "?"
+        }
+        let names: [(String, String)] = [
+            ("emma", "bf_emma"), ("isabella", "bf_isabella"),
+            ("alice", "bf_alice"), ("lily", "bf_lily"),
+        ]
+        for prefix in ["use voice ", "change voice to ", "switch voice to ", "set voice to "] {
+            if phrase.hasPrefix(prefix) {
+                let name = phrase.dropFirst(prefix.count).trimmingCharacters(in: .whitespaces)
+                if let match = names.first(where: { $0.0 == name }) { return match.1 }
+            }
+        }
+        return nil
+    }
+
     private static func isPrewarmCommand(_ phrase: String) -> Bool {
         ["prewarm", "prewarm on", "prewarm at login", "prewarm when you start",
          "prewarm when dot starts", "stop prewarming", "prewarm off"].contains(phrase)
@@ -2285,6 +2304,19 @@ final class ChatModel: ObservableObject {
         if pendingApproval == nil, copyPhrase == "force it" {
             SafetyApprover.shared.forceNext = true
             respondDirectly("The next approval will run without the safety check — your call.", id: id)
+            return
+        }
+
+        // R4 voice settings: all four British voices stay available; only the chosen
+        // one is loaded, and the change applies from Dot's next reply.
+        if pendingApproval == nil, let choice = Self.voiceCommand(from: copyPhrase) {
+            if choice == "?" {
+                let current = UserDefaults.standard.string(forKey: "dot.voice") ?? "bf_emma"
+                respondDirectly("Voices: emma (default), isabella, alice and lily. You are using \(current). Say \"use voice alice\" to switch.", id: id)
+            } else {
+                UserDefaults.standard.set(choice, forKey: "dot.voice")
+                respondDirectly("Voice set to \(choice). I will speak with it from my next reply.", id: id)
+            }
             return
         }
 

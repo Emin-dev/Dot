@@ -121,7 +121,10 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         let child = Process(), stdin = Pipe(), stdout = Pipe()
         let dir = requested
         child.executableURL = native
-        child.arguments = ["--root", base.path, "--output", requested.path]
+        // R4: the owner's voice choice travels with the launch; the engine loads only
+        // that one voice's embedding, so RAM never holds the whole voice set.
+        let voice = UserDefaults.standard.string(forKey: "dot.voice") ?? "bf_emma"
+        child.arguments = ["--root", base.path, "--output", requested.path, "--voice", voice]
         child.environment = ["PATH": "/usr/bin:/bin"]
         child.currentDirectoryURL = requested
         child.standardInput = stdin; child.standardOutput = stdout
