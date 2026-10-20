@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// animation completion can never pin Dot at a covered destination.
     private var roamGeneration = 0
     private var lastRoamRelocationAt: Double = 0
+    private var lastRoamRefusal: String?
     private var statusItem: NSStatusItem?
     private var statusObservations: [AnyCancellable] = []
     private var lastMenuReadiness: CompanionReadiness?
@@ -917,9 +918,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func performIdleRoam() {
         var refusal: String? = nil
         defer {
-            if let refusal {
+            // Log each veto once until it changes; the same reason every two
+            // minutes buried the log and re-triggered the GitHub sync.
+            let reason = refusal.map { $0.hasPrefix("cadence") ? "cadence" : $0 }
+            if let refusal, reason != lastRoamRefusal {
                 DiagnosticChatLogger.record(role: "system", text: "[ROAM] skip: \(refusal)")
             }
+            lastRoamRefusal = reason
         }
         guard !screenIsOff else { refusal = "display off"; return }
         guard !isAnimatingRoam else { refusal = "already animating"; return }

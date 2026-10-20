@@ -6,7 +6,7 @@
 
 See **[docs/ROADMAP.md](docs/ROADMAP.md)** for current plans, goals and the new
 per-Dot GitHub log system; **[docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md)** carries the
-binding rules R1–R16.
+binding rules R1–R17.
 
 ## Install Dot
 

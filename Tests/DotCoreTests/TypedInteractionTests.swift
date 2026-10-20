@@ -408,6 +408,14 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertNil(ChatModel.factToRemember(from: String(repeating: "a", count: 241) + " I like tea"))
     }
 
+    @MainActor func testSpokenCommandsIgnoreWhisperPunctuation() {
+        XCTAssertEqual(ChatModel.commandPhrase(" What do you remember? "), "what do you remember")
+        XCTAssertEqual(ChatModel.commandPhrase("Copy that."), "copy that")
+        XCTAssertEqual(ChatModel.commandPhrase("Read file notes.txt"), "read file notes.txt")
+        XCTAssertTrue(ChatModel.isMemoryListRequest(ChatModel.commandPhrase("What do you remember about me?")))
+        XCTAssertFalse(ChatModel.isMemoryListRequest(ChatModel.commandPhrase("What do you remember about Paris?")))
+    }
+
     @MainActor func testPageReadRequestIsExactAndDoesNotStealOrdinaryTurns() {
         XCTAssertTrue(ChatModel.isPageReadRequest("summarize this page"))
         XCTAssertTrue(ChatModel.isPageReadRequest(" read this document "))
@@ -443,12 +451,25 @@ final class TypedInteractionTests: XCTestCase {
 
     @MainActor func testSystemWakeClearsTheSleepBlockAndSaysItIsBack() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.speakDirect("hello")
         f.model.cancelForEnvironment(reason: .systemSleep)
-        guard case .blocked = f.model.phase else { return XCTFail("Sleep must block the turn") }
+        guard case .blocked = f.model.phase else { return XCTFail("Sleep during speech must block the turn") }
         f.model.handleSystemWake()
         XCTAssertNil(f.model.issue)
         XCTAssertTrue(f.enqueued.contains("I'm back."))
         guard case .speaking = f.model.phase else { return XCTFail("The greeting must start playback") }
+    }
+
+    @MainActor func testIdleSleepNeverBlocksAndResumeGreetsOnce() async throws {
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.pauseForScreenOff()
+        f.model.cancelForEnvironment(reason: .systemSleep)
+        XCTAssertEqual(f.model.phase, .idle, "Sleeping while idle interrupts nothing")
+        XCTAssertNil(f.model.issue)
+        f.model.resumeAfterScreenOn()
+        f.speaking = false; f.model.cancelTurn()
+        f.model.handleSystemWake()
+        XCTAssertEqual(f.enqueued.filter { $0 == "I'm back." }.count, 1, "Both wake paths share one greeting")
     }
 
     @MainActor func testFinalSpokenQuestionArmsTheFollowupWithoutAToolCall() {

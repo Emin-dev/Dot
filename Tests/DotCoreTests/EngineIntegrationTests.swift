@@ -176,6 +176,13 @@ final class EngineIntegrationTests: XCTestCase {
             "execute_command", "delete_file", "contextual_workflow", "calendar_schedule"
         ]))
         for tool in tools { XCTAssertEqual(tool["type"] as? String, "function") }
+        let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
+        let system = try XCTUnwrap(messages.first?["content"] as? String)
+        // The owner's log had Dot answer "I can't hear audio, I have no microphone".
+        XCTAssertTrue(system.contains("spoken aloud"))
+        XCTAssertTrue(system.contains("Never claim you cannot hear"))
+        // Owner decision 2026-10-20: no forced questions.
+        XCTAssertFalse(system.contains("60%"))
         let askUser = try XCTUnwrap(tools.first { ($0["function"] as? [String: Any])?["name"] as? String == "ask_user" })
         let function = try XCTUnwrap(askUser["function"] as? [String: Any])
         XCTAssertEqual(function["name"] as? String, "ask_user"); XCTAssertEqual(function["strict"] as? Bool, true)

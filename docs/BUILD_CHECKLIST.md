@@ -647,6 +647,10 @@ app or browser; keep the reply as text and suppress proactive/follow-up speech. 
 
 **Proactive cadence.** Choices remain 10 / 4 / 1 minutes; the **default is Normal (4 minutes)**, changed from High.
 
+**Proactive questions (R17, owner answer 2026-10-20).** Proactive comments stay regular on that cadence,
+but a comment ends with a question only when it genuinely needs the owner's reply; no rule forces a
+share of questions. The `ask_user` question is never spoken after content that already asked one.
+
 **Idle movement.** Dot roams to a new clear spot **every 2 minutes** while idle (3.2 s glide). The idle cadence was 12–18 seconds until 2026-10-17, which was too frequent. The former relocation every 5 seconds while thinking was **retired by the owner on 2026-10-17** after Dot moved nonstop through long model loads; Dot now stays put during a turn and only the 2-minute idle roam is scheduled. It never covers protected windows, text regions or the cursor, and stays put while hovered, pinned, dragging, hidden or in a menu.
 
 **Default appearance (changed 2026-10-17): Dew is the default skin.** The owner replaced the

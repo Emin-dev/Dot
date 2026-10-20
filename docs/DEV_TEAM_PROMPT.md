@@ -1,7 +1,7 @@
 # Dot — Professional Development Brief v2 (owner-answered, 2026-10-17)
 
 > **Current implementation status:** read [AI_HANDOFF.md](AI_HANDOFF.md) for what is implemented,
-> partial, blocked and next. This brief remains the binding spec (R1–R15); older docs may be stale.
+> partial, blocked and next. This brief remains the binding spec (R1–R17); older docs may be stale.
 
 This brief is for the AI development team continuing Dot. It encodes the owner's
 audit answers as binding rules. It supersedes any earlier statement that contradicts it.
@@ -97,6 +97,15 @@ back**. No manual click required.
 **R15. Action approvals.** Add a **trusted-app allowlist**: actions for allowlisted
 apps skip the card. Everything outside the allowlist keeps the per-command card. File
 operations are automatic per R7.
+
+**R16. Auxiliary model (2026-10-19).** A small local model, Gemma-3-4B Q4 (~4 GB), handles
+fast narrow tasks and is the R7 safety approver: every file mutation Dot chooses, including the
+model's own `delete_file` and automatic destructive file commands, is checked before it runs.
+No approver means no execution. The main engine and model stay untouched.
+
+**R17. Proactive comments (2026-10-20).** Keep commenting on the owner's chosen cadence
+(Low 10 / Normal 4 / High 1 minute), but end with a question only when the comment genuinely needs
+the owner's reply. No rule may force a question into a share of replies.
 
 ## 3. Fixed constraints (never change without the owner)
 

@@ -153,6 +153,53 @@ struct SplashIdentity: Decodable {
     }
 }
 
+/// The `ask_user` question is spoken after the answer only when the answer has not
+/// already asked it. The model often ends its content with its own question and
+/// then calls the tool with a reworded one, which made Dot ask twice in a row.
+enum SpokenQuestion {
+    static func endsWithQuestion(_ text: String) -> Bool {
+        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let closers = "\"'”’)]}"
+        while let last = trimmed.last, closers.contains(last) {
+            trimmed.removeLast()
+            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard trimmed.hasSuffix("?") else { return false }
+        var sentence = String(trimmed.dropLast())
+        let boundaries: Set<Character> = [".", "!", "?", "\n"]
+        if let last = sentence.lastIndex(where: { boundaries.contains($0) }) {
+            sentence = String(sentence[sentence.index(after: last)...])
+        }
+        // A quoted/explanatory construction ("A quoted question: why?") is not Dot
+        // asking the owner; only a direct final question is an invitation.
+        guard !sentence.contains(":"), !sentence.contains("\""),
+              !sentence.contains("“"), !sentence.contains("”") else { return false }
+        return sentence.split(whereSeparator: \.isWhitespace).count >= 2
+    }
+    static func needsAppending(_ question: String, after content: String) -> Bool {
+        let punctuation = CharacterSet(charactersIn: "?!.,:; ").union(.whitespacesAndNewlines)
+        let cleanQ = question.lowercased().trimmingCharacters(in: punctuation)
+        let cleanC = content.lowercased().trimmingCharacters(in: punctuation)
+        guard !cleanQ.isEmpty else { return false }
+        if cleanC.isEmpty { return true }
+        return !cleanC.contains(cleanQ) && !endsWithQuestion(content)
+    }
+}
+
+/// Whisper writes non-speech as annotations ("[BLANK_AUDIO]", "[MUSIC PLAYING]",
+/// "(coughs)", "♪"). They are not words the owner said and must never become a turn.
+enum SpokenTranscript {
+    static func words(_ raw: String) -> String {
+        var text = raw.replacingOccurrences(of: #"\[[^\]]{0,60}\]"#, with: " ", options: .regularExpression)
+        // Only short parentheticals are annotations; longer ones can be real speech.
+        text = text.replacingOccurrences(of: #"\((?:\s*[A-Za-z'-]+){1,4}\s*\)"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"[♪♫*]+"#, with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) ? trimmed : ""
+    }
+}
+
 struct SentenceBuffer {
     private var pending = ""
     mutating func feed(_ delta: String) -> [String] {
@@ -200,6 +247,28 @@ struct StreamDelta {
     }
 }
 
+/// R4: the four British Kokoro voices the owner can pick. Emma is the default;
+/// Isabella is the one the signed runtime manifest always ships.
+enum DotVoice {
+    static let defaultsKey = "dot.voice"
+    static let defaultVoice = "bf_emma"
+    static let alwaysBundled = "bf_isabella"
+    static let british = ["bf_emma", "bf_isabella", "bf_alice", "bf_lily"]
+    static func selected(in defaults: UserDefaults = .standard) -> String {
+        let stored = defaults.string(forKey: defaultsKey) ?? defaultVoice
+        return british.contains(stored) ? stored : defaultVoice
+    }
+    /// The voice to launch: the owner's choice when its embedding is on disk,
+    /// otherwise the always-bundled Isabella, so a missing file never mutes Dot.
+    static func launchVoice(selected: String, root: URL,
+                            exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> String {
+        // Same layout rule as dot-voice: <root>/model when present, else <root>.
+        let model = root.appendingPathComponent("model", isDirectory: true)
+        let voices = (exists(model.path) ? model : root).appendingPathComponent("voices", isDirectory: true)
+        return exists(voices.appendingPathComponent(selected + ".pt").path) ? selected : alwaysBundled
+    }
+}
+
 /// Strict framing for Dot's bundled Bionic helper, not an installed daemon API.
 struct VoiceEvent {
     let kind: String
@@ -219,7 +288,10 @@ struct VoiceEvent {
               let version = value["protocol"] as? Int, version == 1,
               let kind = value["event"] as? String else { return nil }
         if kind == "hello" {
-            guard value["engine"] as? String == "kokoro", value["voice"] as? String == "bf_isabella",
+            // dot-voice announces the voice it loaded; any of the four British
+            // voices is valid. Requiring Isabella here rejected the Emma default.
+            guard value["engine"] as? String == "kokoro", let voice = value["voice"] as? String,
+                  DotVoice.british.contains(voice),
                   value["sample_rate"] as? Int == 24000, value["offline"] as? Bool == true else { return nil }
             return VoiceEvent(kind: kind, request: nil, turn: nil, filename: nil)
         }
@@ -3966,9 +4038,9 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
         case .text(let source, let content):
             docEvidence.append("\(source): \(content)")
         case .permissionDenied:
-            DiagnosticChatLogger.record(role: "dot", text: "Context extraction skipped: permission denied for the active document or webpage.")
+            DiagnosticChatLogger.record(role: "system", text: "Context extraction skipped: permission denied for the active document or webpage.")
         case .noText:
-            DiagnosticChatLogger.record(role: "dot", text: "Context extraction skipped: the active document or webpage had no readable text.")
+            DiagnosticChatLogger.record(role: "system", text: "Context extraction skipped: the active document or webpage had no readable text.")
         }
 
         var desktopSnippet = activeDesktop?.promptContextSnippet

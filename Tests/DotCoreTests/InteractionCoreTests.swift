@@ -101,6 +101,36 @@ final class InteractionCoreTests: XCTestCase {
     }
 }
 
+final class SpokenQuestionTests: XCTestCase {
+    func testToolQuestionIsNotAppendedAfterTheAnswerAlreadyAsked() {
+        // From the owner's log: two different questions spoken back to back.
+        let content = "I see a fresh Dot-2.dmg in Downloads. Want me to check whether it's the latest or help you install it?"
+        let tool = "Want me to check that Dot-2.dmg in Downloads and help install it?"
+        XCTAssertFalse(SpokenQuestion.needsAppending(tool, after: content))
+        XCTAssertEqual(ProactiveReplyBuffer.Result.speak(content: content, question: tool).text, content)
+    }
+    func testToolQuestionIsSpokenWhenTheAnswerAskedNothing() {
+        XCTAssertTrue(SpokenQuestion.needsAppending("Shall I open it?", after: "The export finished."))
+        XCTAssertTrue(SpokenQuestion.needsAppending("Shall I open it?", after: ""))
+        XCTAssertFalse(SpokenQuestion.needsAppending("Shall I open it?", after: "Done. Shall I open it?"))
+        XCTAssertEqual(ProactiveReplyBuffer.Result.speak(content: "The export finished.", question: "Shall I open it?").text,
+                       "The export finished. Shall I open it?")
+    }
+}
+
+final class SpokenTranscriptTests: XCTestCase {
+    func testWhisperNonSpeechAnnotationsAreNotATurn() {
+        // Every one of these reached the model as a user turn in the owner's log.
+        for noise in ["[BLANK_AUDIO]", " [SOUND]", "[coughs]", "[MUSIC PLAYING]", "[silence]", "(upbeat music)", "♪ ♪", "..."] {
+            XCTAssertEqual(SpokenTranscript.words(noise), "", noise)
+        }
+    }
+    func testRealSpeechSurvivesAroundAnnotations() {
+        XCTAssertEqual(SpokenTranscript.words(" (coughs) Check battery level."), "Check battery level.")
+        XCTAssertEqual(SpokenTranscript.words(" Hello, can you hear me?"), "Hello, can you hear me?")
+    }
+}
+
 final class VoiceEventTests: XCTestCase {
     private func event(_ fields: [String: Any]) -> VoiceEvent? {
         VoiceEvent.parse(try! JSONSerialization.data(withJSONObject: fields))
@@ -114,6 +144,19 @@ final class VoiceEventTests: XCTestCase {
     }
     func testVoiceHandshakeRejectsOtherEngine() {
         XCTAssertNil(event(["protocol": 1, "event": "hello", "engine": "remote", "voice": "bf_isabella", "sample_rate": 24000, "offline": true]))
+    }
+    func testVoiceHandshakeAcceptsEveryBritishVoiceOnly() {
+        for voice in DotVoice.british {
+            XCTAssertNotNil(event(["protocol": 1, "event": "hello", "engine": "kokoro", "voice": voice, "sample_rate": 24000, "offline": true]), voice)
+        }
+        XCTAssertNil(event(["protocol": 1, "event": "hello", "engine": "kokoro", "voice": "af_heart", "sample_rate": 24000, "offline": true]))
+    }
+    func testMissingVoiceEmbeddingFallsBackToTheBundledVoice() {
+        let root = URL(fileURLWithPath: "/payload/Voice", isDirectory: true)
+        let present: Set<String> = ["/payload/Voice/model", "/payload/Voice/model/voices/bf_isabella.pt",
+                                    "/payload/Voice/model/voices/bf_alice.pt"]
+        XCTAssertEqual(DotVoice.launchVoice(selected: "bf_alice", root: root, exists: present.contains), "bf_alice")
+        XCTAssertEqual(DotVoice.launchVoice(selected: "bf_emma", root: root, exists: present.contains), "bf_isabella")
     }
     func testVoiceAudioRequiresValidRequestAndTurn() {
         XCTAssertNotNil(event(audio))

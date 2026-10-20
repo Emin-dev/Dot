@@ -123,7 +123,12 @@ final class BionicVoice: NSObject, AVAudioPlayerDelegate {
         child.executableURL = native
         // R4: the owner's voice choice travels with the launch; the engine loads only
         // that one voice's embedding, so RAM never holds the whole voice set.
-        let voice = UserDefaults.standard.string(forKey: "dot.voice") ?? "bf_emma"
+        let selected = DotVoice.selected()
+        let voice = DotVoice.launchVoice(selected: selected, root: base)
+        if voice != selected {
+            DiagnosticChatLogger.record(role: "system",
+                text: "Voice \(selected) is not installed; speaking with \(voice) instead.")
+        }
         child.arguments = ["--root", base.path, "--output", requested.path, "--voice", voice]
         child.environment = ["PATH": "/usr/bin:/bin"]
         child.currentDirectoryURL = requested
