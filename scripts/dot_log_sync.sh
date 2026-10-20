@@ -52,13 +52,13 @@ mkdir -p "repo/$DEST"
 # password or API key even when an older build wrote it into a log file.
 sanitize() {
     perl -pe '
-        s/((?:Authorization)\s*[:=]\s*Bearer\s+)\S+/$1[REDACTED]/gi;
+        s/((?:Authorization)\s*[:=]\s*Bearer\s+)\S+/${1}[REDACTED]/gi;
         s/\bgh[pousr]_[A-Za-z0-9]{20,}\b/[REDACTED_TOKEN]/g;
         s/\bgithub_pat_[A-Za-z0-9_]{20,}\b/[REDACTED_TOKEN]/g;
-        s/\b(password|passwd|passphrase|secret)\s*[:=]\s*[^\r\n]+/$1=[REDACTED]/gi;
-        s/\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+/$1=[REDACTED]/gi;
-        s/\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+/$1=[REDACTED]/gi;
-        s/\b(token|api(?:[\s_-]?key))\s+(?:is|was)\s+\S+/$1=[REDACTED]/gi;
+        s/\b(password|passwd|passphrase|secret)\s*[:=]\s*[^\r\n]+/${1}=[REDACTED]/gi;
+        s/\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+/${1}=[REDACTED]/gi;
+        s/\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+/${1}=[REDACTED]/gi;
+        s/\b(token|api(?:[\s_-]?key))\s+(?:is|was)\s+\S+/${1}=[REDACTED]/gi;
     ' "$1"
 }
 for name in dot_chat_log.txt dot_chat_log.1.txt; do

@@ -6143,6 +6143,90 @@ public enum MemoryKeyPointExtractor {
     }
 }
 
+// MARK: - Model part download plan (pure, tested by SwiftPM)
+
+/// Plan for the primary model delivery route: pinned split parts hosted on the
+/// `Emin-dev/Dot` GitHub release. `Resources/model-parts.json` stays `pending`
+/// until the owner splits and uploads the verified payload. When ready, every
+/// part is verified by SHA-256 and the joined file is verified against
+/// `bundled-models.json`; Hugging Face is only a fallback with the same hash.
+public struct ModelPartPlan: Decodable, Equatable, Sendable {
+    public struct Part: Decodable, Equatable, Sendable {
+        public let asset: String
+        public let file: String
+        public let offset: Int64
+        public let bytes: Int64
+        public let sha256: String
+
+        public init(asset: String, file: String, offset: Int64, bytes: Int64, sha256: String) {
+            self.asset = asset
+            self.file = file
+            self.offset = offset
+            self.bytes = bytes
+            self.sha256 = sha256
+        }
+    }
+
+    public let schema_version: Int
+    public let status: String
+    public let release_tag: String?
+    public let base_url: String?
+    public let parts: [Part]
+
+    /// GitHub rejects release assets at 2 GB, so every part must stay below it.
+    public static let maximumPartBytes: Int64 = 2_000_000_000
+
+    public static func decode(_ data: Data) -> ModelPartPlan? {
+        guard let plan = try? JSONDecoder().decode(ModelPartPlan.self, from: data),
+              plan.schema_version == 1, plan.parts.count <= 512 else { return nil }
+        return plan
+    }
+
+    public var isReady: Bool {
+        status == "ready" && !parts.isEmpty && baseURL != nil && releaseTag != nil
+    }
+
+    public var releaseTag: String? { release_tag }
+    public var baseURL: URL? {
+        guard let base_url, let tag = release_tag, !tag.isEmpty,
+              let url = URL(string: base_url),
+              url.scheme == "https", url.host == "github.com",
+              url.path.hasSuffix("/"),
+              url.path.hasPrefix("/Emin-dev/Dot/releases/download/\(tag)/") else { return nil }
+        return url
+    }
+
+    public func parts(for file: String) -> [Part] {
+        parts.filter { $0.file == file }.sorted { $0.offset < $1.offset }
+    }
+
+    /// A part plan is usable only when every covered file is contiguous from
+    /// zero and the part sizes add up to the signed manifest size. Files with no
+    /// parts fall back to the per-file Hugging Face route.
+    public func validate(files: [(path: String, bytes: Int64)]) -> Bool {
+        guard isReady else { return false }
+        let expected = Dictionary(files.map { ($0.path, $0.bytes) }, uniquingKeysWith: { first, _ in first })
+        let covered = Set(parts.map(\.file))
+        var assets = Set<String>()
+        for file in covered {
+            guard let total = expected[file] else { return false }
+            let ordered = parts(for: file)
+            var next: Int64 = 0
+            for part in ordered {
+                guard part.offset == next, part.bytes > 0, part.bytes <= Self.maximumPartBytes,
+                      part.sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                      part.asset != ".", !part.asset.contains("/"), !part.asset.contains(".."),
+                      part.asset.range(of: "^[A-Za-z0-9._-]{1,200}$", options: .regularExpression) != nil,
+                      !part.file.hasPrefix("/"), !part.file.contains(".."),
+                      assets.insert(part.asset).inserted else { return false }
+                next += part.bytes
+            }
+            guard next == total else { return false }
+        }
+        return !covered.isEmpty
+    }
+}
+
 // MARK: - GitHub log channel policy (pure, tested by SwiftPM)
 
 import Foundation

@@ -46,7 +46,7 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
 cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
-cp Resources/bundled-models.json "$APP/Contents/Resources/"
+cp Resources/bundled-models.json Resources/model-parts.json "$APP/Contents/Resources/"
 cp -R Resources/Research "$APP/Contents/Resources/"
 python3 -B scripts/copy_offline_models.py --source "$DOT_MODEL_PAYLOAD" \
   --destination "$APP/Contents/Resources/OfflineModels" --manifest Resources/bundled-models.json

@@ -3,12 +3,79 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 permissions:
   contents: read
 concurrency:
   group: dot-native-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: false
 jobs:
+  rust-gates:
+    # Portable Rust gates. dot-voice is macOS-only (fullfp16) and runs below.
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Rust components
+        run: rustup component add rustfmt clippy
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check -p dot-research -p dot-runtime
+      - name: Test
+        run: cargo test -p dot-research -p dot-runtime
+      - name: Clippy
+        run: cargo clippy -p dot-research -p dot-runtime --all-targets -- -D warnings
+      - name: Static contracts
+        run: python3 -B scripts/check_contracts.py
+      - name: Model-part split and join contracts
+        run: python3 -B -m unittest Tests/Python/test_release_parts.py -v
+
+  swift-test:
+    # Portable pure-core lane on an arm64 macOS runner.
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Swift version
+        run: swift --version
+      - name: Build
+        run: swift build
+      - name: Test
+        run: swift test --parallel
+
+  dot-voice:
+    # Kokoro/MLX `fullfp16` only builds on arm64 macOS; never on the Pi.
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust components
+        run: rustup component add rustfmt clippy
+      - name: Build dot-voice
+        run: cargo build --release -p dot-voice
+      - name: Test dot-voice
+        run: cargo test --release -p dot-voice
+      - name: Protocol smoke line
+        run: |
+          set -euo pipefail
+          out=$(printf '{"protocol":1,"type":"hello"}\n' | ./target/release/dot-voice 2>/dev/null | head -1)
+          echo "$out"
+          case "$out" in *'"protocol":1'*) ;; *) echo 'dot-voice did not emit a protocol line' >&2; exit 1;; esac
+
   macos:
     # Standard public-repository runner. Test Python is provisioned explicitly.
     # No neural payloads, app launch, dependency caches, microphone access,

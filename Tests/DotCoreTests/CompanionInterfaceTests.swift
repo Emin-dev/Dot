@@ -557,11 +557,15 @@ final class ModelProvisionerTests: XCTestCase {
     func testManifestPathsMapToTheReviewedRepositories() throws {
         let target = try ModelProvisioner.remoteURL(for: "llm-target/config.json")
         XCTAssertEqual(target.absoluteString,
-                       "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/resolve/main/config.json")
+                       "https://huggingface.co/mlx-community/Qwen3.8-27B-4bit/resolve/\(ModelProvisioner.targetRevision)/config.json")
         let draft = try ModelProvisioner.remoteURL(for: "llm-draft/model.safetensors")
         XCTAssertEqual(draft.absoluteString,
-                       "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/resolve/main/model.safetensors")
+                       "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/resolve/\(ModelProvisioner.draftRevision)/model.safetensors")
+        let auxiliary = try ModelProvisioner.remoteURL(for: "aux/gemma-3-4b-it-Q4_K_M.gguf")
+        XCTAssertEqual(auxiliary.absoluteString,
+                       "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf")
         XCTAssertThrowsError(try ModelProvisioner.remoteURL(for: "other/file"))
+        XCTAssertThrowsError(try ModelProvisioner.remoteURL(for: "aux/../escape"))
     }
 }
 #endif

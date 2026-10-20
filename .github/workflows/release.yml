@@ -1,28 +1,105 @@
-name: Release prerequisites
+name: Release
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (created at the current main commit)"
+        required: true
+        default: "v1.1.0-phase3"
 permissions:
-  contents: read
+  contents: write
+concurrency:
+  group: dot-release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  # Previously published, audited runtime-only app. We reuse its external
+  # Splash/Kokoro/Whisper runtime payload, never its model weights, then build
+  # the current source and package a fresh DMG. The SHA-256 is the published
+  # Dot.dmg.sha256 for public-f6cc73d.
+  DONOR_URL: https://github.com/Emin-dev/Dot/releases/download/public-f6cc73d/Dot.dmg
+  DONOR_SHA256: 942f877fa64dbe338b9ba55d5475d6a3d968ca7132038e7e52d217ff17a3afc3
 jobs:
-  checks:
+  package:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 45
     env:
-      # macOS 26 App Intents metadata requires the installed Xcode 26 SDK.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Homebrew Python links TLS outside its root and correctly fails Seatbelt.
-      # Use the official test toolchain; never widen the product sandbox for CI.
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
-      - name: Model-free source verification
-        run: bash scripts/verify_macos.sh
-      - name: Require complete native acceptance before distribution
+      - name: Build Rust runtime binaries
+        run: cargo build --release --bin dot-voice --bin dot-search --bin dot-fetch --bin dot-safety
+      - name: Fetch the audited runtime payload (no model weights)
         run: |
-          echo 'This runner cannot validate the full bundled model. No development DMG is published.'
-          echo 'Use scripts/build_complete.sh, native offline acceptance, then scripts/package_complete.sh.'
-          exit 1
+          set -euo pipefail
+          mkdir -p .tmp/donor .tmp/donor/mnt .tmp/runtime .tmp/whisper
+          curl -L --fail --retry 5 --retry-delay 5 -o .tmp/donor/Dot.dmg "$DONOR_URL"
+          echo "$DONOR_SHA256  .tmp/donor/Dot.dmg" | shasum -a 256 -c -
+          hdiutil attach .tmp/donor/Dot.dmg -nobrowse -readonly -mountpoint .tmp/donor/mnt
+          trap 'hdiutil detach .tmp/donor/mnt || true' EXIT
+          /usr/bin/ditto .tmp/donor/mnt/Dot.app/Contents/Resources/Offline .tmp/runtime/Offline
+          /usr/bin/ditto .tmp/donor/mnt/Dot.app/Contents/Frameworks/whisper.framework .tmp/whisper/whisper.framework
+          hdiutil detach .tmp/donor/mnt
+          test -f .tmp/runtime/Offline/runtime-manifest.json
+          test -f .tmp/whisper/whisper.framework/Modules/module.modulemap
+      - name: Static contracts and release script checks
+        run: |
+          python3 -B scripts/check_contracts.py
+          python3 -B -m unittest Tests/Python/test_release_parts.py -v
+          bash -n scripts/package_default_release.sh scripts/package_all_in_one.sh packaging/join-dot-dmg.command
+      - name: Package the default app without model weights
+        env:
+          DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
+          DOT_WHISPER_FRAMEWORK: .tmp/whisper/whisper.framework
+        run: bash scripts/package_default_release.sh
+      - name: Stage release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp build-public/Dot.dmg build-public/Dot.dmg.sha256 release-assets/
+          cp packaging/join-dot-dmg.command scripts/join_release.py release-assets/
+          cat > release-assets/README.txt <<'EOF'
+          Dot default DMG
+          ===============
+          Dot.dmg contains the app and its verified local runtime, but not the
+          Qwen3.8 27B Q4 weights (22.4 GB). On first launch Dot downloads the
+          exact signed-manifest files, resumably and with per-file SHA-256:
+            1. pinned split parts from the Emin-dev/Dot model-parts-v1 release
+            2. pinned Hugging Face revisions only when the same SHA-256 matches
+          Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
+
+          All-in-one installer
+          ====================
+          The complete DMG is 22+ GB and GitHub limits each asset to 2 GB, so it
+          is published as Dot-all-in-one.dmg.partNNN plus a .parts.json manifest.
+          Put join-dot-dmg.command, join_release.py and all parts in one folder,
+          then double-click join-dot-dmg.command. It downloads missing parts,
+          verifies every part and the joined DMG, and opens it.
+          Hosting the model parts requires the owner's 22.4 GB verified payload;
+          see docs/QUESTIONS_FOR_EMIN.md and scripts/model_parts.py.
+          EOF
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dot-release-assets
+          path: release-assets/*
+          if-no-files-found: error
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-assets/* --clobber
+          else
+            gh release create "$TAG" release-assets/* \
+              --title "Dot $TAG" \
+              --notes-file release-assets/README.txt
+          fi

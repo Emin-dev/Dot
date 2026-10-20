@@ -2539,3 +2539,58 @@ final class LogRedactionTests: XCTestCase {
         XCTAssertEqual(LogRedaction.masked(text), text)
     }
 }
+
+final class ModelPartPlanTests: XCTestCase {
+    private func plan(_ json: String) -> ModelPartPlan? {
+        ModelPartPlan.decode(Data(json.utf8))
+    }
+
+    private let valid = """
+    {"schema_version":1,"status":"ready","release_tag":"model-parts-v1",
+     "base_url":"https://github.com/Emin-dev/Dot/releases/download/model-parts-v1/",
+     "parts":[
+       {"asset":"model.bin.part000","file":"llm-target/model.bin","offset":0,"bytes":10,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+       {"asset":"model.bin.part001","file":"llm-target/model.bin","offset":10,"bytes":5,"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+     ]}
+    """
+
+    func testReadyPlanValidatesContiguousCoveredFileAndAllowsFallbackFiles() {
+        let decoded = plan(valid)
+        XCTAssertNotNil(decoded)
+        XCTAssertTrue(decoded?.isReady == true)
+        XCTAssertEqual(decoded?.releaseTag, "model-parts-v1")
+        XCTAssertEqual(decoded?.parts(for: "llm-target/model.bin").map(\.offset), [0, 10])
+        XCTAssertTrue(decoded?.validate(files: [("llm-target/model.bin", 15), ("aux/fallback.gguf", 99)]) == true)
+    }
+
+    func testPendingOrEmptyPlanIsNotUsable() {
+        XCTAssertFalse(plan("""
+        {"schema_version":1,"status":"pending","release_tag":"model-parts-v1",
+         "base_url":"https://github.com/Emin-dev/Dot/releases/download/model-parts-v1/","parts":[]}
+        """)?.isReady == true)
+        let pending = plan(valid.replacingOccurrences(of: "\"ready\"", with: "\"pending\""))
+        XCTAssertFalse(pending?.isReady == true)
+        XCTAssertFalse(pending?.validate(files: [("llm-target/model.bin", 15)]) == true)
+    }
+
+    func testGapWrongTotalAndOversizedPartAreRejected() {
+        let gap = valid.replacingOccurrences(of: "\"offset\":10", with: "\"offset\":11")
+        XCTAssertFalse(plan(gap)?.validate(files: [("llm-target/model.bin", 15)]) == true)
+        XCTAssertFalse(plan(valid)?.validate(files: [("llm-target/model.bin", 16)]) == true)
+        let oversized = valid.replacingOccurrences(of: "\"bytes\":10", with: "\"bytes\":2000000001")
+        XCTAssertFalse(plan(oversized)?.validate(files: [("llm-target/model.bin", 15)]) == true)
+    }
+
+    func testUnsafeAssetOrForeignURLIsRejected() {
+        let traversal = valid.replacingOccurrences(of: "model.bin.part000", with: "../escape")
+        XCTAssertFalse(plan(traversal)?.validate(files: [("llm-target/model.bin", 15)]) == true)
+        let foreign = valid.replacingOccurrences(of: "https://github.com/Emin-dev/Dot/releases/download/",
+                                                 with: "https://example.com/")
+        XCTAssertFalse(plan(foreign)?.isReady == true)
+        XCTAssertNil(plan(valid.replacingOccurrences(of: "\"schema_version\":1", with: "\"schema_version\":2")))
+    }
+
+    func testUnknownFilePartDoesNotCoverTheManifest() {
+        XCTAssertFalse(plan(valid)?.validate(files: [("llm-target/other.bin", 15)]) == true)
+    }
+}

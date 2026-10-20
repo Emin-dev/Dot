@@ -42,7 +42,7 @@ xcrun swiftc -O -warnings-as-errors -module-name Dot -target "$TARGET" \
 cp target/release/dot-voice target/release/dot-search target/release/dot-fetch target/release/dot-safety "$APP/Contents/MacOS/"
 mkdir -p "$APP/Contents/Resources/Voice" "$APP/Contents/Resources/Runtime"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
-cp Resources/bundled-models.json "$APP/Contents/Resources/"
+cp Resources/bundled-models.json Resources/model-parts.json "$APP/Contents/Resources/"
 cp -R Resources/Research "$APP/Contents/Resources/"
 cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Info.plist "$APP/Contents/Info.plist"

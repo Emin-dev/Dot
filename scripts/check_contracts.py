@@ -48,7 +48,13 @@ checks = {
     'truncated SSE rejected': 'guard sawDone else { throw EngineError.response }' in engine,
     'thinking preserved': '"enable_thinking": true' in engine and '"reasoning_effort": "low"' in engine,
     'packaging treats warnings as errors': '-warnings-as-errors' in read('build.sh'),
-    'release never publishes an incomplete development app': 'action-gh-release' not in read('.github/workflows/release.yml') and 'exit 1' in read('.github/workflows/release.yml'),
+    'release publishes only the verified model-less app with a pinned runtime donor': (
+        'package_default_release.sh' in read('.github/workflows/release.yml')
+        and 'DONOR_SHA256' in read('.github/workflows/release.yml')
+        and 'shasum -a 256 -c -' in read('.github/workflows/release.yml')
+        and 'Dot.dmg' in read('.github/workflows/release.yml')
+    ),
+    'release pipeline runs the static contracts': 'scripts/check_contracts.py' in read('.github/workflows/release.yml'),
     'no stale tracked main app in source snapshot': not (root / 'Dot.dmg').exists(),
     'shared Xcode scheme exists': (root / 'Dot.xcodeproj/xcshareddata/xcschemes/Dot.xcscheme').exists(),
     'native options remain in compact companion menu': not any(token in read('src/App.swift') + chat for token in ['Settings {', 'WindowGroup', '.popover(', '.sheet(', 'NSOpenPanel', 'ConnectionView']),
