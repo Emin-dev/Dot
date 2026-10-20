@@ -592,50 +592,50 @@ final class CapturedPCMTimingTests: XCTestCase {
         manager.onSpeechEnded = { published = ($0, $1) }
         let id = UUID()
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 1_000, silence: 3, invitation: nil)
-        append(pcm, at: 1_000.0, amplitude: 0.1)
-        manager.closeCapture(id, pcm.poll(at: 1_000.2, finishing: true))
+        pcm.begin(at: 300, silence: 3, invitation: nil)
+        append(pcm, at: 300.0, amplitude: 0.1)
+        manager.closeCapture(id, pcm.poll(at: 300.2, finishing: true))
         XCTAssertEqual(published?.0, id)
         XCTAssertEqual(published?.1.outcome, .forcedFinish, "A forced finish publishes evidence, not silence")
         XCTAssertEqual(published?.1.endReason, .forcedFinish)
-        XCTAssertEqual(published?.1.silenceSatisfiedAt ?? -1, 1_000.1, accuracy: 0.00001)
+        XCTAssertEqual(published?.1.silenceSatisfiedAt ?? -1, 300.1, accuracy: 0.00001)
     }
 
     // MARK: - Audio route/format change mid-capture
 
     func testUnmigratedStoresAreExactlyWhatTheRouteChangeFixReplaces() {
         let staleRate = CapturedPCM(rate: 8_000)
-        staleRate.begin(at: 500, silence: 3, invitation: nil)
-        append(staleRate, at: 500.0, amplitude: 0.1)
+        staleRate.begin(at: 100, silence: 3, invitation: nil)
+        append(staleRate, at: 100.0, amplitude: 0.1)
         staleRate.append(buffer(rate: 16_000, frames: 1_600, amplitude: 0.1),
-                         at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 500.1)))
-        XCTAssertEqual(staleRate.poll(at: 500.2).endReason, .invalidAudio,
+                         at: AVAudioTime(hostTime: AVAudioTime.hostTime(forSeconds: 100.1)))
+        XCTAssertEqual(staleRate.poll(at: 100.2).endReason, .invalidAudio,
                        "Post-switch audio in an old-rate store is rejected")
         let gapped = CapturedPCM(rate: 8_000)
-        gapped.begin(at: 600, silence: 3, invitation: nil)
-        append(gapped, at: 600.0, amplitude: 0.1)
-        append(gapped, at: 600.8, amplitude: 0)
-        XCTAssertEqual(gapped.poll(at: 600.9).endReason, .invalidAudio,
+        gapped.begin(at: 200, silence: 3, invitation: nil)
+        append(gapped, at: 200.0, amplitude: 0.1)
+        append(gapped, at: 200.8, amplitude: 0)
+        XCTAssertEqual(gapped.poll(at: 200.9).endReason, .invalidAudio,
                        "Unreset continuity rejects the tap restart gap")
     }
 
     func testFormatAndRateChangeReArmsCaptureAndPreservesCapturedAudio() {
         let before = CapturedPCM(rate: 8_000)
-        before.begin(at: 700, silence: 3, invitation: nil)
-        append(before, at: 700.0, amplitude: 0.1)
-        append(before, at: 700.1, amplitude: 0.1)
-        XCTAssertEqual(before.poll(at: 700.25).decision, .listening)
+        before.begin(at: 300, silence: 3, invitation: nil)
+        append(before, at: 300.0, amplitude: 0.1)
+        append(before, at: 300.1, amplitude: 0.1)
+        XCTAssertEqual(before.poll(at: 300.25).decision, .listening)
         // The input device switches to 16 kHz and its tap resumes 0.5s later.
-        let after = CapturedPCM(rate: 16_000, migrating: before, at: 700.7)
-        append(after, at: 700.8, rate: 16_000, amplitude: 0.1, frames: 1_600)
-        let observation = after.poll(at: 700.9)
+        let after = CapturedPCM(rate: 16_000, migrating: before, at: 300.7)
+        append(after, at: 300.8, rate: 16_000, amplitude: 0.1, frames: 1_600)
+        let observation = after.poll(at: 300.9)
         XCTAssertEqual(observation.decision, .listening, "Post-switch audio must keep the turn alive")
         XCTAssertNotEqual(observation.endReason, .invalidAudio)
         XCTAssertEqual(observation.snapshot?.phase, .speaking)
-        XCTAssertEqual(observation.snapshot?.audioThrough ?? -1, 700.9, accuracy: 0.00001)
+        XCTAssertEqual(observation.snapshot?.audioThrough ?? -1, 300.9, accuracy: 0.00001)
         XCTAssertEqual(after.rate, 16_000, "The store reports the new device rate")
-        append(before, at: 700.85, amplitude: 0.1) // retired tap callback
-        XCTAssertEqual(after.poll(at: 700.95).decision, .listening, "The retired tap cannot disturb the turn")
+        append(before, at: 300.85, amplitude: 0.1) // retired tap callback
+        XCTAssertEqual(after.poll(at: 300.95).decision, .listening, "The retired tap cannot disturb the turn")
         XCTAssertEqual(after.take().count, 3_200, "Pre-switch and post-switch audio are both preserved")
     }
 
@@ -645,33 +645,33 @@ final class CapturedPCMTimingTests: XCTestCase {
     /// so acting on it would silently cancel a turn that just re-armed.
     func testSuccessfulRearmDeactivatesTheOldStoreSoItCannotCancelTheTurn() {
         let old = CapturedPCM(rate: 8_000)
-        old.begin(at: 700, silence: 3, invitation: nil)
-        append(old, at: 700.0, amplitude: 0.1)
-        XCTAssertEqual(old.poll(at: 700.2).decision, .listening)
+        old.begin(at: 300, silence: 3, invitation: nil)
+        append(old, at: 300.0, amplitude: 0.1)
+        XCTAssertEqual(old.poll(at: 300.2).decision, .listening)
 
-        let migrated = CapturedPCM(rate: 16_000, migrating: old, at: 700.7)
-        XCTAssertEqual(migrated.poll(at: 700.9).decision, .listening, "The re-armed turn stays alive")
-        XCTAssertEqual(old.poll(at: 700.9).decision, .cancelled,
+        let migrated = CapturedPCM(rate: 16_000, migrating: old, at: 300.7)
+        XCTAssertEqual(migrated.poll(at: 300.9).decision, .listening, "The re-armed turn stays alive")
+        XCTAssertEqual(old.poll(at: 300.9).decision, .cancelled,
                        "The old store is deactivated by the re-arm and must not be polled as the live turn")
     }
 
     func testReArmedCaptureKeepsItsOriginalFiveMinuteBound() {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 800, silence: 3, invitation: nil)
-        append(pcm, at: 800.0, amplitude: 0.1)
-        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 850.0)
-        XCTAssertEqual(migrated.poll(at: 850.0).snapshot?.maximumRemainingSeconds ?? -1, 250, accuracy: 0.00001)
-        XCTAssertEqual(migrated.poll(at: 1_100.1).decision, .maximumDuration, "The turn ends at its original bound")
+        pcm.begin(at: 100, silence: 3, invitation: nil)
+        append(pcm, at: 100.0, amplitude: 0.1)
+        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 150.0)
+        XCTAssertEqual(migrated.poll(at: 150.0).snapshot?.maximumRemainingSeconds ?? -1, 250, accuracy: 0.00001)
+        XCTAssertEqual(migrated.poll(at: 400.1).decision, .maximumDuration, "The turn ends at its original bound")
     }
 
     func testCancellationSurvivesAFormatChange() {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 900, silence: 3, invitation: nil)
-        append(pcm, at: 900.0, amplitude: 0.1)
-        let migrated = CapturedPCM(rate: 16_000, migrating: pcm, at: 900.2)
+        pcm.begin(at: 200, silence: 3, invitation: nil)
+        append(pcm, at: 200.0, amplitude: 0.1)
+        let migrated = CapturedPCM(rate: 16_000, migrating: pcm, at: 200.2)
         migrated.cancel()
-        append(migrated, at: 900.3, rate: 16_000, amplitude: 0.1)
-        let cancelled = migrated.poll(at: 900.4)
+        append(migrated, at: 200.3, rate: 16_000, amplitude: 0.1)
+        let cancelled = migrated.poll(at: 200.4)
         XCTAssertEqual(cancelled.decision, .cancelled)
         XCTAssertEqual(cancelled.endReason, .intentionalCancellation)
         XCTAssertTrue(migrated.take().isEmpty)
@@ -679,30 +679,30 @@ final class CapturedPCMTimingTests: XCTestCase {
 
     func testReArmedTapThatNeverDeliversStillFailsClosedAsMissingAudio() {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 1_000, silence: 3, invitation: nil)
-        append(pcm, at: 1_000.0, amplitude: 0)
-        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 1_000.2)
-        XCTAssertEqual(migrated.poll(at: 1_001.0).decision, .listening, "A deliberate restart gap is tolerated")
-        XCTAssertEqual(migrated.poll(at: 1_002.3).endReason, .missingAudio, "No first buffer still fails closed")
+        pcm.begin(at: 100, silence: 3, invitation: nil)
+        append(pcm, at: 100.0, amplitude: 0)
+        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 100.2)
+        XCTAssertEqual(migrated.poll(at: 101.0).decision, .listening, "A deliberate restart gap is tolerated")
+        XCTAssertEqual(migrated.poll(at: 102.3).endReason, .missingAudio, "No first buffer still fails closed")
     }
 
     func testDeviceGapAcrossAReArmIsNeverCountedAsSilence() {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 1_100, silence: 2, invitation: nil)
-        append(pcm, at: 1_100.0, amplitude: 0.1)
-        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 1_100.2)
-        append(migrated, at: 1_101.0, amplitude: 0)
-        for index in 1...11 { append(migrated, at: 1_101.0 + Double(index) / 10, amplitude: 0) }
-        let duringGap = migrated.poll(at: 1_102.2)
+        pcm.begin(at: 100, silence: 2, invitation: nil)
+        append(pcm, at: 100.0, amplitude: 0.1)
+        let migrated = CapturedPCM(rate: 8_000, migrating: pcm, at: 100.2)
+        append(migrated, at: 101.0, amplitude: 0)
+        for index in 1...11 { append(migrated, at: 101.0 + Double(index) / 10, amplitude: 0) }
+        let duringGap = migrated.poll(at: 102.2)
         XCTAssertEqual(duringGap.decision, .listening, "A device gap is not silent PCM")
         XCTAssertNil(duringGap.evidence)
-        append(migrated, at: 1_102.2, amplitude: 0.1)
-        append(migrated, at: 1_102.3, amplitude: 0.1)
-        for index in 4...24 { append(migrated, at: 1_102.0 + Double(index) / 10, amplitude: 0) }
-        let ended = migrated.poll(at: 1_104.6)
+        append(migrated, at: 102.2, amplitude: 0.1)
+        append(migrated, at: 102.3, amplitude: 0.1)
+        for index in 4...24 { append(migrated, at: 102.0 + Double(index) / 10, amplitude: 0) }
+        let ended = migrated.poll(at: 104.6)
         XCTAssertEqual(ended.decision, .silenceSatisfied)
-        XCTAssertEqual(ended.evidence?.firstSpeechAt ?? -1, 1_100, accuracy: 0.00001)
-        XCTAssertEqual(ended.evidence?.speechEndedAt ?? -1, 1_102.4, accuracy: 0.00001)
+        XCTAssertEqual(ended.evidence?.firstSpeechAt ?? -1, 100, accuracy: 0.00001)
+        XCTAssertEqual(ended.evidence?.speechEndedAt ?? -1, 102.4, accuracy: 0.00001)
     }
 }
 #endif

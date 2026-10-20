@@ -39,9 +39,12 @@ jobs:
         run: python3 -B -m unittest Tests/Python/test_release_parts.py -v
 
   swift-test:
-    # Portable pure-core lane on an arm64 macOS runner.
+    # Portable pure-core lane on an arm64 macOS runner. The Xcode 26 SDK is
+    # required because the source uses macOS 26 App Intents types.
     runs-on: macos-15
     timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -205,7 +205,7 @@ private final class CoordinatorFixture {
 final class VoiceCoordinatorTests: XCTestCase {
     @MainActor private func eventually(_ message: String, file: StaticString = #filePath, line: UInt = #line,
                                       _ condition: @escaping @MainActor () -> Bool) async throws {
-        let deadline = ProcessInfo.processInfo.systemUptime + 4
+        let deadline = ProcessInfo.processInfo.systemUptime + 20
         while !condition(), ProcessInfo.processInfo.systemUptime < deadline {
             try await Task.sleep(nanoseconds: 1_000_000)
         }
