@@ -1,7 +1,24 @@
-# Dot audit — 2026-10-20
+# Dot audit — 2026-10-20 (re-audited 2026-10-21)
 
-Base: `6b70eb2` (main). Environment: Linux aarch64 Cortex-A72, 4 GB, Rust only.
-Swift/Xcode, macOS permissions, audio, screen capture and DMG installation cannot run here.
+Base: `6b70eb2`, re-audited at the Phase 4 source (`c7c4ca6` + guardrails). Environment: Linux
+aarch64 Cortex-A72, 4 GB, Rust only. Swift/Xcode, macOS permissions, audio, screen capture and DMG
+installation still cannot run on the Pi, but **macOS arm64 CI now compiles and runs them**.
+
+## Phase 4 re-audit (2026-10-21)
+
+- The merged real-log branch is **compiled and green**: CI `39511199762` passed `rust-gates`,
+  `swift-test`, `dot-voice` and `macos` (936 XCTest / 0 failures, 1 skipped; 608 SwiftPM; 614 Python
+  / 4 skipped; 60 guardrails at that commit; now 62).
+- Every "FIXED (pending push)" / "UNVERIFIABLE-ON-LINUX" row below that concerns Swift compilation or
+  the named suites is now **Verified (automated)** by that run; native permissions/audio/device
+  behavior remains **owner-gated**, not proven by CI.
+- Offline source contract added (`Tests/Python/test_offline_runtime_contract.py`) plus a Swift
+  no-network model-reuse test; native disconnected acceptance stays owner-gated.
+- The rows still **BROKEN** are unchanged and honest: R9 self-healing is not built, the complete
+  all-in-one parts and pinned model parts are not uploaded, and the DMG is ad-hoc signed/not
+  notarised. The hardware gate is still M5 Pro class / 48 GB / macOS 27+.
+- `BUILD_CHECKLIST.txt` is historical (2026-10-14) and its old stacked-payload rows are not current
+  promises; [PHASE4_RESULT.md](PHASE4_RESULT.md) is the current promise matrix.
 
 Legend: **WORKS** = exercised on this host or unambiguous source+tests; **BROKEN** = documented
 promise contradicted by current source/CI; **UNVERIFIABLE-ON-LINUX** = requires macOS/Swift or the
@@ -19,7 +36,7 @@ owner's real hardware/session.
 | Memory, files, calendar, research, safety approver | UNVERIFIABLE-ON-LINUX | source present; no native run here |
 | No conversation upload / no analytics | **FIXED** | new owner rule authorizes text-only upload; `DotLogSync` now writes `dot/<install-id>/<launch>/` to `dot-logs`, never `main`, with masking and no images |
 | Minimum hardware M5 Pro / 48 GB / macOS 27+ | **FIXED** | `HardwareCompatibility` now refuses anything below M5 Pro class / 48 GB / macOS 27 with a clear blocking message |
-| CI green on main | **FIXED (pending push)** | the hosted runner now records the by-design canary failure and skips packaging instead of failing verification |
+| CI green on main | **VERIFIED** | run [`39511199762`](https://github.com/Emin-dev/Dot/actions/runs/39511199762) passed all four jobs; the hosted runner records the by-design canary failure and skips packaging |
 | Rust gates green | **FIXED** | `cargo fmt --all` applied; `manual_repeat_n` fixed; `dot-research` and `dot-runtime` check/test/clippy pass |
 
 ## Promises from docs/AI_HANDOFF.md
@@ -31,10 +48,11 @@ owner's real hardware/session.
 | File read/search/autonomous utilities, safety gate | UNVERIFIABLE-ON-LINUX | source + tests; `dot-safety` check did not finish on the Pi (llama.cpp build > 15 min) |
 | Conservative placement/roam, OCR clicks | UNVERIFIABLE-ON-LINUX | source + tests; no WindowServer |
 | Research providers and cache | UNVERIFIABLE-ON-LINUX | Rust `dot-research` tests pass |
-| Full XCTest / SwiftPM / Python lanes green | UNVERIFIABLE-ON-LINUX | no `swift`/`xcodebuild` on this host; CI currently red |
+| Full XCTest / SwiftPM / Python lanes green | **VERIFIED (macOS CI)** | 936 XCTest/0 (1 skipped), 608 SwiftPM/0, 614 Python/4 skipped in run `39511199762` |
 | Logs in `Application Support/Dot/Logs`, 2 MB rotation | WORKS (source) | `src/InteractionCore.swift:5159-5230` |
 | Token only from the owner (never bundled) | WORKS (source) | `DotLogSync` reads Keychain service `dot-github-token`, then the owner-created config file; no token exists in the repo |
-| Release published `public-f6cc73d` | UNVERIFIABLE-ON-LINUX | GitHub release exists; artifact not exercised |
+| Default DMG published | **REBUILT (release workflow)** | Phase 4 tag/SHA in [PHASE4_RESULT.md](PHASE4_RESULT.md); asset not installed on a Mac here |
+| Complete all-in-one parts | **BROKEN/blocked** | needs the owner's verified 22.4 GB payload |
 
 ## Promises from docs/BUILD_CHECKLIST.md / .txt
 
@@ -55,7 +73,7 @@ owner's real hardware/session.
 | Calendar create/edit/move (R13) | UNVERIFIABLE-ON-LINUX | EventKit only |
 | Battery/charging alerts (R14) | UNVERIFIABLE-ON-LINUX | source + tests |
 | Trusted-app allowlist (R15) | WORKS (source) | `TrustedAppStore` |
-| Hardware/OS gate M4 Pro/36 GB/26.4+ | **BROKEN vs new owner rule** | superseded by M5 Pro/48 GB/27+ requirement |
+| Hardware/OS gate M5 Pro class / 48 GB / macOS 27+ | **VERIFIED (source + tests)** | supersedes the old M4 Pro/36 GB/26.4 row; no override and no smaller model |
 | GitHub log system, one folder per Dot | **FIXED** | `dot/<install-id>/<launch-timestamp>/` on `dot-logs`; offline queue, backoff, 64-entry bound, 2 MB rotation, text only; token request remains owner-gated |
 
 ## Promises from docs/GOAL_STATUS.md
@@ -64,14 +82,14 @@ owner's real hardware/session.
 |---|---|---|
 | In-app automatic GitHub log sync | **FIXED** | dedicated `dot-logs` branch, per-launch folders, queue/backoff, Keychain/config token; `main` is PR-protected |
 | R1, R5, R7, R10, R11, R14, R15, R16 marked complete | UNVERIFIABLE-ON-LINUX | same rows above |
-| XCTest 915 / SwiftPM / Python 604 / 53 guards | UNVERIFIABLE-ON-LINUX | CI red; counts are from a macOS run |
+| Test/guardrail counts | **VERIFIED** | Phase 4: 936 XCTest, 608 SwiftPM, 614 Python, 62 guardrails; see PHASE4_RESULT |
 | Rust green | **FIXED** | fmt/check/test/clippy pass for `dot-research` and `dot-runtime` on the Pi |
 | Installed provenance equals HEAD | UNVERIFIABLE-ON-LINUX | no installed app here |
 | R4, notarisation, owner session owner-gated | UNVERIFIABLE-ON-LINUX | requires Emin |
 
-## Branch diff: `origin/claude/app-dot-behavior-faax19` vs `main`
+## Branch diff: `origin/claude/app-dot-behavior-faax19` vs `main` — merged
 
-Branch is **2 commits ahead** of main (`main..branch`), 21 files, +411/−89:
+The branch was merged normally at `181756c6` (21 files, +411/−89) and is **no longer ahead**:
 
 - `e51943b` fixes real-log defects: every British voice accepted, missing voice embedding falls back
   safely, Whisper non-speech annotations dropped, sleep/wake no longer leaves Dot stuck, spoken
@@ -81,25 +99,21 @@ Branch is **2 commits ahead** of main (`main..branch`), 21 files, +411/−89:
   and contract tests.
 - Docs/checklists updated in the branch.
 
-**Recommendation: merge the branch into main** (fast-forward is possible), then run Linux Rust gates
-and macOS CI. The changes are small, reviewed, covered by new tests and align with the owner's
-2026-10-20 decisions. No conflicting local work exists. Do not force-push.
+**Phase 4 verification:** the merged code compiled and ran on macOS arm64 (CI `39511199762`), with
+the focused eight-suite gate and the full lanes green. Installation and owner acceptance remain
+separate.
 
-## Ordered fix plan
+## Ordered fix plan — status
 
-1. Efficiency setup: `AGENTS.md`, `opencode.json`.
-2. Merge `origin/claude/app-dot-behavior-faax19` into main.
-3. Make Rust gates green: `cargo fmt --all`, fix `manual_repeat_n`, re-run check/test/clippy for
-   `dot-research`, `dot-runtime`; best-effort `dot-safety` on the Pi (document if it cannot finish).
-4. Fix the launch hardware gate to **M5 Pro class, 48 GB, macOS 27+**, with a clear blocking message;
-   update tests, README and checklist.
-5. Replace `DotLogSync` paths with `dot/<stable-install-id>/<launch-UTC>/` on a dedicated logs branch;
-   add token read from Keychain then config file, offline queue, bounded retries/backoff, rotation;
-   write the token request to `docs/QUESTIONS_FOR_EMIN.md` and stop.
-6. Fix macOS CI: keep the runtime-finalizer canary mandatory for packaging but do not fail the
-   verification job solely on its hosted-runner failure; record it and skip packaging.
-7. Add Swift tests for the hardware gate and log-sync path derivation/queue; keep Rust tests green.
-8. Update PROGRESS/checklists; push to main and watch CI.
+1. [x] Efficiency setup: `AGENTS.md`, `opencode.json`.
+2. [x] Merge `origin/claude/app-dot-behavior-faax19` into main (`181756c6`).
+3. [x] Make Rust gates green: fmt/check/test/clippy for `dot-research`, `dot-runtime`.
+4. [x] Fix the launch hardware gate to **M5 Pro class, 48 GB, macOS 27+**.
+5. [x] Log channel: `dot/<stable-install-id>/<launch-UTC>/` on `dot-logs`, Keychain/config token,
+   offline queue/backoff/rotation; token request in `docs/QUESTIONS_FOR_EMIN.md`.
+6. [x] Hosted runtime-finalizer canary recorded; packaging skipped instead of a red verification job.
+7. [x] Swift tests for the hardware gate and log-sync path derivation/queue.
+8. [x] Phase 4 focused suites/offline contracts; docs and CI updated.
 
 ## Post-audit fixes (2026-10-20)
 

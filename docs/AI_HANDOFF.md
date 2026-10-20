@@ -5,22 +5,22 @@ The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R1
 older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, `CONTINUATION.md` and
 `BUILD_CHECKLIST.md` contain history that is partly superseded; their top notes point here.
 
-## Start here (next worker, 2026-10-20)
+## Start here (next worker, 2026-10-21 — Phase 4 verified)
 
-1. The fixes below live on branch `claude/app-dot-behavior-faax19` (a cloud session cannot push to
-   `main`; the integration owner merges it). Their Swift code was **written and reviewed but never
-   compiled**. On the Mac, before anything else:
-   - typecheck (command under "Commands");
-   - focused XCTest suites: `VoiceEventTests`, `SpokenQuestionTests`, `SpokenTranscriptTests`,
-     `TypedInteractionTests`, `VoiceCoordinatorTests`, `EngineIntegrationTests`,
-     `ProactiveBehaviorTests`, `ProactiveIntegrationTests`;
-   - the full XCTest and `swift test` lanes, `scripts/check_contracts.py` (55 guardrails), then
-     `scripts/install_local.sh`.
-2. Owner acceptance after install: talk with the default voice (Emma), sleep and wake the Mac while
-   idle (Dot must say "I'm back." once and keep roaming), say "What do you remember?", watch one
-   proactive comment end without a forced question.
-3. Owner behavior decisions are being collected one question at a time; answered ones are recorded as
-   rules in `DEV_TEAM_PROMPT.md` (R17 onward) and in "Open owner questions" below.
+1. The `claude/app-dot-behavior-faax19` work is merged at `181756c6` and **compiled and tested on
+   macOS arm64 in GitHub Actions**. Phase 4 added an explicit focused-suite gate and offline
+   contracts; see [PHASE4_RESULT.md](PHASE4_RESULT.md) for the evidence matrix and the exact CI and
+   release links.
+2. The eight named suites now run explicitly in `scripts/verify_macos.sh` before the full XCTest
+   lane: `VoiceEventTests`, `SpokenQuestionTests`, `SpokenTranscriptTests`,
+   `TypedInteractionTests`, `VoiceCoordinatorTests`, `EngineIntegrationTests`,
+   `ProactiveBehaviorTests`, `ProactiveIntegrationTests`. They are also part of the full lane.
+3. Owner acceptance after install is still the only unautomated proof: talk with the default voice
+   (Emma), sleep and wake the Mac while idle (Dot must say "I'm back." once and keep roaming), say
+   "What do you remember?", watch one proactive comment end without a forced question.
+4. Remaining owner gates (not decided here) stay in "Open owner questions" and
+   [QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md): model-part upload, complete all-in-one parts,
+   Developer ID/notarisation, log token, R4 and R9 decisions.
 
 ## Owner decision recorded 2026-10-20
 
@@ -52,32 +52,49 @@ Ask one at a time, numbered options, record the answer as a rule. Not yet answer
 - Text logs auto-upload to `Emin-dev/Dot@dot-logs` under `dot/<install-id>/<launch>/` via
   `DotLogSync`; see [the log reading guide](LOG_READING_GUIDE.md).
 
-## Fixes from the owner's real log (2026-10-20)
+## Fixes from the owner's real log (2026-10-20, verified 2026-10-21)
 
-Found by reading the old `dots/macbook16-m5-pro-48gb-mac17-8/logs/dot_chat_log.txt` (the channel now writes `dot/<install-id>/<launch>/`). Source and tests changed;
-the Swift build and XCTest lanes were **not run** (Linux session, no Swift toolchain). Static guardrails
-(now 55/55, two added) and the Python suite (604, 2 IPv6-only errors that also fail on the untouched
-tree) were run.
+Found by reading the old `dots/macbook16-m5-pro-48gb-mac17-8/logs/dot_chat_log.txt` (the channel now
+writes `dot/<install-id>/<launch>/`). The fixes are merged at `181756c6` and were **compiled and run on
+macOS arm64 in Phase 4**. Each claim below names the test or static guardrail that proves it; the full
+evidence table is in [PHASE4_RESULT.md](PHASE4_RESULT.md).
 
 - **Voice was dead for every voice except Isabella.** `VoiceEvent.parse` required `bf_isabella` in the
   `hello` event while the default is `bf_emma`, so every turn ended in "Unsupported Bionic voice
   protocol". Any of the four British voices is now accepted; a missing voice file falls back to the
-  always-bundled Isabella with a log line (`DotVoice`).
+  always-bundled Isabella with a log line (`DotVoice`). Proven by
+  `VoiceEventTests.testVoiceHandshakeAcceptsEveryBritishVoiceOnly`,
+  `testMissingVoiceEmbeddingFallsBackToTheBundledVoice` and the guardrail "every British voice passes
+  the voice handshake".
 - **Stuck after sleep.** An idle sleep blocked Dot with "Listening stopped when your Mac went to sleep";
   the wake greeting then refused to speak and the block stayed, so idle roaming was vetoed for hours
   (`[ROAM] skip: phase=blocked`). Idle sleep no longer blocks, wake clears a sleep block, and both wake
-  paths share one "I'm back."
+  paths share one "I'm back." Proven by
+  `TypedInteractionTests.testIdleSleepNeverBlocksAndResumeGreetsOnce`,
+  `testSystemWakeClearsTheSleepBlockAndSaysItIsBack` and `testScreenOffPausesAutonomousWorkAndSpeech`.
 - **Spoken commands never matched.** Whisper ends transcripts with "." or "?", so "What do you
   remember?", "Copy that.", "List voices." went to the model. Command phrases drop trailing punctuation;
-  the memory list now also shows the R5 key points.
+  the memory list now also shows the R5 key points. Proven by
+  `TypedInteractionTests.testSpokenCommandsIgnoreWhisperPunctuation` and the guardrail "memory list
+  includes core facts and R5 key points".
 - **Non-speech became turns.** `[BLANK_AUDIO]`, `[SOUND]`, `[coughs]`, `[MUSIC PLAYING]` are stripped.
-- **Double questions.** The `ask_user` question is no longer spoken after content that already asked one.
+  Proven by `SpokenTranscriptTests.testWhisperNonSpeechAnnotationsAreNotATurn` and
+  `testRealSpeechSurvivesAroundAnnotations`.
+- **Double questions.** The `ask_user` question is no longer spoken after content that already asked
+  one. Proven by `SpokenQuestionTests.testToolQuestionIsNotAppendedAfterTheAnswerAlreadyAsked` and
+  `testToolQuestionIsSpokenWhenTheAnswerAskedNothing`.
 - **"I can't hear you."** The system prompt now says the owner talks by voice and replies are spoken.
+  Proven by `EngineIntegrationTests.testProductionChatRequestAndFragmentedFinalQuestionContract` and
+  the guardrail "Dot knows it is heard and never forces a question".
 - **R7 gap.** Model-chosen `delete_file` and automatic destructive file commands now pass the safety
-  approver before running (they ran unchecked before).
+  approver before running (they ran unchecked before). Proven by the guardrail "model file mutations
+  pass the R16 safety approver first"; the native approver decision itself still needs the owner's
+  real session.
 - **Log noise.** One `[HEALTH]` line per real change (was 4 to 8 per turn, `engine=unknown` when ready),
   "Context extraction skipped" is logged as SYSTEM not DOT, repeated `[ROAM] skip` reasons are logged
   once, and the `[SYNC] pushed` line no longer makes the log sync re-upload itself every five minutes.
+  Proven by the guardrail "log noise is bounded and labelled honestly", and the offline log-sync
+  contracts in `Tests/Python/test_offline_runtime_contract.py`.
 
 ## Resolved: uncommitted work in the tree (2026-10-18)
 
@@ -97,24 +114,25 @@ refactor** by another worker:
 
 ## Current build and gates
 
-- Repo: `/Users/mac/Documents/deepseek-harness/default-workspace/Dot`, branch **main only**.
-- App source last changed at **`8afab50`** (screen-off/lock pause); `f03d608` added release scripts;
-  later commits are docs. Run `git log -1` and `scripts/install_local.sh`; the installed app's
-  `build-provenance.json` must equal that HEAD. Do not assume an older installed provenance from any
-  document.
-- Last full green automated gate: **XCTest 904 / 0 failures (1 opt-in live test skipped)**,
-  **`swift test` 580 / 0**, **Python 604 passed / 4 skipped**, **53 static guardrails**, Debug + Release
-  builds. The full `verify_macos.sh` run at `e0fb2a7` was clean apart from its **by-design
-  runtime-finalizer canary**; rerun it after the latest placement/screen-off changes (the full XCTest
-  and SwiftPM lanes are green, but the complete script has not been rerun since `8afab50`).
-- Public package **published** as GitHub release **`public-f6cc73d`** (latest, non-prerelease):
-  `Dot.dmg` (~1.0 GB) and `Dot.zip` (~785 MB) plus SHA-256 files. Remote GitHub asset digests match
-  the local SHA-256 exactly. The assets were built at app-source `850fa98` (same binary as `f6cc73d`);
-  the README latest-download links resolve. They contain the runtime, no `OfflineModels`, and the
-  manifest-verified downloader. The build is **Apple Development signed, not notarised** (no Developer
-  ID Application identity or notary credentials on this Mac).
-- The full 19.9 GB first-launch model download has **not** been run end to end; a gated live test
-  downloaded and SHA-verified one real file from Hugging Face through the same code path.
+- Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
+  `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
+- Last full green macOS gate (CI run `39511199762`, commit `c7c4ca6`): **XCTest 936 / 0 failures
+  (1 opt-in live test skipped)**, **`swift test` 608 / 0**, **Python 614 / 4 skipped**,
+  **60 static guardrails**, the eight focused suites, `dot-voice` and Debug/Release builds. Two
+  further static guardrails were added afterwards (now 62) and run in the next green CI/release pass.
+  The hosted runtime-finalizer canary is still a by-design failure; `verify_macos.sh` records it and
+  skips hosted packaging, while every independent Swift/Xcode/Python check continues.
+- The default DMG is rebuilt from the current source by `.github/workflows/release.yml`; the release
+  tag, asset sizes and SHA-256 for the Phase 4 build are recorded in
+  [PHASE4_RESULT.md](PHASE4_RESULT.md). It contains the audited runtime, **no model weights**
+  (`models_bundled: false`), and the manifest-verified first-launch downloader. It is ad-hoc signed,
+  **not notarised** (no Developer ID Application identity or notary credentials).
+- The full 19.9 GB first-launch model download has **not** been run end to end on this Pi; the
+  downloader's units, resume/hash/repair paths and one real gated Hugging Face file were exercised.
+  After the download, core conversation/voice/memory reuse local files and do not require a network;
+  see [PHASE4_RESULT.md](PHASE4_RESULT.md) and [offline acceptance](offline-acceptance.md).
+- The complete all-in-one DMG parts and the pinned model parts are **not uploaded**: both need the
+  verified 22.4 GB payload on the owner's Mac (`QUESTIONS_FOR_EMIN.md` §8–10).
 
 ## What genuinely works
 
@@ -172,14 +190,17 @@ refactor** by another worker:
 
 ## Suggested next order
 
-1. Clean-Mac test of the published release: download `Dot.dmg` → drag to Applications → first-launch
-   20 GB model download → voice turn.
-2. Owner acceptance session: voice, follow-up, cap, file op, calendar card, video silence, screen-off
-   pause, screen watching, battery/timer.
+1. Owner acceptance session on a Mac at or above the gate: install the Phase 4 DMG → first-launch
+   model download → voice with Emma, sleep/wake ("I'm back." once, roaming resumes), "What do you
+   remember?", one proactive comment without a forced question, then the broader checklist
+   (follow-up, cap, file op, calendar card, video silence, screen-off pause, battery/timer).
+2. Store the log token and confirm one queued upload; verify offline startup with the network disabled
+   and the model already present.
 3. R9 decision and implementation (plugin layer + watchdog).
 4. R4 decision.
-5. Supervisor slices 2–5; R10 local index/offline snapshot; full-disk index; B8.
-6. Notarisation, licence closure, second-Mac acceptance, final docs truth pass.
+5. Upload the verified model parts and produce the complete all-in-one parts (owner Mac).
+6. Supervisor slices 2–5; R10 local index/offline snapshot; full-disk index; B8.
+7. Notarisation, licence closure, second-Mac acceptance, final docs truth pass.
 
 ## Commands (verified in this environment)
 
@@ -217,7 +238,11 @@ PATH=/private/tmp/dot-py313/bin:$PATH bash scripts/verify_macos.sh
 
 ## Environment traps
 
-- `python3` is 3.9; use `/private/tmp/dot-py313/bin/python`.
+- `python3` is 3.9 on the owner Mac; use `/private/tmp/dot-py313/bin/python`.
+- On the Linux Pi, the Python suite assumes a 022 umask and a disk-backed TMPDIR. Run it as
+  `(umask 022; TMPDIR=$PWD/.tmp/pytmp python3 -B -m unittest discover -s Tests/Python -v)`;
+  `/tmp` is a 768 MB tmpfs and the runtime-reconstruction fixtures reserve 1 GB of scratch space,
+  and a group-writable checkout is correctly rejected as an unsafe runtime mode.
 - Checkout is cloud-synced: use `/private/tmp` scratch paths and `xattr -cr` before codesign.
 - Re-signing resets TCC: install with `scripts/install_local.sh` (stable Apple Development identity).
 - Never weaken `startupSeconds` (10 s) or `PlacementSnapshot.lifetime` (10 s); guard tests exist.

@@ -1,3 +1,9 @@
+> **PHASE 4 (2026-10-21): historical, not current verification.** This plain-text file is the
+> 2026-10-14 snapshot and is explicitly superseded. Its unchecked boxes are retained as history and
+> must not be read as current promises or current failures. The live per-promise Verified/Partial/
+> Broken matrix is in [PHASE4_RESULT.md](PHASE4_RESULT.md); the canonical checklist is
+> [BUILD_CHECKLIST.md](BUILD_CHECKLIST.md).
+>
 > **SUPERSEDED (2026-10-17).** This plain-text companion describes the retired Python voice helper,
 > source fetcher and SearXNG search stack as pending work, and no longer exists in that form. See
 > [the Rust-only runtime](rust-runtime.md) and the current

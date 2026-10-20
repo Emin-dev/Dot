@@ -1,5 +1,26 @@
 # Dot: implementation and next steps
 
+## Phase 4 checkpoint — 2026-10-21 (compile, verify, offline, rebuild)
+
+- The merged `claude/app-dot-behavior-faax19` work is now compiled and executed on macOS arm64.
+  `scripts/verify_macos.sh` explicitly runs the eight real-log suites before the full lane.
+- Real-log fixes are mapped to passing tests/guardrails in `docs/PHASE4_RESULT.md`: four British
+  voices and Isabella fallback, idle sleep/wake with one "I'm back." and roaming unblocked, spoken
+  commands with Whisper punctuation, non-speech filtering, no double/forced questions, the R7 safety
+  approver and bounded log noise.
+- Offline contracts added: `Tests/Python/test_offline_runtime_contract.py` proves the core has no
+  cloud STT/TTS/LLM endpoint, speech/inference are loopback-only, model files are reused offline and
+  re-hashed before readiness, and log sync is token-gated and silent. A Swift test proves a
+  size-complete model file creates no provisioning URLSession task. Native disconnected acceptance
+  remains owner-run.
+- Checklist walk: every current promise in `AI_HANDOFF`, `BUILD_CHECKLIST.md`, `ROADMAP`, `AUDIT`
+  is marked Verified/Partial/Broken in `docs/PHASE4_RESULT.md`. The `.txt` checklist is explicitly
+  historical and is not presented as current verification.
+- Owner gates unchanged: model-part upload, complete all-in-one parts, notarisation, log token,
+  R4 and R9 decisions. `docs/QUESTIONS_FOR_EMIN.md` §8–10 has the exact steps.
+- The default DMG is rebuilt by the release workflow from this source; the tag, asset sizes and
+  SHA-256 are recorded in `docs/PHASE4_RESULT.md`.
+
 ## Phase 3 checkpoint — 2026-10-20 (CI + release packaging)
 
 - Committed phase 2 in three logical commits (Rust fmt/clippy, hardware gate + log channel,

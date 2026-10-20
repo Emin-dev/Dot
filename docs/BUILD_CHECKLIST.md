@@ -1,12 +1,36 @@
 # dot: product roadmap and build checklist
 
-> **CURRENT STATUS (2026-10-18):** app source last changed at **`8afab50`**; `f03d608` added
-> release scripts, later commits are docs. Reinstall so provenance matches HEAD. 904 XCTest/0 (1 skipped), 580
-> `swift test`/0, 604 Python/4 skipped, 53 guardrails. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded),
-> R11, R12, R13 (create/edit/move), R14, R15 are implemented; **R4 blocked on the payload decision**,
-> **R9 not built**, **R10 partial**. Published release **`public-f6cc73d`** contains Dot.dmg/Dot.zip. Read
-> [AI_HANDOFF.md](AI_HANDOFF.md) for current state, blockers, commands and the next plan. The "4 of 97" and older run counts below are **2026-10-14 historical
-> checkpoints**, not current completion.
+> **CURRENT STATUS (2026-10-21, PHASE 4 VERIFIED):** the merged real-log fixes are compiled and run on
+> macOS arm64. CI `39511199762` (commit `c7c4ca6`): **936 XCTest / 0 failures (1 skipped), 608
+> `swift test`/0, 614 Python/4 skipped, 60 static guardrails, eight focused suites, `dot-voice`,
+> Debug+Release**. Two more guardrails now make **62**. The default DMG is rebuilt by the release
+> workflow; see [PHASE4_RESULT.md](PHASE4_RESULT.md) for the tag/SHA and the per-promise
+> Verified/Partial/Broken matrix. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded), R11, R12, R13
+> (create/edit/move), R14, R15, R16 (gated), R17 are implemented; **R4 blocked on the payload
+> decision**, **R9 not built**, **R10 partial**. Read [AI_HANDOFF.md](AI_HANDOFF.md) for current state,
+> blockers, commands and the next plan. The "4 of 97" and older run counts below are **historical
+> checkpoints**, not current completion; unchecked boxes below remain roadmap scope until the Phase 4
+> matrix says otherwise.
+
+## Phase 4 status of this checklist (2026-10-21)
+
+The detailed per-promise evidence is in [PHASE4_RESULT.md](PHASE4_RESULT.md). Summary:
+
+| Checklist area | Status | Evidence / limit |
+| --- | --- | --- |
+| Real-log voice/sleep/transcript/command/R17 fixes | **Verified (automated)** | Focused XCTest + full lane in CI `39511199762`; owner session still required |
+| Launch gate: M5 Pro class / 48 GB / macOS 27+ | **Verified (source + tests)** | `HardwareCompatibility` tests and guardrails; no override, no smaller model |
+| Text log channel and offline queue | **Verified (source + tests)** | `DotLogSync`, `LogSyncPolicyTests`, offline contract; token upload owner-gated |
+| Offline core after model download | **Verified (source + unit evidence)** | `test_offline_runtime_contract.py`, `OfflineIntegrationTests`; native disconnected run owner-gated |
+| First-launch model downloader | **Partial** | Manifest/hash/resume/repair paths tested; full 19.9 GB download not run here |
+| Default DMG rebuild | **Verified by release workflow** | Phase 4 release; asset SHA in PHASE4_RESULT |
+| Complete all-in-one installer parts | **Broken/blocked** | Needs the owner's verified 22.4 GB payload; `QUESTIONS_FOR_EMIN.md` §9 |
+| Pinned model-part primary route | **Blocked** | Parts not uploaded; Hugging Face hash-checked fallback is active |
+| Notarisation / Gatekeeper-clean public DMG | **Broken** | No Developer ID/notary credentials; DMG is ad-hoc signed |
+| R9 self-healing | **Broken/not built** | No snapshots, self-test, rollback or watcher |
+| R4 voice picker | **Partial** | Four British voices accepted; only Isabella is always bundled; payload decision open |
+| R10 research/local index | **Partial** | Keyless providers and cache work; no offline encyclopedia/index |
+| Owner acceptance | **Open** | Requires a Mac at/above the gate and the owner's session |
 
 Agreed direction, updated 2026-10-14. **This is the canonical future-product checklist.** [PROGRESS](PROGRESS.md) records verified source, tests and installation; agreement here does not mean a feature is built. Roadmap capability boxes remain unchecked until their stated scope is verified; the separate candidate ledger below records narrower source and automated-check milestones. This documentation delta changes no application code; the preview review is complete and checklist implementation is authorized in tested stages. Voice is the first milestone, with a separate reviewable native skin/settings batch; installation remains a separate step. **Runtime direction:** the runtime direction is Rust-only; the Splash supervisor/TLS relay is still Python until `crates/dot-runtime` slices 2–5 land. The owner decisions below are authoritative; see [the Rust runtime reference](rust-runtime.md).
 
