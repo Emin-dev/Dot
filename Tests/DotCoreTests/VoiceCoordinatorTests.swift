@@ -149,7 +149,7 @@ private final class CoordinatorFixture {
             isReady: { [weak self] in self?.ready ?? false },
             startPreparation: { [weak self] in self?.preparationRequests += 1 },
             microphoneAuthorized: { [weak self] in self?.microphoneAuthorized ?? false },
-            currentRoute: { [weak self] in self?.route }, screenAuthorized: { false },
+            currentRoute: { [weak self] in self?.route }, screenAuthorized: { true },
             startVoice: { [weak self] in self?.voiceEvents.append(.start($0)) },
             enqueueVoice: { [weak self] text, id in
                 guard let self else { return }

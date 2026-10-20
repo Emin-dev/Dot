@@ -1110,7 +1110,7 @@ final class ChatModel: ObservableObject {
             // invitation: a veto defers the poll instead of losing the invite unheard.
             return .init(ready: self.runtime.isReady() && self.visible && !self.runtime.ttsSpeaking() && !self.runtime.recording() && !self.runtime.transcribing() && routeMatches && !videoPlayback(),
                 microphoneAuthorized: self.runtime.microphoneAuthorized(),
-                screenAuthorized: CGPreflightScreenCaptureAccess(),
+                screenAuthorized: self.runtime.screenAuthorized(),
                 interacting: self.interactionPaused || self.historyPresented || self.controlInteraction)
         }
         followup.onInvite = { [weak self] previous, continuation in
