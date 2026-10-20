@@ -87,6 +87,11 @@ def candidate_receipt(root, commit, host_arch, macos_version, sdk_version, app_a
 def main():
     root = Path(__file__).resolve().parents[1]
     os.chdir(root)
+    if not (root / "build/Dot.dmg").is_file():
+        # The mandatory runtime-finalizer canary intentionally blocks packaging
+        # on hosted runners. A verification-only run has no DMG to describe.
+        print("No development DMG was produced (packaging skipped); receipt skipped.")
+        return
     commit = output("git", "rev-parse", "HEAD")
     if output("git", "status", "--porcelain", "--untracked-files=all"):
         raise ValueError("Candidate receipt requires a clean checkout")

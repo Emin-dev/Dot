@@ -39,13 +39,22 @@ Ask one at a time, numbered options, record the answer as a rule. Not yet answer
 - Wake greeting: say "I'm back." after every display wake, only after a long absence, or never.
 - Idle life while blocked: keep roaming and idle motion while an error is shown, or stay still.
 - Self-reflection every 10 minutes: it currently speaks a long report and overwrites the clipboard.
-- Public log sync: `dots/<id>/` on the public repo includes screen-derived text (for example payment
-  details read from Safari); keep public, make the repo private, or redact screen text.
+- Public log sync: **resolved 2026-10-20** — text-only conversation/app logs auto-upload to the
+  dedicated `dot-logs` branch under `dot/<install-id>/<launch>/`, with secrets masked and no images,
+  screenshots, audio or memory database. The owner still needs to store the token
+  (`docs/QUESTIONS_FOR_EMIN.md`). `main` is PR-protected.
 - Personality: how Dot should "live" between turns (idle animations, reactions, mood, greetings).
+
+## Current launch and logging rules (2026-10-20)
+
+- Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+. The launch gate refuses a
+  lower Mac with one clear message; the exact Qwen3.8 27B Q4 Splash model has no smaller fallback.
+- Text logs auto-upload to `Emin-dev/Dot@dot-logs` under `dot/<install-id>/<launch>/` via
+  `DotLogSync`; see [the log reading guide](LOG_READING_GUIDE.md).
 
 ## Fixes from the owner's real log (2026-10-20)
 
-Found by reading `dots/macbook16-m5-pro-48gb-mac17-8/logs/dot_chat_log.txt`. Source and tests changed;
+Found by reading the old `dots/macbook16-m5-pro-48gb-mac17-8/logs/dot_chat_log.txt` (the channel now writes `dot/<install-id>/<launch>/`). Source and tests changed;
 the Swift build and XCTest lanes were **not run** (Linux session, no Swift toolchain). Static guardrails
 (now 55/55, two added) and the Python suite (604, 2 IPv6-only errors that also fail on the untouched
 tree) were run.

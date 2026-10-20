@@ -235,7 +235,7 @@ Requested on 2026-10-13; all items below remain unimplemented acceptance work.
 - [ ] Add version-matched access to dot's own source and Siri/App Intents integration.
 - [x] Research the separate **T3-Video-Wan2.2-5B** feature and Apple Silicon resource/runtime fit. It is not a dependency of the fast voice path and must not silently replace its models.
 - [ ] Preserve a complete bundled offline owner app. Implement a public first-launch downloader for pinned, verified assets with progress, disk-space checks, interruption/retry, corruption handling and offline reuse; no external folder/server setup requirement. Offline core operation and online research are separate acceptance cases.
-- [ ] Implement hardware/OS gates and test the intended **M4 Pro-class/36 GB minimum, 48 GB recommended**, with macOS 26.4+ for the selected Splash runtime. Reported personal test class is M5 Pro/48 GB. These targets are not universal certification or proof on a 36 GB device.
+- [ ] Verify the **Apple Silicon M5 Pro class / 48 GB / macOS 27+** minimum launch gate on the target Mac. Reported personal test class is M5 Pro/48 GB. These targets are not universal certification or proof on other Apple Silicon devices.
 - [ ] Complete clean supported second-Mac acceptance, license/redistribution notices, suitable asset delivery, distribution signing/notarization and exact-artifact installer tests. Existing personal development signing and payload-free CI DMGs do not establish a public release.
 
 ## Research-backed improvements and concrete workflows
@@ -410,7 +410,7 @@ The halo layout and speech mapping are product implementation recommendations. A
 
 The owner explicitly deferred checks requiring their Mac until later and asked cloud work to continue. These remain **pending/unverified**, not waived or passed. They do not block independent implementation, portable tests or hosted model-free macOS CI. Recheck this list against the exact final artifact; mark each item only with observed evidence.
 
-- [ ] Verify complete Apple Silicon/macOS 26.4+ bundle readiness, model/runtime/Whisper integrity, stable signing identity, exact commit and artifact hashes on suitable target hardware.
+- [ ] Verify complete Apple Silicon/macOS 27+ bundle readiness, model/runtime/Whisper integrity, stable signing identity, exact commit and artifact hashes on suitable target hardware.
 - [ ] Run actual microphone → Whisper → selected local Qwen/Splash → audible British `bf_isabella`; repeat and interrupt turns, including no-speech, near-expiry invitations and all silence/invitation settings.
 - [ ] Measure real acoustic onset, speech-end and post-silence p50/p95, stop-to-silence/next-turn delay, recognition quality and CPU/GPU/ANE/RAM/thermal/battery usage; include noise, echo, headphones and Bluetooth.
 - [ ] Verify microphone/screen permission denial and revocation, route changes, sleep/wake, foreground preemption, no stale capture restart, and helper cleanup after Quit/relaunch.

@@ -85,13 +85,14 @@ untouched.
   self-improvement note and health transition is recorded in
   `~/Library/Application Support/Dot/Logs/` (rotated). Screenshots are summarised as
   text (OCR lines and tool outcomes are already logged).
-- **GitHub channel — one folder per Dot:** `scripts/dot_log_sync.sh` mirrors a Dot's
-  logs, `dot-health.json` and memory database into `dots/<DOT_ID>/` on a GitHub
-  repository. Every Dot in the world can therefore publish what it did, what failed
-  and what it could not do; other Dots (and the maintainer) read, compare and adopt
-  each other's better solutions; when a Dot silently stops or cannot do a task, its
-  folder is the call for help. The token is used in-memory only and never stored.
-  Next slices: in-app periodic auto-push and a webhook trigger.
+- **GitHub channel — one folder per launch:** `DotLogSync` (and the manual
+  `scripts/dot_log_sync.sh`) publishes text logs, `dot-health.json` and launch
+  metadata to the dedicated `dot-logs` branch under
+  `dot/<install-id>/<launch-timestamp-UTC>/`. One new folder per launch, a stable
+  anonymous install id, an offline queue with exponential backoff and 2 MB
+  rotation. No images, screenshots, audio or memory database. The token is read
+  from Keychain/config and is never bundled; `main` is PR-protected. See
+  [the log reading guide](LOG_READING_GUIDE.md).
 
 ## What is already working (verified green)
 

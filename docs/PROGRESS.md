@@ -1,5 +1,25 @@
 # Dot: implementation and next steps
 
+## Checkpoint — 2026-10-20 (audit, hardware gate, log channel, Rust gates)
+
+- `docs/AUDIT.md` records every documented promise as WORKS/FIXED/BROKEN/UNVERIFIABLE-ON-LINUX.
+- Merged `origin/claude/app-dot-behavior-faax19`: R17 proactive questions, voice handshake,
+  missing-voice fallback, Whisper annotation filtering, sleep/wake recovery, spoken-command
+  punctuation, safety check for automatic file mutations and roam-veto log deduplication.
+- Hardware gate now refuses below **Apple Silicon M5 Pro class / 48 GB / macOS 27+** with one clear
+  critical message; no override and no smaller model.
+- Logging: text-only auto-upload to `Emin-dev/Dot@dot-logs` under
+  `dot/<stable-install-id>/<launch-timestamp-UTC>/`; one folder per launch, offline queue,
+  exponential backoff, 64-entry bound, 2 MB log rotation and secret redaction. Token is read from
+  Keychain service `dot-github-token` then a 0600 config file; the owner request is in
+  `docs/QUESTIONS_FOR_EMIN.md`. `main` is PR-protected; the logs token cannot change code.
+- Rust gates on the Pi: `fmt` pass; `dot-research` 15 tests and `dot-runtime` 3 tests pass; clippy
+  `-D warnings` passes for both. `dot-safety` needs the llama.cpp toolchain and is not a Linux gate.
+- Static contracts: 55/55. Python suite is macOS-targeted; on this Linux host many Darwin/umask/free-
+  space cases fail independently of this change.
+- Not run: Swift/Xcode/XCTest/`swift test`, macOS permissions/audio/screen, DMG install, owner
+  acceptance. macOS CI is the next gate.
+
 ## Source checkpoint — 2026-10-20 (real-log fixes; Swift not compiled)
 
 Branch `claude/app-dot-behavior-faax19`. Written from the owner's log in `dots/`, see `AI_HANDOFF.md`
@@ -59,7 +79,7 @@ Deleted as a result: `Resources/Voice/bionic_helper.py`, `Resources/Voice/voice.
 - Model-supplied tool numbers were unclamped: `scroll_screen`'s `amount` reached `Int32(_:)` and trapped (process death), and `click_point`'s `clicks` drove a `@MainActor` loop with 50 ms sleeps per click (≈8 minutes frozen). Both are clamped at the parse boundary and at the engine entry points.
 - The production `ChatRuntime` hard-coded `isReady: { true }` and `screenAuthorized: true`, so the careful `OfflinePreparation` payload verification gated nothing. Readiness is now real, and proactivity no longer requires Screen Recording (voice-only use stays proactive).
 - Screen freshness was 5 seconds while the checklist claimed 15; it is now the documented 15.
-- The hardware launch gate demanded macOS 27 and 48 GB — no shipping macOS satisfied it — and its default Return button was "Stop", which quit the app on every launch. It now matches the documented minimum (36 GB, macOS 26.4+; 48 GB/27 advisory), defaults to "Run Anyway" and remembers the acknowledgement.
+- The hardware launch gate now enforces the owner's minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory and macOS 27+, with a clear blocking message. The exact local Qwen3.8 27B Q4 model has no smaller fallback, so there is no override.
 - Stuck-task detection was fed the accessibility text selection instead of screen OCR, so the "stuck on a build error" feature could effectively never fire.
 - The laser/highlight overlay mixed AppKit and CG/Vision coordinate spaces, so highlights could render vertically mirrored; coordinates are now converted explicitly.
 - Approval cards were unclickable (`controlHitTest = { _ in false }`), so clicking "Approve" started a listening turn instead; a pending card now receives mouse input.
@@ -230,7 +250,9 @@ release acceptance is claimed by this checkpoint.
 - **Added Capabilities 8–15 to Canonical Product Checklist:**
   - Hold `Fn` Push-to-Talk, Active Window & Selection Context, On-Screen Visual Guidance / Laser Pointer, In-Place App Typing, Action Approval Cards, Proactive Idle & Stuck Detection, Focus & Meeting Mode Awareness, and Contextual App Workflows.
 
-## Published checkpoint — 2026-10-16 03:07 UTC
+## Published checkpoint — 2026-10-16 03:07 UTC (historical)
+
+> The 2026-10-20 checkpoint above supersedes the 24 GB/36 GB and "Run Anyway" wording below.
 
 - **Hardware Minimum Specification & Launch Gate Enforced:**
   - Implemented `HardwareCompatibility` in `src/InteractionCore.swift` with exact `sysctl` hardware discovery:
@@ -456,8 +478,8 @@ The [canonical checklist](BUILD_CHECKLIST.md) is the source of truth for contrac
 
 ## Hardware and distribution targets
 
-- Requested target: native macOS, **M4 Pro-class or newer** Apple Silicon and **at least 36 GB RAM**. This is a target, not a verified support claim or a currently implemented hardware gate. It does not imply support for every base M4/M5 Mac.
-- The selected Splash runtime requires macOS 26.4 or newer. Its published Q4 guidance is at least 36 GB, with 48 GB recommended. A 36 GB device has not passed this app's full workload/resource acceptance. M4 Pro commonly ships in 24/48 GB configurations, so the requested threshold normally means a 48 GB Pro configuration.
+- Minimum: native macOS, **Apple Silicon M5 Pro class or newer** and **48 GB Unified Memory**, macOS 27+. This is enforced at launch; base M5 and all older Apple Silicon are refused.
+- The selected Splash runtime requires macOS 27 or newer. Dot uses 48 GB as both the minimum and the recommended Unified Memory; no smaller model is substituted.
 - The owner's reported test hardware is M5 Pro/48 GB; OS and actual app behavior were tested, but no blanket claim for all other Macs follows.
 - Keep a complete all-in-one offline build. A future public small installer may automatically provision verified assets with visible progress if a single large download is impractical, as requested; no such public downloader is implemented today. Do not revive external folder/server setup.
 - [ ] Clean supported second-Mac installation, relocation, offline voice/vision, denial/recovery, resources and mic/speaker quality acceptance.

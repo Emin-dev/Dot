@@ -7,7 +7,7 @@ by actually running the gate, not by assumption.
 
 | Item | State | Evidence |
 |---|---|---|
-| In-app automatic GitHub sync | ✅ | `DotLogSync` ships in `Contents/MacOS`; the running app pushed its own `periodic` commits to `dots/macbook16-m5-pro-48gb-mac17-8/` on `main` (observed live) |
+| In-app automatic GitHub log sync | ✅ (source) / token pending | `DotLogSync` writes `dot/<install-id>/<launch>/` to the dedicated `dot-logs` branch with an offline queue and backoff; the owner must store the token (see `QUESTIONS_FOR_EMIN.md`). `main` is PR-protected. |
 | R1 five-minute listening | ✅ | `VoiceCaptureDeadline.maximumDuration = 300.0`; recognizer bounds 301 s; spoken cap notice; VoiceTimingTests 37/0 |
 | R14 battery/charging alerts | ✅ | policy + settings + idle-tick monitor + spoken configuration commands; BatteryAlertTests 3/0 |
 | R11 cold-start progress + prewarm | ✅ | live stage messages follow `onReadinessStage`; `prewarm at login` / `stop prewarming` commands; off by default |

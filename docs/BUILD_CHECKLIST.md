@@ -113,11 +113,12 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 - [x] **Full Background Autonomy:** Dot keeps working when clicking into other applications; turns are only interrupted if user explicitly clicks Stop in Dot's window or says "stop".
 - [x] **Safe-Zone 5-Second Random Movement — retired 2026-10-17.** While thinking, Dot used to relocate every 5 seconds to a safe empty zone detected via `PlacementCapture` and `RoamingCore`. The owner observed Dot moving nonstop through long model loads and retired the cadence: Dot now keeps its position through a turn and moves only on the 2-minute idle roam (plus a necessary escape when covered). The safe-zone calculation remains.
 - [x] **Self-Improvement & Failure Logging:** Automatically logs task failure reason, missing capability, and proposed fix via `DiagnosticChatLogger.recordFailure` and indexes corrections in local FTS5 store.
+- [x] **Text log channel (2026-10-20, owner-authorized new feature):** full user/Dot conversation text, tool outcomes, app/system events and health snapshots are written locally under `Application Support/Dot/Logs/` (2 MB rotation, secrets masked). `DotLogSync` auto-uploads text only to `Emin-dev/Dot` on the dedicated `dot-logs` branch under `dot/<stable-install-id>/<launch-timestamp-UTC>/`; one new folder per launch, persistent offline queue, exponential backoff, bounded retries. No images, screenshots, audio, microphone data or memory database. The token is read from Keychain/config and never bundled; see [the guide](LOG_READING_GUIDE.md). `main` requires a pull request and cannot be changed by the logs token.
 - [x] **Live GitHub Repository Integration:** Built-in menu items and conversational inquiries to inspect, copy, and open Dot's repository (`https://github.com/Emin-dev/Dot`) and read local source code directly.
-- [x] **Hardware Specification Launch Gate:** launch gate with an **Apple Silicon / 36 GB Unified Memory / macOS 26.4** minimum floor; **48 GB and macOS 27+ are advisory recommendations** and never block a launch:
-  - *Technically Impossible* (Intel, RAM < 24 GB, or macOS < 15): Informative critical alert with single "Quit" button.
-  - *Below Minimum* (chip below M4 Pro/M5, RAM < 36 GB, or macOS < 26.4): Warning alert with **"Run Anyway" as the default** (Return-key) button and "Stop" secondary; shown once per acknowledgement.
-  - *Meets Specification* (Apple Silicon, 36 GB RAM, macOS 26.4+): Direct launch without interruption.
+- [x] **Hardware Specification Launch Gate:** launch gate with an **Apple Silicon M5 Pro class / 48 GB Unified Memory / macOS 27+** minimum floor. The exact local Qwen3.8 27B Q4 model has no smaller fallback, so an unmet minimum is refused rather than overridden:
+  - *Technically Impossible* (Intel): critical alert with a single "Quit" button.
+  - *Below Minimum* (chip below M5 Pro class, RAM < 48 GB, or macOS < 27): critical alert naming the detected Mac and the unmet items, with a single "Quit" button.
+  - *Meets Specification* (Apple M5 Pro class or newer, 48 GB, macOS 27+): direct launch without interruption.
 - [x] **Smart Local Timers & Reminders with macOS Notifications:**
   - Natural language timer parsing ("set a timer for 10 minutes", "timer 5 min", "remind me in 30 seconds to stretch", "cancel timer", "show timers") via `SmartTimerScheduler` and `SmartTimerParser`.
   - Asynchronous local scheduling with audio chime and voice completion alert. A `UNUserNotificationCenter` banner is **not** implemented: no notification permission is requested, so timers alert by sound and speech only.
@@ -330,7 +331,7 @@ Requested on 2026-10-13. The mechanism changed on 2026-10-17 — Rust `dot-searc
 - [ ] Add version-matched access to dot's own source and Siri/App Intents integration.
 - [x] Research the separate **T3-Video-Wan2.2-5B** feature and Apple Silicon resource/runtime fit. It is not a dependency of the fast voice path and must not silently replace its models.
 - [ ] Preserve a complete bundled offline owner app. Implement a public first-launch downloader for pinned, verified assets with progress, disk-space checks, interruption/retry, corruption handling and offline reuse; no external folder/server setup requirement. Offline core operation and online research are separate acceptance cases.
-- [ ] Implement hardware/OS gates and test the intended **M4 Pro-class/36 GB minimum, 48 GB recommended**, with macOS 26.4+ for the selected Splash runtime. Reported personal test class is M5 Pro/48 GB. These targets are not universal certification or proof on a 36 GB device.
+- [ ] Verify the **Apple Silicon M5 Pro class / 48 GB / macOS 27+** minimum launch gate on the target Mac. Reported personal test class is M5 Pro/48 GB. These targets are not universal certification or proof on other Apple Silicon devices.
 - [ ] Complete clean supported second-Mac acceptance, license/redistribution notices, suitable asset delivery, distribution signing/notarization and exact-artifact installer tests. Existing personal development signing and payload-free CI DMGs do not establish a public release.
 
 ## Research-backed improvements and concrete workflows
@@ -505,7 +506,7 @@ The halo layout and speech mapping are product implementation recommendations. A
 
 The owner explicitly deferred checks requiring their Mac until later and asked cloud work to continue. These remain **pending/unverified**, not waived or passed. They do not block independent implementation, portable tests or hosted model-free macOS CI. Recheck this list against the exact final artifact; mark each item only with observed evidence.
 
-- [ ] Verify complete Apple Silicon/macOS 26.4+ bundle readiness, model/runtime/Whisper integrity, stable signing identity, exact commit and artifact hashes on suitable target hardware.
+- [ ] Verify complete Apple Silicon/macOS 27+ bundle readiness, model/runtime/Whisper integrity, stable signing identity, exact commit and artifact hashes on suitable target hardware.
 - [ ] Run actual microphone → Whisper → selected local Qwen/Splash → audible British `bf_isabella`; repeat and interrupt turns, including no-speech, near-expiry invitations and all silence/invitation settings.
 - [ ] Measure real acoustic onset, speech-end and post-silence p50/p95, stop-to-silence/next-turn delay, recognition quality and CPU/GPU/ANE/RAM/thermal/battery usage; include noise, echo, headphones and Bluetooth.
 - [ ] Verify microphone/screen permission denial and revocation, route changes, sleep/wake, foreground preemption, no stale capture restart, and helper cleanup after Quit/relaunch.

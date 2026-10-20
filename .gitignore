@@ -15,3 +15,5 @@ __pycache__/
 target/
 
 build-public/
+
+.tmp/
