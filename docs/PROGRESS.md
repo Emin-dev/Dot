@@ -1,5 +1,15 @@
 # Dot: implementation and next steps
 
+## Source checkpoint — 2026-10-20 (real-log fixes; Swift not compiled)
+
+Branch `claude/app-dot-behavior-faax19`. Written from the owner's log in `dots/`, see `AI_HANDOFF.md`
+for each defect and fix. Run here: `scripts/check_contracts.py` 55/55, Python suite 604 tests with the
+same 2 IPv6-only errors as the untouched tree. **Not run:** typecheck, XCTest, `swift test`,
+`verify_macos.sh`, install and owner acceptance (Linux session, no Swift toolchain). New or changed
+tests: `VoiceEventTests` (every British voice, missing-voice fallback), `SpokenQuestionTests`,
+`SpokenTranscriptTests`, `TypedInteractionTests` (idle sleep, wake greeting once, command
+punctuation), `ProactiveBehaviorTests` (R17), `EngineIntegrationTests` (system prompt).
+
 ## Published checkpoint — 2026-10-17 (Rust-only runtime; every repository gate green)
 
 This checkpoint records work verified on this machine, not intentions. Everything below was run and observed.

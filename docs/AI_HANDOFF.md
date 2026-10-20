@@ -1,15 +1,54 @@
-# Dot — AI continuation handoff (2026-10-18)
+# Dot — AI continuation handoff (2026-10-20)
 
 **Read this first.** This is the current, evidence-based state for any AI developer continuing Dot.
-The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R15). Where this file and an
+The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R17). Where this file and an
 older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, `CONTINUATION.md` and
 `BUILD_CHECKLIST.md` contain history that is partly superseded; their top notes point here.
+
+## Start here (next worker, 2026-10-20)
+
+1. The fixes below live on branch `claude/app-dot-behavior-faax19` (a cloud session cannot push to
+   `main`; the integration owner merges it). Their Swift code was **written and reviewed but never
+   compiled**. On the Mac, before anything else:
+   - typecheck (command under "Commands");
+   - focused XCTest suites: `VoiceEventTests`, `SpokenQuestionTests`, `SpokenTranscriptTests`,
+     `TypedInteractionTests`, `VoiceCoordinatorTests`, `EngineIntegrationTests`,
+     `ProactiveBehaviorTests`, `ProactiveIntegrationTests`;
+   - the full XCTest and `swift test` lanes, `scripts/check_contracts.py` (55 guardrails), then
+     `scripts/install_local.sh`.
+2. Owner acceptance after install: talk with the default voice (Emma), sleep and wake the Mac while
+   idle (Dot must say "I'm back." once and keep roaming), say "What do you remember?", watch one
+   proactive comment end without a forced question.
+3. Owner behavior decisions are being collected one question at a time; answered ones are recorded as
+   rules in `DEV_TEAM_PROMPT.md` (R17 onward) and in "Open owner questions" below.
+
+## Owner decision recorded 2026-10-20
+
+- **R17. Proactive comments: regular, no forced question.** Dot keeps commenting on the cadence the
+  owner picked (Low 10 / Normal 4 / High 1 minute) and asks a question only when the comment genuinely
+  needs the owner's reply. Implemented in `ProactiveReplyBuffer.prompt` and the main system prompt
+  (the old "ask questions in >60% of interactions" rule is gone); covered by
+  `ProactiveBehaviorTests.testProactivePromptNeverForcesAQuestion`,
+  `EngineIntegrationTests.testProductionChatRequestAndFragmentedFinalQuestionContract` and the
+  guardrail "Dot knows it is heard and never forces a question".
+
+## Open owner questions (behavior and "life")
+
+Ask one at a time, numbered options, record the answer as a rule. Not yet answered:
+
+- Wake greeting: say "I'm back." after every display wake, only after a long absence, or never.
+- Idle life while blocked: keep roaming and idle motion while an error is shown, or stay still.
+- Self-reflection every 10 minutes: it currently speaks a long report and overwrites the clipboard.
+- Public log sync: `dots/<id>/` on the public repo includes screen-derived text (for example payment
+  details read from Safari); keep public, make the repo private, or redact screen text.
+- Personality: how Dot should "live" between turns (idle animations, reactions, mood, greetings).
 
 ## Fixes from the owner's real log (2026-10-20)
 
 Found by reading `dots/macbook16-m5-pro-48gb-mac17-8/logs/dot_chat_log.txt`. Source and tests changed;
 the Swift build and XCTest lanes were **not run** (Linux session, no Swift toolchain). Static guardrails
-53/53 and the Python suite (604, 2 IPv6-only errors that also fail on the untouched tree) were run.
+(now 55/55, two added) and the Python suite (604, 2 IPv6-only errors that also fail on the untouched
+tree) were run.
 
 - **Voice was dead for every voice except Isabella.** `VoiceEvent.parse` required `bf_isabella` in the
   `hello` event while the default is `bf_emma`, so every turn ended in "Unsupported Bionic voice
@@ -31,9 +70,10 @@ the Swift build and XCTest lanes were **not run** (Linux session, no Swift toolc
   "Context extraction skipped" is logged as SYSTEM not DOT, repeated `[ROAM] skip` reasons are logged
   once, and the `[SYNC] pushed` line no longer makes the log sync re-upload itself every five minutes.
 
-## ⚠️ Uncommitted work in the tree (2026-10-18)
+## Resolved: uncommitted work in the tree (2026-10-18)
 
-At the time this handoff was written, the working tree contains an **uncommitted, in-progress
+Resolved by 2026-10-20: no call site of `MemoryTierStore(directory:)` remains in `src/` or `Tests/`.
+Kept as history. At the time this note was written, the working tree contains an **uncommitted, in-progress
 refactor** by another worker:
 - `MemoryTierStore.init(facts:)` (MS-1) and related `LocalFTSStore` busy-timeout/step logging,
   web-research changes, stricter `package_public_release.sh`/`verify_macos.sh` scripts.

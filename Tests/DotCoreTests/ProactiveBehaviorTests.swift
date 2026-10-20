@@ -7,6 +7,13 @@ import XCTest
 final class ProactiveBehaviorTests: XCTestCase {
     private var ready: ProactiveContext { .init(ready: true, visible: true) }
 
+    /// Owner decision 2026-10-20: regular comments, a question only when a reply is needed.
+    func testProactivePromptNeverForcesAQuestion() {
+        let prompt = ProactiveReplyBuffer.prompt
+        XCTAssertTrue(prompt.contains("only when the comment genuinely needs the user's reply"))
+        XCTAssertFalse(prompt.contains("call ask_user with a short natural follow-up question"))
+    }
+
     func testEveryPresetWaitsItsExactMonotonicInterval() throws {
         XCTAssertEqual(ProactiveFrequency.high.interval, 60)
         XCTAssertEqual(ProactiveFrequency.normal.interval, 240)

@@ -1,5 +1,8 @@
 # Dot continuation — current handoff (2026-10-18)
 
+> **2026-10-20:** real-log fixes and owner rule R17 are on branch `claude/app-dot-behavior-faax19`,
+> written but not yet compiled. Start with the "Start here" list in [AI_HANDOFF.md](AI_HANDOFF.md).
+
 > **Current source of truth: [AI_HANDOFF.md](AI_HANDOFF.md).** Read it before changing code. This file
 > preserves the dated engineering record below; older sections are historical and may describe fixed
 > defects or retired runtimes.

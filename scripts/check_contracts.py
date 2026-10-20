@@ -97,6 +97,8 @@ checks = {
     'screen freshness preserves acquisition through submission': 'let acquiredAt = ProcessInfo.processInfo.systemUptime' in read('src/ScreenContext.swift') and 'acquiredAt: acquiredAt' in read('src/ScreenContext.swift') and engine.count('capturedImage?.validateFreshness(now: clock())') == 2,
     'history separates generated text from final playback': 'recordAssistant(turn: id, event: .playbackCompleted)' in chat and 'ConversationGenerationStatus' in read('src/ConversationHistory.swift'),
     'explicit utility control region receives native events': 'controlHitTest?' in read('src/CompanionPanel.swift') and 'nativeControlPressed' in read('src/CompanionPanel.swift'),
+    'Dot knows it is heard and never forces a question': 'Never claim you cannot hear' in engine and '60%' not in engine and 'only when the comment genuinely needs' in read('src/ProactiveBehavior.swift'),
+    'every British voice passes the voice handshake': 'DotVoice.british.contains(voice)' in read('src/InteractionCore.swift') and 'DotVoice.launchVoice(selected: selected, root: base)' in read('src/BionicVoice.swift'),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())

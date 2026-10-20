@@ -1,7 +1,7 @@
 # Dot — Roadmap, Goals & Current Plans
 
 Last updated 2026-10-19. This is the public statement of where Dot is going; it is
-kept in sync with the owner's binding rules in `docs/DEV_TEAM_PROMPT.md` (R1–R16)
+kept in sync with the owner's binding rules in `docs/DEV_TEAM_PROMPT.md` (R1–R17)
 and `docs/BUILD_CHECKLIST.md`.
 
 ## The goal
@@ -35,6 +35,12 @@ Metal) that reads a prompt (full conversation + proposed commands) and prints a
 strict yes/no; (3) gating — the R7 flow routes every file/shell action through it,
 re-asks with a safer solution on "no", and escalates to asking the owner after
 three failed attempts.
+
+**Real-log fixes and R17 (2026-10-20):** voice handshake for every British voice (Emma was
+rejected), idle sleep no longer leaves Dot blocked, spoken commands ignore Whisper punctuation,
+non-speech tags dropped, no double or forced questions (R17), Dot knows it is heard, model-chosen
+file deletions pass the R16 approver, and the log/sync noise is gone. Code is on branch
+`claude/app-dot-behavior-faax19`, not yet compiled or installed; see `AI_HANDOFF.md`.
 
 **Phase A progress (2026-10-19):** R1 five-minute listening ✅ · R14 battery alerts
 with spoken configuration ✅ · R11 live cold-start progress + prewarm toggle ✅ ·
