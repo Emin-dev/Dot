@@ -43,6 +43,20 @@ python3 -B scripts/check_contracts.py
 swift test --scratch-path "$LOGS/swiftpm" --cache-path "$LOGS/swiftpm-cache" \
   --config-path "$LOGS/swiftpm-config" --security-path "$LOGS/swiftpm-security" \
   2>&1 | tee "$LOGS/swift.log"
+# Focused real-log regression suites first: these are the exact classes named in
+# docs/AI_HANDOFF.md. The full lane below reuses the same derived data.
+xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \
+  -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$LOGS/Debug" \
+  DOT_TEST_PYTHON="$TEST_PYTHON" CODE_SIGNING_ALLOWED=NO test \
+  -only-testing:DotTests/VoiceEventTests \
+  -only-testing:DotTests/SpokenQuestionTests \
+  -only-testing:DotTests/SpokenTranscriptTests \
+  -only-testing:DotTests/TypedInteractionTests \
+  -only-testing:DotTests/VoiceCoordinatorTests \
+  -only-testing:DotTests/EngineIntegrationTests \
+  -only-testing:DotTests/ProactiveBehaviorTests \
+  -only-testing:DotTests/ProactiveIntegrationTests \
+  2>&1 | tee "$LOGS/focused.log"
 xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Debug \
   -destination "platform=macOS,arch=$(uname -m)" -derivedDataPath "$LOGS/Debug" \
   DOT_TEST_PYTHON="$TEST_PYTHON" CODE_SIGNING_ALLOWED=NO test 2>&1 | tee "$LOGS/test.log"

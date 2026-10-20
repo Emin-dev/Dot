@@ -78,7 +78,7 @@ jobs:
     # No neural payloads, app launch, dependency caches, microphone access,
     # or publishing credentials. Keep package validation internal; no binary upload.
     runs-on: macos-15
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       # macOS 26 App Intents metadata requires the installed Xcode 26 SDK.
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer

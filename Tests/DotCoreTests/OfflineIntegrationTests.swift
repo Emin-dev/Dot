@@ -8,9 +8,11 @@ private final class AssetFixture: URLProtocol {
     static var payload = Data("hello".utf8)
     static var range: String?
     static var lastRange: String?
+    static var requestCount = 0
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        Self.requestCount += 1
         Self.lastRange = request.value(forHTTPHeaderField: "Range")
         var headers = ["Content-Length": String(Self.payload.count)]
         if let range = Self.range { headers["Content-Range"] = range }
@@ -28,7 +30,8 @@ final class OfflineIntegrationTests: XCTestCase {
     override func setUpWithError() throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
-        AssetFixture.status = 200; AssetFixture.payload = Data("hello".utf8); AssetFixture.range = nil; AssetFixture.lastRange = nil
+        AssetFixture.status = 200; AssetFixture.payload = Data("hello".utf8); AssetFixture.range = nil
+        AssetFixture.lastRange = nil; AssetFixture.requestCount = 0
     }
     override func tearDownWithError() throws { try FileManager.default.removeItem(at: folder) }
     private func transfer() -> AssetTransfer {
@@ -104,6 +107,25 @@ final class OfflineIntegrationTests: XCTestCase {
         let url = folder.appendingPathComponent("small"); try Data("hello".utf8).write(to: url)
         XCTAssertThrowsError(try OfflinePayload.hash(url, bytes: 4, expected: checksum))
         XCTAssertNoThrow(try OfflinePayload.hash(url, bytes: 5, expected: checksum))
+    }
+    /// Offline after the first launch: `ensureModels` reuses a complete model file
+    /// without creating a task on the injected provisioning session.
+    /// `OfflinePreparation.verifyModels` re-hashes the file afterwards and gates
+    /// readiness; that ordering is covered by the Python offline contract.
+    func testCompleteModelFilesAreReusedWithoutANetworkRequest() async throws {
+        let file = folder.appendingPathComponent("llm-target/model.bin")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try Data("hello".utf8).write(to: file)
+        let plan = BundledModelIndex(schema_version: 1, total_bytes: 5,
+                                     files: [.init(path: "llm-target/model.bin", bytes: 5, sha256: checksum)])
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [AssetFixture.self]
+        let provisioner = ModelProvisioner(session: URLSession(configuration: configuration))
+        try await provisioner.ensureModels(at: folder, plan: plan) { _ in }
+        XCTAssertEqual(AssetFixture.requestCount, 0)
+        XCTAssertEqual(try Data(contentsOf: file), Data("hello".utf8))
+        try await OfflinePayload.verifyHash(file, bytes: 5, expected: checksum)
     }
 }
 #endif

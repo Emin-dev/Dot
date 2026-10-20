@@ -105,6 +105,40 @@ checks = {
     'explicit utility control region receives native events': 'controlHitTest?' in read('src/CompanionPanel.swift') and 'nativeControlPressed' in read('src/CompanionPanel.swift'),
     'Dot knows it is heard and never forces a question': 'Never claim you cannot hear' in engine and '60%' not in engine and 'only when the comment genuinely needs' in read('src/ProactiveBehavior.swift'),
     'every British voice passes the voice handshake': 'DotVoice.british.contains(voice)' in read('src/InteractionCore.swift') and 'DotVoice.launchVoice(selected: selected, root: base)' in read('src/BionicVoice.swift'),
+    'log noise is bounded and labelled honestly': (
+        re.search(r'guard\s+signature\s*!=\s*lastHealthSignature\s+else\s*\{\s*return\s*\}', chat) is not None
+        and 'engine.answering ? "ready"' in chat
+        and len(re.findall(r'DiagnosticChatLogger\.record\(\s*role:\s*"system",\s*text:\s*"Context extraction skipped',
+                           read('src/InteractionCore.swift'))) == 2
+        and re.search(r'reason\s*!=\s*lastRoamRefusal', read('src/App.swift')) is not None
+        and re.search(r'guard\s+snapshotSize\s*!=\s*size\s*\|\|\s*sourceModified\s*>\s*snapshotModified\s+else\s*\{\s*continue\s*\}',
+                      read('src/DotLogSync.swift')) is not None
+        and len(re.findall(r'DiagnosticChatLogger\.record\(', read('src/DotLogSync.swift'))) == 1
+        and 'private func enqueueCurrentFiles()' in read('src/DotLogSync.swift')
+        and 'private func enqueue(local: URL' in read('src/DotLogSync.swift')
+        and 'dot-sync' not in read('src/DotLogSync.swift').partition('private func enqueueCurrentFiles()')[2].partition('private func enqueue(local: URL')[0]
+    ),
+    'offline core keeps speech and inference loopback-only': (
+        'https://127.0.0.1:' in read('src/BundledSplash.swift')
+        and '127.0.0.1' in engine
+        and 'URLSession' not in read('src/BionicVoice.swift')
+        and 'SFSpeechRecognizer' not in read('src/Speech.swift')
+        and all(url not in read(name) for name in ('src/BionicVoice.swift', 'src/Speech.swift', 'src/WhisperRecognizer.swift')
+                for url in ('http://', 'https://'))
+    ),
+    'first-launch model files are reused offline and re-hashed': (
+        'if let size = try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize,' in read('src/OfflinePreparation.swift')
+        and 'Int64(size) == asset.bytes' in read('src/OfflinePreparation.swift')
+        and 'OfflinePayload.verifyHash(path, bytes: asset.bytes, expected: asset.sha256)' in read('src/OfflinePreparation.swift')
+        and 'ModelProvisioner.shared.ensureModels' in read('src/OfflinePreparation.swift')
+    ),
+    'log sync is optional and silent when offline': (
+        re.search(r'guard\s+let\s+token\s*=\s*token\(\)\s+else\s*\{', read('src/DotLogSync.swift')) is not None
+        and re.search(r'state\.failed\(\s*remotePath:\s*entry\.remotePath,\s*now:\s*now\s*\)',
+                      read('src/DotLogSync.swift')) is not None
+        and 'NSAlert' not in read('src/DotLogSync.swift')
+        and re.search(r'\bissue\s*=', read('src/DotLogSync.swift')) is None
+    ),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())
