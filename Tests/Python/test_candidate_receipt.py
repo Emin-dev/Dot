@@ -191,8 +191,15 @@ class CandidateReceiptTests(unittest.TestCase):
             with self.subTest(log=log): self.assertIn(f'2>&1 | tee "$LOGS/{log}.log"', gates)
         self.assertIn('print(text, end="")', (ROOT / "scripts/write_candidate_receipt.py").read_text())
 
-    def test_complete_release_gate_remains_closed(self):
+    def test_release_workflow_packages_only_the_verified_model_less_app(self):
         release = (ROOT / ".github/workflows/release.yml").read_text()
-        self.assertIn("Require complete native acceptance before distribution", release)
-        self.assertIn("exit 1", release)
-        self.assertNotIn("upload-artifact", release)
+        self.assertIn("package_default_release.sh", release)
+        self.assertIn("DONOR_SHA256", release)
+        self.assertIn("shasum -a 256 -c -", release)
+        self.assertIn("scripts/check_contracts.py", release)
+        self.assertIn("upload-artifact", release)
+        self.assertIn("gh release create", release)
+        self.assertNotIn("models_bundled: true", release)
+        packaging = (ROOT / "scripts/package_default_release.sh").read_text()
+        self.assertIn("'models_bundled': False", packaging)
+        self.assertIn("build-provenance.json", packaging)
