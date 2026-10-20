@@ -77,3 +77,48 @@ needs the unprotected `dot-logs` branch.
 
 **Recommended default (implemented):** every bundled British Kokoro voice is accepted; a missing
 selected voice falls back to the bundled `bf_isabella` with an honest log line. No cloud TTS.
+
+## 8. Model part hosting (blocking the primary first-launch route)
+
+**What is needed:** the verified 22,420,071,166-byte model payload, split into
+GitHub-release parts under 2 GB, uploaded once to `Emin-dev/Dot` as tag `model-parts-v1`.
+
+**Why:** the default DMG intentionally ships without model weights. The app already
+supports pinned parts as the primary route; until the parts exist it falls back to the
+pinned Hugging Face revisions and verifies every file against `bundled-models.json`.
+Model parts can only be produced on the Mac that holds the accepted payload; they cannot
+be generated on the Pi or in GitHub-hosted CI (disk and bandwidth).
+
+**Exact steps on the Mac with the verified `OfflineModels` payload:**
+
+```bash
+python3 scripts/model_parts.py --models "$HOME/Applications/Dot.app/Contents/Resources/OfflineModels" \
+  --output build-parts --tag model-parts-v1
+# upload every build-parts/*.partNNN plus build-parts/model-parts.json
+cp build-parts/model-parts.json Resources/model-parts.json
+git add Resources/model-parts.json && git commit -m "model: pin uploaded model parts"
+```
+
+`model_parts.py` refuses to split if any file size or SHA-256 differs from
+`Resources/bundled-models.json`. The next app build then carries the exact plan; no token
+or key is needed for publishing assets (use your normal `gh` login).
+
+## 9. All-in-one installer parts (owner-run, after complete acceptance)
+
+The complete DMG is about 22 GB, so GitHub requires <2 GB parts. After the complete
+installer exists and passes native acceptance:
+
+```bash
+DOT_ALL_IN_ONE_DMG=build-complete/Dot.dmg bash scripts/package_all_in_one.sh
+```
+
+This uploads `Dot.dmg.partNNN`, `Dot.dmg.parts.json`, `join-dot-dmg.command` and
+`join_release.py` to the `all-in-one-v1` release. Users double-click the command; it
+downloads missing parts, verifies every part and the joined DMG, then opens it.
+
+## 10. Signing / notarization for a fully public DMG
+
+The CI release DMG is ad-hoc signed and not notarized because the repository has no
+Developer ID certificate or notarization credential. Publishing a Gatekeeper-clean app
+needs Emin's Apple Developer account (`SIGN_IDENTITY`, `notarytool` credentials). The
+current release notes say this explicitly rather than claiming a distributable build.

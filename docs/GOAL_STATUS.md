@@ -18,16 +18,38 @@ by actually running the gate, not by assumption.
 | R15 trusted-app allowlist | ✅ | contextual cards unless trusted; menu toggle; empty by default |
 | R10 keyless metasearch | ✅ | DuckDuckGo + Google News + Wikipedia + arXiv, live-verified; Mojeek/Marginalia blocked automation (documented) |
 
+## Phase 3 — CI and release (2026-10-20)
+
+- `ci.yml` now runs four independent jobs: Rust gates on Ubuntu, `swift build`/`swift test`
+  with the Xcode 26 SDK, `dot-voice` build + protocol tests on arm64 macOS, and the
+  full `verify_macos.sh` lane.
+- Voice tests that used arbitrary absolute host times are now deterministic on a
+  freshly booted runner; coordinator waits no longer assume a 4-second budget.
+- `release.yml` packages the **default model-less DMG** from current source: it downloads
+  the previously published audited runtime donor (`public-f6cc73d`, SHA-256 pinned),
+  strips model weights, and re-signs. It refuses to ship `OfflineModels`.
+- Model delivery: `Resources/model-parts.json` is the primary pinned-part plan; when the
+  owner uploads parts it becomes `ready`. Until then the app uses revision-pinned
+  Hugging Face files and verifies the same signed SHA-256. Parts, retries/backoff,
+  HTTP Range resume, per-part SHA-256, per-launch repair and disk checks are implemented.
+- All-in-one: `split_release.py`, `join_release.py`, `join-dot-dmg.command` and
+  `package_all_in_one.sh` produce/verify/join <2 GiB parts. Model and all-in-one parts are
+  owner-gated (see `QUESTIONS_FOR_EMIN.md` §8–10).
+- `verify_macos.sh` still records the hosted runtime-finalizer canary as a known
+  hosted-toolchain limitation and skips packaging; the release job uses the pinned donor
+  runtime instead of pretending that canary passed.
+
 ## Verification evidence (last full runs)
 
-- Full Xcode lane: **915 tests, 1 skipped, 0 failures — TEST SUCCEEDED**
+- Full Xcode lane: **915 tests, 1 skipped, 0 failures — TEST SUCCEEDED** (before phase 3;
+  phase-3 CI reruns the portable SwiftPM lane and the audio-dependent Xcode lane)
 - SwiftPM suites: green (62 suite lines, 0 failures)
-- Python suite: **604 tests OK, 4 skipped** (admission-contract indentation updated to the nested readiness block)
-- Static guardrails: **53/53**
-- Rust: dot-research 15, dot-runtime 3, dot-voice/dot-safety build clean
-- `verify_macos.sh`: passes every stage; **0 warnings**; the only failure is the
+- Python suite: **608 tests** (phase-3 release/parts contracts added; 4 skipped)
+- Static guardrails: **56/56** (release workflow contract updated)
+- Rust: dot-research 15, dot-runtime 3, dot-voice protocol tests 2 (macOS CI)
+- `verify_macos.sh`: passes every independent stage; **0 warnings**; the only failure is the
   **runtime finalizer canary**, which fails by design on a hosted toolchain
-  (`unsupported hosted toolchain image`) and blocks packaging
+  (`unsupported hosted toolchain image`) and blocks hosted packaging
 - Installed app: provenance equals HEAD, all five binaries present, signed, running
 
 ## Remaining — all owner-gated (no code path exists without these)

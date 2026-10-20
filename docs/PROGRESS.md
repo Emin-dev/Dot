@@ -1,5 +1,33 @@
 # Dot: implementation and next steps
 
+## Phase 3 checkpoint — 2026-10-20 (CI + release packaging)
+
+- Committed phase 2 in three logical commits (Rust fmt/clippy, hardware gate + log channel,
+  docs) and pushed to `main` (PR-protection rule bypass is recorded by GitHub).
+- Fixed reviewer findings before release: secret masking for spaced "API key"; atomic log
+  snapshot staging; periodic sync no longer blocks `requestSync`; exhausted queue entries
+  get a fresh budget on new content; logs branch is re-checked after 404/409/422.
+- CI is split into `rust-gates`, `swift-test`, `dot-voice` and the full `macos` lane.
+  `dot-voice` (fullfp16) runs only on arm64 macOS. Runtime tests that depended on host
+  uptime were made deterministic; coordinator waits are 20 s.
+- Added the model-part delivery layer: `ModelPartPlan` policy, pinned release parts as the
+  primary route, Range resume, per-part SHA-256, bounded retries/backoff, whole-file
+  verification, automatic repair, disk-space check and Dot progress. Hugging Face remains
+  a revision-pinned, hash-checked fallback; the previously unmapped `aux/` Gemma file now
+  downloads correctly.
+- Added release packaging: `package_default_release.sh` builds the current source with the
+  audited runtime donor and no model weights; `release.yml` verifies the donor SHA, runs
+  contracts, packages, and publishes `Dot.dmg`, `.sha256`, joiner and README.
+- Added all-in-one splitting/joining: `split_release.py`, `join_release.py`,
+  `join-dot-dmg.command`, `package_all_in_one.sh`, plus `model_parts.py` for the owner's
+  verified payload. All parts stay below 2 GB.
+- Owner-gated: uploading the 22.4 GB model parts and the complete DMG parts, and Developer
+  ID signing/notarization. See `docs/QUESTIONS_FOR_EMIN.md` §8–10 and
+  `docs/PHASE3_RESULT.md`.
+- Verification on the Pi: `cargo fmt/check/test/clippy` for `dot-research`/`dot-runtime`,
+  56 static contracts and the new Python split/join tests pass. `dot-voice` cannot build
+  here (`instruction requires: fullfp16`), by design; macOS CI covers it.
+
 ## Checkpoint — 2026-10-20 (audit, hardware gate, log channel, Rust gates)
 
 - `docs/AUDIT.md` records every documented promise as WORKS/FIXED/BROKEN/UNVERIFIABLE-ON-LINUX.
