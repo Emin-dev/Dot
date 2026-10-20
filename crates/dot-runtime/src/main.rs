@@ -36,7 +36,13 @@ pub enum Event {
 }
 
 impl Event {
-    pub fn started(pid: u32, port: u16, backend_port: u16, api_key: &str, cert_sha256: &str) -> Self {
+    pub fn started(
+        pid: u32,
+        port: u16,
+        backend_port: u16,
+        api_key: &str,
+        cert_sha256: &str,
+    ) -> Self {
         Event::Started {
             protocol: PROTOCOL,
             pid,
@@ -48,7 +54,11 @@ impl Event {
     }
 
     pub fn failed(stage: &str, reason: &str) -> Self {
-        Event::Failed { protocol: PROTOCOL, stage: stage.to_string(), reason: reason.to_string() }
+        Event::Failed {
+            protocol: PROTOCOL,
+            stage: stage.to_string(),
+            reason: reason.to_string(),
+        }
     }
 
     /// The single line this process prints for the event, newline included.
@@ -82,7 +92,10 @@ impl ApiKey {
 
 /// The exact shape the Swift side accepts: 64 lowercase hex characters.
 pub fn is_api_key(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn main() {
@@ -128,7 +141,10 @@ mod tests {
         let key = ApiKey::generate();
         assert_eq!(key.as_str().len(), 64);
         assert!(is_api_key(key.as_str()));
-        assert!(key.as_str().bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(key
+            .as_str()
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         assert!(ApiKey::from_hex(key.as_str()).is_some());
         // Two keys are not the same.
         assert_ne!(key.as_str(), ApiKey::generate().as_str());

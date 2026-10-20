@@ -2,11 +2,11 @@ use std::env;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use any_tts::{load_model, ModelType, SynthesisRequest, TtsConfig};
 use any_tts::config::ModelAssetDir;
+use any_tts::{ModelType, SynthesisRequest, TtsConfig, load_model};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -143,19 +143,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let selected_voice = voice.unwrap_or_else(|| DEFAULT_VOICE.to_string());
-    let mut config = TtsConfig::new(ModelType::Kokoro).with_model_path(model_dir.to_string_lossy().to_string());
+    let mut config =
+        TtsConfig::new(ModelType::Kokoro).with_model_path(model_dir.to_string_lossy().to_string());
     // RAM discipline: load exactly the selected voice's embedding, never the whole
     // voices directory. All four British voices stay available as options; only the
     // chosen one occupies memory.
-    let voice_source = model_dir.join("voices").join(format!("{}.pt", selected_voice));
+    let voice_source = model_dir
+        .join("voices")
+        .join(format!("{}.pt", selected_voice));
     match std::fs::read(&voice_source) {
         Ok(bytes) => {
             let mut single = std::collections::BTreeMap::new();
-            single.insert(format!("{}.pt", selected_voice), std::sync::Arc::from(bytes));
+            single.insert(
+                format!("{}.pt", selected_voice),
+                std::sync::Arc::from(bytes),
+            );
             config.files.voices_dir = Some(ModelAssetDir::from_bytes(single));
         }
         Err(e) => {
-            eprintln!("Voice '{}' not found at {}: {}", selected_voice, voice_source.display(), e);
+            eprintln!(
+                "Voice '{}' not found at {}: {}",
+                selected_voice,
+                voice_source.display(),
+                e
+            );
             emit_json(&ErrorEvent {
                 protocol: PROTOCOL,
                 event: "unavailable",
@@ -169,7 +180,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = match load_model(config) {
         Ok(m) => Arc::new(m),
         Err(e) => {
-            eprintln!("Failed to load Kokoro model from {}: {}", model_dir.display(), e);
+            eprintln!(
+                "Failed to load Kokoro model from {}: {}",
+                model_dir.display(),
+                e
+            );
             emit_json(&ErrorEvent {
                 protocol: PROTOCOL,
                 event: "unavailable",
@@ -304,7 +319,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let text = req.text.unwrap_or_default();
 
                 let epoch = current_epoch.load(Ordering::SeqCst);
-                let job = Job { id: id.clone(), turn: turn.clone(), text, epoch };
+                let job = Job {
+                    id: id.clone(),
+                    turn: turn.clone(),
+                    text,
+                    epoch,
+                };
 
                 if let Err(_) = job_tx.try_send(job) {
                     emit_json(&ErrorEvent {

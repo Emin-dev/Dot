@@ -111,16 +111,22 @@ fn run() -> Outcome {
     // connected peer cannot be changed and no resolver can be consulted.
     let stream = unsafe { TcpStream::from_raw_fd(0) };
     verify_peer(&stream, pin, target.port)?;
-    stream.set_nonblocking(false).map_err(|_| Failure::Protocol)?;
+    stream
+        .set_nonblocking(false)
+        .map_err(|_| Failure::Protocol)?;
     let idle = Some(Duration::from_secs_f64(timeout.min(IDLE_TIMEOUT)));
-    stream.set_read_timeout(idle).map_err(|_| Failure::Protocol)?;
-    stream.set_write_timeout(idle).map_err(|_| Failure::Protocol)?;
+    stream
+        .set_read_timeout(idle)
+        .map_err(|_| Failure::Protocol)?;
+    stream
+        .set_write_timeout(idle)
+        .map_err(|_| Failure::Protocol)?;
 
     let config = tls_config()?;
     let server_name = rustls::pki_types::ServerName::try_from(target.host.clone())
         .map_err(|_| Failure::Protocol)?;
-    let connection = rustls::ClientConnection::new(config, server_name)
-        .map_err(|_| Failure::Protocol)?;
+    let connection =
+        rustls::ClientConnection::new(config, server_name).map_err(|_| Failure::Protocol)?;
     let mut transport = rustls::StreamOwned::new(connection, stream);
     // Complete the handshake (certificate chain and hostname) before any HTTP byte.
     transport
@@ -132,13 +138,7 @@ fn run() -> Outcome {
     let stderr = io::stderr();
     let mut body = io::BufWriter::with_capacity(32_768, stdout.lock());
     let mut metadata = stderr.lock();
-    exchange(
-        &mut transport,
-        &target,
-        &mut body,
-        &mut metadata,
-        deadline,
-    )?;
+    exchange(&mut transport, &target, &mut body, &mut metadata, deadline)?;
     body.flush().map_err(|_| Failure::Protocol)?;
     Ok(())
 }
@@ -233,7 +233,10 @@ fn parse_target(url: &str) -> Result<Target, Failure> {
     {
         return Err(Failure::Protocol);
     }
-    if host.bytes().all(|byte| byte.is_ascii_digit() || byte == b'.') {
+    if host
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.')
+    {
         return Err(Failure::Protocol);
     }
     let path = if parsed.path().is_empty() {
@@ -334,7 +337,8 @@ fn pem_certificates(pem: &[u8]) -> Vec<rustls::pki_types::CertificateDer<'static
             .copied()
             .filter(|byte| !byte.is_ascii_whitespace())
             .collect();
-        if let Ok(der) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &encoded)
+        if let Ok(der) =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &encoded)
         {
             certificates.push(rustls::pki_types::CertificateDer::from(der));
         }
@@ -375,8 +379,8 @@ fn exchange<T: Read + Write>(
     let mut source = Source::new(io, deadline);
     let (status, headers) = read_head(&mut source)?;
 
-    let transfer_encoding = header(&headers, "transfer-encoding")
-        .map(|value| value.trim().to_ascii_lowercase());
+    let transfer_encoding =
+        header(&headers, "transfer-encoding").map(|value| value.trim().to_ascii_lowercase());
     if let Some(coding) = &transfer_encoding {
         if coding != "chunked" {
             return Err(Failure::Protocol);
@@ -678,7 +682,11 @@ fn gzip_body(input: &[u8], out: &mut Vec<u8>) -> Outcome {
 }
 
 fn gzip_header_len(input: &[u8]) -> Result<usize, Failure> {
-    if input.len() < 10 || input[0] != 0x1f || input[1] != 0x8b || input[2] != 8 || input[3] & 0xe0 != 0
+    if input.len() < 10
+        || input[0] != 0x1f
+        || input[1] != 0x8b
+        || input[2] != 8
+        || input[3] & 0xe0 != 0
     {
         return Err(Failure::Protocol);
     }
@@ -839,7 +847,6 @@ impl<'a, T: Read> Source<'a, T> {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1033,7 +1040,10 @@ mod tests {
         );
         assert!(outcome.is_ok());
         assert_eq!(body, b"body");
-        assert_eq!(metadata, r#"{"headers":{"content-length":"4","content-type":"text/plain"},"status":200}"#);
+        assert_eq!(
+            metadata,
+            r#"{"headers":{"content-length":"4","content-type":"text/plain"},"status":200}"#
+        );
         let request = String::from_utf8(request).expect("utf-8 request");
         assert!(request.starts_with("GET /plain HTTP/1.1\r\n"));
         assert!(request.contains("Host: example.org\r\n"));
@@ -1066,7 +1076,11 @@ mod tests {
 
     #[test]
     fn non_success_status_reports_metadata_and_reads_no_body() {
-        for (status, location) in [(302, "Location: /next"), (401, "WWW-Authenticate: Basic"), (500, "")] {
+        for (status, location) in [
+            (302, "Location: /next"),
+            (401, "WWW-Authenticate: Basic"),
+            (500, ""),
+        ] {
             let mut raw = format!(
                 "HTTP/1.1 {status} X\r\nContent-Length: 4\r\n{}\r\n",
                 if location.is_empty() {
@@ -1080,7 +1094,10 @@ mod tests {
             let (outcome, body, metadata, _) = run("https://example.org/redirect", &raw);
             assert!(outcome.is_ok(), "{status}");
             assert!(body.is_empty(), "{status}");
-            assert!(metadata.contains(&format!(r#""status":{status}"#)), "{metadata}");
+            assert!(
+                metadata.contains(&format!(r#""status":{status}"#)),
+                "{metadata}"
+            );
             if status == 302 {
                 assert!(metadata.contains(r#""location":"/next""#), "{metadata}");
             }
@@ -1101,7 +1118,10 @@ mod tests {
         for truncated in [
             response(&["Transfer-Encoding: chunked"], b"8\r\nevid"),
             response(&["Transfer-Encoding: chunked"], b"8\r\nevidence\r\n"),
-            response(&["Transfer-Encoding: chunked"], b"zz\r\nevidence\r\n0\r\n\r\n"),
+            response(
+                &["Transfer-Encoding: chunked"],
+                b"zz\r\nevidence\r\n0\r\n\r\n",
+            ),
             response(&["Transfer-Encoding: chunked"], b"8\r\nevidence\n0\r\n\r\n"),
             response(
                 &["Transfer-Encoding: chunked"],
@@ -1135,15 +1155,12 @@ mod tests {
     fn declared_transferred_and_decoded_caps_fail_with_limit() {
         let (outcome, _, _, _) = run(
             "https://example.org/large",
-            &response(
-                &[&format!("Content-Length: {}", MAX_BYTES + 1)],
-                b"",
-            ),
+            &response(&[&format!("Content-Length: {}", MAX_BYTES + 1)], b""),
         );
         assert_eq!(outcome, Err(Failure::Limit));
 
         let mut oversized = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
-        oversized.extend(std::iter::repeat(b'x').take(MAX_BYTES + 2));
+        oversized.extend(std::iter::repeat_n(b'x', MAX_BYTES + 2));
         let (outcome, _, _, _) = run("https://example.org/large", &oversized);
         assert_eq!(outcome, Err(Failure::Limit));
 
@@ -1265,10 +1282,7 @@ mod tests {
 
     #[test]
     fn connection_close_delimited_body_is_accepted_within_the_cap() {
-        let (outcome, body, _, _) = run(
-            "https://example.org/eof",
-            &response(&[], b"evidence"),
-        );
+        let (outcome, body, _, _) = run("https://example.org/eof", &response(&[], b"evidence"));
         assert!(outcome.is_ok());
         assert_eq!(body, b"evidence");
     }
@@ -1300,4 +1314,3 @@ mod tests {
         assert!(outcome.is_err());
     }
 }
-

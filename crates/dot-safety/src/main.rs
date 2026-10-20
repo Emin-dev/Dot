@@ -27,7 +27,9 @@ fn main() {
             i += 1;
         }
     }
-    let Some(model_path) = model_path else { fail("missing --model") };
+    let Some(model_path) = model_path else {
+        fail("missing --model")
+    };
 
     let mut input = String::new();
     use std::io::Read;
@@ -48,10 +50,11 @@ fn main() {
         Ok(b) => b,
         Err(e) => fail(&format!("backend: {e}")),
     };
-    let model = match LlamaModel::load_from_file(&backend, &model_path, &LlamaModelParams::default()) {
-        Ok(m) => m,
-        Err(e) => fail(&format!("model: {e}")),
-    };
+    let model =
+        match LlamaModel::load_from_file(&backend, &model_path, &LlamaModelParams::default()) {
+            Ok(m) => m,
+            Err(e) => fail(&format!("model: {e}")),
+        };
     let mut ctx = match model.new_context(&backend, LlamaContextParams::default()) {
         Ok(c) => c,
         Err(e) => fail(&format!("context: {e}")),
@@ -71,7 +74,10 @@ fn main() {
     }
     let mut batch = LlamaBatch::new(tokens.len(), 1);
     for (pos, token) in tokens.iter().enumerate() {
-        if batch.add(*token, pos as i32, &[0], pos + 1 == tokens.len()).is_err() {
+        if batch
+            .add(*token, pos as i32, &[0], pos + 1 == tokens.len())
+            .is_err()
+        {
             fail("batch full");
         }
     }
@@ -107,6 +113,10 @@ fn main() {
     }
 
     let trimmed = decoded.trim().to_ascii_lowercase();
-    let verdict = if trimmed.starts_with("yes") { "yes" } else { "no" };
+    let verdict = if trimmed.starts_with("yes") {
+        "yes"
+    } else {
+        "no"
+    };
     println!("{}", json!({"verdict": verdict, "reason": decoded.trim()}));
 }

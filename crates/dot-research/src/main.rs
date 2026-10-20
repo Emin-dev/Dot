@@ -1,10 +1,10 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::io::{BufRead, Write};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
-use serde::{Deserialize, Serialize};
 
 #[allow(dead_code)]
 #[derive(Debug, Deserialize)]
@@ -121,7 +121,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = local_addr.port();
 
     let my_pid = std::process::id();
-    let server_pid = if my_pid < u32::MAX { my_pid + 1 } else { my_pid - 1 };
+    let server_pid = if my_pid < u32::MAX {
+        my_pid + 1
+    } else {
+        my_pid - 1
+    };
 
     // Emit ready JSON event to stdout
     let ready_event = ReadyEvent {
@@ -151,7 +155,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(ref auth) = proxy_auth {
                     // Expect format "Basic dot:<hex>" or similar
                     if let Some(stripped) = auth.strip_prefix("Basic ") {
-                        if let Ok(decoded) = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, stripped) {
+                        if let Ok(decoded) = base64::Engine::decode(
+                            &base64::engine::general_purpose::STANDARD,
+                            stripped,
+                        ) {
                             if let Ok(dec_str) = String::from_utf8(decoded) {
                                 if let Some((user, pass)) = dec_str.split_once(':') {
                                     p = p.basic_auth(user, pass);
@@ -212,7 +219,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn handle_connection(mut socket: TcpStream, state: Arc<SearchState>) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+async fn handle_connection(
+    mut socket: TcpStream,
+    state: Arc<SearchState>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // A client may deliver the request head and body as separate TCP segments
     // (CFNetwork/URLSession does exactly that), so a single read() can see a
     // complete head and an empty body. Read until httparse reports the head is
@@ -241,7 +251,8 @@ async fn handle_connection(mut socket: TcpStream, state: Arc<SearchState>) -> Re
             Err(_) => return Ok(()),
         };
         if buf.len() + read > MAX_REQUEST {
-            let resp = "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let resp =
+                "HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = socket.write_all(resp.as_bytes()).await;
             return Ok(());
         }
@@ -370,7 +381,9 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
         for res in arxiv_results {
             if !results.iter().any(|r| r.url == res.url) {
                 results.push(res);
-                if results.len() >= 8 { break; }
+                if results.len() >= 8 {
+                    break;
+                }
             }
         }
     }
@@ -381,7 +394,9 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
         for res in news_results {
             if !results.iter().any(|r| r.url == res.url) {
                 results.push(res);
-                if results.len() >= 8 { break; }
+                if results.len() >= 8 {
+                    break;
+                }
             }
         }
     }
@@ -404,7 +419,10 @@ async fn perform_web_search(query: &str, client: &reqwest::Client) -> Vec<Search
 /// arXiv: a keyless, bot-tolerant scholarly index (Atom XML). Mojeek was tried
 /// first but 403s automated queries, so scholarly results are the reliable
 /// independent source; each provider's failure never costs the others.
-async fn search_arxiv(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+async fn search_arxiv(
+    query: &str,
+    client: &reqwest::Client,
+) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!(
         "https://export.arxiv.org/api/query?search_query=all:{}&start=0&max_results=8",
         urlencoding::encode(&format!("\"{}\"", query))
@@ -412,15 +430,19 @@ async fn search_arxiv(query: &str, client: &reqwest::Client) -> Result<Vec<Searc
     let body = client
         .get(&url)
         .timeout(std::time::Duration::from_secs(8))
-        .send().await?
+        .send()
+        .await?
         .error_for_status()?
-        .text().await?;
+        .text()
+        .await?;
     let mut results = Vec::new();
     // Minimal Atom parsing by entry block; no XML dependency needed.
     let mut rest = body.as_str();
     while let Some(entry_start) = rest.find("<entry") {
         let after = &rest[entry_start..];
-        let Some(entry_end) = after.find("</entry>") else { break };
+        let Some(entry_end) = after.find("</entry>") else {
+            break;
+        };
         let entry = &after[..entry_end];
         rest = &after[entry_end..];
         let title = tag_text(entry, "title").trim().to_string();
@@ -442,24 +464,31 @@ async fn search_arxiv(query: &str, client: &reqwest::Client) -> Result<Vec<Searc
 fn tag_text(entry: &str, name: &str) -> String {
     let open = format!("<{}>", name);
     let close = format!("</{}>", name);
-    let Some(s) = entry.find(&open) else { return String::new() };
+    let Some(s) = entry.find(&open) else {
+        return String::new();
+    };
     let after = &entry[s + open.len()..];
-    let Some(e) = after.find(&close) else { return String::new() };
-    after[..e]
-        .replace("\n", " ")
-        .trim()
-        .to_string()
+    let Some(e) = after.find(&close) else {
+        return String::new();
+    };
+    after[..e].replace("\n", " ").trim().to_string()
 }
 
-async fn search_news(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+async fn search_news(
+    query: &str,
+    client: &reqwest::Client,
+) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!(
         "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en",
         urlencoding::encode(query)
     );
-    let resp = client.get(&url)
+    let resp = client
+        .get(&url)
         .header("User-Agent", "Dot/1.0 (+https://github.com/Emin-dev/Dot)")
-        .send().await?
-        .text().await?;
+        .send()
+        .await?
+        .text()
+        .await?;
     Ok(parse_news_rss(&resp, 3))
 }
 
@@ -469,13 +498,28 @@ fn parse_news_rss(xml: &str, limit: usize) -> Vec<SearchResult> {
     let mut results = Vec::new();
     for item in xml.split("<item>").skip(1) {
         let link = rss_tag(item, "link").map(clean_rss).unwrap_or_default();
-        if !link.starts_with("http") { continue; }
+        if !link.starts_with("http") {
+            continue;
+        }
         let title = rss_tag(item, "title").map(clean_rss).unwrap_or_default();
-        if title.is_empty() { continue; }
-        let content = rss_tag(item, "description").map(clean_rss).unwrap_or_default();
-        let published = rss_tag(item, "pubDate").map(clean_rss).filter(|d| !d.is_empty());
-        results.push(SearchResult { url: link, title, content, published_date: published });
-        if results.len() >= limit { break; }
+        if title.is_empty() {
+            continue;
+        }
+        let content = rss_tag(item, "description")
+            .map(clean_rss)
+            .unwrap_or_default();
+        let published = rss_tag(item, "pubDate")
+            .map(clean_rss)
+            .filter(|d| !d.is_empty());
+        results.push(SearchResult {
+            url: link,
+            title,
+            content,
+            published_date: published,
+        });
+        if results.len() >= limit {
+            break;
+        }
     }
     results
 }
@@ -498,8 +542,14 @@ fn clean_rss(text: &str) -> String {
     clean_html(inner)
 }
 
-async fn search_duckduckgo(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
-    let url = format!("https://html.duckduckgo.com/html/?q={}", urlencoding::encode(query));
+async fn search_duckduckgo(
+    query: &str,
+    client: &reqwest::Client,
+) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+    let url = format!(
+        "https://html.duckduckgo.com/html/?q={}",
+        urlencoding::encode(query)
+    );
     let resp = client.get(&url).send().await?.text().await?;
 
     let mut results = Vec::new();
@@ -510,7 +560,8 @@ async fn search_duckduckgo(query: &str, client: &reqwest::Client) -> Result<Vec<
         if let Some(url_part) = extract_tag_attr(block, "a class=\"result__url\"", "href") {
             let actual_url = if url_part.contains("uddg=") {
                 // Extract actual decoded target from DDG redirect url /l/?kh=-1&uddg=<encoded>
-                url_part.split("uddg=")
+                url_part
+                    .split("uddg=")
                     .nth(1)
                     .and_then(|u| u.split('&').next())
                     .and_then(|u| urlencoding::decode(u).ok())
@@ -528,8 +579,8 @@ async fn search_duckduckgo(query: &str, client: &reqwest::Client) -> Result<Vec<
                 .or_else(|| extract_tag_text(block, "h2 class=\"result__title\""))
                 .unwrap_or_else(|| "Web Result".to_string());
 
-            let snippet = extract_tag_text(block, "a class=\"result__snippet\"")
-                .unwrap_or_default();
+            let snippet =
+                extract_tag_text(block, "a class=\"result__snippet\"").unwrap_or_default();
 
             results.push(SearchResult {
                 url: actual_url,
@@ -547,7 +598,10 @@ async fn search_duckduckgo(query: &str, client: &reqwest::Client) -> Result<Vec<
     Ok(results)
 }
 
-async fn search_wikipedia(query: &str, client: &reqwest::Client) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
+async fn search_wikipedia(
+    query: &str,
+    client: &reqwest::Client,
+) -> Result<Vec<SearchResult>, Box<dyn std::error::Error + Send + Sync>> {
     let url = format!(
         "https://en.wikipedia.org/w/api.php?action=opensearch&search={}&limit=5&namespace=0&format=json",
         urlencoding::encode(query)
@@ -642,9 +696,14 @@ mod tests {
         assert_eq!(results[0].title, "Dot ships a fix");
         assert_eq!(results[0].url, "https://example.com/a");
         assert_eq!(results[0].content, "The details & context.");
-        assert_eq!(results[0].published_date.as_deref(), Some("Fri, 17 Oct 2026 10:00:00 GMT"));
+        assert_eq!(
+            results[0].published_date.as_deref(),
+            Some("Fri, 17 Oct 2026 10:00:00 GMT")
+        );
         assert_eq!(results[1].title, "Second story");
-        assert!(results.iter().all(|r| r.url.starts_with("https://example.com/")));
+        assert!(results
+            .iter()
+            .all(|r| r.url.starts_with("https://example.com/")));
     }
 
     #[test]
