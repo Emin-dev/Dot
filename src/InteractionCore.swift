@@ -6190,9 +6190,8 @@ public struct ModelPartPlan: Decodable, Equatable, Sendable {
     public var baseURL: URL? {
         guard let base_url, let tag = release_tag, !tag.isEmpty,
               let url = URL(string: base_url),
-              url.scheme == "https", url.host == "github.com",
-              url.path.hasSuffix("/"),
-              url.path.hasPrefix("/Emin-dev/Dot/releases/download/\(tag)/") else { return nil }
+              url.scheme == "https", url.host == "github.com", url.query == nil,
+              url.absoluteString.hasPrefix("https://github.com/Emin-dev/Dot/releases/download/\(tag)/") else { return nil }
         return url
     }
 
