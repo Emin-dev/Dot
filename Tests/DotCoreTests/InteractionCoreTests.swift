@@ -1352,173 +1352,74 @@ final class FinalPlaybackBarrierTests: XCTestCase {
 }
 
 final class HardwareCompatibilityTests: XCTestCase {
-    func testHardwareCompatibilityMeetsSpecification() {
-        let m5Pro = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 1, isAppleSilicon: true)
+    func testMinimumConfigurationIsAccepted() {
+        let m5Pro = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 1)
         XCTAssertTrue(m5Pro.meetsChipSpec)
         XCTAssertTrue(m5Pro.meetsRAMSpec)
         XCTAssertTrue(m5Pro.meetsOSSpec)
         XCTAssertTrue(m5Pro.meetsAllSpecs)
         XCTAssertNil(m5Pro.technicalImpossibilityReason)
         XCTAssertEqual(HardwareCompatibility.evaluate(info: m5Pro), .compatible(m5Pro))
+        XCTAssertEqual(HardwareCompatibility.launchGate(info: m5Pro), .proceed)
 
-        let m4Max = HardwareCompatibility.SystemInfo(chip: "Apple M4 Max", ramGB: 64, osMajor: 27, osMinor: 1, osPatch: 0, isAppleSilicon: true)
-        XCTAssertTrue(m4Max.meetsAllSpecs)
-        XCTAssertEqual(HardwareCompatibility.evaluate(info: m4Max), .compatible(m4Max))
-
-        let m4Pro = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
-        XCTAssertTrue(m4Pro.meetsAllSpecs)
-        XCTAssertEqual(HardwareCompatibility.evaluate(info: m4Pro), .compatible(m4Pro))
+        let m5Max = HardwareCompatibility.SystemInfo(chip: "Apple M5 Max", ramGB: 64, osMajor: 28)
+        XCTAssertTrue(m5Max.meetsAllSpecs)
+        let m6 = HardwareCompatibility.SystemInfo(chip: "Apple M6", ramGB: 48, osMajor: 27)
+        XCTAssertTrue(m6.meetsAllSpecs)
     }
 
-    func testHardwareCompatibilityBelowSpecification() {
-        // Base M4 (not Pro/Max/Ultra)
-        let m4Base = HardwareCompatibility.SystemInfo(chip: "Apple M4", ramGB: 48, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
-        XCTAssertFalse(m4Base.meetsChipSpec)
-        XCTAssertTrue(m4Base.meetsRAMSpec)
-        XCTAssertNil(m4Base.technicalImpossibilityReason)
-        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: m4Base) {
-            XCTAssertTrue(reasons.contains(where: { $0.contains("below recommended M4 Pro") }))
-        } else {
-            XCTFail("Expected belowMinimum for base M4")
-        }
-
-        // M4 Pro with 32 GB RAM (< 48 GB)
-        let m4Pro32 = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 32, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
-        XCTAssertTrue(m4Pro32.meetsChipSpec)
-        XCTAssertFalse(m4Pro32.meetsRAMSpec)
-        XCTAssertNil(m4Pro32.technicalImpossibilityReason)
-        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: m4Pro32) {
-            XCTAssertTrue(reasons.contains(where: { $0.contains("Unified Memory") }))
-        } else {
-            XCTFail("Expected belowMinimum for 32 GB RAM")
-        }
-
-        // M5 Pro with macOS 26 (< 27)
-        let m5ProOlderOS = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 26, osMinor: 0, osPatch: 0, isAppleSilicon: true)
-        XCTAssertFalse(m5ProOlderOS.meetsOSSpec)
-        XCTAssertNil(m5ProOlderOS.technicalImpossibilityReason)
-        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: m5ProOlderOS) {
-            XCTAssertTrue(reasons.contains(where: { $0.contains("macOS 27") }))
-        } else {
-            XCTFail("Expected belowMinimum for older OS")
-        }
-
-        // Older M3 Max
-        let m3Max = HardwareCompatibility.SystemInfo(chip: "Apple M3 Max", ramGB: 64, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
-        XCTAssertFalse(m3Max.meetsChipSpec)
-        if case .belowMinimum = HardwareCompatibility.evaluate(info: m3Max) {
-            // Success
-        } else {
-            XCTFail("Expected belowMinimum for M3 Max")
-        }
-    }
-
-    func testHardwareCompatibilityTechnicallyImpossible() {
-        // Intel Mac
-        let intel = HardwareCompatibility.SystemInfo(chip: "Intel Core i9", ramGB: 64, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: false)
-        XCTAssertNotNil(intel.technicalImpossibilityReason)
-        if case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: intel) {
-            XCTAssertTrue(reason.contains("Intel"))
-        } else {
-            XCTFail("Expected technicallyImpossible for Intel Mac")
-        }
-
-        // Apple Silicon with < 24 GB RAM (8 GB or 16 GB)
-        let m1LowRAM = HardwareCompatibility.SystemInfo(chip: "Apple M1", ramGB: 16, osMajor: 27, osMinor: 0, osPatch: 0, isAppleSilicon: true)
-        XCTAssertNotNil(m1LowRAM.technicalImpossibilityReason)
-        if case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: m1LowRAM) {
-            XCTAssertTrue(reason.contains("24 GB"))
-        } else {
-            XCTFail("Expected technicallyImpossible for 16 GB RAM")
-        }
-
-        // macOS < 15
-        let oldOS = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 48, osMajor: 14, osMinor: 5, osPatch: 0, isAppleSilicon: true)
-        XCTAssertNotNil(oldOS.technicalImpossibilityReason)
-        if case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: oldOS) {
-            XCTAssertTrue(reason.contains("macOS 15"))
-        } else {
-            XCTFail("Expected technicallyImpossible for macOS < 15")
-        }
-    }
-
-    func testHardwareCompatibilityStatusSummary() {
-        let current = HardwareCompatibility.queryCurrent()
-        let summary = HardwareCompatibility.statusSummary(info: current)
-        XCTAssertFalse(summary.isEmpty)
-        XCTAssertTrue(summary.contains(current.chip))
-    }
-
-    func testDocumentedMinimumHardwareIsAcceptedAnd48GBStaysAdvisory() {
-        // README.md: "at least 36 GB RAM, with 48 GB recommended", macOS 26.4+ for the full runtime.
-        let minimum = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 36, osMajor: 26, osMinor: 4)
-        XCTAssertTrue(minimum.meetsRAMSpec)
-        XCTAssertTrue(minimum.meetsOSSpec)
-        XCTAssertEqual(HardwareCompatibility.evaluate(info: minimum), .compatible(minimum))
-        XCTAssertTrue(HardwareCompatibility.statusSummary(info: minimum).contains("Advisory"))
-        XCTAssertTrue(minimum.advisoryNotes.contains(where: { $0.contains("48 GB") }))
-        XCTAssertTrue(minimum.advisoryNotes.contains(where: { $0.contains("macOS 27") }))
-        // The 48 GB / macOS 27 recommendation is text only: it never produces a warning.
-        XCTAssertEqual(HardwareCompatibility.launchGate(info: minimum, defaults: UserDefaults(suiteName: UUID().uuidString)!), .proceed)
-
-        // macOS 26.3 is below the documented floor, 26.4 and later majors are not.
-        let earlyOS = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 26, osMinor: 3)
-        XCTAssertFalse(earlyOS.meetsOSSpec)
-        XCTAssertTrue(HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 27).meetsOSSpec)
-        XCTAssertTrue(HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 28).meetsOSSpec)
-
-        // 35 GB is below the 36 GB minimum but nowhere near "technically impossible".
-        let lowRAM = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 35, osMajor: 27)
-        XCTAssertFalse(lowRAM.meetsRAMSpec)
-        XCTAssertNil(lowRAM.technicalImpossibilityReason)
-        if case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: lowRAM) {
-            XCTAssertTrue(reasons.contains(where: { $0.contains("36 GB") }))
-            XCTAssertTrue(reasons.contains(where: { $0.contains("48 GB") }))
-        } else {
-            XCTFail("35 GB must stay below the documented 36 GB minimum")
-        }
-    }
-
-    func testBelowMinimumWarningDefaultsToRunAnywayAndIsAcknowledgedOnce() throws {
-        let suiteName = "dot-hardware-gate-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        // Base M4, 48 GB, macOS 27: below the recommended chip class only.
-        let baseM4 = HardwareCompatibility.SystemInfo(chip: "Apple M4", ramGB: 48, osMajor: 27)
-        guard case .warnBelowSpec(let plan) = HardwareCompatibility.launchGate(info: baseM4, defaults: defaults) else {
-            return XCTFail("Expected a one-time below-minimum warning")
-        }
-        // Return must continue, never quit: "Run Anyway" is first and is the default button.
-        XCTAssertEqual(plan.buttons, ["Run Anyway", "Stop"])
-        XCTAssertEqual(plan.defaultButtonIndex, 0)
-        XCTAssertEqual(plan.defaultButtonTitle, "Run Anyway")
-        XCTAssertTrue(plan.informativeText.contains("Run Anyway"))
-        XCTAssertTrue(plan.informativeText.contains("36 GB"))
-        XCTAssertTrue(plan.informativeText.contains("macOS 26.4"))
-
-        // Run Anyway persists, so the warning is not shown again on every launch.
-        XCTAssertFalse(HardwareCompatibility.hasAcknowledgedBelowSpec(in: defaults))
-        HardwareCompatibility.acknowledgeBelowSpec(in: defaults)
-        XCTAssertTrue(HardwareCompatibility.hasAcknowledgedBelowSpec(in: defaults))
-        XCTAssertEqual(HardwareCompatibility.launchGate(info: baseM4, defaults: defaults), .proceed)
-
-        // A compatible machine never warns, and an impossible one still refuses.
-        let compatible = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 27)
-        XCTAssertEqual(HardwareCompatibility.launchGate(info: compatible, defaults: defaults), .proceed)
-        let intel = HardwareCompatibility.SystemInfo(chip: "Intel Core i9", ramGB: 64, osMajor: 27, isAppleSilicon: false)
-        if case .refuseImpossible(let plan) = HardwareCompatibility.launchGate(info: intel, defaults: defaults) {
+    func testAnythingBelowTheMinimumIsRefusedWithAClearMessage() {
+        let cases = [
+            HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 64, osMajor: 27),
+            HardwareCompatibility.SystemInfo(chip: "Apple M5", ramGB: 48, osMajor: 27),
+            HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 32, osMajor: 27),
+            HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 26),
+            HardwareCompatibility.SystemInfo(chip: "Apple M3 Max", ramGB: 64, osMajor: 27),
+        ]
+        for info in cases {
+            XCTAssertFalse(info.meetsAllSpecs, info.chip)
+            XCTAssertNil(info.technicalImpossibilityReason)
+            guard case .belowMinimum(_, let reasons) = HardwareCompatibility.evaluate(info: info) else {
+                return XCTFail("Expected belowMinimum for \(info.chip)")
+            }
+            XCTAssertFalse(reasons.isEmpty)
+            guard case .refuseImpossible(let plan) = HardwareCompatibility.launchGate(info: info) else {
+                return XCTFail("The minimum must block launch for \(info.chip)")
+            }
             XCTAssertEqual(plan.buttons, ["Quit"])
+            XCTAssertEqual(plan.defaultButtonTitle, "Quit")
+            XCTAssertEqual(plan.defaultButtonIndex, 0)
             XCTAssertTrue(plan.isCritical)
-        } else {
-            XCTFail("Intel must stay impossible regardless of acknowledgement")
+            XCTAssertTrue(plan.informativeText.contains("48 GB"))
+            XCTAssertTrue(plan.informativeText.contains("macOS 27"))
+            XCTAssertTrue(plan.informativeText.contains("M5 Pro"))
         }
+    }
 
-        // verifyOnLaunch returns false only for the truly impossible cases: Intel, < 24 GB, macOS < 15.
-        XCTAssertNotNil(HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 23, osMajor: 27).technicalImpossibilityReason)
-        XCTAssertNotNil(HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 14).technicalImpossibilityReason)
-        XCTAssertNil(HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 24, osMajor: 15).technicalImpossibilityReason)
-        XCTAssertNil(HardwareCompatibility.SystemInfo(chip: "Apple M4", ramGB: 36, osMajor: 26, osMinor: 4).technicalImpossibilityReason)
+    func testIntelIsIncompatible() {
+        let intel = HardwareCompatibility.SystemInfo(chip: "Intel Core i9", ramGB: 64, osMajor: 27, isAppleSilicon: false)
+        XCTAssertNotNil(intel.technicalImpossibilityReason)
+        guard case .technicallyImpossible(_, let reason) = HardwareCompatibility.evaluate(info: intel) else {
+            return XCTFail("Expected technicallyImpossible for Intel")
+        }
+        XCTAssertTrue(reason.contains("Intel"))
+        guard case .refuseImpossible(let plan) = HardwareCompatibility.launchGate(info: intel) else {
+            return XCTFail("Intel must not launch")
+        }
+        XCTAssertEqual(plan.buttons, ["Quit"])
+    }
+
+    func testStatusSummaryStatesTheExactMinimum() {
+        let compatible = HardwareCompatibility.SystemInfo(chip: "Apple M5 Pro", ramGB: 48, osMajor: 27)
+        let summary = HardwareCompatibility.statusSummary(info: compatible)
+        XCTAssertTrue(summary.contains("M5 Pro"))
+        XCTAssertTrue(summary.contains("48 GB"))
+        XCTAssertTrue(summary.contains("macOS 27"))
+        XCTAssertTrue(summary.contains("meets"))
+
+        let low = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 32, osMajor: 26)
+        let lowSummary = HardwareCompatibility.statusSummary(info: low)
+        XCTAssertTrue(lowSummary.contains("below"))
     }
 }
 
@@ -2028,14 +1929,13 @@ final class ScreenCoordinateSpaceTests: XCTestCase {
     }
 
     @MainActor
-    func testBelowSpecAlertPutsReturnOnRunAnywayAndNotOnStop() {
-        let info = HardwareCompatibility.SystemInfo(chip: "Apple M4", ramGB: 48, osMajor: 27)
-        let plan = HardwareCompatibility.belowMinimumPlan(info: info, reasons: info.belowSpecReasons)
+    func testMinimumAlertIsBlockingAndQuitIsTheDefault() {
+        let info = HardwareCompatibility.SystemInfo(chip: "Apple M4 Pro", ramGB: 48, osMajor: 27)
+        let plan = HardwareCompatibility.minimumPlan(info: info, reasons: info.belowSpecReasons)
         let alert = HardwareCompatibility.makeAlert(from: plan)
-        XCTAssertEqual(alert.buttons.map(\.title), ["Run Anyway", "Stop"])
-        XCTAssertEqual(alert.buttons.first?.keyEquivalent, "\r", "Return must run anyway, not quit")
-        XCTAssertEqual(alert.buttons.last?.keyEquivalent, "")
-        XCTAssertFalse(alert.buttons.contains(where: { $0.title != plan.defaultButtonTitle && $0.keyEquivalent == "\r" }))
+        XCTAssertEqual(alert.buttons.map(\.title), ["Quit"])
+        XCTAssertEqual(alert.buttons.first?.keyEquivalent, "\r")
+        XCTAssertEqual(alert.alertStyle, .critical)
     }
     #endif
 }
@@ -2521,5 +2421,121 @@ final class ClickMatchingTests: XCTestCase {
         let score = try XCTUnwrap(MouseControlEngine.clickMatchScore(line: line("Open Settings"), target: "open settings"))
         XCTAssertGreaterThan(score, 1_000)
         XCTAssertNil(MouseControlEngine.clickMatchScore(line: line("Cancel"), target: "save"))
+    }
+}
+
+final class LogSyncPolicyTests: XCTestCase {
+    func testInstallIDIsStableAnonymousAndValidated() {
+        XCTAssertEqual(LogSyncPolicy.normalizedInstallID("  A1B2-C3D4-E5F6-G7H8  "), "a1b2c3d4e5f6g7h8")
+        XCTAssertNil(LogSyncPolicy.normalizedInstallID("short"))
+        XCTAssertNil(LogSyncPolicy.normalizedInstallID("!!!!----"))
+        let generated = LogSyncPolicy.newInstallID()
+        XCTAssertEqual(generated.count, 16)
+        XCTAssertEqual(LogSyncPolicy.normalizedInstallID(generated), generated)
+        XCTAssertFalse(generated.contains("-"))
+    }
+
+    func testLaunchFolderIsUTCAndOnePerLaunch() {
+        let epoch = Date(timeIntervalSince1970: 0)
+        XCTAssertEqual(LogSyncPolicy.launchStamp(for: epoch), "1970-01-01T00-00-00Z")
+        let later = Date(timeIntervalSince1970: 1_785_600_000)
+        XCTAssertEqual(LogSyncPolicy.folder(installID: "a1b2c3d4", launch: epoch),
+                       "dot/a1b2c3d4/1970-01-01T00-00-00Z")
+        XCTAssertEqual(LogSyncPolicy.remotePath(folder: "dot/a/b", file: "dot_chat_log.txt"),
+                       "dot/a/b/dot_chat_log.txt")
+        XCTAssertEqual(LogSyncPolicy.remotePath(folder: "dot/a/b/", file: "meta.json"),
+                       "dot/a/b/meta.json")
+        XCTAssertNotEqual(LogSyncPolicy.launchStamp(for: epoch), LogSyncPolicy.launchStamp(for: later))
+    }
+
+    func testBackoffGrowsAndStopsAtTheRetryBudget() {
+        XCTAssertEqual(LogSyncPolicy.backoff(attempt: 0), 30)
+        XCTAssertEqual(LogSyncPolicy.backoff(attempt: 1), 30)
+        XCTAssertEqual(LogSyncPolicy.backoff(attempt: 2), 60)
+        XCTAssertEqual(LogSyncPolicy.backoff(attempt: 3), 120)
+        XCTAssertEqual(LogSyncPolicy.backoff(attempt: 100), LogSyncPolicy.maximumBackoffSeconds)
+        XCTAssertTrue(LogSyncPolicy.shouldRetry(attempt: 7))
+        XCTAssertFalse(LogSyncPolicy.shouldRetry(attempt: 8))
+    }
+
+    func testQueueDeduplicatesAndBoundsItself() {
+        var queue = LogUploadQueue()
+        queue.enqueue(localPath: "/q/a", remotePath: "dot/a/b/a.txt", now: 100)
+        queue.enqueue(localPath: "/q/b", remotePath: "dot/a/b/b.txt", now: 200)
+        XCTAssertEqual(queue.entries.count, 2)
+
+        queue.enqueue(localPath: "/q/a-new", remotePath: "dot/a/b/a.txt", now: 300)
+        XCTAssertEqual(queue.entries.count, 2)
+        XCTAssertEqual(queue.entries.first?.localPath, "/q/a-new")
+        XCTAssertEqual(queue.entries.first?.nextAttempt, 100, "Re-enqueue must not reset backoff")
+        XCTAssertEqual(queue.entries.first?.attempts, 0)
+        XCTAssertEqual(queue.due(now: 250).map(\.remotePath), ["dot/a/b/a.txt", "dot/a/b/b.txt"])
+
+        for index in 0...LogSyncPolicy.maximumQueueEntries {
+            queue.enqueue(localPath: "/q/\(index)", remotePath: "dot/a/b/\(index).txt", now: 400)
+        }
+        XCTAssertLessThanOrEqual(queue.entries.count, LogSyncPolicy.maximumQueueEntries)
+        XCTAssertEqual(queue.entries.last?.remotePath, "dot/a/b/\(LogSyncPolicy.maximumQueueEntries).txt")
+    }
+
+    func testFailureUsesBackoffAndParksExhaustedEntries() {
+        var queue = LogUploadQueue()
+        queue.enqueue(localPath: "/q/a", remotePath: "dot/a/b/a.txt", now: 0)
+        XCTAssertEqual(queue.failed(remotePath: "dot/a/b/a.txt", now: 10), 1)
+        XCTAssertEqual(queue.entries[0].nextAttempt, 40)
+        XCTAssertTrue(queue.due(now: 39).isEmpty)
+        XCTAssertEqual(queue.due(now: 40).count, 1)
+
+        queue.enqueue(localPath: "/q/a-new", remotePath: "dot/a/b/a.txt", now: 45)
+        XCTAssertEqual(queue.entries[0].attempts, 1, "A changed snapshot keeps the retry budget")
+        XCTAssertEqual(queue.entries[0].nextAttempt, 40, "A changed snapshot keeps its backoff")
+        XCTAssertEqual(queue.entries[0].localPath, "/q/a-new")
+
+        for _ in 0..<20 {
+            _ = queue.failed(remotePath: "dot/a/b/a.txt", now: 1_000)
+        }
+        XCTAssertNil(queue.failed(remotePath: "dot/a/b/a.txt", now: 2_000))
+        XCTAssertEqual(queue.entries.count, 1, "An exhausted snapshot stays parked, not forgotten")
+        XCTAssertTrue(queue.due(now: 2_000).isEmpty)
+        XCTAssertNil(queue.failed(remotePath: "dot/missing", now: 0))
+
+        queue.enqueue(localPath: "/q/a-recovered", remotePath: "dot/a/b/a.txt", now: 3_000)
+        XCTAssertEqual(queue.entries[0].attempts, 0, "New content after exhaustion gets a fresh retry budget")
+        XCTAssertEqual(queue.entries[0].nextAttempt, 3_000)
+        XCTAssertEqual(queue.due(now: 3_000).count, 1)
+    }
+
+    func testQueueRoundTripsThroughJSON() throws {
+        var queue = LogUploadQueue()
+        queue.enqueue(localPath: "/q/a", remotePath: "dot/a/b/a.txt", now: 42)
+        let restored = LogUploadQueue.decoded(try queue.encoded())
+        XCTAssertEqual(restored, queue)
+        XCTAssertNil(LogUploadQueue.decoded(Data("not json".utf8)))
+    }
+}
+
+final class LogRedactionTests: XCTestCase {
+    func testTokensAndPasswordsAreMasked() {
+        let text = """
+        Authorization: Bearer abc123def456
+        token: ghp_abcdefghijklmnopqrstuvwxyz0123456789
+        github_pat_abcdefghijklmnopqrstuvwxyz_0123456789
+        password = hunter2
+        passphrase: correct horse battery staple
+        My API key is sk-live-secret
+        """
+        let masked = LogRedaction.masked(text)
+        XCTAssertFalse(masked.contains("abc123def456"))
+        XCTAssertFalse(masked.contains("ghp_"))
+        XCTAssertFalse(masked.contains("github_pat_"))
+        XCTAssertFalse(masked.contains("hunter2"))
+        XCTAssertFalse(masked.contains("sk-live-secret"))
+        XCTAssertFalse(masked.contains("correct horse battery staple"))
+        XCTAssertTrue(masked.contains("[REDACTED]"))
+    }
+
+    func testOrdinaryConversationIsUnchanged() {
+        let text = "Can you remind me to call Alice at 3 PM about the Berlin report?"
+        XCTAssertEqual(LogRedaction.masked(text), text)
     }
 }

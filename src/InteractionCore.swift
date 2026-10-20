@@ -1052,23 +1052,18 @@ struct FinalPlaybackBarrier {
 }
 
 /// Hardware requirements verification and production launch gate.
-/// Documented product target (README.md): M4 Pro-class or newer with at least 36 GB RAM, with
-/// 48 GB recommended; the complete Splash runtime requires macOS 26.4+. 48 GB and macOS 27+ stay
-/// advisory text and never block a launch.
+/// The owner's minimum is Apple Silicon M5 Pro class, 48 GB Unified Memory and macOS 27+.
+/// The exact Qwen3.8 27B Q4 Splash model has no smaller fallback, so a machine below that
+/// minimum is refused at launch with one clear message.
 public struct HardwareCompatibility: Sendable {
-    /// Minimum Unified Memory that satisfies the documented product target.
-    public static let minimumRAMGB = 36
-    /// Advisory (recommended) Unified Memory; never a launch gate.
+    /// Minimum Unified Memory required to launch Dot.
+    public static let minimumRAMGB = 48
+    /// Kept for display; the minimum and the recommendation are the same.
     public static let recommendedRAMGB = 48
-    /// Minimum OS that satisfies the documented product target (macOS 26.4+).
-    public static let minimumOSMajor = 26
-    public static let minimumOSMinor = 4
-    /// Advisory (recommended) OS major version; never a launch gate.
+    /// Minimum OS required to launch Dot.
+    public static let minimumOSMajor = 27
+    public static let minimumOSMinor = 0
     public static let recommendedOSMajor = 27
-    /// Persisted acknowledgement so the below-minimum warning is shown once, not on every launch.
-    public static let belowSpecAcknowledgementKey = "dotHardwareBelowSpecAcknowledged"
-    public static let runAnywayButtonTitle = "Run Anyway"
-    public static let stopButtonTitle = "Stop"
 
     /// Pure, testable description of a launch alert. AppKit presentation only applies this plan,
     /// so button order and the Return-key button are covered by portable tests.
@@ -1092,20 +1087,10 @@ public struct HardwareCompatibility: Sendable {
         }
     }
 
-    /// Launch outcome. `warnBelowSpec` is presented at most once per acknowledgement;
-    /// `refuseImpossible` is the only case that ends the process.
+    /// Launch outcome. Any machine below the minimum is refused; there is no override.
     public enum LaunchGate: Equatable, Sendable {
         case proceed
-        case warnBelowSpec(LaunchAlertPlan)
         case refuseImpossible(LaunchAlertPlan)
-    }
-
-    public static func hasAcknowledgedBelowSpec(in defaults: UserDefaults = .standard) -> Bool {
-        defaults.bool(forKey: belowSpecAcknowledgementKey)
-    }
-
-    public static func acknowledgeBelowSpec(in defaults: UserDefaults = .standard) {
-        defaults.set(true, forKey: belowSpecAcknowledgementKey)
     }
 
     public struct SystemInfo: Equatable, Sendable {
@@ -1134,8 +1119,8 @@ public struct HardwareCompatibility: Sendable {
             if let match = chip.range(of: #"M(\d+)"#, options: .regularExpression) {
                 let numStr = chip[match].dropFirst()
                 if let gen = Int(numStr) {
-                    if gen >= 5 { return true }
-                    if gen == 4 {
+                    if gen >= 6 { return true }
+                    if gen == 5 {
                         let upper = chip.uppercased()
                         return upper.contains("PRO") || upper.contains("MAX") || upper.contains("ULTRA")
                     }
@@ -1144,12 +1129,12 @@ public struct HardwareCompatibility: Sendable {
             return false
         }
 
-        /// Minimum specification: the documented 36 GB product target.
+        /// Minimum specification: 48 GB Unified Memory.
         public var meetsRAMSpec: Bool {
             ramGB >= HardwareCompatibility.minimumRAMGB
         }
 
-        /// Minimum specification: macOS 26.4+, or any later major release.
+        /// Minimum specification: macOS 27.0 or later.
         public var meetsOSSpec: Bool {
             osMajor > HardwareCompatibility.minimumOSMajor
                 || (osMajor == HardwareCompatibility.minimumOSMajor && osMinor >= HardwareCompatibility.minimumOSMinor)
@@ -1159,46 +1144,41 @@ public struct HardwareCompatibility: Sendable {
             meetsChipSpec && meetsRAMSpec && meetsOSSpec
         }
 
+        /// Only Intel is treated as a different architecture failure; every other unmet
+        /// requirement is reported by `belowSpecReasons` and still refused at launch.
         public var technicalImpossibilityReason: String? {
             if !isAppleSilicon {
-                return "Intel processors are not supported. Dot requires Apple Silicon architecture."
-            }
-            if ramGB < 24 {
-                return "This Mac has \(ramGB) GB of Unified Memory. Dot runs a 27B model (Qwen 3.8 27B 4-bit) requiring a minimum of 24 GB Unified Memory to load."
-            }
-            if osMajor < 15 {
-                return "macOS \(osMajor) is unsupported. Dot requires macOS 15 or newer (macOS 27 recommended)."
+                return "Intel processors are not supported. Dot requires Apple Silicon (M5 Pro class or newer)."
             }
             return nil
         }
 
-        /// Advisory-only notes for hardware that meets the minimum but not the recommendation.
-        /// These never gate a launch.
+        /// Human-readable gaps from the minimum; empty on a compatible Mac.
         public var advisoryNotes: [String] {
             var notes: [String] = []
             if !meetsChipSpec {
-                notes.append("Processor (\(chip)) is below recommended M4 Pro, M5 or newer.")
+                notes.append("Processor (\(chip)) is below the required Apple M5 Pro class or newer.")
             }
             if ramGB < HardwareCompatibility.recommendedRAMGB {
-                notes.append("Unified Memory (\(ramGB) GB) is below recommended \(HardwareCompatibility.recommendedRAMGB) GB.")
+                notes.append("Unified Memory (\(ramGB) GB) is below the required \(HardwareCompatibility.recommendedRAMGB) GB.")
             }
             if osMajor < HardwareCompatibility.recommendedOSMajor {
-                notes.append("Operating System (macOS \(osString)) is below recommended macOS \(HardwareCompatibility.recommendedOSMajor).")
+                notes.append("Operating System (macOS \(osString)) is below the required macOS \(HardwareCompatibility.recommendedOSMajor).")
             }
             return notes
         }
 
-        /// Reasons the minimum specification is not met (chip class or the 36 GB / macOS 26.4 floor).
+        /// Reasons the minimum specification is not met.
         public var belowSpecReasons: [String] {
             var reasons: [String] = []
             if !meetsChipSpec {
-                reasons.append("Processor (\(chip)) is below recommended M4 Pro, M5 or newer.")
+                reasons.append("Processor (\(chip)) is below the required Apple M5 Pro class or newer.")
             }
             if !meetsRAMSpec {
-                reasons.append("Unified Memory (\(ramGB) GB) is below the required \(HardwareCompatibility.minimumRAMGB) GB minimum (48 GB recommended).")
+                reasons.append("Unified Memory (\(ramGB) GB) is below the required \(HardwareCompatibility.minimumRAMGB) GB minimum.")
             }
             if !meetsOSSpec {
-                reasons.append("Operating System (macOS \(osString)) is below the required macOS \(HardwareCompatibility.minimumOSMajor).\(HardwareCompatibility.minimumOSMinor) (macOS \(HardwareCompatibility.recommendedOSMajor) recommended).")
+                reasons.append("Operating System (macOS \(osString)) is below the required macOS \(HardwareCompatibility.minimumOSMajor).\(HardwareCompatibility.minimumOSMinor)+.")
             }
             return reasons
         }
@@ -1253,60 +1233,42 @@ public struct HardwareCompatibility: Sendable {
     public static func statusSummary(info: SystemInfo = queryCurrent()) -> String {
         switch evaluate(info: info) {
         case .compatible(let current):
-            let baseline = "Hardware meets the target minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). Minimum is Apple Silicon with \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor)."
-            let advisories = current.advisoryNotes
-            guard !advisories.isEmpty else {
-                return baseline + " Recommended configuration (M4 Pro or M5+, \(recommendedRAMGB) GB RAM, macOS \(recommendedOSMajor)+) is met."
-            }
-            return baseline + " Advisory: " + advisories.joined(separator: " ")
+            return "Hardware meets Dot's minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). Minimum is Apple M5 Pro class, \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor)+."
         case .belowMinimum(let current, let reasons):
             let details = reasons.joined(separator: " ")
-            return "Hardware below target minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). \(details) Minimum is Apple Silicon with \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor); recommended is M4 Pro or M5+, \(recommendedRAMGB) GB Unified Memory, and macOS \(recommendedOSMajor)."
+            return "Hardware below Dot's minimum specification: \(current.chip), \(current.ramGB) GB Unified Memory, macOS \(current.osString). \(details) Minimum is Apple M5 Pro class, \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor)+."
         case .technicallyImpossible(let current, let reason):
             return "Hardware incompatible: \(current.chip), \(current.ramGB) GB RAM, macOS \(current.osString). Reason: \(reason)"
         }
     }
 
-    /// Pure launch-gate decision. The below-minimum warning is presented once per acknowledgement;
-    /// only a technically impossible machine refuses to launch. `proceed` covers both the compatible
-    /// case and a previously acknowledged override.
-    public static func launchGate(info: SystemInfo = queryCurrent(), defaults: UserDefaults = .standard) -> LaunchGate {
+    /// Pure launch-gate decision. Every unmet minimum refuses to launch; there is no override.
+    public static func launchGate(info: SystemInfo = queryCurrent()) -> LaunchGate {
         switch evaluate(info: info) {
         case .compatible:
             return .proceed
         case .belowMinimum(let detected, let reasons):
-            guard !hasAcknowledgedBelowSpec(in: defaults) else { return .proceed }
-            return .warnBelowSpec(belowMinimumPlan(info: detected, reasons: reasons))
+            return .refuseImpossible(minimumPlan(info: detected, reasons: reasons))
         case .technicallyImpossible(let detected, let reason):
             return .refuseImpossible(impossiblePlan(info: detected, reason: reason))
         }
     }
 
-    /// Minimum specification now matches the documented product target (36 GB, macOS 26.4+);
-    /// 48 GB and macOS 27+ stay advisory. "Run Anyway" is the default/Return button.
-    public static func belowMinimumPlan(info: SystemInfo, reasons: [String]) -> LaunchAlertPlan {
+    /// Clear, blocking message for a Mac below the minimum configuration.
+    public static func minimumPlan(info: SystemInfo, reasons: [String]) -> LaunchAlertPlan {
         let items = reasons.map { "• " + $0 }.joined(separator: "\n")
-        let advisories = info.advisoryNotes.map { "• " + $0 }.joined(separator: "\n")
-        var text = "Running Dot on this hardware is below the recommended configuration. You may experience slow responses or heavy memory pressure.\n\n" +
-            "Target Minimum Specification:\n" +
-            "• Apple Silicon\n" +
-            "• \(minimumRAMGB) GB Unified Memory\n" +
-            "• macOS \(minimumOSMajor).\(minimumOSMinor) or newer\n\n" +
+        let text = "Dot needs Apple Silicon M5 Pro class or newer, \(minimumRAMGB) GB Unified Memory and macOS \(minimumOSMajor).\(minimumOSMinor) or newer. The exact Qwen3.8 27B Q4 model runs locally and has no smaller fallback, so Dot cannot start on this Mac.\n\n" +
             "Detected on this Mac:\n" +
             "• Processor: \(info.chip)\n" +
             "• Memory: \(info.ramGB) GB Unified Memory\n" +
             "• Operating System: macOS \(info.osString)\n\n" +
-            "Items below specification:\n" +
-            items + "\n\n"
-        if !advisories.isEmpty {
-            text += "Advisory (recommended, not required):\n" + advisories + "\n\n"
-        }
-        text += "Choose \(runAnywayButtonTitle) to continue; Dot will not ask again. Choose \(stopButtonTitle) to quit."
-        return LaunchAlertPlan(title: "Hardware Below Recommended Specification",
+            "Not met:\n" +
+            items
+        return LaunchAlertPlan(title: "Hardware Does Not Meet Dot's Minimum",
                                informativeText: text,
-                               buttons: [runAnywayButtonTitle, stopButtonTitle],
+                               buttons: ["Quit"],
                                defaultButtonIndex: 0,
-                               isCritical: false)
+                               isCritical: true)
     }
 
     public static func impossiblePlan(info: SystemInfo, reason: String) -> LaunchAlertPlan {
@@ -1318,9 +1280,9 @@ public struct HardwareCompatibility: Sendable {
                             "• Operating System: macOS \(info.osString)\n\n" +
                             "Reason:\n\(reason)\n\n" +
                             "Required:\n" +
-                            "• Apple Silicon (Intel is unsupported)\n" +
-                            "• 24 GB Unified Memory or more\n" +
-                            "• macOS 15 or newer",
+                            "• Apple Silicon M5 Pro class or newer\n" +
+                            "• \(minimumRAMGB) GB Unified Memory or more\n" +
+                            "• macOS \(minimumOSMajor).\(minimumOSMinor) or newer",
                         buttons: ["Quit"],
                         defaultButtonIndex: 0,
                         isCritical: true)
@@ -1347,19 +1309,6 @@ public struct HardwareCompatibility: Sendable {
         switch launchGate() {
         case .proceed:
             return true
-
-        case .warnBelowSpec(let plan):
-            NSApp.activate(ignoringOtherApps: true)
-            let response = makeAlert(from: plan).runModal()
-            let chosen = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-            guard chosen == plan.defaultButtonIndex else {
-                // Only an explicit Stop ends the app; the default (Return) button continues.
-                NSApplication.shared.terminate(nil)
-                return false
-            }
-            acknowledgeBelowSpec()
-            return true
-
         case .refuseImpossible(let plan):
             NSApp.activate(ignoringOtherApps: true)
             makeAlert(from: plan).runModal()
@@ -1377,23 +1326,22 @@ public struct HardwareCompatibility: Sendable {
         case .compatible(let info):
             alert.alertStyle = .informational
             alert.messageText = "Hardware Compatible"
-            alert.informativeText = "Your Mac meets the target minimum specification for Dot.\n\n" +
-                "• Processor: \(info.chip) (M4 Pro, M5 or newer recommended)\n" +
-                "• Memory: \(info.ramGB) GB Unified Memory (\(minimumRAMGB) GB minimum, \(recommendedRAMGB) GB recommended)\n" +
-                "• Operating System: macOS \(info.osString) (macOS \(minimumOSMajor).\(minimumOSMinor)+ required, macOS \(recommendedOSMajor)+ recommended)\n\n" +
-                "Dot runs the local Qwen 3.8 27B 4-bit model at optimal performance."
+            alert.informativeText = "Your Mac meets Dot's minimum specification.\n\n" +
+                "• Processor: \(info.chip) (Apple M5 Pro class or newer required)\n" +
+                "• Memory: \(info.ramGB) GB Unified Memory (\(minimumRAMGB) GB minimum)\n" +
+                "• Operating System: macOS \(info.osString) (macOS \(minimumOSMajor).\(minimumOSMinor)+ required)\n\n" +
+                "Dot runs the exact local Qwen3.8 27B Q4 model on Splash with no smaller fallback."
 
         case .belowMinimum(let info, let reasons):
-            alert.alertStyle = .warning
-            alert.messageText = "Hardware Below Recommended Specification"
+            alert.alertStyle = .critical
+            alert.messageText = "Hardware Does Not Meet Dot's Minimum"
             let items = reasons.map { "• " + $0 }.joined(separator: "\n")
-            alert.informativeText = "Target Minimum: Apple Silicon, \(minimumRAMGB) GB Unified Memory, macOS \(minimumOSMajor).\(minimumOSMinor)+ (recommended: M4 Pro/M5+, \(recommendedRAMGB) GB, macOS \(recommendedOSMajor)+)\n\n" +
+            alert.informativeText = "Target Minimum: Apple Silicon M5 Pro class or newer, \(minimumRAMGB) GB Unified Memory, macOS \(minimumOSMajor).\(minimumOSMinor)+\n\n" +
                 "Detected on this Mac:\n" +
                 "• Processor: \(info.chip)\n" +
                 "• Memory: \(info.ramGB) GB Unified Memory\n" +
                 "• Operating System: macOS \(info.osString)\n\n" +
-                "Notes:\n\(items)\n\n" +
-                "(Running under user override)"
+                "Not met:\n\(items)"
 
         case .technicallyImpossible(let info, let reason):
             alert.alertStyle = .critical
@@ -5304,7 +5252,7 @@ public enum DiagnosticChatLogger {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let timestamp = formatter.string(from: Date())
-        let line = "[\(timestamp)] [\(role.uppercased())] \(trimmed)\n"
+        let line = "[\(timestamp)] [\(role.uppercased())] \(LogRedaction.masked(trimmed))\n"
         guard let data = line.data(using: .utf8) else { return }
 
         lock.lock()
@@ -5940,7 +5888,7 @@ public final class CalendarMeetingAssistant {
             if #available(macOS 14.0, *) {
                 return (status == .fullAccess || status == .writeOnly) ? .granted : .denied
             }
-            // The shipped app targets macOS 26.4, so this branch is unreachable; the
+            // The launch gate requires macOS 27, so this branch is unreachable; the
             // legacy case stays honest rather than referencing the deprecated member.
             return .denied
         }
@@ -6192,5 +6140,168 @@ public enum MemoryKeyPointExtractor {
             if points.count == 10 { break }
         }
         return points
+    }
+}
+
+// MARK: - GitHub log channel policy (pure, tested by SwiftPM)
+
+import Foundation
+
+/// Pure policy for the per-Dot GitHub log channel. Kept separate from the
+/// AppKit/URLSession uploader so it is covered by the portable SwiftPM suite.
+public enum LogSyncPolicy {
+    /// Dedicated data branch. The shipped token can append logs but cannot change
+    /// `main`; branch protection on `main` requires a pull request.
+    public static let branch = "dot-logs"
+    public static let repository = "Emin-dev/Dot"
+    /// One folder per app launch under `dot/<install-id>/<launch-timestamp>/`.
+    public static let root = "dot"
+    public static let maximumRetries = 8
+    public static let maximumQueueEntries = 64
+    public static let maximumFileBytes = 4_000_000
+    public static let baseBackoffSeconds: Double = 30
+    public static let maximumBackoffSeconds: Double = 3_600
+
+    /// Accept only a lowercase alphanumeric stable id (8–32 characters).
+    public static func normalizedInstallID(_ raw: String) -> String? {
+        let filtered = raw.lowercased().filter { character in
+            ("a"..."z").contains(character) || ("0"..."9").contains(character)
+        }
+        guard filtered.count >= 8 else { return nil }
+        return String(filtered.prefix(32))
+    }
+
+    /// A new anonymous id from a UUID, with no hardware or account information.
+    public static func newInstallID() -> String {
+        String(UUID().uuidString.lowercased().filter {
+            ("0"..."9").contains($0) || ("a"..."f").contains($0)
+        }.prefix(16))
+    }
+
+    /// UTC folder timestamp, e.g. `2026-10-20T17-24-00Z`.
+    public static func launchStamp(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
+        return formatter.string(from: date)
+    }
+
+    public static func folder(installID: String, launch: Date) -> String {
+        "\(root)/\(installID)/\(launchStamp(for: launch))"
+    }
+
+    public static func remotePath(folder: String, file: String) -> String {
+        folder.hasSuffix("/") ? folder + file : folder + "/" + file
+    }
+
+    public static func backoff(attempt: Int) -> Double {
+        guard attempt > 0 else { return baseBackoffSeconds }
+        let exponent = min(Double(attempt - 1), 16)
+        return min(maximumBackoffSeconds, baseBackoffSeconds * pow(2, exponent))
+    }
+
+    public static func shouldRetry(attempt: Int) -> Bool {
+        attempt < maximumRetries
+    }
+}
+
+/// One queued upload. `nextAttempt` is a Unix timestamp so the queue survives
+/// restarts and can stay offline indefinitely.
+public struct LogUploadEntry: Codable, Equatable, Sendable {
+    public var localPath: String
+    public var remotePath: String
+    public var attempts: Int
+    public var nextAttempt: Double
+
+    public init(localPath: String, remotePath: String, attempts: Int = 0, nextAttempt: Double = 0) {
+        self.localPath = localPath
+        self.remotePath = remotePath
+        self.attempts = attempts
+        self.nextAttempt = nextAttempt
+    }
+}
+
+/// Persistent offline queue with backoff and a hard bound.
+public struct LogUploadQueue: Codable, Equatable, Sendable {
+    public private(set) var entries: [LogUploadEntry]
+
+    public init(entries: [LogUploadEntry] = []) {
+        self.entries = entries
+    }
+
+    /// Re-queueing the same remote path replaces the snapshot but keeps the
+    /// existing retry budget and backoff, so a log that keeps changing while
+    /// offline cannot defeat exponential backoff. New content after the retry
+    /// budget was exhausted gets a fresh budget, so a recovered network can
+    /// upload again without restarting Dot.
+    public mutating func enqueue(localPath: String, remotePath: String, now: Double) {
+        if let index = entries.firstIndex(where: { $0.remotePath == remotePath }) {
+            entries[index].localPath = localPath
+            if entries[index].attempts >= LogSyncPolicy.maximumRetries {
+                entries[index].attempts = 0
+                entries[index].nextAttempt = now
+            }
+        } else {
+            entries.append(LogUploadEntry(localPath: localPath, remotePath: remotePath, nextAttempt: now))
+            let overflow = entries.count - LogSyncPolicy.maximumQueueEntries
+            if overflow > 0 { entries.removeFirst(overflow) }
+        }
+    }
+
+    public func due(now: Double) -> [LogUploadEntry] {
+        entries.filter { $0.nextAttempt <= now }
+    }
+
+    public mutating func remove(remotePath: String) {
+        entries.removeAll { $0.remotePath == remotePath }
+    }
+
+    /// Returns the new attempt count, or nil when the entry was dropped after
+    /// exhausting its retry budget.
+    @discardableResult
+    public mutating func failed(remotePath: String, now: Double) -> Int? {
+        guard let index = entries.firstIndex(where: { $0.remotePath == remotePath }) else { return nil }
+        let attempts = entries[index].attempts + 1
+        guard LogSyncPolicy.shouldRetry(attempt: attempts) else {
+            entries[index].attempts = attempts
+            entries[index].nextAttempt = now + 365 * 86_400
+            return nil
+        }
+        entries[index].attempts = attempts
+        entries[index].nextAttempt = now + LogSyncPolicy.backoff(attempt: attempts)
+        return attempts
+    }
+
+    public func encoded() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try encoder.encode(self)
+    }
+
+    public static func decoded(_ data: Data) -> LogUploadQueue? {
+        try? JSONDecoder().decode(LogUploadQueue.self, from: data)
+    }
+}
+
+/// Last-line defence: secrets must never reach the log file or an upload.
+public enum LogRedaction {
+    public static func masked(_ text: String) -> String {
+        var result = text
+        let rules: [(String, String)] = [
+            (#"(?i)(authorization\s*[:=]\s*bearer\s+)\S+"#, "$1[REDACTED]"),
+            (#"\bgh[pousr]_[A-Za-z0-9]{20,}\b"#, "[REDACTED_TOKEN]"),
+            (#"\bgithub_pat_[A-Za-z0-9_]{20,}\b"#, "[REDACTED_TOKEN]"),
+            (#"(?i)\b(password|passwd|passphrase|secret)\s*[:=]\s*[^\r\n]+"#, "$1=[REDACTED]"),
+            (#"(?i)\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+"#, "$1=[REDACTED]"),
+            (#"(?i)\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+"#, "$1=[REDACTED]"),
+            (#"(?i)\b(token|api(?:[\s_-]?key))\s+(?:is|was)\s+\S+"#, "$1=[REDACTED]"),
+        ]
+        for (pattern, replacement) in rules {
+            result = result.replacingOccurrences(of: pattern, with: replacement,
+                                                 options: [.regularExpression, .caseInsensitive])
+        }
+        return result
     }
 }
