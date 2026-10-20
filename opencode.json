@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode-go/deepseek-v4.1-flash",
+  "autoupdate": "notify",
+  "snapshot": false,
+  "compaction": {
+    "auto": true,
+    "prune": true,
+    "reserved": 16000
+  },
+  "permission": {
+    "external_directory": {
+      "*": "ask",
+      "/tmp/**": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "git push --force*": "deny",
+      "git branch -D*": "deny",
+      "rm -rf /*": "deny"
+    }
+  }
+}
