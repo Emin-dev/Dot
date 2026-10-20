@@ -350,3 +350,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PROTOCOL, Request};
+
+    #[test]
+    fn parses_protocol_requests_with_bounded_optional_fields() {
+        let hello: Request = serde_json::from_str(r#"{"protocol":1,"type":"hello"}"#).unwrap();
+        assert_eq!(hello.protocol, PROTOCOL);
+        assert_eq!(hello.kind, "hello");
+        assert!(hello.id.is_none());
+
+        let speak: Request = serde_json::from_str(
+            r#"{"protocol":1,"type":"speak","id":"a","turn":"t","text":"hello"}"#,
+        )
+        .unwrap();
+        assert_eq!(speak.kind, "speak");
+        assert_eq!(speak.text.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn unknown_types_deserialize_for_the_explicit_error_branch() {
+        let request: Request = serde_json::from_str(r#"{"protocol":1,"type":"unknown"}"#).unwrap();
+        assert_eq!(request.kind, "unknown");
+    }
+}

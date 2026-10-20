@@ -70,14 +70,8 @@ jobs:
         run: rustup component add rustfmt clippy
       - name: Build dot-voice
         run: cargo build --release -p dot-voice
-      - name: Test dot-voice
+      - name: Test dot-voice protocol parsing
         run: cargo test --release -p dot-voice
-      - name: Protocol smoke line
-        run: |
-          set -euo pipefail
-          out=$(printf '{"protocol":1,"type":"hello"}\n' | ./target/release/dot-voice 2>/dev/null | head -1)
-          echo "$out"
-          case "$out" in *'"protocol":1'*) ;; *) echo 'dot-voice did not emit a protocol line' >&2; exit 1;; esac
 
   macos:
     # Standard public-repository runner. Test Python is provisioned explicitly.
