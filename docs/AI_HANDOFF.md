@@ -116,15 +116,15 @@ refactor** by another worker:
 
 - Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
   `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
-- Last full green macOS gate (CI run `39511199762`, commit `c7c4ca6`): **XCTest 936 / 0 failures
-  (1 opt-in live test skipped)**, **`swift test` 608 / 0**, **Python 614 / 4 skipped**,
-  **60 static guardrails**, the eight focused suites, `dot-voice` and Debug/Release builds. Two
-  further static guardrails were added afterwards (now 62) and run in the next green CI/release pass.
-  The hosted runtime-finalizer canary is still a by-design failure; `verify_macos.sh` records it and
+- Last full green macOS gate (CI run `39513636141`, commit `69ecfbd`, all 62 guardrails):
+  **XCTest 936 / 0 failures (1 opt-in live test skipped)**, **`swift test` 608 / 0**,
+  **Python 614 / 4 skipped**, the eight focused suites, `dot-voice` and Debug/Release builds. The
+  hosted runtime-finalizer canary is still a by-design failure; `verify_macos.sh` records it and
   skips hosted packaging, while every independent Swift/Xcode/Python check continues.
-- The default DMG is rebuilt from the current source by `.github/workflows/release.yml`; the release
-  tag, asset sizes and SHA-256 for the Phase 4 build are recorded in
-  [PHASE4_RESULT.md](PHASE4_RESULT.md). It contains the audited runtime, **no model weights**
+- Public release **`v1.1.0-phase4`** was built from `69ecfbd` by release run `39515511382`:
+  `Dot.dmg` **1,005,188,103 bytes**, SHA-256
+  `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6`; the GitHub API asset digest
+  matches exactly. The DMG contains the audited runtime, **no model weights**
   (`models_bundled: false`), and the manifest-verified first-launch downloader. It is ad-hoc signed,
   **not notarised** (no Developer ID Application identity or notary credentials).
 - The full 19.9 GB first-launch model download has **not** been run end to end on this Pi; the

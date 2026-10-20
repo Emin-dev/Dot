@@ -18,8 +18,9 @@
   historical and is not presented as current verification.
 - Owner gates unchanged: model-part upload, complete all-in-one parts, notarisation, log token,
   R4 and R9 decisions. `docs/QUESTIONS_FOR_EMIN.md` §8–10 has the exact steps.
-- The default DMG is rebuilt by the release workflow from this source; the tag, asset sizes and
-  SHA-256 are recorded in `docs/PHASE4_RESULT.md`.
+- Green CI `39513636141` at `69ecfbd` (all 62 guardrails) and release `v1.1.0-phase4`
+  (run `39515511382`) rebuilt `Dot.dmg` from the same source: 1,005,188,103 bytes, SHA-256
+  `dc9561fa…4978c6`, and the GitHub asset digest matches. Details in `docs/PHASE4_RESULT.md`.
 
 ## Phase 3 checkpoint — 2026-10-20 (CI + release packaging)
 

@@ -1,11 +1,12 @@
 # dot: product roadmap and build checklist
 
 > **CURRENT STATUS (2026-10-21, PHASE 4 VERIFIED):** the merged real-log fixes are compiled and run on
-> macOS arm64. CI `39511199762` (commit `c7c4ca6`): **936 XCTest / 0 failures (1 skipped), 608
-> `swift test`/0, 614 Python/4 skipped, 60 static guardrails, eight focused suites, `dot-voice`,
-> Debug+Release**. Two more guardrails now make **62**. The default DMG is rebuilt by the release
-> workflow; see [PHASE4_RESULT.md](PHASE4_RESULT.md) for the tag/SHA and the per-promise
-> Verified/Partial/Broken matrix. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded), R11, R12, R13
+> macOS arm64. CI [`39513636141`](https://github.com/Emin-dev/Dot/actions/runs/39513636141) (commit
+> `69ecfbd`): **936 XCTest / 0 failures (1 skipped), 608 `swift test`/0, 614 Python/4 skipped, 62
+> static guardrails, eight focused suites, `dot-voice`, Debug+Release**. The default DMG was rebuilt
+> by release [`v1.1.0-phase4`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase4)
+> (1,005,188,103 bytes, SHA-256 `dc9561fa…4978c6`, digest verified). See
+> [PHASE4_RESULT.md](PHASE4_RESULT.md) for the per-promise Verified/Partial/Broken matrix. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded), R11, R12, R13
 > (create/edit/move), R14, R15, R16 (gated), R17 are implemented; **R4 blocked on the payload
 > decision**, **R9 not built**, **R10 partial**. Read [AI_HANDOFF.md](AI_HANDOFF.md) for current state,
 > blockers, commands and the next plan. The "4 of 97" and older run counts below are **historical
@@ -18,7 +19,7 @@ The detailed per-promise evidence is in [PHASE4_RESULT.md](PHASE4_RESULT.md). Su
 
 | Checklist area | Status | Evidence / limit |
 | --- | --- | --- |
-| Real-log voice/sleep/transcript/command/R17 fixes | **Verified (automated)** | Focused XCTest + full lane in CI `39511199762`; owner session still required |
+| Real-log voice/sleep/transcript/command/R17 fixes | **Verified (automated)** | Focused XCTest + full lane in CI `39513636141`; owner session still required |
 | Launch gate: M5 Pro class / 48 GB / macOS 27+ | **Verified (source + tests)** | `HardwareCompatibility` tests and guardrails; no override, no smaller model |
 | Text log channel and offline queue | **Verified (source + tests)** | `DotLogSync`, `LogSyncPolicyTests`, offline contract; token upload owner-gated |
 | Offline core after model download | **Verified (source + unit evidence)** | `test_offline_runtime_contract.py`, `OfflineIntegrationTests`; native disconnected run owner-gated |

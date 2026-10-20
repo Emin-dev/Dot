@@ -6,9 +6,11 @@ installation still cannot run on the Pi, but **macOS arm64 CI now compiles and r
 
 ## Phase 4 re-audit (2026-10-21)
 
-- The merged real-log branch is **compiled and green**: CI `39511199762` passed `rust-gates`,
+- The merged real-log branch is **compiled and green**: CI
+  [`39513636141`](https://github.com/Emin-dev/Dot/actions/runs/39513636141) passed `rust-gates`,
   `swift-test`, `dot-voice` and `macos` (936 XCTest / 0 failures, 1 skipped; 608 SwiftPM; 614 Python
-  / 4 skipped; 60 guardrails at that commit; now 62).
+  / 4 skipped; 62 guardrails), and release [`v1.1.0-phase4`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase4)
+  rebuilt the default DMG with a verified SHA-256/digest.
 - Every "FIXED (pending push)" / "UNVERIFIABLE-ON-LINUX" row below that concerns Swift compilation or
   the named suites is now **Verified (automated)** by that run; native permissions/audio/device
   behavior remains **owner-gated**, not proven by CI.
@@ -36,7 +38,7 @@ owner's real hardware/session.
 | Memory, files, calendar, research, safety approver | UNVERIFIABLE-ON-LINUX | source present; no native run here |
 | No conversation upload / no analytics | **FIXED** | new owner rule authorizes text-only upload; `DotLogSync` now writes `dot/<install-id>/<launch>/` to `dot-logs`, never `main`, with masking and no images |
 | Minimum hardware M5 Pro / 48 GB / macOS 27+ | **FIXED** | `HardwareCompatibility` now refuses anything below M5 Pro class / 48 GB / macOS 27 with a clear blocking message |
-| CI green on main | **VERIFIED** | run [`39511199762`](https://github.com/Emin-dev/Dot/actions/runs/39511199762) passed all four jobs; the hosted runner records the by-design canary failure and skips packaging |
+| CI green on main | **VERIFIED** | run [`39513636141`](https://github.com/Emin-dev/Dot/actions/runs/39513636141) passed all four jobs; the hosted runner records the by-design canary failure and skips packaging |
 | Rust gates green | **FIXED** | `cargo fmt --all` applied; `manual_repeat_n` fixed; `dot-research` and `dot-runtime` check/test/clippy pass |
 
 ## Promises from docs/AI_HANDOFF.md
@@ -48,7 +50,7 @@ owner's real hardware/session.
 | File read/search/autonomous utilities, safety gate | UNVERIFIABLE-ON-LINUX | source + tests; `dot-safety` check did not finish on the Pi (llama.cpp build > 15 min) |
 | Conservative placement/roam, OCR clicks | UNVERIFIABLE-ON-LINUX | source + tests; no WindowServer |
 | Research providers and cache | UNVERIFIABLE-ON-LINUX | Rust `dot-research` tests pass |
-| Full XCTest / SwiftPM / Python lanes green | **VERIFIED (macOS CI)** | 936 XCTest/0 (1 skipped), 608 SwiftPM/0, 614 Python/4 skipped in run `39511199762` |
+| Full XCTest / SwiftPM / Python lanes green | **VERIFIED (macOS CI)** | 936 XCTest/0 (1 skipped), 608 SwiftPM/0, 614 Python/4 skipped in run `39513636141` |
 | Logs in `Application Support/Dot/Logs`, 2 MB rotation | WORKS (source) | `src/InteractionCore.swift:5159-5230` |
 | Token only from the owner (never bundled) | WORKS (source) | `DotLogSync` reads Keychain service `dot-github-token`, then the owner-created config file; no token exists in the repo |
 | Default DMG published | **REBUILT (release workflow)** | Phase 4 tag/SHA in [PHASE4_RESULT.md](PHASE4_RESULT.md); asset not installed on a Mac here |
@@ -99,7 +101,7 @@ The branch was merged normally at `181756c6` (21 files, +411/−89) and is **no 
   and contract tests.
 - Docs/checklists updated in the branch.
 
-**Phase 4 verification:** the merged code compiled and ran on macOS arm64 (CI `39511199762`), with
+**Phase 4 verification:** the merged code compiled and ran on macOS arm64 (CI `39513636141`), with
 the focused eight-suite gate and the full lanes green. Installation and owner acceptance remain
 separate.
 

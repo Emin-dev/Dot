@@ -8,14 +8,16 @@ owner-log fixes into named tests/guardrails, added offline source and model-reus
 rebuilt the default DMG from the current source.
 
 - Phase 4 code/test commits: `c7c4ca6` (focused suites, offline contracts, 60 guardrails) and
-  `7e5c6b5` (safety-approver and memory-list guardrails, 62 total).
-- CI run [`39511199762`](https://github.com/Emin-dev/Dot/actions/runs/39511199762) at `c7c4ca6`:
-  all four jobs green. The two guardrails added in `7e5c6b5` run in the follow-up green CI and
-  release pass.
+  `7e5c6b5` (safety-approver and memory-list guardrails, 62 total); docs at `69ecfbd`.
+- CI run [`39513636141`](https://github.com/Emin-dev/Dot/actions/runs/39513636141) at `69ecfbd`
+  (all 62 guardrails): all four jobs green. The earlier evidence run is
+  [`39511199762`](https://github.com/Emin-dev/Dot/actions/runs/39511199762) at `c7c4ca6`.
+- Release run [`39515511382`](https://github.com/Emin-dev/Dot/actions/runs/39515511382) built the
+  DMG from the same `69ecfbd` source.
 - Environment: the Pi compiles/tests Rust and Python only. Swift, XCTest, `dot-voice` and the DMG
   are macOS arm64 CI jobs; nothing here claims native microphone/speaker/screen behaviour.
 
-## Verification (macOS arm64 CI `39511199762`)
+## Verification (macOS arm64 CI `39513636141`, all 62 guardrails)
 
 | Gate | Result |
 | --- | --- |
@@ -28,7 +30,7 @@ rebuilt the default DMG from the current source.
 | Full XCTest lane | pass, **936 tests / 0 failures, 1 skipped** (opt-in live model test) |
 | `dot-voice` build + protocol tests | pass |
 | Python suite | pass, **614 / 4 skipped** |
-| Static contracts | pass, **60/60** at `c7c4ca6`; **62/62** after `7e5c6b5` |
+| Static contracts | pass, **62/62** |
 | Debug + Release builds, zero warnings | pass |
 | Hosted runtime-finalizer canary | by-design failure; recorded, hosted packaging skipped |
 
@@ -129,10 +131,13 @@ runs contracts and split/join checks, packages the model-less default DMG, and u
 
 | Item | Value |
 | --- | --- |
-| Release tag | filled after the Phase 4 release workflow |
-| Release workflow run | filled after the Phase 4 release workflow |
-| DMG bytes / SHA-256 | filled after the Phase 4 release workflow |
-| Remote asset digest check | filled after the Phase 4 release workflow |
+| Release tag | [`v1.1.0-phase4`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase4) (source `69ecfbd`) |
+| Release workflow run | [`39515511382`](https://github.com/Emin-dev/Dot/actions/runs/39515511382), success |
+| DMG bytes | **1,005,188,103** |
+| DMG SHA-256 | `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6` |
+| `Dot.dmg.sha256` | uploaded; content matches the SHA above |
+| Remote asset digest | GitHub API digest `sha256:dc9561fa…4978c6` — matches exactly |
+| Other assets | `join-dot-dmg.command` (1,238 B), `join_release.py` (4,746 B), `README.txt` (1,108 B) |
 
 The DMG is **ad-hoc signed and not notarised**. GitHub caps each asset at 2 GB; the complete
 all-in-one installer is split by the existing tools but its parts cannot be produced on the Pi

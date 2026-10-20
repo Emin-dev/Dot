@@ -40,14 +40,16 @@ three failed attempts.
 (Emma was rejected), idle sleep no longer leaves Dot blocked, spoken commands ignore Whisper
 punctuation, non-speech tags dropped, no double or forced questions (R17), Dot knows it is heard,
 model-chosen file deletions pass the R16 approver, and the log/sync noise is gone. The merged code was
-compiled and tested on macOS arm64 in Phase 4 (CI `39511199762`; focused suites + full XCTest +
+compiled and tested on macOS arm64 in Phase 4 (CI `39513636141`; focused suites + full XCTest +
 `swift test` + Python + 60 guardrails). Installation and owner acceptance remain separate; see
 [PHASE4_RESULT.md](PHASE4_RESULT.md).
 
-**Phase 4 honest limits (2026-10-21):** the default model-less DMG is rebuilt and published; the
-complete all-in-one parts and pinned model parts still need the owner's verified 22.4 GB payload
-(`QUESTIONS_FOR_EMIN.md` §8–10). The DMG is ad-hoc signed and not notarised. Core conversation works
-offline after the model download; native disconnected acceptance is still owner-run.
+**Phase 4 honest limits (2026-10-21):** the default model-less DMG is rebuilt and published as
+[`v1.1.0-phase4`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase4) (SHA-256
+`dc9561fa…4978c6`, GitHub digest verified); the complete all-in-one parts and pinned model parts still
+need the owner's verified 22.4 GB payload (`QUESTIONS_FOR_EMIN.md` §8–10). The DMG is ad-hoc signed
+and not notarised. Core conversation works offline after the model download; native disconnected
+acceptance is still owner-run.
 
 **Phase A progress (2026-10-19):** R1 five-minute listening ✅ · R14 battery alerts
 with spoken configuration ✅ · R11 live cold-start progress + prewarm toggle ✅ ·
