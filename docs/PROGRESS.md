@@ -27,6 +27,11 @@
 - Verification on the Pi: `cargo fmt/check/test/clippy` for `dot-research`/`dot-runtime`,
   56 static contracts and the new Python split/join tests pass. `dot-voice` cannot build
   here (`instruction requires: fullfp16`), by design; macOS CI covers it.
+- CI run [`39493996358`](https://github.com/Emin-dev/Dot/actions/runs/39493996358) is green
+  in all four jobs. Release
+  [`v1.1.0-phase3`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3) publishes
+  `Dot.dmg` (983,301,281 bytes, SHA-256 `572e8e59…32f5e`) plus checksum, joiner and README.
+  See `docs/PHASE3_RESULT.md` for the full result and the remaining owner gates.
 
 ## Checkpoint — 2026-10-20 (audit, hardware gate, log channel, Rust gates)
 

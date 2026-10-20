@@ -22,10 +22,12 @@ by actually running the gate, not by assumption.
 
 - `ci.yml` now runs four independent jobs: Rust gates on Ubuntu, `swift build`/`swift test`
   with the Xcode 26 SDK, `dot-voice` build + protocol tests on arm64 macOS, and the
-  full `verify_macos.sh` lane.
+  full `verify_macos.sh` lane. Run `39493996358` on `main@d0c7662` is green in all four.
 - Voice tests that used arbitrary absolute host times are now deterministic on a
   freshly booted runner; coordinator waits no longer assume a 4-second budget.
-- `release.yml` packages the **default model-less DMG** from current source: it downloads
+- Release [`v1.1.0-phase3`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3)
+  publishes `Dot.dmg` (983,301,281 bytes, SHA-256 `572e8e59…32f5e`), its checksum, the joiner
+  and a README. `release.yml` packages the **default model-less DMG** from current source: it downloads
   the previously published audited runtime donor (`public-f6cc73d`, SHA-256 pinned),
   strips model weights, and re-signs. It refuses to ship `OfflineModels`.
 - Model delivery: `Resources/model-parts.json` is the primary pinned-part plan; when the
@@ -46,7 +48,7 @@ by actually running the gate, not by assumption.
 - SwiftPM suites: green (62 suite lines, 0 failures)
 - Python suite: **608 tests** (phase-3 release/parts contracts added; 4 skipped)
 - Static guardrails: **56/56** (release workflow contract updated)
-- Rust: dot-research 15, dot-runtime 3, dot-voice protocol tests 2 (macOS CI)
+- Rust: 18 tests for dot-research/dot-runtime on the Pi; dot-voice build + 2 protocol tests on macOS CI
 - `verify_macos.sh`: passes every independent stage; **0 warnings**; the only failure is the
   **runtime finalizer canary**, which fails by design on a hosted toolchain
   (`unsupported hosted toolchain image`) and blocks hosted packaging

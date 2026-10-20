@@ -12,9 +12,9 @@ binding rules R1–R17.
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
 
-**Current release: [public-f6cc73d](https://github.com/Emin-dev/Dot/releases/tag/public-f6cc73d).**
+**Current release: [v1.1.0-phase3](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3).**
 **[Download `Dot.dmg`](https://github.com/Emin-dev/Dot/releases/latest/download/Dot.dmg)**, open it,
-drag **Dot** into **Applications**, and launch it. The app verifies its signed runtime, then downloads
+drag **Dot** into **Applications**, and launch it. The app verifies its runtime, then downloads
 the exact 19.9 GB local model from Hugging Face on first launch, checking every file's SHA-256 against
 the bundled manifest. Allow about 25 GB of free disk and a stable connection; progress appears in the
 menu bar and context menu.
