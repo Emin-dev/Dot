@@ -132,6 +132,13 @@ checks = {
         and 'OfflinePayload.verifyHash(path, bytes: asset.bytes, expected: asset.sha256)' in read('src/OfflinePreparation.swift')
         and 'ModelProvisioner.shared.ensureModels' in read('src/OfflinePreparation.swift')
     ),
+    'model file mutations pass the R16 safety approver first': (
+        chat.index('case .deleteFile(let path, _):') < chat.index('safetyRefusal(for: "delete file \\(path)")')
+        and chat.index('safetyRefusal(for: command)') < chat.index('await Self.runShellCommand(command)')
+    ),
+    'memory list includes core facts and R5 key points': (
+        'isMemoryListRequest(copyPhrase)' in chat and 'for tier in [MemoryTier.core, .keyPoints]' in chat
+    ),
     'log sync is optional and silent when offline': (
         re.search(r'guard\s+let\s+token\s*=\s*token\(\)\s+else\s*\{', read('src/DotLogSync.swift')) is not None
         and re.search(r'state\.failed\(\s*remotePath:\s*entry\.remotePath,\s*now:\s*now\s*\)',
