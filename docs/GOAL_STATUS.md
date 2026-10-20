@@ -25,8 +25,8 @@ by actually running the gate, not by assumption.
   full `verify_macos.sh` lane. Run `39493996358` on `main@d0c7662` is green in all four.
 - Voice tests that used arbitrary absolute host times are now deterministic on a
   freshly booted runner; coordinator waits no longer assume a 4-second budget.
-- Release [`v1.1.0-phase3`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3)
-  publishes `Dot.dmg` (983,301,281 bytes, SHA-256 `572e8e59…32f5e`), its checksum, the joiner
+- Release [`v1.1.0-phase3.1`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3.1)
+  publishes `Dot.dmg` (1,011,993,151 bytes, SHA-256 `207676a4…bdbda`), its checksum, the joiner
   and a README. `release.yml` packages the **default model-less DMG** from current source: it downloads
   the previously published audited runtime donor (`public-f6cc73d`, SHA-256 pinned),
   strips model weights, and re-signs. It refuses to ship `OfflineModels`.

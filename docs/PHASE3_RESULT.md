@@ -6,13 +6,13 @@ Phase 3 is complete for everything that can be built and published without the o
 private payload or Apple Developer credentials. The public CI is green and a release is
 published.
 
-- **CI run** [`39493996358`](https://github.com/Emin-dev/Dot/actions/runs/39493996358) on
-  `main@d0c7662`: `rust-gates`, `swift-test`, `dot-voice` and the full `macos` lane all
+- **CI run** [`39499667589`](https://github.com/Emin-dev/Dot/actions/runs/39499667589) on
+  `main@8189a28`: `rust-gates`, `swift-test`, `dot-voice` and the full `macos` lane all
   **succeeded**.
-- **Release** [`v1.1.0-phase3`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3):
-  `Dot.dmg` (983,301,281 bytes), `Dot.dmg.sha256`, `join-dot-dmg.command`,
+- **Release** [`v1.1.0-phase3.1`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3.1) (supersedes `v1.1.0-phase3`):
+  `Dot.dmg` (1,011,993,151 bytes), `Dot.dmg.sha256`, `join-dot-dmg.command`,
   `join_release.py`, `README.txt`.
-  `Dot.dmg` SHA-256: `572e8e590652ced4c25096d6737e9ecef23f33400ca5bd39fb70d2a6bb332f5e`.
+  `Dot.dmg` SHA-256: `207676a4a9c562f387c4428a0bf67edc3775c47d3d91a3ee4352f78b234bdbda`.
 
 ## What the release contains
 
