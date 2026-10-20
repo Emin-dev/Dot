@@ -283,6 +283,22 @@ final class ChatModel: ObservableObject {
         }
     }
 
+    /// R7 revised: an automatic file mutation chosen by the model passes the same
+    /// local safety approver as an approved card. Nil means it may run.
+    private func safetyRefusal(for action: String) async -> String? {
+        let conversation = history.suffix(10).map { "\($0.role): \($0.content)" }.joined(separator: "\n")
+        switch await SafetyApprover.shared.evaluate(conversation: conversation, action: action) {
+        case .allowed:
+            return nil
+        case .denied(let reason):
+            return SafetyApprover.shared.registerStrike(key: action) >= 3
+                ? "The safety check refused this three times (\(reason)). Say \"force it\" and ask again to run it as-is."
+                : "The safety check refused (\(reason)), so I did not run it."
+        case .unavailable(let reason):
+            return "The safety check is unavailable (\(reason)), so I did not run it."
+        }
+    }
+
     func denyPendingAction() {
         guard let req = pendingApproval else { return }
         pendingApproval = nil
@@ -1405,9 +1421,10 @@ final class ChatModel: ObservableObject {
         startPrewarmIfEnabled()
         DiagnosticChatLogger.record(role: "system", text: "Resumed after display wake/unlock.")
         // R12: the greeting is spoken when the display is actually back (including
-        // the locked-wake path, where handleSystemWake runs before the unlock).
-        speakDirect("I'm back.")
-        wakeGreeted = true
+        // the locked-wake path, where handleSystemWake runs before the unlock). A
+        // sleep block would make speakDirect refuse it and keep Dot stuck.
+        clearSleepBlock()
+        greetAfterWake()
     }
     func stopProactivity() {
         proactive.stop()
@@ -1643,7 +1660,7 @@ final class ChatModel: ObservableObject {
                     var sentences = SentenceBuffer()
                     for sentence in sentences.feed(content) { self.enqueueVoice(sentence, id: id) }
                     if let tail = sentences.flush() { self.enqueueVoice(tail, id: id) }
-                    if let question, !question.isEmpty, !content.contains(question) { self.enqueueVoice(question, id: id) }
+                    if let question, SpokenQuestion.needsAppending(question, after: content) { self.enqueueVoice(question, id: id) }
                     self.runtime.completeVoice(id)
                 } catch {
                     // Same rule as speakDirect: report, never swap in a system voice,
@@ -1755,25 +1772,7 @@ final class ChatModel: ObservableObject {
     /// A final spoken question is a reply invitation even when the local model
     /// omitted the preferred `ask_user` tool call. Requires a real sentence, not a
     /// bare "?" or a one-word interjection.
-    static func endsWithSpokenQuestion(_ text: String) -> Bool {
-        var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let closers = "\"'”’)]}"
-        while let last = trimmed.last, closers.contains(last) {
-            trimmed.removeLast()
-            trimmed = trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        guard trimmed.hasSuffix("?") else { return false }
-        var sentence = String(trimmed.dropLast())
-        let boundaries: Set<Character> = [".", "!", "?", "\n"]
-        if let last = sentence.lastIndex(where: { boundaries.contains($0) }) {
-            sentence = String(sentence[sentence.index(after: last)...])
-        }
-        // A quoted/explanatory construction ("A quoted question: why?") is not Dot
-        // asking the owner; only a direct final question is an invitation.
-        guard !sentence.contains(":"), !sentence.contains("\""),
-              !sentence.contains("“"), !sentence.contains("”") else { return false }
-        return sentence.split(whereSeparator: \.isWhitespace).count >= 2
-    }
+    static func endsWithSpokenQuestion(_ text: String) -> Bool { SpokenQuestion.endsWithQuestion(text) }
 
     /// The question contract is preferred; a final question in the spoken answer is
     /// the fallback. A failed or video-silenced voice never arms the microphone.
@@ -1825,6 +1824,19 @@ final class ChatModel: ObservableObject {
             command: suggestion)
     }
 
+    /// A spoken or typed command phrase: lowercased, trimmed, and without the
+    /// trailing punctuation Whisper adds, so exact command tables still match.
+    static func commandPhrase(_ text: String) -> String {
+        text.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: ".?!,;:…")))
+    }
+
+    static func isMemoryListRequest(_ phrase: String) -> Bool {
+        ["what do you remember", "what do you remember about me", "what do you know about me",
+         "show your memory", "show your memories", "list your memories", "what have you remembered",
+         "what's in your memory", "what is in your memory"].contains(phrase)
+    }
+
     /// The fact to store, or nil when the turn is not a stated preference. The
     /// `remember` instruction is stripped wherever it occurs, so
     /// "can you remember that I like tea" stores "I like tea", not the instruction.
@@ -1857,30 +1869,47 @@ final class ChatModel: ObservableObject {
         case .restricted: micStatus = "restricted"
         default: micStatus = "undetermined"
         }
-        let payload: [String: Any] = [
+        // A per-turn readiness re-check of a running engine is not a transition:
+        // it used to write four to eight identical [HEALTH] lines every turn.
+        let engineHealth = engine.answering ? "ready" : (engineStage ?? "not started")
+        let screen = CGPreflightScreenCaptureAccess()
+        let line = "[HEALTH] engine=\(engineHealth) files=\(runtime.isReady() ? "ready" : "checking") mic=\(micStatus) screen=\(screen)"
+        let signature = line + " phase=\(phase) issue=\(issue?.title ?? "")"
+        guard signature != lastHealthSignature else { return }
+        lastHealthSignature = signature
+        let fields: [String: Any] = [
             "schema_version": 1,
             "updated_at": Date().timeIntervalSince1970,
             "app": "dot",
             "pid": ProcessInfo.processInfo.processIdentifier,
-            "engine_stage": engineStage ?? "unknown",
-            "engine_ready": runtime.isReady(),
+            "engine_stage": engineHealth,
+            "engine_ready": engine.answering,
+            "files_ready": runtime.isReady(),
             "mic": micStatus,
-            "screen": CGPreflightScreenCaptureAccess(),
+            "screen": screen,
             "accessibility": InPlaceAppTyping.isAccessibilityTrusted(),
             "phase": String(describing: phase),
             "issue": issue?.title ?? "",
             "last_error": issue?.title ?? "",
-            "memory_records": memory.map { _ in 0 } as Any,
         ]
-        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
-            let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-                .appendingPathComponent("Dot/dot-health.json")
-            if let url { try? data.write(to: url, options: .atomic) }
+        let memory = self.memory
+        Task {
+            var payload = fields
+            if let counts = try? await memory?.tierCounts() { payload["memory_records"] = counts.values.reduce(0, +) }
+            guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+                  let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                      .appendingPathComponent("Dot/dot-health.json") else { return }
+            try? data.write(to: url, options: .atomic)
         }
-        DiagnosticChatLogger.record(role: "system", text: "[HEALTH] engine=\(engineStage ?? "unknown") ready=\(runtime.isReady()) mic=\(micStatus) screen=\(CGPreflightScreenCaptureAccess())")
+        if line != lastHealthLine {
+            lastHealthLine = line
+            DiagnosticChatLogger.record(role: "system", text: line)
+        }
         // Every health transition is also a reason to publish this Dot's folder.
         DotLogSync.shared.requestSync(reason: "health-change")
     }
+    private var lastHealthSignature: String?
+    private var lastHealthLine: String?
 
     /// The four-voice surface: "use voice emma" / "change voice to alice" / "list
     /// voices". Returns "?" for the status form or the chosen voice name.
@@ -2194,7 +2223,7 @@ final class ChatModel: ObservableObject {
         guard gate.accepts(id) else { return }
 
         if pendingApproval != nil {
-            let lower = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+            let lower = Self.commandPhrase(text)
             // Only unambiguous approval wording may execute a pending destructive
             // action. Generic acknowledgements ("yes", "okay", "sure") can be an
             // answer to an unrelated question and must never approve one.
@@ -2215,7 +2244,9 @@ final class ChatModel: ObservableObject {
         // "copy" means "copy what you just said", not "press Cmd+C in whatever app
         // happens to be focused". The owner asked for Dot's own text repeatedly and
         // got an empty pasteboard because the old path forwarded Cmd+C elsewhere.
-        let copyPhrase = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Whisper ends almost every transcript with "." or "?", so exact spoken
+        // commands ("What do you remember?", "Copy that.") must ignore it.
+        let copyPhrase = Self.commandPhrase(text)
         // Searching file contents, as opposed to the existing name search: "search my
         // files for X" reports where X appears instead of only where it is named.
         if pendingApproval == nil, let query = Self.fileSearchRequest(from: copyPhrase) {
@@ -2318,10 +2349,10 @@ final class ChatModel: ObservableObject {
         // one is loaded, and the change applies from Dot's next reply.
         if pendingApproval == nil, let choice = Self.voiceCommand(from: copyPhrase) {
             if choice == "?" {
-                let current = UserDefaults.standard.string(forKey: "dot.voice") ?? "bf_emma"
+                let current = DotVoice.selected()
                 respondDirectly("Voices: emma (default), isabella, alice and lily. You are using \(current). Say \"use voice alice\" to switch.", id: id)
             } else {
-                UserDefaults.standard.set(choice, forKey: "dot.voice")
+                UserDefaults.standard.set(choice, forKey: DotVoice.defaultsKey)
                 respondDirectly("Voice set to \(choice). I will speak with it from my next reply.", id: id)
             }
             return
@@ -2372,19 +2403,22 @@ final class ChatModel: ObservableObject {
         // "What do you remember" must show the stored core facts. The old parser for
         // this existed but had no caller, so the question fell through to the model,
         // which cannot see the memory store.
-        if pendingApproval == nil,
-           ["what do you remember", "what do you know about me", "show your memory",
-            "list your memories", "show your memories", "what have you remembered"].contains(copyPhrase) {
+        if pendingApproval == nil, Self.isMemoryListRequest(copyPhrase) {
             Task { [weak self] in
                 guard let self else { return }
                 var lines: [String] = []
-                if let memory = self.memory,
-                   let core = try? await memory.records(tier: .core, limit: 15, includeSuperseded: false) {
-                    lines = core.map(\.text)
+                if let memory = self.memory {
+                    // Preferences and corrections first, then the R5 conversation key
+                    // points, which this list never showed before.
+                    for tier in [MemoryTier.core, .keyPoints] {
+                        if let records = try? await memory.records(tier: tier, limit: 10, includeSuperseded: false) {
+                            lines += records.map(\.text)
+                        }
+                    }
                 }
                 let message = lines.isEmpty
                     ? "I have not been told anything to remember yet. Tell me a preference and I will keep it."
-                    : "I remember:" + lines.prefix(10).map { "\n• \($0)" }.joined()
+                    : "I remember:" + lines.prefix(15).map { "\n• \($0)" }.joined()
                 self.respondDirectly(message, id: id)
             }
             return
@@ -3034,13 +3068,23 @@ final class ChatModel: ObservableObject {
                             self.pendingApproval = req
                             executedToolConfirmation = "This command requires your approval. Click Approve or say 'Approve' to run: \(command)."
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: "Awaiting user approval", succeeded: true)
+                        } else if ActionApprovalRequest.isPotentiallyDestructive(command),
+                                  let refusal = await self.safetyRefusal(for: command) {
+                            executedToolConfirmation = refusal
+                            DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: refusal, succeeded: false)
                         } else {
                             let output = await Self.runShellCommand(command)
                             executedToolConfirmation = "Executed command:\n\(output)"
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: output, succeeded: true)
                         }
                     case .deleteFile(let path, _):
-                        // R7: file deletion is autonomous.
+                        // R7 revised: deletion needs no card, but the local safety
+                        // model decides first; no approver means no deletion.
+                        if let refusal = await self.safetyRefusal(for: "delete file \(path)") {
+                            executedToolConfirmation = refusal
+                            DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: refusal, succeeded: false)
+                            break
+                        }
                         do {
                             try FileManager.default.removeItem(atPath: path)
                             executedToolConfirmation = "Deleted \(path)."
@@ -3201,15 +3245,10 @@ final class ChatModel: ObservableObject {
                 let shouldFollowup = Self.shouldArmFollowup(explicitQuestion: hasQ, answer: self.answer,
                     voiceFailed: self.voiceDeliveryFailed, videoSilent: self.videoSpeechMuted)
                 if !self.voiceDeliveryFailed { self.followup.generationFinished(turn: id, hasQuestion: shouldFollowup) }
-                if let question {
+                if let question, SpokenQuestion.needsAppending(question.text, after: self.answer) {
                     let qTrimmed = question.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let ansTrimmed = self.answer.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let cleanQ = qTrimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:; "))
-                    let cleanAns = ansTrimmed.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:; "))
-                    if !cleanAns.hasSuffix(cleanQ) && !cleanAns.contains(cleanQ) {
-                        self.answer += (self.answer.isEmpty ? "" : " ") + qTrimmed
-                        self.enqueueVoice(qTrimmed, id: id)
-                    }
+                    self.answer += (self.answer.isEmpty ? "" : " ") + qTrimmed
+                    self.enqueueVoice(qTrimmed, id: id)
                 }
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))
@@ -3409,16 +3448,37 @@ final class ChatModel: ObservableObject {
         if case .blocked = savedPhase { issue = savedIssue; phase = savedPhase }
     }
     func cancelForEnvironment(reason: VoiceCaptureEndReason) {
+        if reason == .systemSleep { wakeGreeted = false }
         if stt.captureState != .idle {
             stt.cancel(reason: reason)
-        } else if reason == .permissionLost {
-            // A typed answer does not need microphone permission. Revoke only
-            // the automatic invitation when no capture was using that grant.
+        } else if reason == .permissionLost || !turnInProgress {
+            // A typed answer does not need microphone permission, and a sleep or
+            // device change while Dot is idle interrupts nothing. Revoke only the
+            // automatic invitation; blocking here left Dot stuck on "Listening
+            // stopped when your Mac went to sleep" after every idle sleep.
             followup.cancel(); automaticReply = false; updateProactiveContext()
         } else {
             cancelTurn()
             if let message = reason.recoveryMessage { block(message, issue: .voice) }
         }
+    }
+    /// A turn is thinking, speaking or still owns work; idle and blocked are not.
+    private var turnInProgress: Bool {
+        phase.isActive || generating || work != nil || runtime.ttsSpeaking()
+    }
+    /// R12: a block caused by sleep is not a failure once the Mac is back, whether
+    /// it ended a capture (speech) or an answer (voice).
+    private func clearSleepBlock() {
+        guard case .blocked(let message) = phase else { return }
+        if issue == .voice || message == VoiceCaptureEndReason.systemSleep.recoveryMessage {
+            issue = nil; phase = .idle
+        }
+    }
+    /// One "I'm back." per sleep or screen-off, whichever wake path arrives first.
+    private func greetAfterWake() {
+        guard !wakeGreeted else { return }
+        wakeGreeted = true
+        speakDirect("I'm back.")
     }
     /// R12: a wake is not a failure. Clear the sleep-induced block, re-arm the
     /// proactive scheduler and say Dot is back. The audio route needs a moment to
@@ -3434,10 +3494,10 @@ final class ChatModel: ObservableObject {
     func handleSystemWake() {
         guard !shuttingDown, !screenPaused else { return }
         IdleSelfReflectionEngine.shared.recordUserActivity()
-        if case .blocked = phase, issue == .voice { issue = nil; phase = .idle }
+        clearSleepBlock()
         proactive.start()
         updateProactiveContext()
-        speakDirect("I'm back.")
+        greetAfterWake()
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
     func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; screenWatchTask?.cancel(); screenWatchTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }

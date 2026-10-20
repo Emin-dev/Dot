@@ -85,7 +85,7 @@ final class WhisperRecognizer: @unchecked Sendable {
                     for index in 0..<whisper_full_n_segments(context) {
                         if let text = whisper_full_get_segment_text(context, index) { result += String(cString: text) }
                     }
-                    result = result.trimmingCharacters(in: .whitespacesAndNewlines)
+                    result = SpokenTranscript.words(result)
                     guard !result.isEmpty else { throw RecognitionFailure.empty }
                     continuation.resume(returning: result)
                     #else

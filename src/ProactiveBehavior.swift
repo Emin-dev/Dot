@@ -85,14 +85,8 @@ struct ProactiveReplyBuffer {
             switch self {
             case .silent: return ""
             case .speak(let content, let question):
-                if let question, !question.isEmpty, !content.isEmpty {
-                    let cleanQ = question.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:; "))
-                    let cleanC = content.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:; "))
-                    if !cleanQ.isEmpty && (cleanC.hasSuffix(cleanQ) || cleanC.contains(cleanQ)) {
-                        return content
-                    }
-                }
-                return [content, question].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " ")
+                guard let question, SpokenQuestion.needsAppending(question, after: content) else { return content }
+                return [content, question].filter { !$0.isEmpty }.joined(separator: " ")
             }
         }
     }

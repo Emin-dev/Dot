@@ -110,10 +110,13 @@ final class DotLogSync: @unchecked Sendable {
                 lastHealthHash = hash; uploaded += 1
             }
         }
-        if uploaded > 0 {
+        // Only the first push of a session is written to the chat log: every
+        // logged push changed the log, so the next period re-uploaded the whole
+        // file and committed again, every five minutes, forever.
+        if uploaded > 0, !pushedOnce {
             DiagnosticChatLogger.record(role: "system", text: "[SYNC] pushed \(uploaded) file(s) to \(repo) dots/\(dotID) (\(reason))")
-            pushedOnce = true
         }
+        if uploaded > 0 { pushedOnce = true }
     }
 
     /// PUT one file through the Contents API: fetch the current blob sha (404 means

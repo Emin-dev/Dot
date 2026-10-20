@@ -5,6 +5,32 @@ The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R1
 older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, `CONTINUATION.md` and
 `BUILD_CHECKLIST.md` contain history that is partly superseded; their top notes point here.
 
+## Fixes from the owner's real log (2026-10-20)
+
+Found by reading `dots/macbook16-m5-pro-48gb-mac17-8/logs/dot_chat_log.txt`. Source and tests changed;
+the Swift build and XCTest lanes were **not run** (Linux session, no Swift toolchain). Static guardrails
+53/53 and the Python suite (604, 2 IPv6-only errors that also fail on the untouched tree) were run.
+
+- **Voice was dead for every voice except Isabella.** `VoiceEvent.parse` required `bf_isabella` in the
+  `hello` event while the default is `bf_emma`, so every turn ended in "Unsupported Bionic voice
+  protocol". Any of the four British voices is now accepted; a missing voice file falls back to the
+  always-bundled Isabella with a log line (`DotVoice`).
+- **Stuck after sleep.** An idle sleep blocked Dot with "Listening stopped when your Mac went to sleep";
+  the wake greeting then refused to speak and the block stayed, so idle roaming was vetoed for hours
+  (`[ROAM] skip: phase=blocked`). Idle sleep no longer blocks, wake clears a sleep block, and both wake
+  paths share one "I'm back."
+- **Spoken commands never matched.** Whisper ends transcripts with "." or "?", so "What do you
+  remember?", "Copy that.", "List voices." went to the model. Command phrases drop trailing punctuation;
+  the memory list now also shows the R5 key points.
+- **Non-speech became turns.** `[BLANK_AUDIO]`, `[SOUND]`, `[coughs]`, `[MUSIC PLAYING]` are stripped.
+- **Double questions.** The `ask_user` question is no longer spoken after content that already asked one.
+- **"I can't hear you."** The system prompt now says the owner talks by voice and replies are spoken.
+- **R7 gap.** Model-chosen `delete_file` and automatic destructive file commands now pass the safety
+  approver before running (they ran unchecked before).
+- **Log noise.** One `[HEALTH]` line per real change (was 4 to 8 per turn, `engine=unknown` when ready),
+  "Context extraction skipped" is logged as SYSTEM not DOT, repeated `[ROAM] skip` reasons are logged
+  once, and the `[SYNC] pushed` line no longer makes the log sync re-upload itself every five minutes.
+
 ## ⚠️ Uncommitted work in the tree (2026-10-18)
 
 At the time this handoff was written, the working tree contains an **uncommitted, in-progress
