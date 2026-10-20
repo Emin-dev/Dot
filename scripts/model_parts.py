@@ -79,6 +79,7 @@ def main() -> int:
     root = args.models.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     parts: list[dict] = []
+    assets: set[str] = set()
     for item in manifest["files"]:
         relative = item["path"]
         source = (root / relative).resolve()
@@ -95,6 +96,9 @@ def main() -> int:
         offset = 0
         index = 0
         stem = safe_asset(relative)
+        if stem in assets:
+            raise SystemExit(f"asset name collision for {relative!r}; rename the manifest path")
+        assets.add(stem)
         with source.open("rb") as stream:
             while offset < expected_bytes:
                 size = min(args.part_size, expected_bytes - offset)

@@ -68,21 +68,24 @@ jobs:
           Dot default DMG
           ===============
           Dot.dmg contains the app and its verified local runtime, but not the
-          Qwen3.8 27B Q4 weights (22.4 GB). On first launch Dot downloads the
-          exact signed-manifest files, resumably and with per-file SHA-256:
-            1. pinned split parts from the Emin-dev/Dot model-parts-v1 release
-            2. pinned Hugging Face revisions only when the same SHA-256 matches
+          Qwen3.8 27B Q4 weights (22.4 GB). On first launch Dot verifies the
+          signed manifest and downloads the exact files with resume, retries and
+          per-file SHA-256. The pinned Emin-dev/Dot model-parts-v1 release is
+          the intended primary route, but its parts are NOT uploaded yet; until
+          they are, the app uses revision-pinned Hugging Face files and rejects
+          any SHA-256 mismatch.
           Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
+          This DMG is ad-hoc signed and NOT notarized, so Gatekeeper may require
+          a manual Open. A Gatekeeper-clean build needs Emin's Developer ID.
 
           All-in-one installer
           ====================
-          The complete DMG is 22+ GB and GitHub limits each asset to 2 GB, so it
-          is published as Dot-all-in-one.dmg.partNNN plus a .parts.json manifest.
-          Put join-dot-dmg.command, join_release.py and all parts in one folder,
-          then double-click join-dot-dmg.command. It downloads missing parts,
-          verifies every part and the joined DMG, and opens it.
-          Hosting the model parts requires the owner's 22.4 GB verified payload;
-          see docs/QUESTIONS_FOR_EMIN.md and scripts/model_parts.py.
+          The complete DMG is 22+ GB and GitHub limits each asset to 2 GB. Its
+          owner-produced parts (Dot.dmg.partNNN + Dot.dmg.parts.json) are NOT
+          published yet. Once they are, put join-dot-dmg.command,
+          join_release.py and all parts in one folder and double-click the
+          command: it downloads missing parts, verifies every part and the
+          joined DMG, and opens it. See docs/QUESTIONS_FOR_EMIN.md §8-10.
           EOF
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

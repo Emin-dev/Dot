@@ -563,7 +563,7 @@ final class ModelProvisionerTests: XCTestCase {
                        "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/resolve/\(ModelProvisioner.draftRevision)/model.safetensors")
         let auxiliary = try ModelProvisioner.remoteURL(for: "aux/gemma-3-4b-it-Q4_K_M.gguf")
         XCTAssertEqual(auxiliary.absoluteString,
-                       "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf")
+                       "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/\(ModelProvisioner.auxRevision)/gemma-3-4b-it-Q4_K_M.gguf")
         XCTAssertThrowsError(try ModelProvisioner.remoteURL(for: "other/file"))
         XCTAssertThrowsError(try ModelProvisioner.remoteURL(for: "aux/../escape"))
     }

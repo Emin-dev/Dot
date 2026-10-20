@@ -25,13 +25,13 @@ is never copied.
 First launch downloads the exact manifest files:
 
 1. **Primary:** pinned `<2 GB` split parts from the `Emin-dev/Dot` release, with per-part
-   SHA-256, HTTP Range resume, bounded retries/backoff and automatic repair.
-2. **Fallback:** revision-pinned Hugging Face files only when the same signed SHA-256
-   matches `Resources/bundled-models.json`. The previously missing `aux/` Gemma mapping is
-   fixed.
+   SHA-256, persisted URLSession resume data plus HTTP Range resume, bounded retries with
+   backoff and automatic repair.
+2. **Fallback:** revision-pinned Hugging Face files (target, draft and aux Gemma) only when
+   the same signed SHA-256 matches `Resources/bundled-models.json`.
 
-Disk space is checked before download, every file is re-verified on every launch, and
-progress is visible in Dot's menu and status text. The app still refuses to launch below
+Disk space is checked before download (including the largest staging part), every file is
+re-verified on every launch, and progress is visible in Dot's menu and status text. The app still refuses to launch below
 Apple Silicon M5 Pro class, 48 GB Unified Memory or macOS 27; CI uses the macOS 15 runner
 with the Xcode 26 SDK, which is the honest SDK/build floor.
 
@@ -57,7 +57,7 @@ in `docs/QUESTIONS_FOR_EMIN.md` §8–10.
 | `python3 -B scripts/check_contracts.py` | 56/56 |
 | macOS CI `swift-test` | pass (Xcode 26.3 SDK) |
 | macOS CI `dot-voice` | build + 2 protocol tests pass |
-| macOS CI full `verify_macos.sh` | pass; hosted runtime-finalizer canary is recorded as the known hosted-toolchain limitation |
+| macOS CI full `verify_macos.sh` | independent stages pass; the hosted runtime-finalizer canary is recorded as the known hosted-toolchain limitation and hosted packaging is skipped |
 | Release workflow | pass; donor SHA verified, contracts run, DMG packaged and published |
 
 `dot-voice` cannot be built on the Pi (`instruction requires: fullfp16`), which is why it

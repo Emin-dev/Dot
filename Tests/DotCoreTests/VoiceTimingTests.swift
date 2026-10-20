@@ -555,22 +555,22 @@ final class CapturedPCMTimingTests: XCTestCase {
 
     func testReleaseAfterCompletedSilenceKeepsSatisfiedEvidence() throws {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 200, silence: 2, invitation: nil)
-        append(pcm, at: 200.0, amplitude: 0.1)
-        for index in 1...21 { append(pcm, at: 200.0 + Double(index) / 10, amplitude: 0) }
-        let released = pcm.poll(at: 202.2, finishing: true)
+        pcm.begin(at: 10, silence: 2, invitation: nil)
+        append(pcm, at: 10.0, amplitude: 0.1)
+        for index in 1...21 { append(pcm, at: 10.0 + Double(index) / 10, amplitude: 0) }
+        let released = pcm.poll(at: 12.2, finishing: true)
         XCTAssertEqual(released.decision, .silenceSatisfied)
         let evidence = try XCTUnwrap(released.evidence)
         XCTAssertEqual(evidence.outcome, .silenceSatisfied)
         XCTAssertNil(evidence.endReason)
-        XCTAssertEqual(evidence.silenceSatisfiedAt, 202.1, accuracy: 0.00001)
+        XCTAssertEqual(evidence.silenceSatisfiedAt, 12.1, accuracy: 0.00001)
     }
 
     func testReleaseWithNoMeasuredSpeechPublishesNoEvidence() {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 300, silence: 3, invitation: 6)
-        append(pcm, at: 300.0, amplitude: 0)
-        let released = pcm.poll(at: 300.2, finishing: true)
+        pcm.begin(at: 15, silence: 3, invitation: 6)
+        append(pcm, at: 15.0, amplitude: 0)
+        let released = pcm.poll(at: 15.2, finishing: true)
         XCTAssertEqual(released.decision, .forcedFinish)
         XCTAssertNil(released.evidence, "No measured utterance means nothing to transcribe")
         XCTAssertEqual(released.endReason, .forcedFinish)
@@ -578,9 +578,9 @@ final class CapturedPCMTimingTests: XCTestCase {
 
     func testReleaseCannotHideARealCaptureFailure() {
         let pcm = CapturedPCM(rate: 8_000)
-        pcm.begin(at: 400, silence: 3, invitation: nil)
-        append(pcm, at: 400.0, amplitude: .nan)
-        let released = pcm.poll(at: 400.2, finishing: true)
+        pcm.begin(at: 20, silence: 3, invitation: nil)
+        append(pcm, at: 20.0, amplitude: .nan)
+        let released = pcm.poll(at: 20.2, finishing: true)
         XCTAssertEqual(released.decision, .audioUnavailable)
         XCTAssertEqual(released.endReason, .invalidAudio)
         XCTAssertNil(released.evidence)

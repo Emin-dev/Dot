@@ -114,7 +114,8 @@ final class OfflinePreparation: ObservableObject {
                       Int64(size) == asset.bytes else { continue }
                 reusable += asset.bytes
             }
-            let requiredFree = DownloadBudget.requiredFree(total: plan.total_bytes, reusableBytes: reusable)
+            let staging = parts?.parts.map(\.bytes).max() ?? 0
+            let requiredFree = DownloadBudget.requiredFree(total: plan.total_bytes, reusableBytes: reusable) + staging
             var volume = folder
             while !FileManager.default.fileExists(atPath: volume.path) { volume = volume.deletingLastPathComponent() }
             if let free = (try? FileManager.default.attributesOfFileSystem(forPath: volume.path))?[.systemFreeSize] as? Int64,
@@ -257,6 +258,7 @@ actor ModelProvisioner {
     /// every file must still match the SHA-256 in the signed manifest.
     static let targetRevision = "10c35caafbb80f7dc6a7a432cdd11af10a6d4818"
     static let draftRevision = "015e795645c74b1a0eeef3b570031fb62e769bc5"
+    static let auxRevision = "d0976223747697cb51e056d85c532013931fe52e"
 
     static func remoteURL(for path: String) throws -> URL {
         let prefix: String
@@ -269,7 +271,7 @@ actor ModelProvisioner {
             base = "https://huggingface.co/incoai/Qwen3.8-27B-DFlash2/resolve/\(draftRevision)/"
         } else if path.hasPrefix("aux/") {
             prefix = "aux/"
-            base = "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/main/"
+            base = "https://huggingface.co/ggml-org/gemma-3-4b-it-GGUF/resolve/\(auxRevision)/"
         } else {
             throw PreparationFailure.download("Unknown model path '\(path)'.")
         }
@@ -441,6 +443,8 @@ actor ModelProvisioner {
                 } catch let http as PartHTTPFailure {
                     if http.status == 408 || http.status == 429 || http.status >= 500 {
                         if attempt >= 5 { throw PreparationFailure.download("A model part download failed after \(attempt) attempts.") }
+                        let seconds = min(30, 1 << (attempt - 1))
+                        try await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
                     } else {
                         throw PreparationFailure.download("The model part server returned HTTP \(http.status).")
                     }
@@ -476,28 +480,27 @@ actor ModelProvisioner {
 
     private func transfer(_ url: URL, to destination: URL, expected: Int64,
                           report: @escaping @Sendable (Int64) -> Void) async throws {
+        let resumeURL = destination.appendingPathExtension("resumedata")
+        let resumeData = try? Data(contentsOf: resumeURL)
         var existing = Int64((try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
-        if existing == expected { report(expected); return }
-        if existing > expected { try? FileManager.default.removeItem(at: destination); existing = 0 }
-        var request = URLRequest(url: url)
-        if existing > 0 { request.setValue("bytes=\(existing)-", forHTTPHeaderField: "Range") }
-        let reporter = ModelPartProgress(offset: existing) { written, _ in report(written) }
-        let temporary: URL, response: URLResponse
-        do {
-            (temporary, response) = try await session.download(for: request, delegate: reporter)
-        } catch let error as URLError {
-            if error.code == .cancelled { throw CancellationError() }
-            throw error
+        if resumeData == nil {
+            if existing == expected { report(expected); return }
+            if existing > expected { try? FileManager.default.removeItem(at: destination); existing = 0 }
         }
+        var request = URLRequest(url: url)
+        if resumeData == nil, existing > 0 {
+            request.setValue("bytes=\(existing)-", forHTTPHeaderField: "Range")
+        }
+        let progressOffset = resumeData == nil ? existing : 0
+        let (temporary, response) = try await downloadPartFile(request, resumeData: resumeData,
+                                                               progressOffset: progressOffset,
+                                                               resumeURL: resumeURL, report: report)
         defer { try? FileManager.default.removeItem(at: temporary) }
         try Task.checkCancellation()
-        guard let http = response as? HTTPURLResponse else {
-            throw PreparationFailure.download("The model part server returned no response.")
+        guard let http = response, (http.statusCode == 200 || http.statusCode == 206) else {
+            throw PartHTTPFailure(status: response?.statusCode ?? 0)
         }
-        let append = existing > 0 && http.statusCode == 206
-        if !(http.statusCode == 200 || http.statusCode == 206) {
-            throw PartHTTPFailure(status: http.statusCode)
-        }
+        let append = resumeData == nil && existing > 0 && http.statusCode == 206
         if append {
             let handle = try FileHandle(forWritingTo: destination)
             let input = try FileHandle(forReadingFrom: temporary)
@@ -515,12 +518,96 @@ actor ModelProvisioner {
             try? FileManager.default.removeItem(at: destination)
             try FileManager.default.moveItem(at: temporary, to: destination)
         }
+        try? FileManager.default.removeItem(at: resumeURL)
         let size = Int64((try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         guard size == expected else {
             try? FileManager.default.removeItem(at: destination)
             throw PreparationFailure.download("A model part was incomplete.")
         }
         report(expected)
+    }
+
+    private func downloadPartFile(_ request: URLRequest, resumeData: Data?, progressOffset: Int64,
+                                  resumeURL: URL,
+                                  report: @escaping @Sendable (Int64) -> Void) async throws -> (URL, HTTPURLResponse?) {
+        try await withCheckedThrowingContinuation { continuation in
+            let receiver = PartDownloadReceiver(resumeURL: resumeURL, progressOffset: progressOffset, report: report)
+            let partSession = URLSession(configuration: session.configuration, delegate: receiver,
+                                         delegateQueue: nil)
+            receiver.session = partSession
+            receiver.completion = { result in
+                partSession.finishTasksAndInvalidate()
+                continuation.resume(with: result)
+            }
+            let task = resumeData.map { partSession.downloadTask(withResumeData: $0) }
+                ?? partSession.downloadTask(with: request)
+            receiver.task = task
+            task.resume()
+        }
+    }
+}
+
+/// Persists a downloaded part and any URLSession resume data, so a dropped
+/// connection continues from the bytes already received instead of restarting.
+private final class PartDownloadReceiver: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let resumeURL: URL
+    private let progressOffset: Int64
+    private let report: @Sendable (Int64) -> Void
+    private let lock = NSLock()
+    private var location: URL?
+    private var response: HTTPURLResponse?
+    private var completed = false
+    var session: URLSession?
+    var task: URLSessionDownloadTask?
+    var completion: ((Result<(URL, HTTPURLResponse?), Error>) -> Void)?
+
+    init(resumeURL: URL, progressOffset: Int64, report: @escaping @Sendable (Int64) -> Void) {
+        self.resumeURL = resumeURL
+        self.progressOffset = progressOffset
+        self.report = report
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
+                    totalBytesExpectedToWrite: Int64) {
+        report(progressOffset + totalBytesWritten)
+    }
+
+    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
+                    didFinishDownloadingTo location: URL) {
+        let held = location.appendingPathExtension("dot-part-\(UUID().uuidString)")
+        do {
+            try FileManager.default.moveItem(at: location, to: held)
+            lock.lock(); self.location = held; lock.unlock()
+        } catch {
+            lock.lock(); self.location = nil; lock.unlock()
+        }
+        lock.lock(); response = downloadTask.response as? HTTPURLResponse; lock.unlock()
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.lock()
+        guard !completed else { lock.unlock(); return }
+        completed = true
+        let location = self.location
+        let response = self.response
+        lock.unlock()
+        if let error {
+            let ns = error as NSError
+            if let data = ns.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
+                try? data.write(to: resumeURL, options: .atomic)
+            } else {
+                try? FileManager.default.removeItem(at: resumeURL)
+            }
+            if let location { try? FileManager.default.removeItem(at: location) }
+            completion?(.failure(error))
+            return
+        }
+        guard let location else {
+            completion?(.failure(URLError(.badServerResponse)))
+            return
+        }
+        completion?(.success((location, response)))
     }
 }
 

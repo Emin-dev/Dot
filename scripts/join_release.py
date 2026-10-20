@@ -76,12 +76,17 @@ def join(manifest_path: Path, output: Path, fetch: bool) -> None:
     resolved: list[Path] = []
     for part in parts:
         path = base / part["name"]
-        if not path.is_file() and fetch and part.get("url"):
+        expected = int(part["bytes"])
+        usable = path.is_file() and path.stat().st_size == expected and sha256_file(path) == part["sha256"]
+        if not usable and fetch and part.get("url"):
             print(f"downloading {part['name']}")
-            download(part["url"], path, int(part["bytes"]))
-        if not path.is_file() or path.stat().st_size != int(part["bytes"]):
-            raise SystemExit(f"missing or wrong-size part: {part['name']}")
-        if sha256_file(path) != part["sha256"]:
+            if path.exists():
+                path.unlink()
+            download(part["url"], path, expected)
+            usable = path.is_file() and path.stat().st_size == expected and sha256_file(path) == part["sha256"]
+        if not usable:
+            if not path.is_file() or path.stat().st_size != expected:
+                raise SystemExit(f"missing or wrong-size part: {part['name']}")
             raise SystemExit(f"SHA-256 mismatch: {part['name']}")
         resolved.append(path)
     staging = output.with_suffix(output.suffix + ".join")
