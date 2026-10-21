@@ -57,16 +57,16 @@ jobs:
           url="https://github.com/Emin-dev/Dot/releases/download/$MODEL_PARTS_TAG/model-parts.json"
           if curl -fsSL --retry 3 -o .tmp/model-parts.json "$url"; then
             python3 -B - "$MODEL_PARTS_TAG" <<'PY'
-import json, sys
-tag = sys.argv[1]
-data = json.load(open('.tmp/model-parts.json'))
-assert data.get('schema_version') == 1, 'schema_version'
-assert data.get('status') == 'ready', 'status is not ready'
-assert data.get('release_tag') == tag, 'release_tag mismatch'
-assert data.get('parts'), 'no parts'
-assert str(data.get('base_url', '')).startswith(
-    f'https://github.com/Emin-dev/Dot/releases/download/{tag}/'), 'base_url'
-PY
+          import json, sys
+          tag = sys.argv[1]
+          data = json.load(open('.tmp/model-parts.json'))
+          assert data.get('schema_version') == 1, 'schema_version'
+          assert data.get('status') == 'ready', 'status is not ready'
+          assert data.get('release_tag') == tag, 'release_tag mismatch'
+          assert data.get('parts'), 'no parts'
+          assert str(data.get('base_url', '')).startswith(
+              f'https://github.com/Emin-dev/Dot/releases/download/{tag}/'), 'base_url'
+          PY
             cp .tmp/model-parts.json Resources/model-parts.json
             echo "bundling published parts plan from $MODEL_PARTS_TAG"
           else
