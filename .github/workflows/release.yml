@@ -379,6 +379,7 @@ jobs:
       - name: Publish v1.1.1 as Latest only when every acceptance job is green
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
