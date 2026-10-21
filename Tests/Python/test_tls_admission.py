@@ -485,10 +485,10 @@ class TLSAdmissionTests(unittest.TestCase):
                     operations[-1]['retries'] += 1; retried.set()
                 raise
         def flood():
-            # 16 MiB is deliberately larger than any Darwin/autotuned receive
-            # buffer: 2 MiB could be absorbed whole, so no production send ever
-            # exhausted its budget and the test flaked on a fast runner.
-            try: upstream.sendall(b'fixture response' * 1048576)
+            # 32 MiB is deliberately larger than any Darwin/autotuned receive
+            # buffer: 2 MiB (and sometimes 16 MiB) could be absorbed whole, so
+            # no production send ever exhausted its budget on a fast runner.
+            try: upstream.sendall(b'fixture response' * 2097152)
             except OSError: pass
         sender = threading.Thread(target=flood)
         # A small SO_RCVBUF is a request, not a contract: Darwin clamps it up
@@ -498,7 +498,7 @@ class TLSAdmissionTests(unittest.TestCase):
         # at most one chunk per io_poll_interval, so bound the wait by the
         # capacity the kernel reports instead of assuming Linux's instant stall.
         chunks = client.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF) // 32768 + 3
-        saturation_budget = chunks * (self.relay.io_timeout + self.relay.io_poll_interval)
+        saturation_budget = max(15.0, chunks * (self.relay.io_timeout + self.relay.io_poll_interval))
         with patch.object(ssl.SSLSocket, 'send', observed_send), \
              patch.object(self.relay, '_sendall', observed_sendall):
             sender.start()
