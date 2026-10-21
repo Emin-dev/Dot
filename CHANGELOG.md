@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-21 — Phase 6 multi-model review fixes
+
+Three independent read-only reviews (deepseek-v4.1-flash, qwen3.8-flash,
+qwen3.8-max) covered the whole product source. Verified fixes:
+
+- Proactive fallback: the tip is spoken after resetting the turn to idle instead
+  of being silently dropped while `.thinking`, which had vetoed proactive work.
+- Safety: interpreter executors (`python3`, `osascript`, `perl`, `ruby`, `node`,
+  `env`) now require the approval/safety path; `env python3 -c` cannot bypass it.
+- Direct replies: stale detached file-read/forget/memory-list results cannot
+  overwrite a newer turn, while the show-history confirmation uses the new turn
+  after the panel advances the gate.
+- Safety follow-up: leading assignments and launchers (`FOO=1 python3`,
+  `nohup`, `command`, `nice`, `xcrun`, `env -u`) cannot hide an interpreter;
+  `echo env python3` stays harmless.
+- Installer: the existing payload is cloned before the voice/aux fetch, so an
+  upgrade with a runtime-only previous app keeps the fetched files.
+- Publishing: the GitHub token is passed through a `curl --config -` pipe, never
+  argv; model parts are re-hashed after writing; the double-click joiner refuses
+  multiple part manifests.
+- Residuals recorded: stale remote part assets on a deliberate renamed re-split
+  (operator cleanup; client is now safe) and the existing owner-run `security`
+  argv token step.
+
+Details and the model-by-model table are in
+[docs/REVIEW_FINDINGS.md](docs/REVIEW_FINDINGS.md).
+
 ## 2026-10-21 — Phase 5 independent review fixes
 
 Verified by independent reviewers and fixed (details in

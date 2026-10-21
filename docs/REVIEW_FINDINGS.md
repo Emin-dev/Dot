@@ -204,3 +204,72 @@ Notarisation and a real DMG install remain owner gates.
 | `retry()` did not cancel in-flight work | fixed: cancels the generation and restarts after exit |
 | Perl 4 MB cap did not apply to pipes | fixed: bounded 64 KiB reads |
 | URL decode loop stopped after 3 passes | fixed: 8 passes |
+
+## Phase 6 multi-model review (2026-10-21)
+
+Scope was the whole product source, not a diff: `src/`, `crates/`, `scripts/`,
+`Tests/`, `packaging/` and the workflows. Three fresh read-only sessions ran on
+three different models, one or two at a time, with a static-review budget; the
+main agent verified every claim and ran the real gates serially. Raw transcripts
+are in `.tmp/phase6/v3-*.log` (not committed).
+
+| Reviewer | Exact model id | Outcome |
+| --- | --- | --- |
+| Correctness / Swift | `opencode-go/deepseek-v4.1-flash` | 3 findings, all verified and fixed |
+| Scripts / release | `opencode-go/qwen3.8-flash` | 5 findings: 3 verified and fixed, 1 fixed on the client side with the server-side part recorded as residual, 1 accepted residual |
+| Rust / boundaries | `opencode-go/qwen3.8-max` | **partial**: the 20-minute bound expired while it was still reading; no final finding block, so nothing was counted. Its inspected areas were re-checked by the main agent. |
+| GLM / Jev | not offered | **not used**: `opencode models` lists only the four allowed ids |
+
+### Verified findings and fixes
+
+| # | Model | Finding (file:line at review time) | Evidence | Outcome |
+| --- | --- | --- | --- | --- |
+| P6-1 | deepseek | `src/ChatView.swift:1696` proactive fallback called `speakDirect(tip)` while `phase` was still `.thinking`; the guard dropped the tip and left proactive work vetoed | `speakDirect` guard at `src/ChatView.swift:156-157`; fallback path had no phase reset; `EngineManager.admitInference` can throw `.busy` for a second background request | fixed: `self.phase = .idle` before `speakDirect(tip)`; source contract plus the existing proactive suites |
+| P6-2 | deepseek | `src/InteractionCore.swift:5441` destructive-command guard did not treat `python3`, `osascript`, `perl`, `ruby` or `node` as wrappers, while `FileOperationPolicy.wrappers` did, so an interpreter could delete files without the R16 approver | `isPotentiallyDestructive` token sets; `FileOperationPolicy.wrappers` already listed the interpreters | fixed: interpreters and `env` are wrappers; `env`/`sudo`/`doas` forward command position; XCTest covers `python3 -c`, `osascript -e`, `env python3 -c` and keeps `echo python3` harmless |
+| P6-3 | deepseek | `src/ChatView.swift:2294` detached file-read/forget/memory-list tasks could call `respondDirectly` after a newer turn and overwrite its answer/phase/history | `respondDirectly` had no turn gate; the three tasks were not stored in `work` | fixed: `respondDirectly` requires `gate.accepts(id)`, the three tasks check it before work, and the dropped-`.dotsoul` path now uses `cancelTurn()` |
+| P6-4 | qwen3.8-flash | `scripts/install_local.sh:104-108` cloned `Offline`/`OfflineModels` after the voice/aux fetch blocks, deleting freshly fetched files on an upgrade whose old app had the runtime but not the voice/aux payload | clone loop order; the fetch branches write into the same staging paths; `build.sh` does not stage `Offline` | fixed: clone the existing payload first, then fetch only what is missing; header no longer claims the script never downloads |
+| P6-5 | qwen3.8-flash | `scripts/publish_public_release.sh:36` put the GitHub token in `curl -H` argv, visible to `ps` for the length of a 1 GB upload | both create/reuse and upload calls used `-H "Authorization: Bearer $TOKEN"` | fixed: all calls use a `curl --config -` header pipe; contract asserts no token header in argv |
+| P6-6 | qwen3.8-flash | `scripts/model_parts.py:107-123` recorded each part's SHA-256 from the input stream but did not re-read the written part, unlike `split_release.py` | `split_release.py:74-76` versus `model_parts.py` | fixed: each part is re-hashed after writing and removed on mismatch; in-process test corrupts the second hash call |
+| P6-7 | qwen3.8-flash | `packaging/join-dot-dmg.command:10` picked `ls *.parts.json | head -n 1`, so two released part sets could join the wrong DMG | `head -n 1` selection | fixed on the client: the command refuses multiple manifests and names them; test runs the real command |
+| P6-8 | qwen3.8-flash | `scripts/package_all_in_one.sh:27` re-uploading a renamed part set leaves old part assets beside the new ones on the release | `gh release upload` has no remote delete; local force-clean is local only | **accepted residual / partial**: deleting published assets automatically is destructive and against the immutable-asset policy. The client now refuses ambiguity; the operator must remove stale assets when deliberately re-splitting a renamed DMG. Recorded in `CHANGELOG.md`. |
+| P6-9 | qwen3.8-flash | `scripts/store_github_token.sh:21` still passes the token in `-w "$TOKEN"` argv | script line 21 | **accepted residual** (same as Phase 5): the macOS `security` CLI has no non-interactive stdin write; the script is owner-run and the token is never logged or stored in the repo. |
+
+### Disagreements kept visible
+
+- deepseek rated the interpreter bypass **major**; qwen3.8-flash did not report it.
+  The code trace above is independent of both, so it was fixed.
+- qwen3.8-flash's install finding described a "fresh install"; the script actually
+  refuses to run without a previous `Offline` payload. The verified reachable case
+  is an upgrade whose previous app has the runtime but not the voice/aux files.
+  The fix covers that case; the inaccurate part of the wording is not copied into
+  the docs.
+- qwen3.8-max produced no final findings before its bound expired, so its silence
+  is not evidence that the Rust/voice/safety areas are clean.
+
+### Regression evidence added in this phase
+
+- `Tests/DotCoreTests/InteractionCoreTests.swift`:
+  `testDestructiveCommandsCannotBypassApprovalByPathWrapperPipeOrRedirect` now
+  includes interpreter wrappers and negative `echo python3`/`echo osascript` cases.
+- `Tests/Python/test_review_pipeline_contract.py`:
+  `Phase6ReviewContractTests` pins the proactive phase reset, stale-reply gate,
+  interpreter wrappers, installer order, token pipe, model-part re-hash and
+  joiner ambiguity rule. A mutation replay confirmed each new assertion fails on
+  the old code shape.
+- `Tests/Python/test_release_parts.py`:
+  `test_model_parts_rehashes_each_written_part` and
+  `test_joiner_refuses_two_manifest_sets_without_joining` exercise the real code,
+  not just text.
+
+### Targeted re-review of the Phase 6 fixes (2026-10-21)
+
+A second static reviewer pass found two regressions in the first fix set; both
+were verified and fixed before the Phase 6 commit:
+
+| Finding | Evidence | Fix |
+| --- | --- | --- |
+| The new `respondDirectly` gate dropped the "show history" confirmation: `onShowHistory?()` opens the panel, which calls `cancelForInteraction()` → `cancelTurn()` → `gate.advance()`, so the old turn id is stale | `src/App.swift:604-606`, `src/ChatView.swift:3455-3458`, guard at `src/ChatView.swift:3354` | the confirmation now uses `gate.current` after the panel opens; XCTest `testShowHistoryConfirmationSurvivesThePanelGateAdvance` drives the real path |
+| The interpreter guard still missed leading assignments and launchers (`FOO=1 python3 -c …`, `nohup python3 -c …`, `command …`, `nice -n 5 …`, `xcrun …`), and the first `env`/`sudo`/`doas` rule falsely flagged `echo env python3` | tokenizer/position trace; the old tests covered only unprefixed forms | `isCommandPosition` now walks back to the segment start, skips `NAME=value`, follows launcher chains (including `env -u`/`-C`/`-S` args and `nice`/`time`/`xcrun` option words), and recurses through launchers so an argument `env` does not make the next word executable; XCTest covers both the bypass and the false positive |
+
+The installer clone order, model-part re-hash, joiner ambiguity guard and token
+pipe were re-checked and needed no further change.
