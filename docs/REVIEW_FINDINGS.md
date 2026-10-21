@@ -1,11 +1,12 @@
 # Phase 5 independent review — findings and verified fixes
 
-**Status 2026-10-21 — CI green.** Final source commit `2f0f79b`; run
-[`39541375214`](https://github.com/Emin-dev/Dot/actions/runs/39541375214) passed
-all four jobs (rust-gates, swift-test, macos, dot-voice). The first attempt at
-`9bff09c` exposed one stale test expectation (`[REDACTED]` vs
-`[REDACTED_ENV]`) and one flaky TLS-backpressure test; the expectation was
-fixed, the TLS test passed on the next full run.
+**Status 2026-10-21 — CI green.** Final commit `d5cc583`; run
+[`39552385832`](https://github.com/Emin-dev/Dot/actions/runs/39552385832) passed
+all four jobs (rust-gates, swift-test, macos, dot-voice): SwiftPM **616 / 0**,
+full XCTest **944 / 0 with 1 skipped** (opt-in live model test), Python **636**
+on the Pi and **636 / 4 skipped** on macOS. The earlier `9bff09c` attempt had a
+stale expectation (`[REDACTED]` vs `[REDACTED_ENV]`) and one flaky
+TLS-backpressure test; both were resolved before this run.
 
 Scope: the diff from merge base `0aeb7fd`
 (`claude/app-dot-behavior-faax19`) to main, plus the live checklists. Reviews ran
@@ -186,7 +187,7 @@ CARGO_BUILD_JOBS=2 cargo clippy ... --all-targets -- -D warnings  -> pass
 `TMPDIR=$PWD/.tmp/pytmp`; without it the runtime-reconstruction disk-reserve
 tests fail with `insufficient free space`. That is an environment limit, not a
 code failure. `swift-test`, the full `macos` XCTest/Python lane and `dot-voice` passed in
-the green run above (all SwiftPM tests, 636 Python tests, 4 skipped).
+the green run above (616 SwiftPM tests, 944 full XCTest, 636 Python tests, 4 skipped).
 Notarisation and a real DMG install remain owner gates.
 
 ## Round 3 (final targeted re-review)

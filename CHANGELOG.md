@@ -25,8 +25,9 @@ Verified by independent reviewers and fixed (details in
   download redirects.
 
 Pi gates: 636 Python tests OK (28 skipped), 18 Rust tests, clippy
-`-D warnings`, 76 contracts. macOS CI run `39541375214` at `2f0f79b` passed all
-four jobs (rust-gates, swift-test, macos, dot-voice).
+`-D warnings`, 76 contracts. macOS CI run `39552385832` at `d5cc583` passed all
+four jobs (rust-gates, swift-test, macos, dot-voice): SwiftPM 616, full XCTest
+944 (1 skipped), Python 636.
 
 ## Earlier
 
