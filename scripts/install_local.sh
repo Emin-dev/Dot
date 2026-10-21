@@ -28,7 +28,7 @@ cd "$(dirname "$0")/.."
 APP="${DOT_INSTALL_PATH:-$HOME/Applications/Dot.app}"
 BACKUP="$APP.backup-latest"
 STAGE="/private/tmp/dot-install-$$"
-SIGN_IDENTITY="Apple Development: Emin Ismayilov (7M2G5ULAUF)"
+SIGN_IDENTITY="${SIGN_IDENTITY:-Apple Development: Emin Ismayilov (7M2G5ULAUF)}"
 
 fail() { echo "install_local: $*" >&2; exit 1; }
 
