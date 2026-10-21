@@ -25,8 +25,10 @@ env:
 jobs:
   launch:
     # Hosted arm64 macOS. This machine is below the product minimum on purpose:
-    # the lane proves the refusal, not a successful conversation.
-    runs-on: macos-15
+    # the lane proves the refusal, not a successful conversation. macOS 26 is
+    # used because the current app deployment floor is 26.4; a macOS 15 runner
+    # cannot even load the binary's Swift runtime.
+    runs-on: macos-26
     timeout-minutes: 45
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer

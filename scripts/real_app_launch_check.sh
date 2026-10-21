@@ -118,6 +118,12 @@ note "== state files =="
 cat "$STATE" | tee -a "$TRANSCRIPT"
 note "== end state files =="
 
+if [ "$REFUSED" -ne 1 ] && grep -qE 'Library not loaded|built for macOS .* newer than running OS' "$TRANSCRIPT" "$CONSOLE" 2>/dev/null; then
+    echo "UNSUPPORTED: this hosted runner cannot execute the real bundle." | tee -a "$TRANSCRIPT" >&2
+    echo "UNSUPPORTED: the app deployment floor is newer than the runner OS; this lane cannot observe the hardware gate here." | tee -a "$TRANSCRIPT" >&2
+    grep -E 'Library not loaded|built for macOS .* newer than running OS|Reason: tried' "$TRANSCRIPT" "$CONSOLE" 2>/dev/null | tee -a "$TRANSCRIPT" >&2 || true
+    exit 78
+fi
 [ "$REFUSED" -eq 1 ] || fail "the exact below-minimum refusal was not observed within 60s"
 [ -f "$LOG" ] || fail "the app did not create its launch log at $LOG"
 grep -qF "Hardware Does Not Meet Dot's Minimum" "$LOG" \
