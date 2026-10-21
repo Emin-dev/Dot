@@ -67,8 +67,8 @@ jobs:
       - name: Static contracts and release checks
         run: |
           python3 -B scripts/check_contracts.py
-          python3 -B -m unittest Tests.Python.test_release_parts.py -v
-          python3 -B -m unittest Tests.Python.test_review_pipeline_contract.py -v
+          python3 -B -m unittest Tests/Python/test_release_parts.py -v
+          python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
           bash -n scripts/package_default_release.sh scripts/real_app_launch_check.sh
 
       - name: Package the real default app (same bundle as the public DMG)
@@ -89,7 +89,8 @@ jobs:
           echo "== launch log =="
           cat .tmp/real-app-check/dot_chat_log.txt 2>/dev/null
           echo "== console =="
-          sed -n '1,200p' .tmp/real-app-check/console.log 2>/dev/null
+          sed -n '1,200p' .tmp/real-app-check/console.log 2>/dev/null || true
+          exit 0
 
       - name: Upload the launch evidence
         if: always()
