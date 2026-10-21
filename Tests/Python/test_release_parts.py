@@ -23,6 +23,13 @@ def load_joiner():
     return module
 
 
+def load_model_parts():
+    spec = importlib.util.spec_from_file_location("dot_model_parts", SCRIPTS / "model_parts.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def run(*args):
     return subprocess.run([sys.executable, "-B", *map(str, args)],
                           cwd=ROOT, text=True, capture_output=True)
@@ -287,6 +294,47 @@ class ReleasePartsTests(unittest.TestCase):
         result = run(SCRIPTS / "join_release.py", manifest_path)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unsafe file name", result.stderr)
+
+
+    def test_joiner_refuses_two_manifest_sets_without_joining(self):
+        folder = self.work / "joiner"
+        folder.mkdir()
+        shutil.copy(ROOT / "packaging/join-dot-dmg.command", folder / "join-dot-dmg.command")
+        for name in ("a.parts.json", "b.parts.json"):
+            (folder / name).write_text("{}")
+        result = subprocess.run(["bash", str(folder / "join-dot-dmg.command")],
+                                cwd=folder, text=True, capture_output=True,
+                                stdin=subprocess.DEVNULL)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("Multiple *.parts.json files are present", result.stderr)
+        self.assertEqual(sorted(path.name for path in folder.iterdir()),
+                         ["a.parts.json", "b.parts.json", "join-dot-dmg.command"])
+
+    def test_model_parts_rehashes_each_written_part(self):
+        manifest_path, data = self._payload()
+        module = load_model_parts()
+        real_sha256 = module.sha256_file
+        calls = {"count": 0}
+
+        def corrupt_destination(path):
+            calls["count"] += 1
+            # First call verifies the source; the second is the post-write check.
+            return "0" * 64 if calls["count"] == 2 else real_sha256(path)
+
+        module.sha256_file = corrupt_destination
+        argv = ["model_parts.py", "--models", str(self.work / "models"),
+                "--manifest", str(manifest_path), "--output", str(self.work / "out"),
+                "--part-size", "8"]
+        old_argv = sys.argv
+        try:
+            sys.argv = argv
+            with self.assertRaises(SystemExit) as failed:
+                module.main()
+        finally:
+            sys.argv = old_argv
+            module.sha256_file = real_sha256
+        self.assertIn("did not verify after writing", str(failed.exception))
+        self.assertFalse((self.work / "out" / "llm-target-model.bin.part000").exists())
 
     def test_model_parts_rejects_hash_mismatch(self):
         manifest_path, _ = self._payload()

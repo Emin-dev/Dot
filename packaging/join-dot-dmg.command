@@ -7,13 +7,21 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-MANIFEST="$(ls -1 *.parts.json 2>/dev/null | head -n 1 || true)"
-if [ -z "$MANIFEST" ]; then
+MANIFESTS=(*.parts.json)
+if [ ! -e "${MANIFESTS[0]}" ]; then
     echo "Missing a *.parts.json next to this script."
     echo "Download the .parts.json, join_release.py and all part files from the release."
     read -r -p "Press Return to close." _
     exit 1
 fi
+if [ "${#MANIFESTS[@]}" -gt 1 ]; then
+    # Picking one silently could join an older, still-published part set.
+    echo "Multiple *.parts.json files are present; remove all but one before joining:" >&2
+    printf '  %s\n' "${MANIFESTS[@]}" >&2
+    read -r -p "Press Return to close." _
+    exit 1
+fi
+MANIFEST="${MANIFESTS[0]}"
 
 PYTHON="$(command -v python3 || true)"
 if [ -z "$PYTHON" ] && [ -x /usr/bin/python3 ]; then PYTHON=/usr/bin/python3; fi

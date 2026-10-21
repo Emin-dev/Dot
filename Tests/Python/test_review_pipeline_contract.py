@@ -118,5 +118,62 @@ class ReviewPipelineContractTests(unittest.TestCase):
         self.assertIn('cancellation.cancel()', source)
 
 
+
+class Phase6ReviewContractTests(unittest.TestCase):
+    """Source guardrails for the Phase 6 multi-model review fixes."""
+
+    def test_proactive_fallback_returns_to_idle_before_speaking(self):
+        source = read('src/ChatView.swift')
+        fallback = source.split('DiagnosticChatLogger.record(role: "dot (proactive fallback)"', 1)[1]
+        fallback = fallback.split('} else {', 1)[0]
+        self.assertIn('self.phase = .idle', fallback)
+        self.assertLess(fallback.index('self.phase = .idle'), fallback.index('self.speakDirect(tip)'))
+
+    def test_direct_replies_cannot_overwrite_a_newer_turn(self):
+        source = read('src/ChatView.swift')
+        method = source.split('private func respondDirectly(', 1)[1]
+        method = method.split('\n    }', 1)[0]
+        self.assertIn('guard gate.accepts(id) else { return }', method)
+        for marker in ('let expanded = (path as NSString).expandingTildeInPath',
+                       'var removed = 0', 'var lines: [String] = []'):
+            task = source.split(marker, 1)[0].rsplit('Task { [weak self] in', 1)[1]
+            self.assertIn('self.gate.accepts(id)', task)
+
+    def test_interpreters_are_treated_as_command_wrappers(self):
+        source = read('src/InteractionCore.swift')
+        wrappers = source.split('private static let wrapperExecutables', 1)[1].split(']', 1)[0]
+        for name in ('python3', 'osascript', 'perl', 'ruby', 'node', 'env'):
+            self.assertIn(f'"{name}"', wrappers)
+        self.assertIn('private static let launcherExecutables', source)
+        self.assertIn('launcherExecutables.contains(first)', source)
+        self.assertIn('isAssignment(tokens[cursor])', source)
+
+    def test_installer_clones_the_payload_before_fetching_voice_or_aux(self):
+        script = read('scripts/install_local.sh')
+        self.assertNotIn('It never downloads anything', script)
+        clone = script.index('for item in Offline OfflineModels; do')
+        voice = script.index('VOICE_DIR="$STAGE/Dot.app/Contents/Resources/Offline/Voice/model"')
+        aux = script.index('AUX_DIR="$STAGE/Dot.app/Contents/Resources/OfflineModels/aux"')
+        self.assertLess(clone, voice)
+        self.assertLess(clone, aux)
+
+    def test_publish_script_does_not_put_the_token_in_argv(self):
+        script = read('scripts/publish_public_release.sh')
+        self.assertNotIn('-H "Authorization: Bearer $TOKEN"', script)
+        self.assertIn('curl -sS --config -', script)
+        self.assertIn('header = "Authorization: Bearer %s"', script)
+
+    def test_model_part_split_verifies_each_written_part(self):
+        script = read('scripts/model_parts.py')
+        self.assertIn('if sha256_file(destination) != part_digest.hexdigest():', script)
+        self.assertIn('did not verify after writing', script)
+
+    def test_joiner_refuses_ambiguous_manifest_sets(self):
+        script = read('packaging/join-dot-dmg.command')
+        self.assertIn('MANIFESTS=(*.parts.json)', script)
+        self.assertIn('Multiple *.parts.json files are present', script)
+        self.assertNotIn('| head -n 1', script)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -32,15 +32,18 @@ body=$(cat <<JSON
  "draft":false,"prerelease":false}
 JSON
 )
-release=$(curl -sS -X POST \
-  -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-  -H "Content-Type: application/json" \
-  -d "$body" https://api.github.com/repos/Emin-dev/Dot/releases)
+# Pass the token through a config pipe, never argv: a 1 GB asset upload keeps
+# the curl process visible in `ps` for minutes.
+release=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | \
+  curl -sS --config - -X POST \
+    -H "Accept: application/vnd.github+json" -H "Content-Type: application/json" \
+    -d "$body" https://api.github.com/repos/Emin-dev/Dot/releases)
 id=$(/usr/bin/python3 -c 'import json,sys;print(json.load(sys.stdin).get("id",""))' <<<"$release" 2>/dev/null)
 if [ -z "$id" ]; then
   # Reuse a release created by an earlier attempt (idempotent asset upload).
-  release=$(curl -fsS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-    "https://api.github.com/repos/Emin-dev/Dot/releases/tags/$TAG")
+  release=$(printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | \
+    curl -fsS --config - -H "Accept: application/vnd.github+json" \
+      "https://api.github.com/repos/Emin-dev/Dot/releases/tags/$TAG")
   id=$(/usr/bin/python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])' <<<"$release")
 fi
 echo "release $TAG id=$id"
@@ -51,9 +54,9 @@ for pair in "$DMG:Dot.dmg:application/x-apple-diskimage" "$DMGSUM:Dot.dmg.sha256
   echo "uploading $file as $name"
   # --upload-file streams; --data-binary buffers the whole asset in curl and
   # fails with "out of memory" for the 1 GB DMG.
-  curl -fsS -X POST \
-    -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-    -H "Content-Type: $type" --upload-file "$file" \
-    "https://uploads.github.com/repos/Emin-dev/Dot/releases/$id/assets?name=$name" >/dev/null
+  printf 'header = "Authorization: Bearer %s"\n' "$TOKEN" | \
+    curl -fsS --config - -X POST \
+      -H "Accept: application/vnd.github+json" -H "Content-Type: $type" --upload-file "$file" \
+      "https://uploads.github.com/repos/Emin-dev/Dot/releases/$id/assets?name=$name" >/dev/null
 done
 echo "PASS: https://github.com/Emin-dev/Dot/releases/tag/$TAG"

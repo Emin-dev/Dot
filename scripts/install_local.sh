@@ -7,7 +7,9 @@
 # sign with the stable identity (so macOS keeps the microphone/screen grants),
 # swap the app in, relaunch and verify.
 #
-# It never downloads anything and never touches the payload's contents.
+# It copies the existing payload when present, fetches the pinned voice/aux files
+# when it is absent, and never changes the payload's contents. DOT_SKIP_* disables
+# the network.
 #
 # Usage:
 #   bash scripts/install_local.sh
@@ -63,6 +65,13 @@ echo "==> assembling the complete bundle in $STAGE"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 # Clone (APFS copy-on-write) so the 20 GB payload is not duplicated on disk.
 cp -c -R build/Dot.app "$STAGE/Dot.app" 2>/dev/null || cp -R build/Dot.app "$STAGE/Dot.app"
+# Clone the existing payload before the fetch blocks below: a later clone would
+# otherwise delete the freshly fetched voice/aux files and install without them.
+for item in Offline OfflineModels; do
+  rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
+  cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
+    || cp -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item"
+done
 # The voice payload (Kokoro model + voices, ~330 MB) lives outside git. In-place
 # upgrades copy it from the app being replaced; a fresh install fetches it from the
 # pinned Hugging Face repo. Both paths verify size, and DOT_SKIP_VOICE_FETCH=1
@@ -101,11 +110,6 @@ if [ "${DOT_SKIP_AUX_FETCH:-0}" != "1" ] && [ ! -f "$AUX_DIR/gemma-3-4b-it-Q4_K_
     fi
 fi
 
-for item in Offline OfflineModels; do
-  rm -rf "$STAGE/Dot.app/Contents/Resources/$item"
-  cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
-    || cp -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item"
-done
 
 # The runtime manifest pins every Offline file. Extra Kokoro voices (R4: all four
 # stay available) must be registered in it or the whole payload verification fails.

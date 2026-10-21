@@ -114,6 +114,9 @@ def main() -> int:
                         out.write(block)
                         part_digest.update(block)
                         written += len(block)
+                if sha256_file(destination) != part_digest.hexdigest():
+                    destination.unlink(missing_ok=True)
+                    raise SystemExit(f"part {name} did not verify after writing")
                 parts.append({
                     "asset": name,
                     "file": relative,
