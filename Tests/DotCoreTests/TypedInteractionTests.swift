@@ -423,6 +423,19 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertFalse(ChatModel.isPageReadRequest("what is on the screen"))
     }
 
+    @MainActor func testShowHistoryConfirmationSurvivesThePanelGateAdvance() async throws {
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.onShowHistory = { f.model.cancelForInteraction() }
+        XCTAssertTrue(f.model.submitTyped("Hello"))
+        try await eventually { f.model.answer == "A local reply." && f.model.phase == .idle }
+        f.enqueued.removeAll()
+        XCTAssertTrue(f.model.submitTyped("show history"))
+        try await eventually { f.model.answer == "Showing what I said in the local history." }
+        XCTAssertTrue(f.enqueued.contains("Showing what I said in the local history."),
+                      "Opening the panel advances the turn gate; the confirmation must use the new turn")
+        XCTAssertEqual(f.transport.requestCount, 1, "The history command must not reach the engine")
+    }
+
     @MainActor func testSpotlightFallbackStripsSpokenFileFiller() {
         XCTAssertEqual(ChatModel.spotlightNameQuery(from: "my notes file"), "notes")
         XCTAssertEqual(ChatModel.spotlightNameQuery(from: "report.txt"), "report.txt")

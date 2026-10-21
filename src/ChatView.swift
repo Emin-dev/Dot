@@ -1693,6 +1693,10 @@ final class ChatModel: ObservableObject {
                     if self.history.count > 12 { self.history.removeFirst(self.history.count - 12) }
                     self.generating = false
                     self.finishProactiveTurn(id: id)
+                    // speakDirect only speaks while idle; the turn was still
+                    // marked .thinking after the background call failed, which
+                    // silently dropped the tip and left proactive work vetoed.
+                    self.phase = .idle
                     self.speakDirect(tip)
                 } else {
                     self.textHistory.recordAssistant(turn: id, text: self.answer, event: .failed(failureStage))
@@ -2187,7 +2191,7 @@ final class ChatModel: ObservableObject {
         ]
         if ext == "dotsoul" {
             let (_, msg) = DotSoulManager.shared.importSoul(from: url)
-            respondDirectly(msg, id: UUID())
+            respondDirectly(msg, id: cancelTurn())
             return
         }
         if textExtensions.contains(ext) {
@@ -2264,7 +2268,7 @@ final class ChatModel: ObservableObject {
         // protected locations.
         if pendingApproval == nil, let path = Self.fileReadRequest(from: copyPhrase) {
             Task { [weak self] in
-                guard let self else { return }
+                guard let self, self.gate.accepts(id) else { return }
                 let expanded = (path as NSString).expandingTildeInPath
                 var isDirectory: ObjCBool = false
                 guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
@@ -2322,7 +2326,7 @@ final class ChatModel: ObservableObject {
                 return
             }
             Task { [weak self] in
-                guard let self else { return }
+                guard let self, self.gate.accepts(id) else { return }
                 var removed = 0
                 if let memory = self.memory,
                    let matches = try? await memory.recall(query: subject, limit: 5, now: Date()) {
@@ -2408,7 +2412,7 @@ final class ChatModel: ObservableObject {
         // which cannot see the memory store.
         if pendingApproval == nil, Self.isMemoryListRequest(copyPhrase) {
             Task { [weak self] in
-                guard let self else { return }
+                guard let self, self.gate.accepts(id) else { return }
                 var lines: [String] = []
                 if let memory = self.memory {
                     // Preferences and corrections first, then the R5 conversation key
@@ -2437,7 +2441,9 @@ final class ChatModel: ObservableObject {
                 respondDirectly("I have not said anything yet.", id: id)
             } else {
                 onShowHistory?()
-                respondDirectly("Showing what I said in the local history.", id: id)
+                // Opening the panel calls cancelForInteraction(), which advances
+                // the turn gate; speak the confirmation in the new current turn.
+                respondDirectly("Showing what I said in the local history.", id: gate.current)
             }
             return
         }
@@ -3345,6 +3351,9 @@ final class ChatModel: ObservableObject {
     }
 
     private func respondDirectly(_ replyText: String, id: UUID) {
+        // A detached read/recall task can finish after the owner started another
+        // turn. Never let its stale text or phase overwrite the new turn.
+        guard gate.accepts(id) else { return }
         DiagnosticChatLogger.record(role: "dot", text: replyText)
         self.answer = replyText
         self.history.append(ChatMessage(role: "assistant", content: replyText))

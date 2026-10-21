@@ -5438,8 +5438,11 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
         "sudo", "chmod", "chown", "mv", "trash", "shutdown"
     ]
     /// Shells and executors that re-introduce a hidden command in a later token.
+    /// Interpreters belong here too: `python3 -c '…shutil.rmtree…'` and
+    /// `osascript -e '…delete…'` are not file utilities and must keep the card.
     private static let wrapperExecutables: Set<String> = [
-        "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "xargs"
+        "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "xargs",
+        "env", "doas", "osascript", "python", "python3", "perl", "ruby", "node", "php"
     ]
     /// Flags that delete, or execute a command per file, inside another command.
     private static let wrapperFlags: Set<String> = ["-exec", "-execdir", "-delete", "-ok", "-okdir"]
@@ -5496,10 +5499,55 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
         return parts.last.map(String.init) ?? token
     }
 
+    /// Launchers that run the next non-option word, plus leading assignments.
+    private static let launcherExecutables: Set<String> = [
+        "env", "sudo", "doas", "nohup", "command", "builtin", "exec", "time",
+        "nice", "setsid", "xcrun", "arch", "!"
+    ]
+
     private static func isCommandPosition(_ tokens: [String], index: Int) -> Bool {
         guard index > 0 else { return true }
-        let previous = tokens[index - 1]
-        return previous.count == 1 && commandSeparators.contains(Character(previous))
+        // Walk back to the start of this command segment, then skip leading
+        // `NAME=value` assignments. This makes `FOO=1 python3 -c …` and
+        // `nohup env python3 -c …` count as executors without treating
+        // `echo env python3` as a command.
+        var start = index
+        while start > 0 {
+            let previous = tokens[start - 1]
+            if previous.count == 1, commandSeparators.contains(Character(previous)) { break }
+            start -= 1
+        }
+        var cursor = start
+        while cursor < index, isAssignment(tokens[cursor]) { cursor += 1 }
+        guard cursor < index else { return true }
+        let first = basename(tokens[cursor].lowercased())
+        guard launcherExecutables.contains(first) else { return cursor == index }
+        cursor += 1
+        var skipNext = false
+        while cursor < index {
+            let token = tokens[cursor].lowercased()
+            if skipNext { skipNext = false; cursor += 1; continue }
+            if token.hasPrefix("-") {
+                // `env -u NAME`, `env -C DIR`, `env -S STRING` take an argument.
+                if first == "env", ["-u", "--unset", "-c", "--chdir", "-s", "--split-string"].contains(token) {
+                    skipNext = true
+                }
+                cursor += 1; continue
+            }
+            if isAssignment(token) { cursor += 1; continue }
+            // `nice -n 5`, `time -p`, `xcrun --sdk macosx` take non-option words
+            // before the command; skip those for their known launchers.
+            if ["nice", "time", "xcrun", "arch"].contains(first) { cursor += 1; continue }
+            break
+        }
+        return cursor == index
+    }
+
+    private static func isAssignment(_ token: String) -> Bool {
+        guard let equals = token.firstIndex(of: "="), equals != token.startIndex else { return false }
+        let name = token[..<equals]
+        guard let first = name.first, first == "_" || first.isLetter else { return false }
+        return name.dropFirst().allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
     }
 
     /// `git reset`, `git clean`, `git checkout -f` and `git push --force` discard committed or
