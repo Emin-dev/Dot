@@ -46,3 +46,9 @@ fi
 "$PYTHON" join_release.py "$MANIFEST" --download --force --output "$OUTPUT"
 hdiutil verify -quiet "$OUTPUT"
 open "$OUTPUT"
+echo
+echo "Dot is ad-hoc signed and NOT notarised."
+echo "Drag Dot to Applications, then allow the first open with one of:"
+echo "  - Finder: right-click (Control-click) Dot > Open > Open"
+echo "  - System Settings > Privacy & Security > Open Anyway"
+echo "  - Terminal: xattr -dr com.apple.quarantine /Applications/Dot.app"

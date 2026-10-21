@@ -48,6 +48,31 @@ jobs:
             echo "Release tags must point to a commit on main." >&2
             exit 1
           }
+      - name: Bundle the published model-parts plan when available
+        env:
+          MODEL_PARTS_TAG: model-parts-v1
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+          url="https://github.com/Emin-dev/Dot/releases/download/$MODEL_PARTS_TAG/model-parts.json"
+          if curl -fsSL --retry 3 -o .tmp/model-parts.json "$url"; then
+            python3 -B - "$MODEL_PARTS_TAG" <<'PY'
+import json, sys
+tag = sys.argv[1]
+data = json.load(open('.tmp/model-parts.json'))
+assert data.get('schema_version') == 1, 'schema_version'
+assert data.get('status') == 'ready', 'status is not ready'
+assert data.get('release_tag') == tag, 'release_tag mismatch'
+assert data.get('parts'), 'no parts'
+assert str(data.get('base_url', '')).startswith(
+    f'https://github.com/Emin-dev/Dot/releases/download/{tag}/'), 'base_url'
+PY
+            cp .tmp/model-parts.json Resources/model-parts.json
+            echo "bundling published parts plan from $MODEL_PARTS_TAG"
+          else
+            echo "::warning::no published model parts plan; the DMG keeps the pending plan and the hash-verified Hugging Face route"
+          fi
+
       - name: Build Rust runtime binaries
         run: cargo build --release --bin dot-voice --bin dot-search --bin dot-fetch --bin dot-safety
       - name: Fetch the audited runtime payload (no model weights)
@@ -74,34 +99,47 @@ jobs:
           DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
           DOT_WHISPER_FRAMEWORK: .tmp/whisper/whisper.framework
         run: bash scripts/package_default_release.sh
+
+      - name: Install from the DMG with quarantine and stay alive for 60 s
+        run: bash scripts/quarantine_launch_check.sh build-public/Dot.dmg .tmp/quarantine-check
       - name: Stage release assets
         run: |
           set -euo pipefail
           mkdir -p release-assets
           cp build-public/Dot.dmg build-public/Dot.dmg.sha256 release-assets/
           cp packaging/join-dot-dmg.command scripts/join_release.py release-assets/
+          cp docs/TEST_TODAY.md release-assets/TEST_TODAY.md
+          if python3 -c 'import json; raise SystemExit(json.load(open("Resources/model-parts.json"))["status"] != "ready")'; then
+            cp Resources/model-parts.json release-assets/model-parts.json
+            (cd release-assets && shasum -a 256 model-parts.json > model-parts.json.sha256)
+          fi
           cat > release-assets/README.txt <<'EOF'
           Dot default DMG
           ===============
           Dot.dmg contains the app and its verified local runtime, but not the
-          Qwen3.8 27B Q4 weights (22.4 GB). On first launch Dot verifies the
+          Qwen3.8 27B Q4 weights (~22.4 GB). On first launch Dot verifies the
           signed manifest and downloads the exact files with resume, retries and
           per-file SHA-256. The pinned Emin-dev/Dot model-parts-v1 release is
-          the intended primary route, but its parts are NOT uploaded yet; until
-          they are, the app uses revision-pinned Hugging Face files and rejects
-          any SHA-256 mismatch.
+          the primary route; revision-pinned Hugging Face files are a
+          hash-checked fallback. Both routes reject any SHA-256 mismatch.
+
           Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
-          This DMG is ad-hoc signed and NOT notarized, so Gatekeeper may require
-          a manual Open. A Gatekeeper-clean build needs Emin's Developer ID.
+
+          First open (the DMG is ad-hoc signed and NOT notarized)
+          -------------------------------------------------------
+          1. Open Dot.dmg and drag Dot to Applications.
+          2. On the first launch macOS may refuse the ad-hoc signed app. Allow it:
+             - Finder: right-click (Control-click) Dot > Open > Open, or
+             - System Settings > Privacy & Security > "Open Anyway", or
+             - Terminal: xattr -dr com.apple.quarantine /Applications/Dot.app
+          3. Launch Dot and follow TEST_TODAY.md in this release.
 
           All-in-one installer
           ====================
           The complete DMG is 22+ GB and GitHub limits each asset to 2 GB. Its
           owner-produced parts (Dot.dmg.partNNN + Dot.dmg.parts.json) are NOT
-          published yet. Once they are, put join-dot-dmg.command,
-          join_release.py and all parts in one folder and double-click the
-          command: it downloads missing parts, verifies every part and the
-          joined DMG, and opens it. See docs/QUESTIONS_FOR_EMIN.md §8-10.
+          published yet; the released DMG plus the first-launch model download
+          is the supported install today. See docs/QUESTIONS_FOR_EMIN.md §8-10.
           EOF
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -136,5 +174,5 @@ jobs:
             gh release create "$TAG" release-assets/* \
               --target "$GITHUB_SHA" \
               --title "Dot $TAG" \
-              --notes-file release-assets/README.txt
+              --notes-file release-assets/TEST_TODAY.md
           fi

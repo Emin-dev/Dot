@@ -71,7 +71,7 @@ jobs:
           python3 -B scripts/check_contracts.py
           python3 -B -m unittest Tests/Python/test_release_parts.py -v
           python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
-          bash -n scripts/package_default_release.sh scripts/real_app_launch_check.sh
+          bash -n scripts/package_default_release.sh scripts/real_app_launch_check.sh scripts/quarantine_launch_check.sh
 
       - name: Package the real default app (same bundle as the public DMG)
         env:
@@ -81,6 +81,9 @@ jobs:
 
       - name: Launch the real app and capture the hardware refusal
         run: bash scripts/real_app_launch_check.sh build/Dot.app .tmp/real-app-check
+
+      - name: Install from the DMG with quarantine and stay alive for 60 s
+        run: bash scripts/quarantine_launch_check.sh build-public/Dot.dmg .tmp/quarantine-check
 
       - name: Print the launch transcript and state
         if: always()
@@ -99,5 +102,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dot-real-app-launch-evidence
-          path: .tmp/real-app-check/
+          path: |
+            .tmp/real-app-check/
+            .tmp/quarantine-check/
           if-no-files-found: warn

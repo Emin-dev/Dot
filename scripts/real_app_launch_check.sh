@@ -49,6 +49,15 @@ note "support: $SUPPORT"
 
 [ "$(uname -m)" = "arm64" ] || fail "this check requires an arm64 runner (got $(uname -m))"
 
+# A quarantined download is the normal first-open state. When required, fail
+# loudly if the attribute is missing so the lane cannot silently pass on an
+# unmarked bundle.
+if [ "${DOT_REQUIRE_QUARANTINE:-0}" = "1" ]; then
+    ATTR="$(xattr -p com.apple.quarantine "$APP" 2>/dev/null || true)"
+    [ -n "$ATTR" ] || fail "com.apple.quarantine is missing from $APP"
+    note "quarantine: $ATTR"
+fi
+
 # Fresh state, so the evidence can only come from this launch.
 rm -rf "$SUPPORT"
 
@@ -61,7 +70,9 @@ APP_PID=$!
 note "launched pid: $APP_PID"
 
 REFUSED=0
+START=$SECONDS
 DEADLINE=$((SECONDS + 60))
+DIED_EARLY=0
 while [ "$SECONDS" -lt "$DEADLINE" ]; do
     if [ -f "$LOG" ] && grep -qF "Hardware Does Not Meet Dot's Minimum" "$LOG"; then
         REFUSED=1
@@ -74,6 +85,23 @@ while [ "$SECONDS" -lt "$DEADLINE" ]; do
     fi
     sleep 1
 done
+
+# Optional first-open proof: the app must stay up for the requested window,
+# not merely appear and quit. This is what docs/TEST_TODAY.md asks the owner to
+# confirm by eye; here it is measured.
+MIN_ALIVE="${DOT_MINIMUM_ALIVE_SECONDS:-0}"
+if [ "$REFUSED" -eq 1 ] && [ "$MIN_ALIVE" -gt 0 ]; then
+    ALIVE_DEADLINE=$((START + MIN_ALIVE))
+    while [ "$SECONDS" -lt "$ALIVE_DEADLINE" ]; do
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            DIED_EARLY=1
+            note "app exited after $((SECONDS - START))s, before the ${MIN_ALIVE}s minimum"
+            break
+        fi
+        sleep 1
+    done
+    note "app alive for $((SECONDS - START))s (minimum ${MIN_ALIVE}s, died_early=$DIED_EARLY)"
+fi
 
 # Capture the durable state before terminating the blocking alert.
 {
@@ -137,6 +165,8 @@ grep -qF "Processor (" "$LOG" || fail "the processor reason is missing"
 grep -qF "Unified Memory (" "$LOG" || fail "the memory reason is missing"
 grep -qF "Operating System (macOS " "$LOG" || fail "the OS reason is missing"
 [ -n "$CRASHES" ] && fail "the app produced a crash report"
+
+[ "$DIED_EARLY" -eq 0 ] || fail "the app did not stay alive for the required ${MIN_ALIVE}s first-open window"
 
 if [ "$ALIVE" -eq 1 ]; then
     note "PASS: real app started, wrote its launch log, and showed the exact below-minimum refusal; the harness terminated the blocking alert."

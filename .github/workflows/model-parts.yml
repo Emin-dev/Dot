@@ -1,0 +1,100 @@
+name: Publish model parts
+
+# Owner-free model delivery. Dispatched from main, this fetches the exact
+# Qwen3.8 27B Q4 payload from its official public repository, verifies every
+# byte against Resources/bundled-models.json, splits it into <2 GB parts and
+# uploads them plus the model-parts.json plan to the model-parts-v1 release.
+# Only the built-in GITHUB_TOKEN is used; no new secret, account or purchase.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag that will hold the parts"
+        required: true
+        default: "model-parts-v1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dot-model-parts
+  cancel-in-progress: false
+
+jobs:
+  parts:
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.inputs.tag || 'model-parts-v1' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+
+      - name: Refuse to replace published parts
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG already exists; published parts are immutable." >&2
+            echo "Delete that release deliberately before re-splitting a different payload." >&2
+            exit 1
+          fi
+          df -h .
+          sw_vers
+
+      - name: Create the empty parts release
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "Dot model parts (Qwen3.8 27B Q4)" \
+            --latest=false \
+            --notes "Verified Qwen3.8 27B Q4 (target + DFlash2 draft + safety aux) split into GitHub-sized parts. Each part and Resources/bundled-models.json are SHA-256 checked. Dot downloads these first; Hugging Face is only a fallback."
+          touch .tmp/parts-release-created
+
+      - name: Fetch, verify and upload parts
+        run: |
+          set -euo pipefail
+          python3 -B scripts/fetch_model_parts.py --tag "$TAG" --upload-release --output build-parts
+          gh release upload "$TAG" \
+            build-parts/model-parts.json \
+            build-parts/model-parts.json.sha256 \
+            build-parts/model-parts.sha256
+
+      - name: Verify the published assets
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json tagName,isLatest,assets \
+            --jq '{tag: .tagName, latest: .isLatest, assets: [.assets[].name]}'
+          test "$(gh release view "$TAG" --json assets --jq '[.assets[].name] | length')" -ge 2
+
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Model parts published"
+            echo
+            echo "Release: \`$TAG\`"
+            echo
+            echo '```'
+            gh release view "$TAG" --json assets --jq '.assets[] | "\(.name)  \(.size)"'
+            echo '```'
+            echo
+            echo "Commit the app against this plan with the next release; release.yml fetches \`model-parts.json\` automatically."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the partial release after a failure
+        if: failure()
+        run: |
+          set +e
+          if [ -f .tmp/parts-release-created ]; then
+            gh release delete "$TAG" --yes --cleanup-tag
+          else
+            echo "no partial release was created by this run; nothing to delete"
+          fi

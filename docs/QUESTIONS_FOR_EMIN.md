@@ -78,30 +78,27 @@ needs the unprotected `dot-logs` branch.
 **Recommended default (implemented):** every bundled British Kokoro voice is accepted; a missing
 selected voice falls back to the bundled `bf_isabella` with an honest log line. No cloud TTS.
 
-## 8. Model part hosting (blocking the primary first-launch route)
+## 8. Model part hosting (no longer owner-gated)
 
-**What is needed:** the verified 22,420,071,166-byte model payload, split into
-GitHub-release parts under 2 GB, uploaded once to `Emin-dev/Dot` as tag `model-parts-v1`.
+**Resolved by the `Publish model parts` workflow** (`.github/workflows/model-parts.yml`,
+`workflow_dispatch`). It needs nothing from Emin: it uses the built-in `GITHUB_TOKEN`,
+fetches the pinned Qwen3.8 27B Q4 files from their official public repositories,
+verifies every file against `Resources/bundled-models.json`, splits them into
+<2 GB parts and uploads the parts plus `model-parts.json` to the `model-parts-v1`
+release. The release workflow then bundles that plan into `Dot.dmg`, so the app's
+primary route is the pinned Emin-dev/Dot parts; revision-pinned Hugging Face files
+remain the hash-checked fallback.
 
-**Why:** the default DMG intentionally ships without model weights. The app already
-supports pinned parts as the primary route; until the parts exist it falls back to the
-pinned Hugging Face revisions and verifies every file against `bundled-models.json`.
-Model parts can only be produced on the Mac that holds the accepted payload; they cannot
-be generated on the Pi or in GitHub-hosted CI (disk and bandwidth).
-
-**Exact steps on the Mac with the verified `OfflineModels` payload:**
+The workflow streams one file at a time, so it fits a hosted runner (~6 GB peak,
+22.4 GB total transfer) and refuses to replace an existing release. The manual route
+below is kept only for a deliberate re-split:
 
 ```bash
 python3 scripts/model_parts.py --models "$HOME/Applications/Dot.app/Contents/Resources/OfflineModels" \
   --output build-parts --tag model-parts-v1
-# upload every build-parts/*.partNNN plus build-parts/model-parts.json
+# upload every build-parts/*.partNNN plus build-parts/model-parts.json by hand
 cp build-parts/model-parts.json Resources/model-parts.json
-git add Resources/model-parts.json && git commit -m "model: pin uploaded model parts"
 ```
-
-`model_parts.py` refuses to split if any file size or SHA-256 differs from
-`Resources/bundled-models.json`. The next app build then carries the exact plan; no token
-or key is needed for publishing assets (use your normal `gh` login).
 
 ## 9. All-in-one installer parts (owner-run, after complete acceptance)
 
