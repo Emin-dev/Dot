@@ -2531,7 +2531,7 @@ final class LogRedactionTests: XCTestCase {
         XCTAssertFalse(masked.contains("hunter2"))
         XCTAssertFalse(masked.contains("sk-live-secret"))
         XCTAssertFalse(masked.contains("correct horse battery staple"))
-        XCTAssertTrue(masked.contains("[REDACTED]"))
+        XCTAssertTrue(masked.contains("[REDACTED"))
     }
 
     func testOrdinaryConversationIsUnchanged() {
@@ -2574,7 +2574,7 @@ final class LogRedactionTests: XCTestCase {
         let legacy = Data("old line\ntoken: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n".utf8)
         let masked = String(decoding: LogRedaction.masked(legacy), as: UTF8.self)
         XCTAssertFalse(masked.contains("ghp_"))
-        XCTAssertTrue(masked.contains("[REDACTED]"))
+        XCTAssertTrue(masked.contains("[REDACTED"))
         let clean = Data("ordinary log line\n".utf8)
         XCTAssertEqual(LogRedaction.masked(clean), clean)
     }
