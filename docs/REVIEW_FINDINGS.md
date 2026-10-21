@@ -35,6 +35,14 @@ Verified and fixed in this phase:
 8. Launch metadata could be permanently suppressed by one disk-write failure.
 9. `model_primary` provenance claimed the pinned parts route while the parts plan
    is still `pending`.
+10. JWT-shaped tokens were not masked by either redactor.
+11. An exhausted log upload was parked for a year; stable logs now retry at the
+   1 h backoff cap.
+12. The safety override policy is now executable in DotCore and covered by
+   XCTest (exact action, expiry, one-shot, strike reset).
+13. The splitter and joiner now refuse silent overwrite (unless `--force`), the
+   splitter re-hashes each written part, and downloads may only redirect to
+   GitHub release hosting.
 
 Remaining owner-only gates (not code review findings):
 
@@ -45,6 +53,53 @@ Remaining owner-only gates (not code review findings):
   capture with the network physically off) and the full 19.9 GB first download.
 - Observe the real safety approver verdicts and the "force it" flow on the owner
   Mac; local tests cover source order and gating only.
+
+## Fresh independent round (2026-10-21, after the first fixes)
+
+A second Phase 5 pass ran three fresh, read-only processes against the same
+merge base `0aeb7fd..HEAD`; each saw only the diff and the live checklists, not
+the earlier findings or this chat.
+
+| Reviewer | Exact id | Outcome |
+| --- | --- | --- |
+| Correctness | `opencode-go/deepseek-v4.1-flash` | 2 findings, both verified and fixed |
+| Security | `opencode-go/qwen3.8-flash` (GLM slot) | 2 findings: 1 verified and fixed, 1 accepted residual |
+| Accuracy | `opencode-go/qwen3.8-max` (Jev slot) | 3 minor findings, all verified and fixed; docs claims rated honest |
+| GLM-5.3-Flash | not offered | **unavailable**: `opencode models` lists no `glm*` id; no paid or unlisted model was used |
+| Jev 1.13 Free | not offered | **skipped**: no `jev*` id in `opencode models`; no paid Zen model was used |
+
+Verified and fixed in this round:
+
+| # | Reviewer | Finding | Evidence | Fix |
+| --- | --- | --- | --- | --- |
+| R4-1 | security | `LogRedaction`/`redact_log.pl` had no JWT rule, so `eyJ…` tokens could be uploaded raw | `printf '…eyJ…' \| perl scripts/redact_log.pl` left the token intact | JWT rule added to both redactors; Perl and Swift-source tests |
+| R4-2 | correctness | An upload that spent its 8-attempt budget was parked for 365 days, and a stable log was only retried after it changed | `LogUploadQueue.failed` set `now + 365 * 86_400`; `enqueueCurrentFiles` only re-enqueues changed files | exhausted entries now retry at the 1 h backoff cap; XCTest asserts the cap retry |
+| R4-3 | correctness | The safety override had no executable test (static text checks only) | `rg` found no XCTest for `armForce`/three strikes/expiry | logic moved to `ForceOverridePolicy` in DotCore; three XCTests cover exact action, expiry, one-shot and strike reset |
+| R4-4 | accuracy | `split_release.py` silently overwrote an existing part set and did not re-read written parts | unconditional `open("wb")` and manifest write | refuses existing outputs unless `--force`; re-hashes every part after writing; tests |
+| R4-5 | accuracy | `join_release.py` silently replaced an existing regular output | `staging.replace(output)` with only a symlink guard | refuses existing output unless `--force`; the double-click wrapper asks before passing `--force`; tests |
+| R4-6 | accuracy | Part downloads followed redirects away from GitHub after validating only the manifest URL | `safe_url` checked the initial URL; `urlopen` followed redirects | `SafeRedirectHandler` allows only HTTPS GitHub/object hosts; test covers foreign and HTTP downgrade |
+
+Targeted round 2 re-review found three residual gaps in those fixes; all were
+verified and fixed:
+
+| # | Finding | Evidence | Fix |
+| --- | --- | --- | --- |
+| R4-7 | The JWT rule required long segments, so `…e30.` and JWE tokens leaked | Perl probes left the short token raw and partly masked a 5-segment JWE | pattern matches 2–4 dot segments with optional empty segments; short/JWE tests |
+| R4-8 | A forced re-split purged only the same filename's old parts; a renamed DMG left old manifests for upload | split `Dot-1.0.dmg`, then `Dot-1.1.dmg --force` in one directory | force purges stale `*.partNNN` and `*.parts.{json,sha256}`; renamed-DMG test |
+| R4-9 | The legacy-queue normalization had no boundary test | only a 365-day value was covered | XCTest keeps the 1 h cap and resets only values above it |
+
+Accepted residual / not changed:
+
+- **The Keychain write still passes the token in argv**
+  (`security add-generic-password -w "$TOKEN"`, `scripts/store_github_token.sh`).
+  This was already listed below; the fresh reviewer repeated it. AGENTS.md
+  requires that the token is never logged or stored in the repo/DMG, which
+  holds. It does not require "never argv", and the macOS `security` CLI has no
+  non-interactive Keychain write that avoids an argument without adding a
+  helper. The owner-run script remains documented.
+- The aux `gemma-3-4b` safety model is **not** a chat fallback; the main model is
+  pinned to `mlx-community/Qwen3.8-27B-4bit`. The accuracy reviewer confirmed the
+  docs disclose this, so no change was made.
 
 ## Reviewers
 
@@ -119,9 +174,9 @@ Remaining owner-only gates (not code review findings):
 
 ```text
 umask 0022; TMPDIR=$PWD/.tmp/pytmp python3 -B -m unittest discover -s Tests/Python -q
-  -> Ran 628 tests, OK (28 skipped)
+  -> Ran 636 tests, OK (28 skipped)
 python3 -B scripts/check_contracts.py
-  -> 69 static guardrails passed
+  -> 76 static guardrails passed
 CARGO_BUILD_JOBS=2 cargo fmt --all -- --check                     -> pass
 CARGO_BUILD_JOBS=2 cargo test -p dot-research -p dot-runtime      -> 18 passed
 CARGO_BUILD_JOBS=2 cargo clippy ... --all-targets -- -D warnings  -> pass
@@ -131,7 +186,7 @@ CARGO_BUILD_JOBS=2 cargo clippy ... --all-targets -- -D warnings  -> pass
 `TMPDIR=$PWD/.tmp/pytmp`; without it the runtime-reconstruction disk-reserve
 tests fail with `insufficient free space`. That is an environment limit, not a
 code failure. `swift-test`, the full `macos` XCTest/Python lane and `dot-voice` passed in
-the green run above (all 611 SwiftPM tests, 628 Python tests, 4 skipped).
+the green run above (all SwiftPM tests, 636 Python tests, 4 skipped).
 Notarisation and a real DMG install remain owner gates.
 
 ## Round 3 (final targeted re-review)

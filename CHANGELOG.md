@@ -16,11 +16,16 @@ Verified by independent reviewers and fixed (details in
 - Release/supply chain: no `--clobber`, releases must come from main, tags must
   match the built commit, new tags are pinned to it, and the all-in-one joiner
   rejects path traversal and foreign part URLs.
-- Docs/tests: 69 static guardrails, a new review-pipeline test file run in CI,
+- Docs/tests: 76 static guardrails, a new review-pipeline test file run in CI,
   Swift redaction tests, and corrected resume/repair and provenance claims.
+- Fresh independent round (deepseek + qwen3.8-flash/max): JWT short/JWE
+  redaction, hourly retry of exhausted log uploads with legacy-queue migration,
+  executable `ForceOverridePolicy` tests, no silent split/join overwrite,
+  whole-part-set cleanup on a forced or renamed re-split, and GitHub-only
+  download redirects.
 
-Pi gates: 628 Python tests OK (28 skipped), 18 Rust tests, clippy
-`-D warnings`, 69 contracts. macOS CI run `39541375214` at `2f0f79b` passed all
+Pi gates: 636 Python tests OK (28 skipped), 18 Rust tests, clippy
+`-D warnings`, 76 contracts. macOS CI run `39541375214` at `2f0f79b` passed all
 four jobs (rust-gates, swift-test, macos, dot-voice).
 
 ## Earlier

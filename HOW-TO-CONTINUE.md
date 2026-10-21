@@ -31,8 +31,8 @@ TMPDIR=$PWD/.tmp/pytmp python3 -B -m unittest discover -s Tests/Python -v
 python3 -B scripts/check_contracts.py
 ```
 
-Expected current result: 628 Python tests OK (28 skipped), 18 Rust tests,
-clippy clean, 69 static guardrails.
+Expected current result: 636 Python tests OK (28 skipped), 18 Rust tests,
+clippy clean, 76 static guardrails.
 
 ## CI
 

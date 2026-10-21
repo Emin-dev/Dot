@@ -48,8 +48,8 @@ Change by editing `src/DotLogSync.swift` (+ tests) if a narrower scope is wanted
 
 **Recommended default (implemented):** branch `dot-logs`; path
 `dot/<16-char-anonymous-install-id>/<YYYY-MM-DDTHH-MM-SSZ>/`; one new folder per launch; 2 MB
-rotation with one rotated file; offline queue capped at 64 entries with exponential backoff to one
-hour and 8 attempts.
+rotation with one rotated file; offline queue capped at 64 entries with 8 exponential attempts,
+then at most one retry per hour while the entry stays queued.
 
 Change by editing `LogSyncPolicy` in `src/InteractionCore.swift` (+ tests).
 
