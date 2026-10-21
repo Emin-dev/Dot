@@ -116,6 +116,7 @@ refactor** by another worker:
 
 - Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
   `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
+  The release tag `v1.1.0-phase4` was built at `69ecfbd`; later commits are documentation-only.
 - Last full green macOS gate (CI run `39513636141`, commit `69ecfbd`, all 62 guardrails):
   **XCTest 936 / 0 failures (1 opt-in live test skipped)**, **`swift test` 608 / 0**,
   **Python 614 / 4 skipped**, the eight focused suites, `dot-voice` and Debug/Release builds. The
@@ -286,6 +287,8 @@ All durable Dot state lives under `~/Library/Application Support/Dot/` (mode 070
 
 ## Recent commits (newest first)
 
+Phase 4: `96d67f1` release evidence · `69ecfbd` Phase 4 result/checklists · `7e5c6b5` safety/memory
+guardrails · `c7c4ca6` focused suites + offline contracts · `4916071` Phase 3 result. Earlier:
 `f03d608` Keychain release auth · `a6fe2eb` public DMG packaging · `8afab50` screen-off/lock pause ·
 `e0fb2a7` visible text-only notice + named calendar edit · `398cb5f` immediate coverage escape ·
 `b0cc3aa` safe path for the 2-minute roam/random relocation · `fca8e7f` placement/click accuracy ·

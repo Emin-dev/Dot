@@ -123,6 +123,35 @@ as current promises or failures.
 | Owner acceptance (real session) | **Open** | requires a Mac at/above the gate |
 | Second-Mac clean install | **Open** | requires the owner's second Mac |
 
+## Unchecked roadmap boxes: not silently claimed, not new Phase 4 bugs
+
+The current checklist/roadmap also contains unchecked future-scope boxes. They were walked and are
+**Open (not built or not owner-verified)**, not Phase 4 regressions:
+
+| Roadmap item | Status | Why it is not marked Verified |
+| --- | --- | --- |
+| Persistent missions / task journal | Open | No implementation in this source |
+| Verified action receipts and undo | Partial | Local history exists; no general receipts/undo |
+| Evidence-backed memory with source/date/hash | Partial | Tiers + FTS exist; source/date linkage is incomplete |
+| Research notebook with claim/date/conflict checks | Partial | Notebook/provider modules exist; no complete question-to-cited-answer workflow |
+| Project resume / handoff pack | Open | No implementation |
+| Watched-folder document worker | Partial | `WatchedDocumentWorker` exists; no full native acceptance |
+| Reusable native action recipes | Partial | Native actions exist; no user-editable recipes |
+| Event-aware proactive help | Partial | Proactive scheduler exists; event/dismissal memory is incomplete |
+| Meeting preparation / select-to-delegate | Open | Calendar briefs exist; these workflows do not |
+| R9 snapshots, self-test, rollback, Rust watchdog | Broken | Not built |
+| R4 full voice picker / payload decision | Partial / owner-gated | Four voices accepted; only Isabella always bundled |
+| R10 offline index / encyclopedia / keyed providers | Partial / owner-gated | Keyless web research + cache exist; local index and keys do not |
+| SearXNG/local search-server stack | Retired | Replaced by Rust `dot-search` |
+| 11-skin visual/device acceptance and shared-expression target | Partial | Source and renders exist; owner/device acceptance open |
+| Streaming STT benchmarks, Core ML Kokoro evaluation | Open | No measured comparison |
+| Full speech-to-audible latency, GPU/ANE/RAM/heat benchmarks | Open | Not measured here |
+| Siri/App Intents invocation | Partial | Metadata packaged; invocation unrun |
+| Persistent complete offline bundle (all-in-one) | Blocked | Needs the 22.4 GB payload |
+| Developer ID signing / notarisation | Broken | No credentials |
+| Clean second-Mac acceptance | Open | Requires the owner's second Mac |
+| `.txt` 2026-10-14 checklist boxes | Historical | File is explicitly superseded; not current promises |
+
 ## Default DMG rebuild
 
 The Phase 4 release workflow rebuilds the current source, verifies the pinned runtime donor SHA-256,
@@ -156,9 +185,10 @@ because the 22.4 GB verified payload is not present. That remains the owner step
 
 ## Pi notes
 
-The Python suite is green on macOS CI. On the Pi it needs a 022 umask and a disk-backed `TMPDIR`:
-the reconstruction fixtures reserve 1 GB of scratch space, `/tmp` is a 768 MB tmpfs, and a
-group-writable checkout is correctly rejected as an unsafe runtime mode. Example:
+The Python suite is green on macOS CI (614 / 4 skipped). It is also green on the Pi once it has a
+022 umask and a disk-backed `TMPDIR`: **614 ran, OK (28 macOS-only skips)**. The reconstruction
+fixtures reserve 1 GB of scratch space, `/tmp` here is a 768 MB tmpfs, and a group-writable checkout
+is correctly rejected as an unsafe runtime mode. Example:
 
 ```bash
 umask 022
