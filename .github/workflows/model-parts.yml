@@ -66,13 +66,18 @@ jobs:
             build-parts/model-parts.json \
             build-parts/model-parts.json.sha256 \
             build-parts/model-parts.sha256
+          touch .tmp/parts-published
 
       - name: Verify the published assets
         run: |
           set -euo pipefail
-          gh release view "$TAG" --json tagName,isLatest,assets \
-            --jq '{tag: .tagName, latest: .isLatest, assets: [.assets[].name]}'
+          gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets \
+            --jq '{tag: .tagName, draft: .isDraft, prerelease: .isPrerelease, assets: [.assets[].name]}'
           test "$(gh release view "$TAG" --json assets --jq '[.assets[].name] | length')" -ge 2
+          test "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "false"
+          for required in model-parts.json model-parts.json.sha256 model-parts.sha256; do
+            gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$required"
+          done
 
       - name: Summary
         if: success()
@@ -93,7 +98,9 @@ jobs:
         if: failure()
         run: |
           set +e
-          if [ -f .tmp/parts-release-created ]; then
+          if [ -f .tmp/parts-published ]; then
+            echo "the manifest was published; keeping the complete release for inspection" >&2
+          elif [ -f .tmp/parts-release-created ]; then
             gh release delete "$TAG" --yes --cleanup-tag
           else
             echo "no partial release was created by this run; nothing to delete"

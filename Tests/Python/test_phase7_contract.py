@@ -18,7 +18,8 @@ class Phase7ContractTests(unittest.TestCase):
         self.assertIn("scripts/fetch_model_parts.py", workflow)
         self.assertIn("gh release upload", workflow)
         self.assertIn("--latest=false", workflow)
-        self.assertIn('if [ -f .tmp/parts-release-created ]', workflow)
+        self.assertIn('if [ -f .tmp/parts-published ]', workflow)
+        self.assertNotIn('--json tagName,isLatest', workflow)
 
     def test_fetch_script_verifies_and_splits_below_two_gb(self):
         script = read("scripts/fetch_model_parts.py")
