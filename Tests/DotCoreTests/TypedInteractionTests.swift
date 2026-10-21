@@ -426,14 +426,16 @@ final class TypedInteractionTests: XCTestCase {
     @MainActor func testShowHistoryConfirmationSurvivesThePanelGateAdvance() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
         f.model.onShowHistory = { f.model.cancelForInteraction() }
-        XCTAssertTrue(f.model.submitTyped("Hello"))
-        try await eventually { f.model.answer == "A local reply." && f.model.phase == .idle }
+        // Seed a reply without depending on a network turn: this test is about
+        // the panel advancing the gate, not about engine latency.
+        f.model.speakDirect("A local reply.")
+        f.model.cancelTurn()
         f.enqueued.removeAll()
         XCTAssertTrue(f.model.submitTyped("show history"))
         try await eventually { f.model.answer == "Showing what I said in the local history." }
         XCTAssertTrue(f.enqueued.contains("Showing what I said in the local history."),
                       "Opening the panel advances the turn gate; the confirmation must use the new turn")
-        XCTAssertEqual(f.transport.requestCount, 1, "The history command must not reach the engine")
+        XCTAssertEqual(f.transport.requestCount, 0, "The history command must not reach the engine")
     }
 
     @MainActor func testSpotlightFallbackStripsSpokenFileFiller() {
