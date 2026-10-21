@@ -12,12 +12,15 @@ binding rules R1–R17.
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
 
-**Current release: [v1.1.0-phase3.1](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase3.1).**
+**Current release: [v1.1.0](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0) (Latest).**
 **[Download `Dot.dmg`](https://github.com/Emin-dev/Dot/releases/latest/download/Dot.dmg)**, open it,
 drag **Dot** into **Applications**, and launch it. The app verifies its runtime, then downloads
-the exact 19.9 GB local model from Hugging Face on first launch, checking every file's SHA-256 against
-the bundled manifest. Allow about 25 GB of free disk and a stable connection; progress appears in the
-menu bar and context menu.
+the exact 22.4 GB local model on first launch from the pinned `model-parts-v1` release (revision-pinned
+Hugging Face files are the hash-checked fallback), checking every file's SHA-256 against the bundled
+manifest. Allow at least **35 GB** of free disk and a stable connection; progress appears in the menu
+bar and context menu. The full owner test is [docs/TEST_TODAY.md](docs/TEST_TODAY.md).
+
+Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
 
 DMG one-line install (after a clean macOS install):
 
@@ -30,11 +33,12 @@ curl -L -o /tmp/Dot.dmg https://github.com/Emin-dev/Dot/releases/latest/download
   && open /Applications/Dot.app
 ```
 
-A zip is also published (`Dot.zip`) with the equivalent `ditto` installer.
-
-The public build is **Apple Development signed, not notarised yet**, so macOS may warn on first open;
-the command clears the quarantine flag. The button resolves once the `Dot.zip` asset is uploaded to a
-release (`GITHUB_TOKEN=… bash scripts/publish_public_release.sh` or upload it manually).
+The public build is **ad-hoc signed and not notarised yet**, so macOS may warn on first open. Either
+right-click (Control-click) **Dot → Open → Open**, use **System Settings → Privacy & Security → Open
+Anyway**, or clear the quarantine flag with the `xattr` command above. CI installs the DMG with
+`com.apple.quarantine` set and proves the app stays alive for 60 seconds; the Gatekeeper dialog itself
+is the owner's first step in [docs/TEST_TODAY.md](docs/TEST_TODAY.md). Developer ID notarisation still
+needs Emin's paid Apple Developer account.
 
 Developers with an existing complete payload can build from source:
 
@@ -62,9 +66,9 @@ A native macOS floating companion. Click to talk; click during an answer to inte
 
 The installed baseline implements a single floating dot with a small right-click menu. That installed build has no app settings, setup, folder-selection or chat windows, or persistent text label below the dot; the newer timer/appearance options are merged source, not installed behavior. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
 
-**The complete personal build was installed and opened on the owner’s Mac; a runtime-only public package with first-launch model download is prepared, but the signed/notarised release and uploaded `Dot.zip` asset remain gates.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
+**The complete personal build was installed and opened on the owner’s Mac; the runtime-only public v1.1.0 DMG with the first-launch model download is published, while Developer ID notarisation and the owner's fresh-Mac acceptance remain gates.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
 
-The current complete personal build contains Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 19,930,313,310-byte Qwen3.8-27B Q4 / draft / vision model selection. Unified provisioning: the owner bundle remains complete and offline-capable; the public runtime-only download fetches the same manifest-verified 19,930,313,310-byte model files on first launch. At launch, Dot verifies the embedded runtime and (when present) the embedded models, with pause/retry in its context menu. A failed download is a visible error; no substitute model or external folder is ever accepted. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
+The current complete personal build contains Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 22,420,071,166-byte Qwen3.8-27B Q4 / draft / vision model selection. Unified provisioning: the owner bundle remains complete and offline-capable; the public runtime-only download fetches the same manifest-verified 22,420,071,166-byte model files on first launch. At launch, Dot verifies the embedded runtime and (when present) the embedded models, with pause/retry in its context menu. A failed download is a visible error; no substitute model or external folder is ever accepted. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
 
 ## Installed interaction and privacy
 
@@ -77,7 +81,7 @@ The current complete personal build contains Splash 1.3.1, English Whisper base.
 - Random roaming is disabled. Conservative local placement protects other windows, text and visually occupied regions; missing/stale/uncertain screen analysis means staying still. Short clear escape paths pause for interaction, speech, pinning and Reduce Motion. Manual drag works without screen access. Reduce Transparency provides an opaque body.
 - File, browser and autonomous computer actions are not implemented. Dot does not execute instructions from screen content.
 
-Conversation state stays in memory and disappears on quit. Dot writes text logs locally and, by the owner's explicit decision, auto-uploads them to the dedicated `dot-logs` branch of `Emin-dev/Dot` under `dot/<install-id>/<launch-timestamp>/`; this channel is text-only (no images, screenshots, audio or microphone recordings), masks keys/tokens/passwords, and cannot change `main`. See [the log reading guide](docs/LOG_READING_GUIDE.md). The token is read from Keychain/config and is never bundled. The public app's only other network path is the manifest-verified model download from the two reviewed Hugging Face repositories. Its owned Splash endpoint is loopback-only; the voice helper denies network access. The [future research/context contract](docs/BUILD_CHECKLIST.md#screen-files-and-online-research) adds online retrieval and explicitly authorized use of relevant screen/file data in web requests while retaining local AI, speech and memory.
+Conversation state stays in memory and disappears on quit. Dot writes text logs locally and, by the owner's explicit decision, auto-uploads them to the dedicated `dot-logs` branch of `Emin-dev/Dot` under `dot/<install-id>/<launch-timestamp>/`; this channel is text-only (no images, screenshots, audio or microphone recordings), masks keys/tokens/passwords, and cannot change `main`. See [the log reading guide](docs/LOG_READING_GUIDE.md). The token is read from Keychain/config and is never bundled. The public app's only other network path is the manifest-verified model download from the pinned `model-parts-v1` release, with the two reviewed Hugging Face repositories as the hash-checked fallback. Its owned Splash endpoint is loopback-only; the voice helper denies network access. The [future research/context contract](docs/BUILD_CHECKLIST.md#screen-files-and-online-research) adds online retrieval and explicitly authorized use of relevant screen/file data in web requests while retaining local AI, speech and memory.
 
 ## Development and verification
 

@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-22 — Phase 7: Emin can test today
+
+- Model delivery is owner-free: `Publish model parts` (run `39661861719`) fetched the
+  pinned Qwen3.8 27B Q4 payload, verified all **22,420,071,166 bytes** against
+  `Resources/bundled-models.json`, split it into **25 parts below 2 GB** and published
+  the `model-parts-v1` release (manifest SHA-256
+  `3f355155ab45df5f359b69a3cbeb9389de244acf8d63329d2b6cd93b6d8ba765`). The plan in
+  `Resources/model-parts.json` is now `ready`; the app uses those parts first and keeps
+  Hugging Face as the hash-checked fallback.
+- First open from the DMG is proven in CI: the release job runs on macOS 26, installs
+  the DMG with `com.apple.quarantine`, and requires the app to stay alive for 60 s.
+  README and `join-dot-dmg.command` explain right-click > Open (and the `xattr`
+  command). Ad-hoc signing stays; notarisation remains the only owner-only signing step.
+- `docs/TEST_TODAY.md` is the exact owner test script: download/verify, install, 22.4 GB
+  model, voice, offline, screen, `force it`, logs and a pass checklist.
+- Gates: Python **656 / 28 skipped**, **76 contracts**, Rust fmt/clippy/test pass. CI
+  `39668799150` at `349fd8c` is green in all four jobs.
+- Release **`v1.1.0`** (Latest): `Dot.dmg` **793,382,400 bytes**, SHA-256
+  `273c724bdfbdbc2dba9ec34edf48d4e09104e0ff2d62d9162db493d01f31e4f3`; assets also
+  include `Dot.dmg.sha256`, `model-parts.json` + `.sha256`, `TEST_TODAY.md`, the joiner
+  and README. The DMG is ad-hoc signed and not notarised. Its provenance records
+  `source_dirty: true` because the just-published parts plan was bundled at release
+  time; that plan is committed from this changelog commit onward, so the next build is
+  clean. Owner remaining: notarisation, log token, and the real-Mac run in TEST_TODAY.md.
+
 ## 2026-10-21 — Phase 6 real-launch lane and gates
 
 - Added `.github/workflows/real-app-check.yml` (dispatch only): it builds the

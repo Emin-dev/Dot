@@ -3,6 +3,28 @@
 This file is the evidence record for the active goal. Every line below was verified
 by actually running the gate, not by assumption.
 
+## Phase 7 — Emin can test everything today (2026-10-22)
+
+- **Model parts are public and owner-free.** `Publish model parts` run `39661861719`
+  fetched the pinned payload, verified **22,420,071,166 bytes** against
+  `Resources/bundled-models.json`, and published **25 parts (<2 GB)** plus the plan to
+  release `model-parts-v1`. Manifest SHA-256
+  `3f355155ab45df5f359b69a3cbeb9389de244acf8d63329d2b6cd93b6d8ba765`; all 25 part
+  assets exist. `Resources/model-parts.json` is `ready`.
+- **First open is verified in CI.** Release run `39668810492` installed `Dot.dmg` with
+  `com.apple.quarantine` on macOS 26 and required the app to stay alive 60 s. The DMG is
+  ad-hoc signed; Developer ID notarisation remains owner-only.
+- **Owner test script:** [TEST_TODAY.md](TEST_TODAY.md) — download/verify, install/first
+  open, 22.4 GB model, voice, offline, screen, `force it`, logs and pass criteria.
+- Pi gates: Python **656 OK / 28 skipped**, **76 contracts**, Rust fmt/clippy/test pass.
+  CI run `39668799150` at `349fd8c` is green in all four jobs.
+- Release **`v1.1.0`** (Latest): `Dot.dmg` **793,382,400 bytes**, SHA-256
+  `273c724bdfbdbc2dba9ec34edf48d4e09104e0ff2d62d9162db493d01f31e4f3`; assets include
+  the checksum, `model-parts.json` + `.sha256`, `TEST_TODAY.md`, joiner and README.
+  Evidence: [PHASE7_RESULT.md](PHASE7_RESULT.md).
+- Still owner-only: install/acceptance on a minimum-spec Mac, the 22.4 GB first download,
+  notarisation, the log token, and the live safety-approver session.
+
 ## Phase 6 — multi-model review, real launch and gates (2026-10-21)
 
 - Three independent read-only reviews covered the whole product source
@@ -25,7 +47,7 @@ by actually running the gate, not by assumption.
   `Dot.dmg` **1,007,296,565 bytes**, SHA-256
   `8d76e6aebc92b0b8a962359efead6b00211ecd4bc47c49435a21b523019a590a`; the
   downloaded asset matches the published `.sha256`. Ad-hoc signed, **not
-  notarised**, no model weights, parts still owner-gated. Evidence:
+  notarised**, no model weights; model parts were still owner-gated at that tag. Evidence:
   [PHASE6_RESULT.md](PHASE6_RESULT.md).
 - Still owner-only: install/acceptance on a minimum-spec Mac, the full 19.9 GB
   model download, notarisation, the log token and the real safety-approval session.
@@ -57,39 +79,37 @@ by actually running the gate, not by assumption.
   and a README. `release.yml` packages the **default model-less DMG** from current source: it downloads
   the previously published audited runtime donor (`public-f6cc73d`, SHA-256 pinned),
   strips model weights, and re-signs. It refuses to ship `OfflineModels`.
-- Model delivery: `Resources/model-parts.json` is the primary pinned-part plan; when the
-  owner uploads parts it becomes `ready`. Until then the app uses revision-pinned
-  Hugging Face files and verifies the same signed SHA-256. Parts, retries/backoff,
-  HTTP Range resume, per-part SHA-256, per-launch repair and disk checks are implemented; the
-  split-part resume/repair loop has source-level checks only (no unit test yet).
+- Model delivery: `Resources/model-parts.json` is `ready`; the CI workflow publishes the
+  pinned parts to `model-parts-v1` and the app uses them first, with revision-pinned
+  Hugging Face files as the hash-checked fallback. Retries/backoff, HTTP Range resume,
+  per-part SHA-256, per-launch repair and disk checks are implemented.
 - All-in-one: `split_release.py`, `join_release.py`, `join-dot-dmg.command` and
-  `package_all_in_one.sh` produce/verify/join <2 GiB parts. Model and all-in-one parts are
-  owner-gated (see `QUESTIONS_FOR_EMIN.md` §8–10).
+  `package_all_in_one.sh` produce/verify/join <2 GiB parts. The all-in-one DMG still
+  needs owner acceptance before it can be built; the model parts no longer do.
 - `verify_macos.sh` still records the hosted runtime-finalizer canary as a known
   hosted-toolchain limitation and skips packaging; the release job uses the pinned donor
   runtime instead of pretending that canary passed.
 
 ## Verification evidence (last full runs)
 
-- Full Xcode lane: **915 tests, 1 skipped, 0 failures — TEST SUCCEEDED** (before phase 3;
-  phase-3 CI reruns the portable SwiftPM lane and the audio-dependent Xcode lane)
-- SwiftPM suites: green (62 suite lines, 0 failures)
-- Python suite: **608 tests** (phase-3 release/parts contracts added; 4 skipped)
-- Static guardrails: **56/56** (release workflow contract updated)
-- Rust: 18 tests for dot-research/dot-runtime on the Pi; dot-voice build + 2 protocol tests on macOS CI
-- `verify_macos.sh`: passes every independent stage; **0 warnings**; the only failure is the
-  **runtime finalizer canary**, which fails by design on a hosted toolchain
-  (`unsupported hosted toolchain image`) and blocks hosted packaging
-- Installed app: provenance equals HEAD, all five binaries present, signed, running
+- Phase 7 CI run `39668799150` at `349fd8c`: `rust-gates`, `swift-test`, `dot-voice`
+  and `macos` all **green**.
+- Pi gates: Python **656 tests / 28 skipped**, **76/76 static guardrails**, Rust
+  fmt/clippy/test pass (`dot-research` + `dot-runtime`; `dot-voice` builds only on macOS).
+- First-open proof: release run `39668810492` installed `Dot.dmg` with
+  `com.apple.quarantine` and the app stayed alive for 60 s.
+- Model parts: 25 assets, 22,420,071,166 bytes, manifest SHA-256
+  `3f355155…8ba765`; `gh release view model-parts-v1` lists every part.
 
 ## Remaining — all owner-gated (no code path exists without these)
 
-1. **R4 voice choice** — four Kokoro British-female samples generated and waiting in
-   `~/Downloads/Dot-voice-samples/` (bf_isabella, bf_emma, bf_alice, bf_lily); the
-   owner picks the winner, or requests the Chatterbox/Orpheus evaluation.
+1. **The goal's done-condition** — run [TEST_TODAY.md](TEST_TODAY.md) on a Mac at or
+   above the minimum: 22.4 GB model download, voice, Wi-Fi-off turn, screen context
+   and the `force it` flow.
 2. **Phase D** — Developer ID Application certificate + notarisation requires the
-   owner's Apple Developer account action (`SIGN_IDENTITY` for
-   `scripts/package_public_release.sh`).
-3. **The goal's done-condition** — the owner exercises the features in one real
-   session (mic grant, a conversation, memory inspect, battery alerts, a file action
-   through the safety approver).
+   owner's paid Apple Developer account (`SIGN_IDENTITY` for
+   `scripts/package_public_release.sh`). Ad-hoc signing works; this only removes the
+   Gatekeeper warning.
+3. **Log upload** — store the token in Keychain and confirm one real upload.
+4. **R4 voice choice** — four Kokoro British-female samples are available; the owner
+   picks the winner, or requests the Chatterbox/Orpheus evaluation.

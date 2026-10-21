@@ -1,7 +1,183 @@
 {
-  "schema_version": 1,
-  "status": "pending",
-  "release_tag": "model-parts-v1",
   "base_url": "https://github.com/Emin-dev/Dot/releases/download/model-parts-v1/",
-  "parts": []
+  "parts": [
+    {
+      "asset": "llm-target-README.md.part000",
+      "bytes": 632,
+      "file": "llm-target/README.md",
+      "offset": 0,
+      "sha256": "860ff845b4746d0b3e1d1afa4f13aac691ef49c7165054cedfb199371568c4c2"
+    },
+    {
+      "asset": "llm-target-chat_template.jinja.part000",
+      "bytes": 8952,
+      "file": "llm-target/chat_template.jinja",
+      "offset": 0,
+      "sha256": "c3cf9e34abf4f9e36c2d72165aa9c132d3e2a725b6c2586aaa3a8af9d7a81041"
+    },
+    {
+      "asset": "llm-target-config.json.part000",
+      "bytes": 4932,
+      "file": "llm-target/config.json",
+      "offset": 0,
+      "sha256": "14b65a0ee06517060a6bbd979bb1a8ff54e7b304b1a1f01d54344b88b8285e85"
+    },
+    {
+      "asset": "llm-target-model-00001-of-00003.safetensors.part000",
+      "bytes": 1900000000,
+      "file": "llm-target/model-00001-of-00003.safetensors",
+      "offset": 0,
+      "sha256": "962b9675936c7b4594ad88bc09907e1498ac593d566016cd84f96b84041cf1ba"
+    },
+    {
+      "asset": "llm-target-model-00001-of-00003.safetensors.part001",
+      "bytes": 1900000000,
+      "file": "llm-target/model-00001-of-00003.safetensors",
+      "offset": 1900000000,
+      "sha256": "b6b5bec10467c1801aa15648d61bceeb9d12b654175608bc64782c65afd4e4ce"
+    },
+    {
+      "asset": "llm-target-model-00001-of-00003.safetensors.part002",
+      "bytes": 1543268662,
+      "file": "llm-target/model-00001-of-00003.safetensors",
+      "offset": 3800000000,
+      "sha256": "7d6cbd4cc62304f754ec9f370aadf69d19b7c99c80f924795ee7a6ccda19e141"
+    },
+    {
+      "asset": "llm-target-model-00002-of-00003.safetensors.part000",
+      "bytes": 1900000000,
+      "file": "llm-target/model-00002-of-00003.safetensors",
+      "offset": 0,
+      "sha256": "c93a92321ba0655dcdf719ba7fe839581d89956477e0ad6f3f38b1749a10ccb0"
+    },
+    {
+      "asset": "llm-target-model-00002-of-00003.safetensors.part001",
+      "bytes": 1900000000,
+      "file": "llm-target/model-00002-of-00003.safetensors",
+      "offset": 1900000000,
+      "sha256": "032edbd2860c3860aba8350d34e2fca046b5dc44a7ac91ee020e77466cbb4b59"
+    },
+    {
+      "asset": "llm-target-model-00002-of-00003.safetensors.part002",
+      "bytes": 1554185130,
+      "file": "llm-target/model-00002-of-00003.safetensors",
+      "offset": 3800000000,
+      "sha256": "2f3537f96fd7d9a6c985f76fd33c3d2ef9e0b3f89ce3df12c96e13afa72a650f"
+    },
+    {
+      "asset": "llm-target-model-00003-of-00003.safetensors.part000",
+      "bytes": 1900000000,
+      "file": "llm-target/model-00003-of-00003.safetensors",
+      "offset": 0,
+      "sha256": "a20db3224450857399a89e3fc18543618a0dd5a34703f26222a148bed08df331"
+    },
+    {
+      "asset": "llm-target-model-00003-of-00003.safetensors.part001",
+      "bytes": 1900000000,
+      "file": "llm-target/model-00003-of-00003.safetensors",
+      "offset": 1900000000,
+      "sha256": "ff6847fb410cb2ef2d9809bc71f8e06108d2920b04ebbc20e18622ad3ce34e4e"
+    },
+    {
+      "asset": "llm-target-model-00003-of-00003.safetensors.part002",
+      "bytes": 1557087557,
+      "file": "llm-target/model-00003-of-00003.safetensors",
+      "offset": 3800000000,
+      "sha256": "771b66fa6d0102ff7e853d0396a4543c369310069d094c995072e32ff3bb7b98"
+    },
+    {
+      "asset": "llm-target-model.safetensors.index.json.part000",
+      "bytes": 218281,
+      "file": "llm-target/model.safetensors.index.json",
+      "offset": 0,
+      "sha256": "13b840162b4cb35c66fef7df072f7dbb4717908204364f5e5d9f9655a2758fa8"
+    },
+    {
+      "asset": "llm-target-preprocessor_config.json.part000",
+      "bytes": 390,
+      "file": "llm-target/preprocessor_config.json",
+      "offset": 0,
+      "sha256": "27225450ac9c6529872ee1924fcb0962ff5634834f817040f444118116f4e516"
+    },
+    {
+      "asset": "llm-target-processor_config.json.part000",
+      "bytes": 991,
+      "file": "llm-target/processor_config.json",
+      "offset": 0,
+      "sha256": "222e060084f093738ca7af4c89ef09d844e415876021325fdf7d5c6821b119d4"
+    },
+    {
+      "asset": "llm-target-tokenizer.json.part000",
+      "bytes": 19989325,
+      "file": "llm-target/tokenizer.json",
+      "offset": 0,
+      "sha256": "06b9509352d2af50381ab2247e083b80d32d5c0aba91c272ca9ff729b6a0e523"
+    },
+    {
+      "asset": "llm-target-tokenizer_config.json.part000",
+      "bytes": 1165,
+      "file": "llm-target/tokenizer_config.json",
+      "offset": 0,
+      "sha256": "792fa3f0cb88b111e54ef3134c873531008c4df471d108da17903426e308aa7b"
+    },
+    {
+      "asset": "llm-target-vocab.json.part000",
+      "bytes": 6722759,
+      "file": "llm-target/vocab.json",
+      "offset": 0,
+      "sha256": "ce99b4cb2983d118806ce0a8b777a35b093e2000a503ebde25853284c9dfa003"
+    },
+    {
+      "asset": "llm-draft-README.md.part000",
+      "bytes": 5399,
+      "file": "llm-draft/README.md",
+      "offset": 0,
+      "sha256": "be141ff737af8779959cb5ecaefb458ac3c214a5020aa40f69d4d1dc6f42494a"
+    },
+    {
+      "asset": "llm-draft-config.json.part000",
+      "bytes": 1239,
+      "file": "llm-draft/config.json",
+      "offset": 0,
+      "sha256": "873e3556509b0da06e29654ba00d4944888d4b5e8a33afde25f7eb27d321e980"
+    },
+    {
+      "asset": "llm-draft-model.safetensors.part000",
+      "bytes": 1900000000,
+      "file": "llm-draft/model.safetensors",
+      "offset": 0,
+      "sha256": "addc89908f7b76b9aeb134020288ed8d07b53f170320dcd32a7d3b2ea9e4cb72"
+    },
+    {
+      "asset": "llm-draft-model.safetensors.part001",
+      "bytes": 1900000000,
+      "file": "llm-draft/model.safetensors",
+      "offset": 1900000000,
+      "sha256": "6c8aa18fbb90e418e79d527a8983e682892d04dbea3bfb9a838cfe5412a4279d"
+    },
+    {
+      "asset": "llm-draft-model.safetensors.part002",
+      "bytes": 48817896,
+      "file": "llm-draft/model.safetensors",
+      "offset": 3800000000,
+      "sha256": "247c5b1dfc42ea3ac0a6b3dd3804fb8e295edc7d8f0fd69dd1a5e923fb5f30fa"
+    },
+    {
+      "asset": "aux-gemma-3-4b-it-Q4_K_M.gguf.part000",
+      "bytes": 1900000000,
+      "file": "aux/gemma-3-4b-it-Q4_K_M.gguf",
+      "offset": 0,
+      "sha256": "23e2970e231ff0e69cd25ab1b1f6bf0430f31ed4f64ff5ba974887662ad3b53b"
+    },
+    {
+      "asset": "aux-gemma-3-4b-it-Q4_K_M.gguf.part001",
+      "bytes": 589757856,
+      "file": "aux/gemma-3-4b-it-Q4_K_M.gguf",
+      "offset": 1900000000,
+      "sha256": "1e67c1247e11412802f923c8af3e2406cfbe86d172d4828c6d2b7a54c2dc480f"
+    }
+  ],
+  "release_tag": "model-parts-v1",
+  "schema_version": 1,
+  "status": "ready"
 }

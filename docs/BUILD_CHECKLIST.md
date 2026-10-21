@@ -23,10 +23,10 @@ The detailed per-promise evidence is in [PHASE4_RESULT.md](PHASE4_RESULT.md). Su
 | Launch gate: M5 Pro class / 48 GB / macOS 27+ | **Verified (source + tests)** | `HardwareCompatibility` tests and guardrails; no override, no smaller model |
 | Text log channel and offline queue | **Verified (source + tests)** | `DotLogSync`, `LogSyncPolicyTests`, offline contract; token upload owner-gated |
 | Offline core after model download | **Verified (source + unit evidence)** | `test_offline_runtime_contract.py`, `OfflineIntegrationTests`; native disconnected run owner-gated |
-| First-launch model downloader | **Partial** | Manifest/hash/reuse tested; split-part resume/repair has source-level checks only; full 19.9 GB download not run here |
+| First-launch model downloader | **Verified (parts source + tests)** | Plan is `ready`; per-part SHA-256 and resume tested; the 22.4 GB download is the owner's first step in TEST_TODAY.md |
 | Default DMG rebuild | **Verified by release workflow** | Phase 4 release; asset SHA in PHASE4_RESULT |
-| Complete all-in-one installer parts | **Broken/blocked** | Needs the owner's verified 22.4 GB payload; `QUESTIONS_FOR_EMIN.md` §9 |
-| Pinned model-part primary route | **Blocked** | Parts not uploaded; Hugging Face hash-checked fallback is active |
+| Complete all-in-one installer parts | **Partial** | Split/join tooling is tested; the 22 GB complete DMG still needs owner acceptance; the default DMG + model parts install works today |
+| Pinned model-part primary route | **Verified by CI** | 25 parts (22,420,071,166 bytes) on `model-parts-v1`; `Resources/model-parts.json` is `ready`; HF remains the hash-checked fallback |
 | Notarisation / Gatekeeper-clean public DMG | **Broken** | No Developer ID/notary credentials; DMG is ad-hoc signed |
 | R9 self-healing | **Broken/not built** | No snapshots, self-test, rollback or watcher |
 | R4 voice picker | **Partial** | Four British voices accepted; only Isabella is always bundled; payload decision open |

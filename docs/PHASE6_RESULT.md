@@ -1,5 +1,8 @@
 # Phase 6 result — multi-model review, real launch, gates and release
 
+> **Superseded 2026-10-22:** the model parts are now published by CI, v1.1.0 is Latest,
+> and the quarantined first open is verified. Current state: [PHASE7_RESULT.md](PHASE7_RESULT.md).
+
 **Status 2026-10-21:** Phase A, the real-launch lane, Phase C and the Phase D
 release are complete. The released DMG is ad-hoc signed and **not** notarised;
 the model and all-in-one parts remain owner-gated.

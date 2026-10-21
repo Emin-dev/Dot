@@ -17,8 +17,9 @@ installation still cannot run on the Pi, but **macOS arm64 CI now compiles and r
 - Offline source contract added (`Tests/Python/test_offline_runtime_contract.py`) plus a Swift
   no-network model-reuse test; native disconnected acceptance stays owner-gated.
 - The rows still **BROKEN** are unchanged and honest: R9 self-healing is not built, the complete
-  all-in-one parts and pinned model parts are not uploaded, and the DMG is ad-hoc signed/not
-  notarised. The hardware gate is still M5 Pro class / 48 GB / macOS 27+.
+  the all-in-one parts are still owner-gated (the pinned model parts are now published
+  on `model-parts-v1`), and the DMG is ad-hoc signed/not notarised. The hardware gate is
+  still M5 Pro class / 48 GB / macOS 27+.
 - `BUILD_CHECKLIST.txt` is historical (2026-10-14) and its old stacked-payload rows are not current
   promises; [PHASE4_RESULT.md](PHASE4_RESULT.md) is the current promise matrix.
 

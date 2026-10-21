@@ -121,6 +121,9 @@ refactor** by another worker:
 
 ## Current build and gates
 
+- Phase 7 release **`v1.1.0`** (Latest) is the first owner-testable build: 25 model parts on
+  `model-parts-v1`, CI-proven first open from the quarantined DMG for 60 s, and
+  [TEST_TODAY.md](TEST_TODAY.md). Evidence: [PHASE7_RESULT.md](PHASE7_RESULT.md).
 - Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
   `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
   The Phase 6 tag **`v1.1.0-phase5`** points at **`88ab9fb`**, the exact commit whose full CI run
@@ -142,13 +145,15 @@ refactor** by another worker:
   **not notarised** (no Developer ID Application identity or notary credentials).
 - Phase 4 release **`v1.1.0-phase4`** remains at `69ecfbd` with `Dot.dmg` 1,005,188,103 bytes,
   SHA-256 `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6`.
-- The full 19.9 GB first-launch model download has **not** been run end to end on this Pi; the
-  downloader's manifest/hash/reuse units and one real gated Hugging Face file were exercised; the
-  split-part resume/repair loop has source-level checks only.
-  After the download, core conversation/voice/memory reuse local files and do not require a network;
+- The 22,420,071,166-byte model is published as 25 parts on `model-parts-v1` and pinned in
+  `Resources/model-parts.json` (CI run `39661861719`); the app uses those parts first.
+  The end-to-end 22.4 GB download on a minimum-spec Mac is the owner's first step in
+  [TEST_TODAY.md](TEST_TODAY.md); the downloader's hash/reuse/resume units are tested.
+  After the download, core conversation/voice/memory reuse local files and require no network;
   see [PHASE4_RESULT.md](PHASE4_RESULT.md) and [offline acceptance](offline-acceptance.md).
-- The complete all-in-one DMG parts and the pinned model parts are **not uploaded**: both need the
-  verified 22.4 GB payload on the owner's Mac (`QUESTIONS_FOR_EMIN.md` §8–10).
+- The complete all-in-one DMG still needs owner acceptance and a 22 GB build
+  (`QUESTIONS_FOR_EMIN.md` §9). The default DMG plus the published model parts is the
+  supported install today.
 
 ## What genuinely works
 
