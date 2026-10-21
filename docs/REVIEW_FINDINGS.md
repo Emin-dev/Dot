@@ -1,8 +1,9 @@
 # Phase 5 independent review — findings and verified fixes
 
-**Status 2026-10-21 — CI green.** Final commit `d5cc583`; run
-[`39552385832`](https://github.com/Emin-dev/Dot/actions/runs/39552385832) passed
-all four jobs (rust-gates, swift-test, macos, dot-voice): SwiftPM **616 / 0**,
+**Status 2026-10-21 — CI green.** Source commit `d5cc583`, docs commit
+`dfb2011`; run
+[`39554065822`](https://github.com/Emin-dev/Dot/actions/runs/39554065822) at
+`dfb2011` passed all four jobs (rust-gates, swift-test, macos, dot-voice): SwiftPM **616 / 0**,
 full XCTest **944 / 0 with 1 skipped** (opt-in live model test), Python **636**
 on the Pi and **636 / 4 skipped** on macOS. The earlier `9bff09c` attempt had a
 stale expectation (`[REDACTED]` vs `[REDACTED_ENV]`) and one flaky
