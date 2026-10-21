@@ -2437,14 +2437,13 @@ final class ChatModel: ObservableObject {
            ["show that", "read that", "show your answer", "read your answer", "show me that",
             "what did you say", "show history", "read history", "show your reply",
             "read your reply", "show me your answer"].contains(copyPhrase) {
-            if answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                respondDirectly("I have not said anything yet.", id: id)
-            } else {
-                onShowHistory?()
-                // Opening the panel calls cancelForInteraction(), which advances
-                // the turn gate; speak the confirmation in the new current turn.
-                respondDirectly("Showing what I said in the local history.", id: gate.current)
-            }
+            // Always open the history surface. A typed command resets `answer`
+            // before this branch, so the old empty-answer check made "show
+            // history" silently answer "I have not said anything yet".
+            onShowHistory?()
+            // Opening the panel calls cancelForInteraction(), which advances the
+            // turn gate; speak the confirmation in the new current turn.
+            respondDirectly("Showing what I said in the local history.", id: gate.current)
             return
         }
 

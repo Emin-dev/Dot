@@ -24,8 +24,10 @@ qwen3.8-max) covered the whole product source. Verified fixes:
 - Safety: interpreter executors (`python3`, `osascript`, `perl`, `ruby`, `node`,
   `env`) now require the approval/safety path; `env python3 -c` cannot bypass it.
 - Direct replies: stale detached file-read/forget/memory-list results cannot
-  overwrite a newer turn, while the show-history confirmation uses the new turn
-  after the panel advances the gate.
+  overwrite a newer turn, while "show history" now always opens the panel and
+  uses the new turn after the panel advances the gate (a typed/voice command
+  resets the visible answer before dispatch, so the old empty-answer check made
+  the command a no-op).
 - Safety follow-up: leading assignments and launchers (`FOO=1 python3`,
   `nohup`, `command`, `nice`, `xcrun`, `env -u`) cannot hide an interpreter;
   `echo env python3` stays harmless.
