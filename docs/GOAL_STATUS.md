@@ -3,6 +3,26 @@
 This file is the evidence record for the active goal. Every line below was verified
 by actually running the gate, not by assumption.
 
+## Phase 7b — Gatekeeper one-line install (2026-10-22)
+
+- Root cause: `public-f6cc73d` opened because it was Apple Development signed on
+  Emin's Mac; the CI releases since 21 Oct are ad-hoc signed, so Gatekeeper
+  rejects them and macOS 27 does not offer right-click > Open.
+- Release **`v1.1.1`** (Latest) adds `install-dot.sh` in the repo and as an asset.
+  The first line of the release notes, `README.txt` and `TEST_TODAY.md` is the
+  one-line curl install. The script verifies every SHA-256, joins split parts,
+  clears quarantine, runs `codesign --verify --deep --strict` and opens Dot.
+- The release starts as a draft; three independent macOS jobs must pass before
+  publish: curl | bash + 60 s alive, quarantined DMG + 60 s alive, and
+  `spctl --assess -vv` plus `codesign` with the verdict in the job summary.
+  Run `39685174351` is green in all five jobs.
+- Release DMG **793,667,072 bytes**, SHA-256
+  `0a409a17626a0d8897d574c67d9cd631b23a14d9eb20d75d45fd44e36104c61a`.
+  Evidence and the owner fallback (`scripts/build-and-sign-on-mac.sh`):
+  [PHASE7B_RESULT.md](PHASE7B_RESULT.md).
+- Still owner-only: Developer ID notarisation (no-warning double-click for every
+  Mac), the minimum-spec Mac run, log token and the live safety session.
+
 ## Phase 7 — Emin can test everything today (2026-10-22)
 
 - **Model parts are public and owner-free.** `Publish model parts` run `39661861719`

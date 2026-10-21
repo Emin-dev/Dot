@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-22 — Phase 7b: Gatekeeper one-line install
+
+- Root cause: `public-f6cc73d` opened on Emin's Mac because it was Apple
+  Development signed on that Mac; the CI releases since 21 Oct are ad-hoc signed,
+  so Gatekeeper rejects them and macOS 27 does not offer right-click > Open.
+- Added `scripts/install-dot.sh`, published in the repo and as a release asset.
+  The first line of `README.txt`, `docs/TEST_TODAY.md` and the release notes is
+  now `curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash`.
+  The script downloads every published part with curl (no quarantine), verifies
+  every SHA-256, joins split parts, mounts the DMG, copies Dot to `/Applications`,
+  clears `com.apple.quarantine`, verifies the ad-hoc signature deeply, detaches
+  and opens Dot. It is idempotent and prints PASS/FAIL.
+- Added `scripts/build-and-sign-on-mac.sh`: builds locally, signs with the first
+  `Apple Development` identity from `security find-identity -v -p codesigning`
+  (ad-hoc fallback), installs to `/Applications` and opens Dot.
+- Release workflow now creates a **draft**, runs three independent macOS jobs
+  (curl | bash + 60 s alive, quarantined DMG + 60 s alive, `spctl --assess -vv`
+  plus `codesign --verify --deep --strict`), and publishes only when all three
+  are green. `spctl` records `rejected` as expected until notarisation.
+- Release **`v1.1.1`** (Latest, run `39685174351`, commit `b765892`): `Dot.dmg`
+  **793,667,072 bytes**, SHA-256
+  `0a409a17626a0d8897d574c67d9cd631b23a14d9eb20d75d45fd44e36104c61a`.
+  Assets also include `install-dot.sh`, `build-and-sign-on-mac.sh`,
+  `Dot.dmg.sha256`, `README.txt`, `TEST_TODAY.md`, the joiner and the parts plan.
+  A no-warning double-click still requires Developer ID notarisation
+  (owner-only). Details: [docs/PHASE7B_RESULT.md](docs/PHASE7B_RESULT.md).
+
 ## 2026-10-22 — Phase 7: Emin can test today
 
 - Model delivery is owner-free: `Publish model parts` (run `39661861719`) fetched the

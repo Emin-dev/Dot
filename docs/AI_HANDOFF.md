@@ -115,15 +115,20 @@ refactor** by another worker:
   release and was not committed by the documentation pass.
 - Do not revert or overwrite these files. Coordinate with the other worker, finish the initializer
   call sites, then run the full gates and `install_local.sh`.
-- The published `Dot.dmg`/`Dot.zip` were built before this refactor, with an **Apple Development**
-  signature. The in-progress packaging script now refuses Apple Development for public distribution;
-  notarisation with a Developer ID remains required for a proper release.
+- The public downloads are now **`v1.1.1`** (Latest): ad-hoc signed, not notarised,
+  installed through `scripts/install-dot.sh`. Its release workflow drafts the release and
+  publishes only after the one-line install, quarantined-DMG and `spctl` jobs are green.
+  The older `public-f6cc73d` was Apple Development signed on Emin's Mac, which is why it
+  opened there; `scripts/build-and-sign-on-mac.sh` reproduces that owner-only path.
+  Developer ID notarisation remains required for a no-warning double-click anywhere.
 
 ## Current build and gates
 
-- Phase 7 release **`v1.1.0`** (Latest) is the first owner-testable build: 25 model parts on
-  `model-parts-v1`, CI-proven first open from the quarantined DMG for 60 s, and
-  [TEST_TODAY.md](TEST_TODAY.md). Evidence: [PHASE7_RESULT.md](PHASE7_RESULT.md).
+- Phase 7b release **`v1.1.1`** (Latest) is owner-testable from one Terminal line:
+  `curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash`.
+  It keeps the 25 model parts on `model-parts-v1` and records the three acceptance
+  jobs in [PHASE7B_RESULT.md](PHASE7B_RESULT.md); `v1.1.0` evidence stays in
+  [PHASE7_RESULT.md](PHASE7_RESULT.md).
 - Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
   `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
   The Phase 6 tag **`v1.1.0-phase5`** points at **`88ab9fb`**, the exact commit whose full CI run
