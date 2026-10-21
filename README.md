@@ -12,33 +12,45 @@ binding rules R1–R17.
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
 
-**Current release: [v1.1.0](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0) (Latest).**
-**[Download `Dot.dmg`](https://github.com/Emin-dev/Dot/releases/latest/download/Dot.dmg)**, open it,
-drag **Dot** into **Applications**, and launch it. The app verifies its runtime, then downloads
-the exact 22.4 GB local model on first launch from the pinned `model-parts-v1` release (revision-pinned
-Hugging Face files are the hash-checked fallback), checking every file's SHA-256 against the bundled
-manifest. Allow at least **35 GB** of free disk and a stable connection; progress appears in the menu
-bar and context menu. The full owner test is [docs/TEST_TODAY.md](docs/TEST_TODAY.md).
+**Current release: [v1.1.1](https://github.com/Emin-dev/Dot/releases/tag/v1.1.1) (Latest).**
+
+One Terminal line:
+
+```bash
+curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
+```
+
+It downloads every release part with curl (curl adds no quarantine), verifies
+every SHA-256, joins split parts, mounts the DMG, copies **Dot** into
+**Applications**, clears `com.apple.quarantine`, verifies the ad-hoc signature
+deeply, and opens Dot. It is idempotent and safe to re-run.
+
+The public build is **ad-hoc signed and not notarised yet**. If macOS still
+warns, use **System Settings → Privacy & Security → Open Anyway**, or run
+`xattr -dr com.apple.quarantine /Applications/Dot.app` then open Dot. A
+no-warning double-click for every Mac needs Developer ID signing plus
+notarisation, which requires Emin's paid Apple Developer account and is
+owner-only.
+
+The app verifies its runtime, then downloads the exact 22.4 GB local model on
+first launch from the pinned `model-parts-v1` release (revision-pinned Hugging
+Face files are the hash-checked fallback), checking every file's SHA-256 against
+the bundled manifest. Allow at least **35 GB** of free disk and a stable
+connection. The full owner test is [docs/TEST_TODAY.md](docs/TEST_TODAY.md).
 
 Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
 
-DMG one-line install (after a clean macOS install):
+If the download is blocked by policy, build and sign on the owner's Mac:
 
 ```bash
-curl -L -o /tmp/Dot.dmg https://github.com/Emin-dev/Dot/releases/latest/download/Dot.dmg \
-  && hdiutil attach /tmp/Dot.dmg -nobrowse -quiet \
-  && cp -R "/Volumes/Dot/Dot.app" /Applications/ \
-  && hdiutil detach "/Volumes/Dot" -quiet \
-  && xattr -dr com.apple.quarantine /Applications/Dot.app \
-  && open /Applications/Dot.app
+bash scripts/build-and-sign-on-mac.sh
 ```
 
-The public build is **ad-hoc signed and not notarised yet**, so macOS may warn on first open. Either
-right-click (Control-click) **Dot → Open → Open**, use **System Settings → Privacy & Security → Open
-Anyway**, or clear the quarantine flag with the `xattr` command above. CI installs the DMG with
-`com.apple.quarantine` set and proves the app stays alive for 60 seconds; the Gatekeeper dialog itself
-is the owner's first step in [docs/TEST_TODAY.md](docs/TEST_TODAY.md). Developer ID notarisation still
-needs Emin's paid Apple Developer account.
+It builds locally with Xcode/SwiftPM, signs with the first `Apple Development`
+identity from `security find-identity -v -p codesigning` (ad-hoc fallback),
+installs to `/Applications` and opens Dot. That signature is trusted only on the
+Mac that owns the certificate; a public no-warning install still needs Developer
+ID notarisation.
 
 Developers with an existing complete payload can build from source:
 

@@ -1,3 +1,5 @@
+curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
+
 # Dot — test everything today
 
 For Emin on a MacBook at or above the minimum: **Apple Silicon M5 Pro class,
@@ -6,7 +8,55 @@ there is no smaller model and no override.
 
 Allow about 45–75 minutes: most of it is the one-time 22.4 GB model download.
 
-## 1. Download and verify
+## 1. Install (one Terminal line)
+
+Copy this exact line into Terminal and press Return:
+
+```bash
+curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
+```
+
+The script downloads `Dot.dmg` (and every part when the release uses split
+parts) with curl, which adds no `com.apple.quarantine`; verifies every SHA-256;
+mounts the DMG; copies `Dot.app` to `/Applications`; clears quarantine; runs
+`codesign --verify --deep --strict`; detaches the DMG; and opens Dot. It prints
+`PASS:`/`FAIL:` lines, is idempotent and is safe to run again. It asks for sudo
+only if `/Applications` is not writable.
+
+**Pass:** the script prints `PASS: Dot is installed` and Dot appears. If it
+prints `FAIL:`, send that line back; do not continue.
+
+### If macOS still blocks the first open
+
+The public build is ad-hoc signed and **not notarised**. Use one of:
+
+- **System Settings → Privacy & Security → Open Anyway**, then open Dot again;
+- Terminal: `xattr -dr com.apple.quarantine /Applications/Dot.app`, then
+  `open /Applications/Dot.app`.
+
+Right-click → Open does not work on every macOS version (including macOS 27),
+which is exactly why the installer clears the attribute for you.
+
+### Owner-only fallback: build and sign on this Mac
+
+If the public download is blocked by policy, run from a checkout:
+
+```bash
+bash scripts/build-and-sign-on-mac.sh
+```
+
+It builds Dot locally with Xcode/SwiftPM and the Rust runtime, signs with the
+first `Apple Development` identity from
+`security find-identity -v -p codesigning` (ad-hoc fallback when none exists),
+installs to `/Applications` and opens Dot. This works because an Apple
+Development signature is trusted on the Mac that owns the certificate; it is
+not a public release.
+
+**Plainly:** a no-warning double-click for every Mac needs **Developer ID
+signing plus notarisation**. That needs Emin's paid Apple Developer account and
+is owner-only, not available today.
+
+## 2. Download and verify manually (optional)
 
 1. Open <https://github.com/Emin-dev/Dot/releases/latest>.
 2. Download `Dot.dmg` and `Dot.dmg.sha256` into `~/Downloads`.
@@ -19,24 +69,6 @@ Allow about 45–75 minutes: most of it is the one-time 22.4 GB model download.
 
    **Pass:** prints `Dot.dmg: OK`. If it prints `FAILED`, delete the file and
    download again; do not install it.
-
-## 2. Install and first open
-
-1. Open `Dot.dmg`, drag **Dot** to **Applications**, and eject the DMG.
-2. The DMG is ad-hoc signed and **not notarised**, so macOS will warn on the
-   first launch. Allow it once, in this order of preference:
-   - Finder: right-click (or Control-click) **Dot** → **Open** → **Open**; or
-   - **System Settings → Privacy & Security → Open Anyway**; or
-   - Terminal: `xattr -dr com.apple.quarantine /Applications/Dot.app`
-3. Launch **Dot**.
-
-   **Pass:** Dot appears on screen and does not quit. A blocking "Hardware Does
-   Not Meet Dot's Minimum" panel means this Mac is below the minimum — record
-   the exact text and stop.
-
-No join step is needed for this DMG. The 22+ GB all-in-one split installer is
-not published yet; `join-dot-dmg.command` is only for those parts when they
-exist.
 
 ## 3. Model download (one time, online)
 
@@ -118,8 +150,9 @@ Use a disposable folder only.
 
 All of these are true:
 
-- [ ] `Dot.dmg: OK` from `shasum` (step 1)
-- [ ] Dot installed from the DMG and launched after the first-open warning
+- [ ] the one-line installer printed `PASS: Dot is installed`
+- [ ] `Dot.dmg: OK` from `shasum` when checking manually (step 2)
+- [ ] Dot launched after the first-open warning
 - [ ] 22.4 GB model downloaded and verified once
 - [ ] Voice question answered aloud; interruption works
 - [ ] Wi-Fi off: relaunch, voice question and answer still work

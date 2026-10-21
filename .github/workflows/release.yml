@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (created at the current main commit)"
+        description: "Release tag (drafted at the current main commit)"
         required: true
-        default: "v1.1.0-phase3"
+        default: "v1.1.1"
 permissions:
   contents: write
 concurrency:
@@ -95,7 +95,9 @@ jobs:
           python3 -B scripts/check_contracts.py
           python3 -B -m unittest Tests/Python/test_release_parts.py -v
           python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
-          bash -n scripts/package_default_release.sh scripts/package_all_in_one.sh packaging/join-dot-dmg.command
+          python3 -B -m unittest Tests/Python/test_phase7_contract.py -v
+          python3 -B -m unittest Tests/Python/test_phase7b_contract.py -v
+          bash -n scripts/package_default_release.sh scripts/package_all_in_one.sh packaging/join-dot-dmg.command scripts/install-dot.sh scripts/build-and-sign-on-mac.sh scripts/install_acceptance_check.sh
       - name: Package the default app without model weights
         env:
           DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
@@ -109,15 +111,24 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
           cp build-public/Dot.dmg build-public/Dot.dmg.sha256 release-assets/
-          cp packaging/join-dot-dmg.command scripts/join_release.py release-assets/
+          cp scripts/install-dot.sh scripts/build-and-sign-on-mac.sh scripts/join_release.py release-assets/
+          cp packaging/join-dot-dmg.command release-assets/
           cp docs/TEST_TODAY.md release-assets/TEST_TODAY.md
           if python3 -c 'import json; raise SystemExit(json.load(open("Resources/model-parts.json"))["status"] != "ready")'; then
             cp Resources/model-parts.json release-assets/model-parts.json
             (cd release-assets && shasum -a 256 model-parts.json > model-parts.json.sha256)
           fi
           cat > release-assets/README.txt <<'EOF'
+          curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
+
           Dot default DMG
           ===============
+          The first line is the whole install: it downloads Dot.dmg with curl,
+          verifies every published SHA-256, mounts the DMG, installs Dot.app to
+          /Applications, clears com.apple.quarantine, verifies the ad-hoc code
+          signature deeply and opens Dot. The script is idempotent, needs sudo
+          only if /Applications is not writable, and is safe to run again.
+
           Dot.dmg contains the app and its verified local runtime, but not the
           Qwen3.8 27B Q4 weights (~22.4 GB). On first launch Dot verifies the
           signed manifest and downloads the exact files with resume, retries and
@@ -127,14 +138,25 @@ jobs:
 
           Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
 
-          First open (the DMG is ad-hoc signed and NOT notarized)
-          -------------------------------------------------------
-          1. Open Dot.dmg and drag Dot to Applications.
-          2. On the first launch macOS may refuse the ad-hoc signed app. Allow it:
-             - Finder: right-click (Control-click) Dot > Open > Open, or
+          First open / Gatekeeper
+          -----------------------
+          The public build is ad-hoc signed and NOT notarised. The installer
+          clears quarantine for you. If macOS still shows a warning, allow it:
              - System Settings > Privacy & Security > "Open Anyway", or
-             - Terminal: xattr -dr com.apple.quarantine /Applications/Dot.app
-          3. Launch Dot and follow TEST_TODAY.md in this release.
+             - Terminal: xattr -dr com.apple.quarantine /Applications/Dot.app,
+               then open /Applications/Dot.app.
+          A no-warning double-click for every Mac needs Developer ID signing and
+          notarisation, which requires Emin's paid Apple Developer account and
+          is owner-only; it is not available in this release.
+
+          If the one-line install is blocked by policy, build on this Mac with
+          scripts/build-and-sign-on-mac.sh (in the repository). It builds the
+          source, signs with the first "Apple Development" identity found by
+          security find-identity -v -p codesigning (ad-hoc fallback), installs
+          to /Applications and opens Dot. That signature only satisfies
+          Gatekeeper on the Mac that owns the certificate.
+
+          Then follow TEST_TODAY.md in this release.
 
           All-in-one installer
           ====================
@@ -149,13 +171,12 @@ jobs:
           name: dot-release-assets
           path: release-assets/*
           if-no-files-found: error
-      - name: Publish GitHub release
+      - name: Create the draft release (nothing is public yet)
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          # If the tag already exists, it must point at the commit we built.
           tag_lines=$(git ls-remote --tags origin "refs/tags/$TAG") || {
             echo "could not query tag $TAG" >&2
             exit 1
@@ -169,12 +190,204 @@ jobs:
             }
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # Never silently replace published assets: a re-run fails instead of
-            # overwriting an audited DMG with a different build.
-            gh release upload "$TAG" release-assets/*
-          else
-            gh release create "$TAG" release-assets/* \
-              --target "$GITHUB_SHA" \
-              --title "Dot $TAG" \
-              --notes-file release-assets/TEST_TODAY.md
+            is_draft=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+            if [ "$is_draft" = "true" ]; then
+              gh release delete "$TAG" --yes
+            else
+              echo "release $TAG is already published; refusing to replace it" >&2
+              exit 1
+            fi
           fi
+          gh release create "$TAG" release-assets/* \
+            --draft \
+            --target "$GITHUB_SHA" \
+            --title "Dot $TAG" \
+            --notes-file release-assets/TEST_TODAY.md
+          gh release view "$TAG" --json tagName,isDraft,assets > .tmp/draft-release.json
+          test "$(python3 -c 'import json; print(json.load(open(".tmp/draft-release.json"))["isDraft"])')" = "True"
+
+  installer-one-liner:
+    # (a) The exact documented shape: curl the draft install-dot.sh and pipe it
+    # into bash. The draft is served locally because GitHub draft assets need a
+    # token; the script being exercised is byte-for-byte the drafted asset.
+    needs: package
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Download the draft release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/draft
+          gh release download "$TAG" --dir .tmp/draft
+          test -f .tmp/draft/install-dot.sh
+          test -f .tmp/draft/Dot.dmg
+          test -f .tmp/draft/Dot.dmg.sha256
+      - name: Run curl | bash and prove Dot runs after 60 s
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory .tmp/draft \
+            > .tmp/http-server.log 2>&1 &
+          SERVER=$!
+          trap 'kill "$SERVER" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/install-dot.sh -o /dev/null; then break; fi
+            sleep 1
+          done
+          DOT_RELEASE_BASE=http://127.0.0.1:8765 \
+            bash -c 'curl -fsSL "$DOT_RELEASE_BASE/install-dot.sh" | bash'
+          bash scripts/install_acceptance_check.sh /Applications/Dot.app 60
+      - name: Quit Dot and remove the test install
+        if: always()
+        run: |
+          osascript -e 'tell application "Dot" to quit' >/dev/null 2>&1 || true
+          pkill -x Dot >/dev/null 2>&1 || true
+          rm -rf /Applications/Dot.app
+
+  quarantine-install:
+    # (b) A browser-like DMG: set com.apple.quarantine on the downloaded DMG,
+    # run the installer, then prove the attribute is gone and Dot stays alive.
+    needs: package
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Download the draft release assets and mark the DMG quarantined
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/draft
+          gh release download "$TAG" --dir .tmp/draft
+          xattr -w com.apple.quarantine \
+            "0081;$(printf %x "$(date +%s)");Safari;" .tmp/draft/Dot.dmg
+          xattr -p com.apple.quarantine .tmp/draft/Dot.dmg
+      - name: Install the quarantined DMG and prove quarantine is gone
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory .tmp/draft \
+            > .tmp/http-server.log 2>&1 &
+          SERVER=$!
+          trap 'kill "$SERVER" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/Dot.dmg.sha256 -o /dev/null; then break; fi
+            sleep 1
+          done
+          DOT_RELEASE_BASE=http://127.0.0.1:8765 \
+          DOT_DMG="$PWD/.tmp/draft/Dot.dmg" \
+          DOT_TEST_QUARANTINE=1 \
+            bash .tmp/draft/install-dot.sh
+          if xattr -p com.apple.quarantine .tmp/draft/Dot.dmg >/dev/null 2>&1; then
+            echo "com.apple.quarantine is still present on the downloaded DMG" >&2
+            exit 1
+          fi
+          echo "PASS: com.apple.quarantine is gone from the downloaded DMG"
+          if xattr -p com.apple.quarantine /Applications/Dot.app >/dev/null 2>&1; then
+            echo "com.apple.quarantine is still present on /Applications/Dot.app" >&2
+            exit 1
+          fi
+          echo "PASS: com.apple.quarantine is gone from /Applications/Dot.app"
+          bash scripts/install_acceptance_check.sh /Applications/Dot.app 60
+      - name: Quit Dot and remove the test install
+        if: always()
+        run: |
+          osascript -e 'tell application "Dot" to quit' >/dev/null 2>&1 || true
+          pkill -x Dot >/dev/null 2>&1 || true
+          rm -rf /Applications/Dot.app
+
+  spctl-codesign:
+    # (c) Record the Gatekeeper verdict. "rejected" is the honest expected
+    # result until the owner notarises with a paid Developer ID; codesign must
+    # still verify the ad-hoc signature.
+    needs: package
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - name: Download the draft release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/draft
+          gh release download "$TAG" --dir .tmp/draft
+      - name: Install, verify codesign and record spctl
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory .tmp/draft \
+            > .tmp/http-server.log 2>&1 &
+          SERVER=$!
+          trap 'kill "$SERVER" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8765/install-dot.sh -o /dev/null; then break; fi
+            sleep 1
+          done
+          DOT_RELEASE_BASE=http://127.0.0.1:8765 \
+            bash -c 'curl -fsSL "$DOT_RELEASE_BASE/install-dot.sh" | bash'
+          codesign --verify --deep --strict /Applications/Dot.app
+          echo "PASS: codesign --verify --deep --strict" >> "$GITHUB_STEP_SUMMARY"
+          set +e
+          SPCTL_OUTPUT="$(spctl --assess -vv /Applications/Dot.app 2>&1)"
+          SPCTL_STATUS=$?
+          set -e
+          {
+            echo "### spctl --assess -vv /Applications/Dot.app"
+            echo '```'
+            echo "$SPCTL_OUTPUT"
+            echo '```'
+            echo "Exit status: $SPCTL_STATUS (rejected is expected until Developer ID notarisation)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "$SPCTL_OUTPUT"
+          case "$SPCTL_OUTPUT" in
+            *rejected*) ;;
+            *) echo "spctl did not report the expected rejection" >&2; exit 1 ;;
+          esac
+      - name: Quit Dot and remove the test install
+        if: always()
+        run: |
+          osascript -e 'tell application "Dot" to quit' >/dev/null 2>&1 || true
+          pkill -x Dot >/dev/null 2>&1 || true
+          rm -rf /Applications/Dot.app
+
+  publish:
+    # The release becomes public and Latest only after all three acceptance
+    # lanes are green.
+    needs: [installer-one-liner, quarantine-install, spctl-codesign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Publish v1.1.1 as Latest only when every acceptance job is green
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          test "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" || {
+            echo "release $TAG is not a draft; refusing to publish" >&2
+            exit 1
+          }
+          gh release edit "$TAG" --draft=false --latest
+          gh release view "$TAG" --json tagName,isDraft,assets \
+            --jq '{tag: .tagName, draft: .isDraft, assets: [.assets[].name]}'
+          test "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "false"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name')" = "$TAG"

@@ -146,21 +146,31 @@ else
     fi
 fi
 
-"${SUDO[@]}" mkdir -p "$INSTALL_DIR"
+# macOS ships bash 3.2, where an empty array expansion is unsafe under
+# `set -u`; call through a helper instead.
+as_root() {
+    if [ "${#SUDO[@]}" -gt 0 ]; then
+        "${SUDO[@]}" "$@"
+    else
+        "$@"
+    fi
+}
+
+as_root mkdir -p "$INSTALL_DIR"
 STAGED="$INSTALL_DIR/.Dot.app.installing.$$"
-"${SUDO[@]}" rm -rf "$STAGED"
-"${SUDO[@]}" ditto "$MNT/Dot.app" "$STAGED" || fail "could not copy Dot.app"
+as_root rm -rf "$STAGED"
+as_root ditto "$MNT/Dot.app" "$STAGED" || fail "could not copy Dot.app"
 pass "Dot.app copied to $INSTALL_DIR"
 
 if [ "${DOT_TEST_QUARANTINE:-0}" = "1" ]; then
-    "${SUDO[@]}" xattr -w "$ATTR" "0081;$(printf '%x' "$(date +%s)");Safari;" "$STAGED"
-    "${SUDO[@]}" xattr -p "$ATTR" "$STAGED" >/dev/null 2>&1 \
+    as_root xattr -w "$ATTR" "0081;$(printf '%x' "$(date +%s)");Safari;" "$STAGED"
+    as_root xattr -p "$ATTR" "$STAGED" >/dev/null 2>&1 \
         || fail "could not set the CI test quarantine attribute"
     pass "test quarantine attribute set on the staged app"
 fi
 
-"${SUDO[@]}" xattr -dr "$ATTR" "$STAGED" || fail "could not clear quarantine"
-if "${SUDO[@]}" xattr -p "$ATTR" "$STAGED" >/dev/null 2>&1; then
+as_root xattr -dr "$ATTR" "$STAGED" || fail "could not clear quarantine"
+if as_root xattr -p "$ATTR" "$STAGED" >/dev/null 2>&1; then
     fail "com.apple.quarantine is still present on $APP"
 fi
 pass "quarantine cleared from Dot.app"
@@ -175,8 +185,8 @@ if pgrep -x Dot >/dev/null 2>&1; then
     sleep 2
 fi
 
-"${SUDO[@]}" rm -rf "$APP" || fail "could not replace $APP"
-"${SUDO[@]}" mv "$STAGED" "$APP" || fail "could not install $APP"
+as_root rm -rf "$APP" || fail "could not replace $APP"
+as_root mv "$STAGED" "$APP" || fail "could not install $APP"
 STAGED=""
 codesign --verify --deep --strict "$APP" || fail "the installed signature did not verify"
 pass "Dot.app installed at $APP"
