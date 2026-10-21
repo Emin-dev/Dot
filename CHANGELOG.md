@@ -20,8 +20,8 @@ Verified by independent reviewers and fixed (details in
   Swift redaction tests, and corrected resume/repair and provenance claims.
 
 Pi gates: 628 Python tests OK (28 skipped), 18 Rust tests, clippy
-`-D warnings`, 69 contracts. macOS Swift/dot-voice/DMG gates run in GitHub
-Actions.
+`-D warnings`, 69 contracts. macOS CI run `39541375214` at `2f0f79b` passed all
+four jobs (rust-gates, swift-test, macos, dot-voice).
 
 ## Earlier
 
