@@ -43,7 +43,9 @@ gh run view <run-id> --log-failed
 ```
 
 A red CI run is a blocker. The Swift/XCTest, focused-suite, `dot-voice` and DMG
-lanes are authoritative for macOS-only behaviour.
+lanes are authoritative for macOS-only behaviour. Final Phase 6 green run:
+`39636742798` at `88ab9fb` (945 XCTest / 1 skipped, 648 Python / 4 skipped).
+Release `v1.1.0-phase5` is at that commit; see `docs/PHASE6_RESULT.md`.
 
 ## Remaining owner-only gates
 

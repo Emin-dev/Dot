@@ -12,7 +12,13 @@
   2 MiB) after CI run `39628138310` failed to saturate a fast Darwin receive
   buffer; the absolute-deadline assertions are unchanged.
 - Pi gates: 645 Python tests OK (28 skipped), 76 contracts, Rust fmt/check/test/
-  clippy pass. Release and final CI evidence: `docs/PHASE6_RESULT.md`.
+  clippy pass. Final CI run `39636742798` at `88ab9fb` is green: 945 XCTest /
+  1 skipped, 648 Python / 4 skipped, 76 contracts.
+- Released **`v1.1.0-phase5`** at `88ab9fb` (run `39642486991`): `Dot.dmg`
+  1,007,296,565 bytes, SHA-256
+  `8d76e6aebc92b0b8a962359efead6b00211ecd4bc47c49435a21b523019a590a`; the
+  downloaded asset matches the published `.sha256`. Ad-hoc signed, not
+  notarised, no model weights; model/all-in-one parts remain owner-gated.
 
 ## 2026-10-21 — Phase 6 multi-model review fixes
 

@@ -1,8 +1,8 @@
 # Phase 6 result — multi-model review, real launch, gates and release
 
-**Status 2026-10-21:** Phase A and the real-launch lane are complete. Phase C is
-being finished on the gate-fix commit; the Phase D release is recorded at the
-bottom when it exists.
+**Status 2026-10-21:** Phase A, the real-launch lane, Phase C and the Phase D
+release are complete. The released DMG is ad-hoc signed and **not** notarised;
+the model and all-in-one parts remain owner-gated.
 
 ## Phase A — multi-model review
 
@@ -73,16 +73,40 @@ Pi gates run serially on the final Phase A tree:
 CI run `39628138310` at `e69135a` was green in `rust-gates`, `swift-test` and
 `dot-voice`, and failed the `macos` lane only on the known timing-sensitive
 `test_authenticated_tls_backpressure_keeps_total_send_deadline`. The fixture
-sent 2 MiB, which a fast Darwin receive buffer could absorb without ever
-saturating a production send; it now sends 16 MiB and still asserts the same
-absolute-deadline condition. The final green CI run is recorded at the top of
-[AI_HANDOFF.md](AI_HANDOFF.md) and in the release record below.
+eventually sent 32 MiB and waits up to 15 s for a production send to exhaust its
+absolute budget; the deadline assertions themselves are unchanged. A second
+failure exposed that typed/voice `show history` reset `answer` before dispatch,
+so the panel never opened; that product bug is fixed and covered by
+`testShowHistoryConfirmationSurvivesThePanelGateAdvance`.
+
+Final CI run [`39636742798`](https://github.com/Emin-dev/Dot/actions/runs/39636742798)
+at `88ab9fb` is **green in all four jobs**: `rust-gates`, `swift-test`, `macos`,
+`dot-voice`. The `macos` lane ran **945 XCTest / 0 failures / 1 skipped**,
+**648 Python tests / 4 skipped**, **76 static guardrails**, zero warnings and
+the Debug/Release packaging checks. The `macos` job was initially cancelled
+while queued on the hosted runner; `gh run rerun --failed` completed it green.
 
 ## Phase D — release
 
-Pending at the time this file was first committed. The tag is created only at
-the commit whose full CI run is green; this section is updated with the tag
-commit, release URL, asset list, DMG size and the downloaded SHA-256 check.
+- Tag: **`v1.1.0-phase5`** at **`88ab9fbece7730ed2369143b83f7eaa32d83b8e7`**
+  (the exact green CI commit; the Phase 4 tag was not moved or reused).
+- Release: <https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase5>
+- Release run: [`39642486991`](https://github.com/Emin-dev/Dot/actions/runs/39642486991), **success**.
+- Assets present: `Dot.dmg`, `Dot.dmg.sha256`, `join-dot-dmg.command`,
+  `join_release.py`, `README.txt`.
+- `Dot.dmg` size: **1,007,296,565 bytes**.
+- Published `.sha256`: `8d76e6aebc92b0b8a962359efead6b00211ecd4bc47c49435a21b523019a590a`.
+- Downloaded the published `Dot.dmg` from the release and computed
+  `8d76e6aebc92b0b8a962359efead6b00211ecd4bc47c49435a21b523019a590a`; it matches
+  the published `.sha256` exactly. The release README has no digest field; the
+  published `.sha256` asset is the release's digest record. The GitHub API returned
+  `digest: null` for these assets, so the byte-level `shasum -a 256` check is the
+  authoritative verification.
+- The DMG is the default model-less bundle: audited runtime included,
+  `models_bundled: false`, first-launch manifest-verified Qwen3.8 27B Q4 download.
+  It is **ad-hoc signed and not notarised**; the pinned model parts and all-in-one
+  parts are still **not uploaded** at this tag. The installed-app acceptance remains
+  owner-only.
 
 ## Remaining owner-only gates
 

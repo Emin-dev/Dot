@@ -7,8 +7,10 @@ by actually running the gate, not by assumption.
 
 - Three independent read-only reviews covered the whole product source
   (`deepseek-v4.1-flash`, `qwen3.8-flash`, `qwen3.8-max`). Nine findings were
-  verified; eight were fixed with regression coverage and two residuals are
-  recorded in [REVIEW_FINDINGS.md](REVIEW_FINDINGS.md#phase-6-multi-model-review-2026-10-21).
+  verified: seven fixed, one fixed on the client side with a server-side
+  residual, and one accepted residual; two regressions found in the targeted
+  re-review were also fixed. Details in
+  [REVIEW_FINDINGS.md](REVIEW_FINDINGS.md#phase-6-multi-model-review-2026-10-21).
   `qwen3.8-max` hit its time bound with no final findings and is recorded as partial.
 - The real-launch lane [`.github/workflows/real-app-check.yml`](../.github/workflows/real-app-check.yml)
   built the actual donor-runtime app via `scripts/package_default_release.sh` and
@@ -16,7 +18,13 @@ by actually running the gate, not by assumption.
   below-minimum refusal and the launch log; it does not prove a successful
   conversation, model download, voice/screen/mic, notarisation or owner acceptance.
 - Pi gates: Python **645 OK / 28 skipped**, **76 contracts**, Rust fmt/check/test/
-  clippy pass. The final full CI run and DMG release are recorded in
+  clippy pass. Final CI run `39636742798` at `88ab9fb` is green in all four jobs:
+  **945 XCTest / 0 failures / 1 skipped**, **648 Python / 4 skipped**, 76 contracts.
+- Release **`v1.1.0-phase5`** at `88ab9fb` (release run `39642486991`):
+  `Dot.dmg` **1,007,296,565 bytes**, SHA-256
+  `8d76e6aebc92b0b8a962359efead6b00211ecd4bc47c49435a21b523019a590a`; the
+  downloaded asset matches the published `.sha256`. Ad-hoc signed, **not
+  notarised**, no model weights, parts still owner-gated. Evidence:
   [PHASE6_RESULT.md](PHASE6_RESULT.md).
 - Still owner-only: install/acceptance on a minimum-spec Mac, the full 19.9 GB
   model download, notarisation, the log token and the real safety-approval session.

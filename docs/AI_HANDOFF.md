@@ -123,22 +123,24 @@ refactor** by another worker:
 
 - Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
   `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
-  The Phase 4 tag `v1.1.0-phase4` stays at `69ecfbd`; the Phase 6 tag is `v1.1.0-phase5` on the
-  final green commit recorded in [PHASE6_RESULT.md](PHASE6_RESULT.md).
-- Last full green macOS gate before Phase 6 (CI run `39554065822`, commit `dfb2011`): **XCTest
-  944 / 0 with 1 skipped**, **`swift test` 616 / 0**, **Python 636 / 4 skipped**, the eight
-  focused suites, `dot-voice` and Debug/Release builds. Phase 6's exact CI run and results are in
-  [PHASE6_RESULT.md](PHASE6_RESULT.md); the Pi gates on the Phase A tree were Python **645 / 28
-  skipped**, **76 contracts**, and the four Rust gates. The hosted runtime-finalizer canary is
-  still a by-design failure; `verify_macos.sh` records it and skips hosted packaging, while every
-  independent Swift/Xcode/Python check continues.
-- Phase 4 public release **`v1.1.0-phase4`** was built from `69ecfbd` by release run `39515511382`:
-  `Dot.dmg` **1,005,188,103 bytes**, SHA-256
-  `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6`; the GitHub API asset digest
-  matched exactly. The DMG contains the audited runtime, **no model weights**
+  The Phase 6 tag **`v1.1.0-phase5`** points at **`88ab9fb`**, the exact commit whose full CI run
+  was green. The Phase 4 tag stays at `69ecfbd`; neither tag was moved.
+- Final Phase 6 green macOS gate (CI run `39636742798`, commit `88ab9fb`, all four jobs):
+  **XCTest 945 / 0 failures / 1 skipped**, **Python 648 / 4 skipped**, **76 static guardrails**,
+  the eight focused suites, `dot-voice`, SwiftPM and Debug/Release builds. The `macos` job was
+  cancelled once while queued and completed green on `gh run rerun --failed`. The hosted
+  runtime-finalizer canary is still a by-design failure; `verify_macos.sh` records it and skips
+  hosted packaging, while every independent Swift/Xcode/Python check continues.
+- Pi gates on the Phase A tree: Python **645 OK / 28 skipped**, **76 contracts**, and the four
+  Rust gates pass. Details and exact commands: [PHASE6_RESULT.md](PHASE6_RESULT.md).
+- Phase 6 public release **`v1.1.0-phase5`** was built by release run `39642486991`:
+  `Dot.dmg` **1,007,296,565 bytes**, SHA-256
+  `8d76e6aebc92b0b8a962359efead6b00211ecd4bc47c49435a21b523019a590a`. The downloaded asset
+  matches the published `.sha256` exactly. It contains the audited runtime, **no model weights**
   (`models_bundled: false`), and the manifest-verified first-launch downloader. It is ad-hoc signed,
-  **not notarised** (no Developer ID Application identity or notary credentials). The Phase 6 DMG
-  is recorded in `PHASE6_RESULT.md`; it is also ad-hoc signed and not notarised.
+  **not notarised** (no Developer ID Application identity or notary credentials).
+- Phase 4 release **`v1.1.0-phase4`** remains at `69ecfbd` with `Dot.dmg` 1,005,188,103 bytes,
+  SHA-256 `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6`.
 - The full 19.9 GB first-launch model download has **not** been run end to end on this Pi; the
   downloader's manifest/hash/reuse units and one real gated Hugging Face file were exercised; the
   split-part resume/repair loop has source-level checks only.
@@ -299,8 +301,10 @@ All durable Dot state lives under `~/Library/Application Support/Dot/` (mode 070
 
 ## Recent commits (newest first)
 
-Phase 6: `e69135a` macOS 26 real-launch lane · `fc0fd1a` lane invocation fix · `7e397c4` real-launch
-workflow · `697ed73` review docs · `fe3aaba` scripts review fixes · `aa4c642` Swift review fixes.
+Phase 6: `88ab9fb` always open history + final green commit · `559294b` TLS fixture ceiling ·
+`0eaf419` history test seed · `f9edbda` Phase 6 docs/gates · `e69135a` macOS 26 real-launch lane ·
+`fc0fd1a` lane invocation fix · `7e397c4` real-launch workflow · `697ed73` review docs ·
+`fe3aaba` scripts review fixes · `aa4c642` Swift review fixes.
 Phase 5: `cc2cd7c` status pointer · `dfb2011` green run · `d5cc583` fresh review fixes · `9bff09c`
 Phase 5 findings · `dd091cd` review fixes.
 Phase 4: `96d67f1` release evidence · `69ecfbd` Phase 4 result/checklists · `7e5c6b5` safety/memory
