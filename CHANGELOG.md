@@ -8,9 +8,10 @@
   the exact below-minimum refusal (`M5 Pro class / 48 GB / macOS 27+`, no smaller
   model fallback) and the durable launch log. A macOS 15 runner cannot load the
   macOS 26.4 binary; that case is reported as `UNSUPPORTED`, not green.
-- Hardened the timing-sensitive TLS backpressure fixture (16 MiB instead of
-  2 MiB) after CI run `39628138310` failed to saturate a fast Darwin receive
-  buffer; the absolute-deadline assertions are unchanged.
+- Hardened the timing-sensitive TLS backpressure fixture (2 MiB → 16 MiB) after
+  CI run `39628138310` failed to saturate a fast Darwin receive buffer; a second
+  hardening at `559294b` raised it to 32 MiB with a ≥15 s wait bound. The
+  absolute-deadline assertions are unchanged.
 - Pi gates: 645 Python tests OK (28 skipped), 76 contracts, Rust fmt/check/test/
   clippy pass. Final CI run `39636742798` at `88ab9fb` is green: 945 XCTest /
   1 skipped, 648 Python / 4 skipped, 76 contracts.

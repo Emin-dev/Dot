@@ -128,7 +128,8 @@ refactor** by another worker:
 - Final Phase 6 green macOS gate (CI run `39636742798`, commit `88ab9fb`, all four jobs):
   **XCTest 945 / 0 failures / 1 skipped**, **Python 648 / 4 skipped**, **76 static guardrails**,
   the eight focused suites, `dot-voice`, SwiftPM and Debug/Release builds. The `macos` job was
-  cancelled once while queued and completed green on `gh run rerun --failed`. The hosted
+  cancelled once while queued and completed green on a rerun (run attempt 2 re-ran all
+  four jobs). The hosted
   runtime-finalizer canary is still a by-design failure; `verify_macos.sh` records it and skips
   hosted packaging, while every independent Swift/Xcode/Python check continues.
 - Pi gates on the Phase A tree: Python **645 OK / 28 skipped**, **76 contracts**, and the four

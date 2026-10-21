@@ -7,9 +7,10 @@ by actually running the gate, not by assumption.
 
 - Three independent read-only reviews covered the whole product source
   (`deepseek-v4.1-flash`, `qwen3.8-flash`, `qwen3.8-max`). Nine findings were
-  verified: seven fixed, one fixed on the client side with a server-side
-  residual, and one accepted residual; two regressions found in the targeted
-  re-review were also fixed. Details in
+  verified: P6-1…P6-6 fixed with regression coverage; P6-7 fixed on the client;
+  P6-8 and P6-9 recorded as accepted residuals (stale remote part assets after a
+  renamed re-split; owner-run `security` argv token); three re-review findings
+  across two fix areas were also fixed. Details in
   [REVIEW_FINDINGS.md](REVIEW_FINDINGS.md#phase-6-multi-model-review-2026-10-21).
   `qwen3.8-max` hit its time bound with no final findings and is recorded as partial.
 - The real-launch lane [`.github/workflows/real-app-check.yml`](../.github/workflows/real-app-check.yml)

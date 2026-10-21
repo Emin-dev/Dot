@@ -73,8 +73,9 @@ Pi gates run serially on the final Phase A tree:
 CI run `39628138310` at `e69135a` was green in `rust-gates`, `swift-test` and
 `dot-voice`, and failed the `macos` lane only on the known timing-sensitive
 `test_authenticated_tls_backpressure_keeps_total_send_deadline`. The fixture
-eventually sent 32 MiB and waits up to 15 s for a production send to exhaust its
-absolute budget; the deadline assertions themselves are unchanged. A second
+eventually sent 32 MiB and waits at least 15 s (bounded below by 15 s and above
+by the reported queue capacity) for a production send to exhaust its absolute
+budget; the deadline assertions themselves are unchanged. A second
 failure exposed that typed/voice `show history` reset `answer` before dispatch,
 so the panel never opened; that product bug is fixed and covered by
 `testShowHistoryConfirmationSurvivesThePanelGateAdvance`.
@@ -84,7 +85,8 @@ at `88ab9fb` is **green in all four jobs**: `rust-gates`, `swift-test`, `macos`,
 `dot-voice`. The `macos` lane ran **945 XCTest / 0 failures / 1 skipped**,
 **648 Python tests / 4 skipped**, **76 static guardrails**, zero warnings and
 the Debug/Release packaging checks. The `macos` job was initially cancelled
-while queued on the hosted runner; `gh run rerun --failed` completed it green.
+while queued on the hosted runner; a rerun (run attempt 2) re-ran all four jobs
+and finished green.
 
 ## Phase D — release
 

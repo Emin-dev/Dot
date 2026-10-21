@@ -263,8 +263,8 @@ are in `.tmp/phase6/v3-*.log` (not committed).
 
 ### Targeted re-review of the Phase 6 fixes (2026-10-21)
 
-A second static reviewer pass found two regressions in the first fix set; both
-were verified and fixed before the Phase 6 commit:
+A second static reviewer pass found three findings across two fix areas in the
+first fix set; all were verified and fixed before the Phase 6 commit:
 
 | Finding | Evidence | Fix |
 | --- | --- | --- |
