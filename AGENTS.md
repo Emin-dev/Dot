@@ -42,5 +42,8 @@ the Pi. Use repo-local `.tmp/` instead of `/tmp`.
 
 ## Quality gate
 
-For each change, run parallel reviewer and tester subagents (plus a CI watcher when CI is
-relevant) before committing. Commit small; push normally to main.
+- After **every** change, launch the `reviewer` and `tester` subagents **in parallel** (plus
+  `ci-watcher` when CI is relevant), all on `opencode-go/deepseek-v4.1-flash`. Fix all findings,
+  then continue or commit. Never commit before both have reported.
+- Run independent work in parallel subagents. Commit small; push normally to main.
+- `reviewer` is read-only; `tester` writes and runs tests; neither commits, pushes or merges.

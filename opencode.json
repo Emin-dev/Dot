@@ -11,12 +11,17 @@
   "permission": {
     "external_directory": {
       "*": "ask",
-      "/tmp/**": "allow"
+      "/tmp/**": "allow",
+      "/home/emin/dev/agent/**": "allow",
+      "/home/emin/.config/opencode/**": "allow"
     },
     "bash": {
       "*": "allow",
       "git push --force*": "deny",
+      "git push -f*": "deny",
       "git branch -D*": "deny",
+      "git branch -d*": "deny",
+      "git branch --delete*": "deny",
       "rm -rf /*": "deny"
     }
   }
