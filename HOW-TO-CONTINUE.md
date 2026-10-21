@@ -1,8 +1,8 @@
 # How to continue Dot
 
-Current source of truth: [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md). Phase 5
-review results: [docs/REVIEW_FINDINGS.md](docs/REVIEW_FINDINGS.md). Working
-rules: [AGENTS.md](AGENTS.md).
+Current source of truth: [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md). Phase 6
+review results and gates: [docs/REVIEW_FINDINGS.md](docs/REVIEW_FINDINGS.md) and
+[docs/PHASE6_RESULT.md](docs/PHASE6_RESULT.md). Working rules: [AGENTS.md](AGENTS.md).
 
 ## Start here
 
@@ -31,8 +31,9 @@ TMPDIR=$PWD/.tmp/pytmp python3 -B -m unittest discover -s Tests/Python -v
 python3 -B scripts/check_contracts.py
 ```
 
-Expected current result: 636 Python tests OK (28 skipped), 18 Rust tests,
-clippy clean, 76 static guardrails.
+Expected current result: 645 Python tests OK (28 skipped), 18 Rust tests,
+clippy clean, 76 static guardrails. The full Python suite takes about 2–3
+minutes on this Pi; run it as a background job and poll it.
 
 ## CI
 

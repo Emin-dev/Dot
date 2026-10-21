@@ -1,5 +1,19 @@
 # Changelog
 
+## 2026-10-21 — Phase 6 real-launch lane and gates
+
+- Added `.github/workflows/real-app-check.yml` (dispatch only): it builds the
+  same donor-runtime, model-less bundle as the public DMG and launches the real
+  `Dot.app` executable on arm64 macOS. Run `39628139773` on macOS 26.6.2 observed
+  the exact below-minimum refusal (`M5 Pro class / 48 GB / macOS 27+`, no smaller
+  model fallback) and the durable launch log. A macOS 15 runner cannot load the
+  macOS 26.4 binary; that case is reported as `UNSUPPORTED`, not green.
+- Hardened the timing-sensitive TLS backpressure fixture (16 MiB instead of
+  2 MiB) after CI run `39628138310` failed to saturate a fast Darwin receive
+  buffer; the absolute-deadline assertions are unchanged.
+- Pi gates: 645 Python tests OK (28 skipped), 76 contracts, Rust fmt/check/test/
+  clippy pass. Release and final CI evidence: `docs/PHASE6_RESULT.md`.
+
 ## 2026-10-21 — Phase 6 multi-model review fixes
 
 Three independent read-only reviews (deepseek-v4.1-flash, qwen3.8-flash,

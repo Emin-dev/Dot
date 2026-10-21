@@ -3,6 +3,24 @@
 This file is the evidence record for the active goal. Every line below was verified
 by actually running the gate, not by assumption.
 
+## Phase 6 — multi-model review, real launch and gates (2026-10-21)
+
+- Three independent read-only reviews covered the whole product source
+  (`deepseek-v4.1-flash`, `qwen3.8-flash`, `qwen3.8-max`). Nine findings were
+  verified; eight were fixed with regression coverage and two residuals are
+  recorded in [REVIEW_FINDINGS.md](REVIEW_FINDINGS.md#phase-6-multi-model-review-2026-10-21).
+  `qwen3.8-max` hit its time bound with no final findings and is recorded as partial.
+- The real-launch lane [`.github/workflows/real-app-check.yml`](../.github/workflows/real-app-check.yml)
+  built the actual donor-runtime app via `scripts/package_default_release.sh` and
+  launched it on arm64 macOS 26.6.2. Run `39628139773` observed the exact
+  below-minimum refusal and the launch log; it does not prove a successful
+  conversation, model download, voice/screen/mic, notarisation or owner acceptance.
+- Pi gates: Python **645 OK / 28 skipped**, **76 contracts**, Rust fmt/check/test/
+  clippy pass. The final full CI run and DMG release are recorded in
+  [PHASE6_RESULT.md](PHASE6_RESULT.md).
+- Still owner-only: install/acceptance on a minimum-spec Mac, the full 19.9 GB
+  model download, notarisation, the log token and the real safety-approval session.
+
 ## Objective code items — status
 
 | Item | State | Evidence |

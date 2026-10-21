@@ -1,24 +1,31 @@
-# Dot — AI continuation handoff (2026-10-20)
+# Dot — AI continuation handoff (2026-10-21)
 
 **Read this first.** This is the current, evidence-based state for any AI developer continuing Dot.
 The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R17). Where this file and an
 older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, `CONTINUATION.md` and
 `BUILD_CHECKLIST.md` contain history that is partly superseded; their top notes point here.
 
-## Start here (next worker, 2026-10-21 — Phase 4 verified)
+## Start here (next worker, 2026-10-21 — Phase 6 verified)
 
-1. The `claude/app-dot-behavior-faax19` work is merged at `181756c6` and **compiled and tested on
-   macOS arm64 in GitHub Actions**. Phase 4 added an explicit focused-suite gate and offline
-   contracts; see [PHASE4_RESULT.md](PHASE4_RESULT.md) for the evidence matrix and the exact CI and
-   release links.
-2. The eight named suites now run explicitly in `scripts/verify_macos.sh` before the full XCTest
+1. Phase 6 ran three independent read-only reviews over the whole product source, fixed every
+   verified blocker/major with regression coverage, and added a real-launch lane. The findings
+   table is in [REVIEW_FINDINGS.md](REVIEW_FINDINGS.md#phase-6-multi-model-review-2026-10-21);
+   the release/gate evidence is in [PHASE6_RESULT.md](PHASE6_RESULT.md).
+2. Phase 6 code commits: `aa4c642` (Swift review fixes), `fe3aaba` (scripts review fixes),
+   `7e397c4` (real-app launch lane), `fc0fd1a`/`e69135a` (lane fixes). Phase 6 docs: `697ed73`
+   and this handoff commit. The Phase 6 tag is created only on the final green CI commit.
+3. The real-launch lane [`.github/workflows/real-app-check.yml`](../.github/workflows/real-app-check.yml)
+   built the actual donor-runtime app and launched it on arm64 macOS 26.6.2; run `39628139773`
+   observed the exact below-minimum refusal and the durable launch log. It does **not** prove a
+   successful conversation, model download, mic/screen/voice, notarisation or owner acceptance.
+4. The eight named suites still run explicitly in `scripts/verify_macos.sh` before the full XCTest
    lane: `VoiceEventTests`, `SpokenQuestionTests`, `SpokenTranscriptTests`,
    `TypedInteractionTests`, `VoiceCoordinatorTests`, `EngineIntegrationTests`,
-   `ProactiveBehaviorTests`, `ProactiveIntegrationTests`. They are also part of the full lane.
-3. Owner acceptance after install is still the only unautomated proof: talk with the default voice
+   `ProactiveBehaviorTests`, `ProactiveIntegrationTests`.
+5. Owner acceptance after install is still the only unautomated proof: talk with the default voice
    (Emma), sleep and wake the Mac while idle (Dot must say "I'm back." once and keep roaming), say
    "What do you remember?", watch one proactive comment end without a forced question.
-4. Remaining owner gates (not decided here) stay in "Open owner questions" and
+6. Remaining owner gates (not decided here) stay in "Open owner questions" and
    [QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md): model-part upload, complete all-in-one parts,
    Developer ID/notarisation, log token, R4 and R9 decisions.
 
@@ -116,18 +123,22 @@ refactor** by another worker:
 
 - Branch **main only**; the Pi checkout is `/home/emin/dev/Dot`. Run `git log -1` and
   `scripts/install_local.sh`; the installed app's `build-provenance.json` must equal that HEAD.
-  The release tag `v1.1.0-phase4` was built at `69ecfbd`; later commits are documentation-only.
-- Last full green macOS gate (CI run `39513636141`, commit `69ecfbd`, all 62 guardrails):
-  **XCTest 936 / 0 failures (1 opt-in live test skipped)**, **`swift test` 608 / 0**,
-  **Python 614 / 4 skipped**, the eight focused suites, `dot-voice` and Debug/Release builds. The
-  hosted runtime-finalizer canary is still a by-design failure; `verify_macos.sh` records it and
-  skips hosted packaging, while every independent Swift/Xcode/Python check continues.
-- Public release **`v1.1.0-phase4`** was built from `69ecfbd` by release run `39515511382`:
+  The Phase 4 tag `v1.1.0-phase4` stays at `69ecfbd`; the Phase 6 tag is `v1.1.0-phase5` on the
+  final green commit recorded in [PHASE6_RESULT.md](PHASE6_RESULT.md).
+- Last full green macOS gate before Phase 6 (CI run `39554065822`, commit `dfb2011`): **XCTest
+  944 / 0 with 1 skipped**, **`swift test` 616 / 0**, **Python 636 / 4 skipped**, the eight
+  focused suites, `dot-voice` and Debug/Release builds. Phase 6's exact CI run and results are in
+  [PHASE6_RESULT.md](PHASE6_RESULT.md); the Pi gates on the Phase A tree were Python **645 / 28
+  skipped**, **76 contracts**, and the four Rust gates. The hosted runtime-finalizer canary is
+  still a by-design failure; `verify_macos.sh` records it and skips hosted packaging, while every
+  independent Swift/Xcode/Python check continues.
+- Phase 4 public release **`v1.1.0-phase4`** was built from `69ecfbd` by release run `39515511382`:
   `Dot.dmg` **1,005,188,103 bytes**, SHA-256
   `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6`; the GitHub API asset digest
-  matches exactly. The DMG contains the audited runtime, **no model weights**
+  matched exactly. The DMG contains the audited runtime, **no model weights**
   (`models_bundled: false`), and the manifest-verified first-launch downloader. It is ad-hoc signed,
-  **not notarised** (no Developer ID Application identity or notary credentials).
+  **not notarised** (no Developer ID Application identity or notary credentials). The Phase 6 DMG
+  is recorded in `PHASE6_RESULT.md`; it is also ad-hoc signed and not notarised.
 - The full 19.9 GB first-launch model download has **not** been run end to end on this Pi; the
   downloader's manifest/hash/reuse units and one real gated Hugging Face file were exercised; the
   split-part resume/repair loop has source-level checks only.
@@ -288,6 +299,10 @@ All durable Dot state lives under `~/Library/Application Support/Dot/` (mode 070
 
 ## Recent commits (newest first)
 
+Phase 6: `e69135a` macOS 26 real-launch lane · `fc0fd1a` lane invocation fix · `7e397c4` real-launch
+workflow · `697ed73` review docs · `fe3aaba` scripts review fixes · `aa4c642` Swift review fixes.
+Phase 5: `cc2cd7c` status pointer · `dfb2011` green run · `d5cc583` fresh review fixes · `9bff09c`
+Phase 5 findings · `dd091cd` review fixes.
 Phase 4: `96d67f1` release evidence · `69ecfbd` Phase 4 result/checklists · `7e5c6b5` safety/memory
 guardrails · `c7c4ca6` focused suites + offline contracts · `4916071` Phase 3 result. Earlier:
 `f03d608` Keychain release auth · `a6fe2eb` public DMG packaging · `8afab50` screen-off/lock pause ·

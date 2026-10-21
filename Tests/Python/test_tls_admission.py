@@ -485,12 +485,15 @@ class TLSAdmissionTests(unittest.TestCase):
                     operations[-1]['retries'] += 1; retried.set()
                 raise
         def flood():
-            try: upstream.sendall(b'fixture response' * 131072)
+            # 16 MiB is deliberately larger than any Darwin/autotuned receive
+            # buffer: 2 MiB could be absorbed whole, so no production send ever
+            # exhausted its budget and the test flaked on a fast runner.
+            try: upstream.sendall(b'fixture response' * 1048576)
             except OSError: pass
         sender = threading.Thread(target=flood)
         # A small SO_RCVBUF is a request, not a contract: Darwin clamps it up
         # (326640 here) and autotunes it, so this never-reading client absorbs
-        # hundreds of KiB before one production send can exhaust its budget.
+        # the queue before one production send can exhaust its budget.
         # The relay drains that queue through its own 4096-byte transport buffer
         # at most one chunk per io_poll_interval, so bound the wait by the
         # capacity the kernel reports instead of assuming Linux's instant stall.
