@@ -129,7 +129,8 @@ refactor** by another worker:
   (`models_bundled: false`), and the manifest-verified first-launch downloader. It is ad-hoc signed,
   **not notarised** (no Developer ID Application identity or notary credentials).
 - The full 19.9 GB first-launch model download has **not** been run end to end on this Pi; the
-  downloader's units, resume/hash/repair paths and one real gated Hugging Face file were exercised.
+  downloader's manifest/hash/reuse units and one real gated Hugging Face file were exercised; the
+  split-part resume/repair loop has source-level checks only.
   After the download, core conversation/voice/memory reuse local files and do not require a network;
   see [PHASE4_RESULT.md](PHASE4_RESULT.md) and [offline acceptance](offline-acceptance.md).
 - The complete all-in-one DMG parts and the pinned model parts are **not uploaded**: both need the

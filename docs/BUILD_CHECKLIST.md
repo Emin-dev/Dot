@@ -23,7 +23,7 @@ The detailed per-promise evidence is in [PHASE4_RESULT.md](PHASE4_RESULT.md). Su
 | Launch gate: M5 Pro class / 48 GB / macOS 27+ | **Verified (source + tests)** | `HardwareCompatibility` tests and guardrails; no override, no smaller model |
 | Text log channel and offline queue | **Verified (source + tests)** | `DotLogSync`, `LogSyncPolicyTests`, offline contract; token upload owner-gated |
 | Offline core after model download | **Verified (source + unit evidence)** | `test_offline_runtime_contract.py`, `OfflineIntegrationTests`; native disconnected run owner-gated |
-| First-launch model downloader | **Partial** | Manifest/hash/resume/repair paths tested; full 19.9 GB download not run here |
+| First-launch model downloader | **Partial** | Manifest/hash/reuse tested; split-part resume/repair has source-level checks only; full 19.9 GB download not run here |
 | Default DMG rebuild | **Verified by release workflow** | Phase 4 release; asset SHA in PHASE4_RESULT |
 | Complete all-in-one installer parts | **Broken/blocked** | Needs the owner's verified 22.4 GB payload; `QUESTIONS_FOR_EMIN.md` §9 |
 | Pinned model-part primary route | **Blocked** | Parts not uploaded; Hugging Face hash-checked fallback is active |

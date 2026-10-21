@@ -6370,12 +6370,30 @@ public struct LogUploadQueue: Codable, Equatable, Sendable {
 
 /// Last-line defence: secrets must never reach the log file or an upload.
 public enum LogRedaction {
+    /// Mask bytes again immediately before upload, so a log line written by an
+    /// older build that predates a redaction rule can never be published raw.
+    public static func masked(_ data: Data) -> Data {
+        // The log contract is text. A non-UTF-8 file is not a text log, so
+        // uploading nothing is safer than publishing opaque bytes.
+        guard let text = String(data: data, encoding: .utf8) else { return Data() }
+        let masked = masked(text)
+        return masked == text ? data : Data(masked.utf8)
+    }
+
     public static func masked(_ text: String) -> String {
         var result = text
         let rules: [(String, String)] = [
+            (#"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----"#, "[REDACTED_PRIVATE_KEY]"),
             (#"(?i)(authorization\s*[:=]\s*bearer\s+)\S+"#, "$1[REDACTED]"),
+            (#"(?i)(authorization\s*[:=]\s*basic\s+)\S+"#, "$1[REDACTED]"),
+            (#"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b"#, "Bearer [REDACTED]"),
+            (#"(?i)\"([^\"]*(?:token|secret|password|passwd|api[_-]?key|access_key|private_key)[^\"]*)\"\s*:\s*\"[^\"]*\""#, "\"$1\":\"[REDACTED]\""),
+            (#"(?i)\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY)[A-Z0-9_]*\s*[:=]\s*\S+"#, "[REDACTED_ENV]"),
             (#"\bgh[pousr]_[A-Za-z0-9]{20,}\b"#, "[REDACTED_TOKEN]"),
             (#"\bgithub_pat_[A-Za-z0-9_]{20,}\b"#, "[REDACTED_TOKEN]"),
+            (#"\bsk-[A-Za-z0-9_-]{16,}\b"#, "[REDACTED_TOKEN]"),
+            (#"\bAKIA[0-9A-Z]{16}\b"#, "[REDACTED_AWS_KEY]"),
+            (#"\bxox[baprs]-[A-Za-z0-9-]{10,}\b"#, "[REDACTED_TOKEN]"),
             (#"(?i)\b(password|passwd|passphrase|secret)\s*[:=]\s*[^\r\n]+"#, "$1=[REDACTED]"),
             (#"(?i)\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+"#, "$1=[REDACTED]"),
             (#"(?i)\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+"#, "$1=[REDACTED]"),

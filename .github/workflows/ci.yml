@@ -36,7 +36,9 @@ jobs:
       - name: Static contracts
         run: python3 -B scripts/check_contracts.py
       - name: Model-part split and join contracts
-        run: python3 -B -m unittest Tests/Python/test_release_parts.py -v
+        run: |
+          python3 -B -m unittest Tests/Python/test_release_parts.py -v
+          python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
 
   swift-test:
     # Portable pure-core lane on an arm64 macOS runner. The Xcode 26 SDK is

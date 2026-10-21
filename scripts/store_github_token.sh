@@ -11,8 +11,11 @@ SERVICE="dot-github-token"
 read -rsp "Paste GitHub token (input hidden): " TOKEN
 echo
 [ -n "$TOKEN" ] || { echo "No token entered." >&2; exit 1; }
-user=$(curl -fsS -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-  https://api.github.com/user | /usr/bin/python3 -c 'import json,sys;print(json.load(sys.stdin).get("login",""))') || {
+# Pass the header through a config pipe, never argv, so the token is not visible
+# to `ps` while the verification request runs.
+user=$(printf 'header = "Authorization: Bearer %s"\nheader = "Accept: application/vnd.github+json"\n' "$TOKEN" \
+  | curl -fsS --config - https://api.github.com/user \
+  | /usr/bin/python3 -c 'import json,sys;print(json.load(sys.stdin).get("login",""))') || {
     echo "Token rejected by GitHub." >&2; exit 1; }
 [ -n "$user" ] || { echo "Token rejected by GitHub." >&2; exit 1; }
 security add-generic-password -a "$USER" -s "$SERVICE" -w "$TOKEN" -U

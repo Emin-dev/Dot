@@ -2340,8 +2340,11 @@ final class ChatModel: ObservableObject {
 
         // R7 manual override: after three refusals the owner may force one action.
         if pendingApproval == nil, copyPhrase == "force it" {
-            SafetyApprover.shared.forceNext = true
-            respondDirectly("The next approval will run without the safety check — your call.", id: id)
+            if SafetyApprover.shared.armForce() {
+                respondDirectly("The next matching approval will run without the safety check — your call.", id: id)
+            } else {
+                respondDirectly("Nothing has been refused three times yet, so there is nothing to force.", id: id)
+            }
             return
         }
 

@@ -33,7 +33,8 @@ by actually running the gate, not by assumption.
 - Model delivery: `Resources/model-parts.json` is the primary pinned-part plan; when the
   owner uploads parts it becomes `ready`. Until then the app uses revision-pinned
   Hugging Face files and verifies the same signed SHA-256. Parts, retries/backoff,
-  HTTP Range resume, per-part SHA-256, per-launch repair and disk checks are implemented.
+  HTTP Range resume, per-part SHA-256, per-launch repair and disk checks are implemented; the
+  split-part resume/repair loop has source-level checks only (no unit test yet).
 - All-in-one: `split_release.py`, `join_release.py`, `join-dot-dmg.command` and
   `package_all_in_one.sh` produce/verify/join <2 GiB parts. Model and all-in-one parts are
   owner-gated (see `QUESTIONS_FOR_EMIN.md` §8–10).

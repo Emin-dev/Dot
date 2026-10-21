@@ -25,6 +25,9 @@ fi
 [ -f join_release.py ] || { echo "Missing join_release.py next to this script."; exit 1; }
 
 OUTPUT="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["output"])' "$MANIFEST")"
+case "$OUTPUT" in
+    ""|.*|*/*|*\\*) echo "The parts manifest has an unsafe output name: $OUTPUT" >&2; exit 1 ;;
+esac
 "$PYTHON" join_release.py "$MANIFEST" --download --output "$OUTPUT"
 hdiutil verify -quiet "$OUTPUT"
 open "$OUTPUT"

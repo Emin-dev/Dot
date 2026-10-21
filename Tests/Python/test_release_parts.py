@@ -97,6 +97,52 @@ class ReleasePartsTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256((self.work / "out" / part["asset"]).read_bytes()).hexdigest(),
                              part["sha256"])
 
+    def _manifest(self, **overrides):
+        data = b"part-data"
+        manifest = {
+            "schema_version": 1,
+            "output": "joined.bin",
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "parts": [{
+                "name": "part000",
+                "bytes": len(data),
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "url": None,
+            }],
+        }
+        manifest.update(overrides)
+        path = self.work / "parts" / "release.parts.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(manifest))
+        return path, data
+
+    def test_join_rejects_path_traversal_in_part_name(self):
+        manifest_path, _ = self._manifest()
+        manifest = json.loads(manifest_path.read_text())
+        manifest["parts"][0]["name"] = "../escape"
+        manifest_path.write_text(json.dumps(manifest))
+        result = run(SCRIPTS / "join_release.py", manifest_path,
+                     "--output", self.work / "joined.bin")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe file name", result.stderr)
+
+    def test_join_rejects_a_foreign_part_url(self):
+        manifest_path, _ = self._manifest()
+        manifest = json.loads(manifest_path.read_text())
+        manifest["parts"][0]["url"] = "https://example.com/part000"
+        manifest_path.write_text(json.dumps(manifest))
+        result = run(SCRIPTS / "join_release.py", manifest_path, "--download",
+                     "--output", self.work / "joined.bin")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing a part URL", result.stderr)
+
+    def test_join_rejects_manifest_output_path(self):
+        manifest_path, _ = self._manifest(output="../escape.bin")
+        result = run(SCRIPTS / "join_release.py", manifest_path)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unsafe file name", result.stderr)
+
     def test_model_parts_rejects_hash_mismatch(self):
         manifest_path, _ = self._payload()
         manifest = json.loads(manifest_path.read_text())

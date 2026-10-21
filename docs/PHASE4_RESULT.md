@@ -111,7 +111,7 @@ as current promises or failures.
 | Screen watching, screen-off/lock pause | **Verified (tests)** | `ScreenContextTests`, typed tests; permission/device owner-gated |
 | Battery/timers/mic mode/trusted apps | **Verified (source/tests)** | focused suites |
 | Text log channel, offline queue, token path | **Verified (source/tests)** | `DotLogSync`, `LogSyncPolicyTests`, offline contract; actual upload needs owner token |
-| First-launch downloader | **Partial** | manifest/hash/resume/repair tested; full 19.9 GB run not done |
+| First-launch downloader | **Partial** | manifest/hash/reuse tested; the split-part resume/repair loop has source-level checks only; full 19.9 GB run not done |
 | Default DMG | **Verified by release workflow** | Phase 4 release (tag/SHA below) |
 | Pinned model-part primary route | **Blocked** | parts not uploaded; hash-checked HF fallback active |
 | Complete all-in-one parts | **Broken/blocked** | needs the verified 22.4 GB payload on the owner Mac |

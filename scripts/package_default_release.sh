@@ -43,6 +43,14 @@ python3 - "$APP/Contents/Resources/build-provenance.json" <<'PY'
 import json, pathlib, subprocess, sys
 path = pathlib.Path(sys.argv[1])
 record = json.loads(path.read_text())
+parts = json.loads((path.parent / 'model-parts.json').read_text())
+tag = parts.get('release_tag') or ''
+parts_ready = (parts.get('schema_version') == 1
+               and parts.get('status') == 'ready'
+               and bool(parts.get('parts'))
+               and bool(tag)
+               and str(parts.get('base_url', '')).startswith(
+                   f'https://github.com/Emin-dev/Dot/releases/download/{tag}/'))
 record.update({
     'commit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
     'source_dirty': bool(subprocess.check_output(['git', 'status', '--porcelain'], text=True).strip()),
@@ -50,8 +58,10 @@ record.update({
     'models_bundled': False,
     'models_downloaded': False,
     'llm_weights_download_on_first_launch': True,
-    'model_primary': 'pinned Emin-dev/Dot release parts',
-    'model_fallback': 'pinned Hugging Face revisions, SHA-256 checked',
+    'model_primary': ('pinned Emin-dev/Dot release parts' if parts_ready
+                      else 'pinned Hugging Face revisions (Emin-dev/Dot parts pending)'),
+    'model_fallback': ('pinned Hugging Face revisions, SHA-256 checked'
+                       if parts_ready else 'n/a: fallback is the active route'),
 })
 path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 PY

@@ -135,7 +135,6 @@ final class DotLogSync: @unchecked Sendable {
 
     private func writeMetadataIfNeeded() {
         guard !metadataQueued, let queue = queueDirectory else { return }
-        metadataQueued = true
         let hardware = HardwareCompatibility.queryCurrent()
         let metadata: [String: Any] = [
             "schema_version": 1,
@@ -152,7 +151,14 @@ final class DotLogSync: @unchecked Sendable {
         guard let data = try? JSONSerialization.data(withJSONObject: metadata,
                                                      options: [.prettyPrinted, .sortedKeys]) else { return }
         let snapshot = queue.appendingPathComponent("\(launchStamp)-meta.json")
-        try? data.write(to: snapshot, options: .atomic)
+        do {
+            try data.write(to: snapshot, options: .atomic)
+        } catch {
+            // Keep the flag clear so a disk error is retried on the next sync
+            // instead of permanently suppressing the launch metadata.
+            return
+        }
+        metadataQueued = true
         enqueue(local: snapshot, remote: LogSyncPolicy.remotePath(folder: launchFolder, file: "meta.json"),
                 now: Date().timeIntervalSince1970)
     }
@@ -223,7 +229,16 @@ final class DotLogSync: @unchecked Sendable {
                   let attributes = try? fileManager.attributesOfItem(atPath: file.path),
                   let size = (attributes[.size] as? NSNumber)?.intValue,
                   size > 0, size <= LogSyncPolicy.maximumFileBytes,
-                  let data = try? Data(contentsOf: file) else {
+                  let raw = try? Data(contentsOf: file) else {
+                state.remove(remotePath: entry.remotePath)
+                changed = true
+                continue
+            }
+            // Re-mask at the boundary: the snapshot may have been written by an
+            // older build before a redaction rule existed. A non-text snapshot
+            // yields no bytes and is not published.
+            let data = LogRedaction.masked(raw)
+            guard !data.isEmpty else {
                 state.remove(remotePath: entry.remotePath)
                 changed = true
                 continue

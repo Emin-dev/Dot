@@ -147,6 +147,48 @@ checks = {
         and re.search(r'\bissue\s*=', read('src/DotLogSync.swift')) is None
     ),
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
+    'default app safety approver finds the downloaded aux model': (
+        'OfflinePreparation.shared.root' in read('src/SafetyApprover.swift')
+        and 'OfflineModels' in read('src/SafetyApprover.swift')
+        and 'aux/gemma-3-4b-it-Q4_K_M.gguf' in read('src/SafetyApprover.swift')
+    ),
+    'log bytes are re-masked immediately before upload': (
+        'LogRedaction.masked(raw)' in read('src/DotLogSync.swift')
+        and 'public static func masked(_ data: Data) -> Data' in read('src/InteractionCore.swift')
+    ),
+    'release cannot clobber published assets or run off main': (
+        '--clobber' not in read('.github/workflows/release.yml')
+        and 'refs/heads/main' in read('.github/workflows/release.yml')
+        and 'git merge-base --is-ancestor HEAD refs/remotes/origin/main' in read('.github/workflows/release.yml')
+        and 'git ls-remote --tags origin' in read('.github/workflows/release.yml')
+        and 'refs/remotes/origin/main' in read('.github/workflows/release.yml')
+        and '--target "$GITHUB_SHA"' in read('.github/workflows/release.yml')
+        and 'case "$OUTPUT" in' in read('packaging/join-dot-dmg.command')
+    ),
+    'default-release provenance matches the pending parts plan': (
+        "parts.get('status') == 'ready'" in read('scripts/package_default_release.sh')
+        and "Emin-dev/Dot parts pending" in read('scripts/package_default_release.sh')
+        and "schema_version') == 1" in read('scripts/package_default_release.sh')
+        and "releases/download/{tag}/" in read('scripts/package_default_release.sh')
+    ),
+    'manual override requires three refusals of the same action': (
+        'func armForce() -> Bool' in read('src/SafetyApprover.swift')
+        and 'consumeForce(for action: String)' in read('src/SafetyApprover.swift')
+        and 'forceNext' not in read('src/SafetyApprover.swift')
+        and 'SafetyApprover.shared.armForce()' in chat
+    ),
+    'manual log script refuses non-log branches and redacts multiline PEM': (
+        'refusing to push logs to branch' in read('scripts/dot_log_sync.sh')
+        and 'dot-logs|dot-*)' in read('scripts/dot_log_sync.sh')
+        and 'redact_log.pl' in read('scripts/dot_log_sync.sh')
+        and 'PRIVATE KEY(?: BLOCK)?' in read('scripts/redact_log.pl')
+        and 'PRIVATE KEY(?: BLOCK)?' in read('src/InteractionCore.swift')
+    ),
+    'all-in-one joiner rejects traversal and foreign part URLs': (
+        'def safe_name(' in read('scripts/join_release.py')
+        and 'def safe_url(' in read('scripts/join_release.py')
+        and 'refusing a part URL' in read('scripts/join_release.py')
+    ),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())
 ET.parse(root / 'Dot.xcodeproj/xcshareddata/xcschemes/Dot.xcscheme')

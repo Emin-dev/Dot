@@ -14,10 +14,42 @@ import argparse
 import hashlib
 import json
 import sys
+import posixpath
+import re
 import urllib.request
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 CHUNK = 8 * 1024 * 1024
+RELEASE_PREFIX = "/Emin-dev/Dot/releases/download/"
+
+
+def safe_name(value: object) -> str:
+    """Part/output names must be one plain filename, never a path."""
+    if not isinstance(value, str) or value in ("", ".", ".."):
+        raise SystemExit("parts manifest has an invalid file name")
+    if value != Path(value).name or "/" in value or "\\" in value or "\x00" in value:
+        raise SystemExit(f"unsafe file name in parts manifest: {value!r}")
+    return value
+
+
+def safe_url(value: object) -> str:
+    """Only fetch parts from this repository's own HTTPS release assets."""
+    if not isinstance(value, str):
+        raise SystemExit("parts manifest has an invalid URL")
+    parsed = urlparse(value)
+    path = parsed.path
+    for _ in range(8):
+        decoded = unquote(path)
+        if decoded == path:
+            break
+        path = decoded
+    normalized = posixpath.normpath(path)
+    if parsed.scheme != "https" or parsed.netloc != "github.com" \
+            or ".." in path.split("/") \
+            or not normalized.startswith(RELEASE_PREFIX):
+        raise SystemExit(f"refusing a part URL outside the Dot release: {value!r}")
+    return value
 
 
 def sha256_file(path: Path) -> str:
@@ -74,21 +106,31 @@ def join(manifest_path: Path, output: Path, fetch: bool) -> None:
         raise SystemExit("part sizes do not add up to the manifest size")
     base = manifest_path.parent
     resolved: list[Path] = []
+    names: set[str] = set()
     for part in parts:
-        path = base / part["name"]
+        name = safe_name(part.get("name"))
+        if name in names:
+            raise SystemExit(f"duplicate part name: {name}")
+        names.add(name)
         expected = int(part["bytes"])
+        if expected <= 0 or not re.fullmatch("[0-9a-f]{64}", str(part.get("sha256", ""))):
+            raise SystemExit(f"invalid size or SHA-256 for part: {name}")
+        path = base / name
         usable = path.is_file() and path.stat().st_size == expected and sha256_file(path) == part["sha256"]
         if not usable and fetch and part.get("url"):
-            print(f"downloading {part['name']}")
+            url = safe_url(part["url"])
+            print(f"downloading {name}")
             if path.exists():
                 path.unlink()
-            download(part["url"], path, expected)
+            download(url, path, expected)
             usable = path.is_file() and path.stat().st_size == expected and sha256_file(path) == part["sha256"]
         if not usable:
             if not path.is_file() or path.stat().st_size != expected:
-                raise SystemExit(f"missing or wrong-size part: {part['name']}")
-            raise SystemExit(f"SHA-256 mismatch: {part['name']}")
+                raise SystemExit(f"missing or wrong-size part: {name}")
+            raise SystemExit(f"SHA-256 mismatch: {name}")
         resolved.append(path)
+    if output.is_symlink():
+        raise SystemExit(f"refusing to replace a symlink: {output}")
     staging = output.with_suffix(output.suffix + ".join")
     with staging.open("wb") as out:
         for path in resolved:
@@ -112,7 +154,7 @@ def main() -> int:
     parser.add_argument("--download", action="store_true")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
-    output = args.output or (args.manifest.parent / manifest["output"])
+    output = args.output or (args.manifest.parent / safe_name(manifest.get("output")))
     join(args.manifest, output, args.download)
     return 0
 

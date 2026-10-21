@@ -18,7 +18,8 @@ python3 -B scripts/split_release.py "$DOT_ALL_IN_ONE_DMG" --output "$OUT" \
 cp packaging/join-dot-dmg.command scripts/join_release.py "$OUT/"
 MANIFEST="$(basename "$DOT_ALL_IN_ONE_DMG").parts.json"
 if gh release view "$TAG" >/dev/null 2>&1; then
-  gh release upload "$TAG" "$OUT"/* --clobber
+  # Never silently replace published parts; delete/recreate deliberately.
+  gh release upload "$TAG" "$OUT"/*
 else
   gh release create "$TAG" "$OUT"/* --title "Dot all-in-one installer" \
     --notes "Complete offline Dot installer split into <2 GB parts. Download the .parts.json, join-dot-dmg.command and join_release.py, then double-click the command."

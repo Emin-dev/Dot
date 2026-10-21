@@ -29,10 +29,25 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
+      - name: Release commit must be on main
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            test "$GITHUB_REF" = "refs/heads/main" || {
+              echo "Manual releases may only be dispatched from main." >&2
+              exit 1
+            }
+          fi
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main || {
+            echo "Release tags must point to a commit on main." >&2
+            exit 1
+          }
       - name: Build Rust runtime binaries
         run: cargo build --release --bin dot-voice --bin dot-search --bin dot-fetch --bin dot-safety
       - name: Fetch the audited runtime payload (no model weights)
@@ -52,6 +67,7 @@ jobs:
         run: |
           python3 -B scripts/check_contracts.py
           python3 -B -m unittest Tests/Python/test_release_parts.py -v
+          python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
           bash -n scripts/package_default_release.sh scripts/package_all_in_one.sh packaging/join-dot-dmg.command
       - name: Package the default app without model weights
         env:
@@ -99,10 +115,26 @@ jobs:
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
+          # If the tag already exists, it must point at the commit we built.
+          tag_lines=$(git ls-remote --tags origin "refs/tags/$TAG") || {
+            echo "could not query tag $TAG" >&2
+            exit 1
+          }
+          if [ -n "$tag_lines" ]; then
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            tag_commit=$(git rev-parse "refs/tags/$TAG^{commit}")
+            test "$tag_commit" = "$GITHUB_SHA" || {
+              echo "tag $TAG points at $tag_commit, not the built commit $GITHUB_SHA" >&2
+              exit 1
+            }
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" release-assets/* --clobber
+            # Never silently replace published assets: a re-run fails instead of
+            # overwriting an audited DMG with a different build.
+            gh release upload "$TAG" release-assets/*
           else
             gh release create "$TAG" release-assets/* \
+              --target "$GITHUB_SHA" \
               --title "Dot $TAG" \
               --notes-file release-assets/README.txt
           fi

@@ -216,8 +216,15 @@ final class OfflinePreparation: ObservableObject {
     }
     func retry() {
         guard !ready else { return }
-        if work != nil { resumeRequested = true }
-        else { start() }
+        if work != nil {
+            // Stop an in-flight transfer now (the part downloader forwards task
+            // cancellation to URLSession) and start a fresh attempt when it exits.
+            resumeRequested = true
+            generation = UUID()
+            work?.cancel()
+        } else {
+            start()
+        }
     }
     func shutdown() { resumeRequested = false; generation = UUID(); work?.cancel() }
 }
@@ -530,20 +537,55 @@ actor ModelProvisioner {
     private func downloadPartFile(_ request: URLRequest, resumeData: Data?, progressOffset: Int64,
                                   resumeURL: URL,
                                   report: @escaping @Sendable (Int64) -> Void) async throws -> (URL, HTTPURLResponse?) {
-        try await withCheckedThrowingContinuation { continuation in
-            let receiver = PartDownloadReceiver(resumeURL: resumeURL, progressOffset: progressOffset, report: report)
-            let partSession = URLSession(configuration: session.configuration, delegate: receiver,
-                                         delegateQueue: nil)
-            receiver.session = partSession
-            receiver.completion = { result in
-                partSession.finishTasksAndInvalidate()
-                continuation.resume(with: result)
+        let cancellation = PartDownloadCancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                let receiver = PartDownloadReceiver(resumeURL: resumeURL, progressOffset: progressOffset, report: report)
+                let partSession = URLSession(configuration: session.configuration, delegate: receiver,
+                                             delegateQueue: nil)
+                receiver.session = partSession
+                receiver.completion = { result in
+                    partSession.finishTasksAndInvalidate()
+                    continuation.resume(with: result)
+                }
+                let task = resumeData.map { partSession.downloadTask(withResumeData: $0) }
+                    ?? partSession.downloadTask(with: request)
+                receiver.task = task
+                cancellation.attach(task)
+                task.resume()
             }
-            let task = resumeData.map { partSession.downloadTask(withResumeData: $0) }
-                ?? partSession.downloadTask(with: request)
-            receiver.task = task
-            task.resume()
+        } onCancel: {
+            cancellation.cancel()
         }
+    }
+}
+
+/// Connects Swift task cancellation to the URLSession task. `pause`, `retry` and
+/// `shutdown` cancel the preparation task; without this the transfer would keep
+/// waiting on the network (up to the 24 h resource timeout) and the actor would
+/// never leave `ensureModels`.
+private final class PartDownloadCancellation: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: URLSessionDownloadTask?
+    private var cancelled = false
+
+    func attach(_ task: URLSessionDownloadTask) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            task.cancel()
+        } else {
+            self.task = task
+            lock.unlock()
+        }
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let task = self.task
+        lock.unlock()
+        task?.cancel()
     }
 }
 

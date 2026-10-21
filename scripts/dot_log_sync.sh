@@ -9,9 +9,21 @@
 # own uploader (DotLogSync) is preferred; this script is the manual fallback.
 set -euo pipefail
 
+HERE="$(cd "$(dirname "$0")" && pwd)"
 : "${DOT_LOGS_REPO:=https://github.com/Emin-dev/Dot.git}"
 : "${DOT_LOGS_BRANCH:=dot-logs}"
 : "${GH_TOKEN:?set GH_TOKEN (fine-grained token with Contents: read and write)}"
+
+# Logs are data only. Never let an override target main, a non-log branch or
+# another repository.
+case "$DOT_LOGS_REPO" in
+    https://github.com/Emin-dev/Dot.git|git@github.com:Emin-dev/Dot.git) ;;
+    *) echo "refusing to push logs to '$DOT_LOGS_REPO' (expected Emin-dev/Dot)" >&2; exit 1 ;;
+esac
+case "$DOT_LOGS_BRANCH" in
+    dot-logs|dot-*) ;;
+    *) echo "refusing to push logs to branch '$DOT_LOGS_BRANCH' (expected dot-logs or dot-*)" >&2; exit 1 ;;
+esac
 
 SUPPORT="${HOME}/Library/Application Support/Dot"
 INSTALL_FILE="$SUPPORT/install-id"
@@ -51,15 +63,7 @@ mkdir -p "repo/$DEST"
 # Same last-line secret masking as the in-app uploader: never publish a token,
 # password or API key even when an older build wrote it into a log file.
 sanitize() {
-    perl -pe '
-        s/((?:Authorization)\s*[:=]\s*Bearer\s+)\S+/${1}[REDACTED]/gi;
-        s/\bgh[pousr]_[A-Za-z0-9]{20,}\b/[REDACTED_TOKEN]/g;
-        s/\bgithub_pat_[A-Za-z0-9_]{20,}\b/[REDACTED_TOKEN]/g;
-        s/\b(password|passwd|passphrase|secret)\s*[:=]\s*[^\r\n]+/${1}=[REDACTED]/gi;
-        s/\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+/${1}=[REDACTED]/gi;
-        s/\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+/${1}=[REDACTED]/gi;
-        s/\b(token|api(?:[\s_-]?key))\s+(?:is|was)\s+\S+/${1}=[REDACTED]/gi;
-    ' "$1"
+    perl "$HERE/redact_log.pl" < "$1"
 }
 for name in dot_chat_log.txt dot_chat_log.1.txt; do
     if [ -f "$SUPPORT/Logs/$name" ]; then

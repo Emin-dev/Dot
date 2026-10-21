@@ -2538,6 +2538,46 @@ final class LogRedactionTests: XCTestCase {
         let text = "Can you remind me to call Alice at 3 PM about the Berlin report?"
         XCTAssertEqual(LogRedaction.masked(text), text)
     }
+
+    func testCommonKeyFormatsAreMaskedToo() {
+        let text = """
+        curl -H "Authorization: Bearer abc123def456"
+        Authorization: Bearer abc123def456
+        sk-live-abcdefghijklmnop1234
+        AKIAABCDEFGHIJKLMNOP
+        xoxb-1234567890-abcdefghij
+        Authorization: Basic dXNlcjpwYXNzd29yZA==
+        AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI
+        "client_secret": "shhh-do-not-upload"
+        -----BEGIN RSA PRIVATE KEY-----
+        MIIEowIBAAKCAQEA
+        -----END RSA PRIVATE KEY-----
+        -----BEGIN PGP PRIVATE KEY BLOCK-----
+        PGPKEYBODY
+        -----END PGP PRIVATE KEY BLOCK-----
+        """
+        let masked = LogRedaction.masked(text)
+        for secret in ["abc123def456", "sk-live-abcdefghijklmnop1234", "AKIAABCDEFGHIJKLMNOP",
+                       "xoxb-1234567890-abcdefghij", "MIIEowIBAAKCAQEA", "dXNlcjpwYXNzd29yZA==",
+                       "wJalrXUtnFEMI", "shhh-do-not-upload", "PGPKEYBODY"] {
+            XCTAssertFalse(masked.contains(secret), "leaked \(secret)")
+        }
+        XCTAssertTrue(masked.contains("[REDACTED_PRIVATE_KEY]"))
+        XCTAssertTrue(masked.contains("[REDACTED_AWS_KEY]"))
+    }
+
+    func testNonTextUploadBytesAreDropped() {
+        XCTAssertEqual(LogRedaction.masked(Data([0xFF, 0xFE, 0x00])), Data())
+    }
+
+    func testUploadBytesAreMaskedAtTheBoundary() {
+        let legacy = Data("old line\ntoken: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n".utf8)
+        let masked = String(decoding: LogRedaction.masked(legacy), as: UTF8.self)
+        XCTAssertFalse(masked.contains("ghp_"))
+        XCTAssertTrue(masked.contains("[REDACTED]"))
+        let clean = Data("ordinary log line\n".utf8)
+        XCTAssertEqual(LogRedaction.masked(clean), clean)
+    }
 }
 
 final class ModelPartPlanTests: XCTestCase {
