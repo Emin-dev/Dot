@@ -28,6 +28,13 @@ OUTPUT="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["out
 case "$OUTPUT" in
     ""|.*|*/*|*\\*) echo "The parts manifest has an unsafe output name: $OUTPUT" >&2; exit 1 ;;
 esac
-"$PYTHON" join_release.py "$MANIFEST" --download --output "$OUTPUT"
+if [ -e "$OUTPUT" ]; then
+    read -r -p "$OUTPUT already exists. Replace it? [y/N] " REPLACE
+    case "$REPLACE" in
+        y|Y|yes|YES) ;;
+        *) echo "Keeping the existing $OUTPUT."; exit 1 ;;
+    esac
+fi
+"$PYTHON" join_release.py "$MANIFEST" --download --force --output "$OUTPUT"
 hdiutil verify -quiet "$OUTPUT"
 open "$OUTPUT"

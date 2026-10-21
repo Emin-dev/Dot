@@ -2343,7 +2343,7 @@ final class ChatModel: ObservableObject {
             if SafetyApprover.shared.armForce() {
                 respondDirectly("The next matching approval will run without the safety check — your call.", id: id)
             } else {
-                respondDirectly("Nothing has been refused three times yet, so there is nothing to force.", id: id)
+                respondDirectly("Nothing is available to force: this exact action needs three refusals, and an override that is already armed cannot be armed again.", id: id)
             }
             return
         }

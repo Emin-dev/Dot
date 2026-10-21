@@ -2478,7 +2478,7 @@ final class LogSyncPolicyTests: XCTestCase {
         XCTAssertEqual(queue.entries.last?.remotePath, "dot/a/b/\(LogSyncPolicy.maximumQueueEntries).txt")
     }
 
-    func testFailureUsesBackoffAndParksExhaustedEntries() {
+    func testFailureUsesBackoffAndRetriesExhaustedEntriesAtTheCap() {
         var queue = LogUploadQueue()
         queue.enqueue(localPath: "/q/a", remotePath: "dot/a/b/a.txt", now: 0)
         XCTAssertEqual(queue.failed(remotePath: "dot/a/b/a.txt", now: 10), 1)
@@ -2495,14 +2495,34 @@ final class LogSyncPolicyTests: XCTestCase {
             _ = queue.failed(remotePath: "dot/a/b/a.txt", now: 1_000)
         }
         XCTAssertNil(queue.failed(remotePath: "dot/a/b/a.txt", now: 2_000))
-        XCTAssertEqual(queue.entries.count, 1, "An exhausted snapshot stays parked, not forgotten")
+        XCTAssertEqual(queue.entries.count, 1, "An exhausted snapshot stays queued, not forgotten")
         XCTAssertTrue(queue.due(now: 2_000).isEmpty)
+        XCTAssertEqual(queue.entries[0].attempts, LogSyncPolicy.maximumRetries)
+        XCTAssertEqual(queue.due(now: 2_000 + LogSyncPolicy.maximumBackoffSeconds).count, 1,
+                       "A stable log is retried at the cap when the network returns")
         XCTAssertNil(queue.failed(remotePath: "dot/missing", now: 0))
 
         queue.enqueue(localPath: "/q/a-recovered", remotePath: "dot/a/b/a.txt", now: 3_000)
         XCTAssertEqual(queue.entries[0].attempts, 0, "New content after exhaustion gets a fresh retry budget")
         XCTAssertEqual(queue.entries[0].nextAttempt, 3_000)
         XCTAssertEqual(queue.due(now: 3_000).count, 1)
+    }
+
+    func testLegacyYearParkedEntryBecomesDueAfterUpgrade() throws {
+        let legacy = #"{"entries":[{"localPath":"/q/old","remotePath":"dot/a/b/a.txt","attempts":8,"nextAttempt":31536000}]}"#
+        var queue = try XCTUnwrap(LogUploadQueue.decoded(Data(legacy.utf8)))
+        queue.normalize(now: 100)
+        XCTAssertEqual(queue.entries[0].nextAttempt, 100)
+        XCTAssertEqual(queue.due(now: 100).count, 1)
+
+        let atCap = #"{"entries":[{"localPath":"/q/cap","remotePath":"r","attempts":8,"nextAttempt":3700}]}"#
+        var capped = try XCTUnwrap(LogUploadQueue.decoded(Data(atCap.utf8)))
+        capped.normalize(now: 100)
+        XCTAssertEqual(capped.entries[0].nextAttempt, 3700, "The valid cap backoff is not shortened")
+        let aboveCap = #"{"entries":[{"localPath":"/q/above","remotePath":"r","attempts":8,"nextAttempt":3701}]}"#
+        var above = try XCTUnwrap(LogUploadQueue.decoded(Data(aboveCap.utf8)))
+        above.normalize(now: 100)
+        XCTAssertEqual(above.entries[0].nextAttempt, 100)
     }
 
     func testQueueRoundTripsThroughJSON() throws {
@@ -2564,6 +2584,15 @@ final class LogRedactionTests: XCTestCase {
         }
         XCTAssertTrue(masked.contains("[REDACTED_PRIVATE_KEY]"))
         XCTAssertTrue(masked.contains("[REDACTED_AWS_KEY]"))
+    }
+
+    func testJWTShapedTokensAreMasked() {
+        let jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0."
+            + "dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+        let masked = LogRedaction.masked("pasted token \(jwt) end")
+        XCTAssertFalse(masked.contains(jwt))
+        XCTAssertFalse(masked.contains("dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"))
+        XCTAssertTrue(masked.contains("[REDACTED_JWT]"))
     }
 
     func testNonTextUploadBytesAreDropped() {
@@ -2632,5 +2661,49 @@ final class ModelPartPlanTests: XCTestCase {
 
     func testUnknownFilePartDoesNotCoverTheManifest() {
         XCTAssertFalse(plan(valid)?.validate(files: [("llm-target/other.bin", 15)]) == true)
+    }
+}
+
+final class ForceOverridePolicyTests: XCTestCase {
+    func testOverrideNeedsThreeRefusalsOfTheExactAction() {
+        var policy = ForceOverridePolicy()
+        XCTAssertFalse(policy.arm(now: 0))
+        policy.registerStrike("delete a.txt")
+        policy.registerStrike("delete b.txt")
+        XCTAssertFalse(policy.arm(now: 1), "Refusals of other actions do not arm the override")
+        policy.registerStrike("delete a.txt")
+        policy.registerStrike("delete a.txt")
+        XCTAssertTrue(policy.arm(now: 2))
+        XCTAssertFalse(policy.consume("delete b.txt", now: 3), "Only the refused action is unlocked")
+        XCTAssertTrue(policy.consume("delete a.txt", now: 3))
+    }
+
+    func testOverrideExpiresAfterTwoMinutesAndIsOneShot() {
+        var policy = ForceOverridePolicy()
+        for _ in 0..<3 { policy.registerStrike("run rm -rf build") }
+        XCTAssertTrue(policy.arm(now: 10))
+        XCTAssertFalse(policy.arm(now: 20), "Arming twice must not extend the lifetime")
+        XCTAssertFalse(policy.consume("run rm -rf build", now: 131))
+        XCTAssertTrue(policy.consume("run rm -rf build", now: 130))
+        XCTAssertFalse(policy.consume("run rm -rf build", now: 130), "The pass is one-shot")
+        XCTAssertFalse(policy.arm(now: 140), "Consuming clears the strikes")
+        for _ in 0..<3 { policy.registerStrike("run rm -rf build") }
+        XCTAssertTrue(policy.arm(now: 200), "Fresh refusals can arm again")
+
+        var expired = ForceOverridePolicy()
+        for _ in 0..<3 { expired.registerStrike("act") }
+        XCTAssertTrue(expired.arm(now: 0))
+        XCTAssertFalse(expired.arm(now: 121), "An expired unconsumed pass cannot be extended")
+        XCTAssertFalse(expired.consume("act", now: 122), "An expired pass is gone")
+        XCTAssertFalse(expired.arm(now: 123), "Expiry clears the old strikes")
+    }
+
+    func testAllowedVerdictClearsTheActionStrikes() {
+        var policy = ForceOverridePolicy()
+        policy.registerStrike("move file")
+        policy.registerStrike("move file")
+        policy.clear("move file")
+        policy.registerStrike("move file")
+        XCTAssertFalse(policy.arm(now: 0), "Cleared refusals do not count toward three")
     }
 }

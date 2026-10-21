@@ -222,6 +222,7 @@ final class DotLogSync: @unchecked Sendable {
         }
         var state = readQueue()
         let now = Date().timeIntervalSince1970
+        state.normalize(now: now)
         var changed = false
         for entry in state.due(now: now) {
             let file = URL(fileURLWithPath: entry.localPath)

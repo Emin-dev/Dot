@@ -189,6 +189,37 @@ checks = {
         and 'def safe_url(' in read('scripts/join_release.py')
         and 'refusing a part URL' in read('scripts/join_release.py')
     ),
+    'force override policy is executable in DotCore': (
+        'public struct ForceOverridePolicy' in read('src/InteractionCore.swift')
+        and 'policy.arm(now: ProcessInfo.processInfo.systemUptime)' in read('src/SafetyApprover.swift')
+        and 'policy.consume(action, now: ProcessInfo.processInfo.systemUptime)' in read('src/SafetyApprover.swift')
+        and 'policy.registerStrike(key)' in read('src/SafetyApprover.swift')
+    ),
+    'exhausted log uploads retry at the backoff cap, not after a year': (
+        'min(entries[index].attempts + 1, LogSyncPolicy.maximumRetries)' in read('src/InteractionCore.swift')
+        and 'nextAttempt = now + 365 * 86_400' not in read('src/InteractionCore.swift')
+    ),
+    'both redactors mask JWT tokens': (
+        '[REDACTED_JWT]' in read('src/InteractionCore.swift')
+        and '[REDACTED_JWT]' in read('scripts/redact_log.pl')
+    ),
+    'split and join refuse silent overwrite; redirects stay on GitHub': (
+        'refusing to overwrite existing part output' in read('scripts/split_release.py')
+        and 'refusing to replace existing output' in read('scripts/join_release.py')
+        and 'class SafeRedirectHandler' in read('scripts/join_release.py')
+        and '--force' in read('scripts/join_release.py')
+    ),
+    'forced split removes stale parts so they cannot be uploaded': (
+        'asset_pattern.fullmatch(name)' in read('scripts/split_release.py')
+        and 'candidate.unlink()' in read('scripts/split_release.py')
+    ),
+    'owner packaging is safe under macOS bash 3.2 nounset': (
+        '${FORCE_ARGS[@]+"${FORCE_ARGS[@]}"}' in read('scripts/package_all_in_one.sh')
+    ),
+    'legacy year-parked upload entries are retried after upgrade': (
+        'public mutating func normalize(now: Double)' in read('src/InteractionCore.swift')
+        and 'state.normalize(now: now)' in read('src/DotLogSync.swift')
+    ),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())
 ET.parse(root / 'Dot.xcodeproj/xcshareddata/xcschemes/Dot.xcscheme')

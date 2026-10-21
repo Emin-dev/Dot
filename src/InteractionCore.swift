@@ -6333,6 +6333,16 @@ public struct LogUploadQueue: Codable, Equatable, Sendable {
         }
     }
 
+    /// Old builds parked exhausted entries for a year. Any next attempt beyond
+    /// the 1 h backoff cap is implausible, so an upgrade makes it due now
+    /// instead of leaving a stable snapshot stranded.
+    public mutating func normalize(now: Double) {
+        let ceiling = now + LogSyncPolicy.maximumBackoffSeconds
+        for index in entries.indices where entries[index].nextAttempt > ceiling {
+            entries[index].nextAttempt = now
+        }
+    }
+
     public func due(now: Double) -> [LogUploadEntry] {
         entries.filter { $0.nextAttempt <= now }
     }
@@ -6341,20 +6351,17 @@ public struct LogUploadQueue: Codable, Equatable, Sendable {
         entries.removeAll { $0.remotePath == remotePath }
     }
 
-    /// Returns the new attempt count, or nil when the entry was dropped after
-    /// exhausting its retry budget.
+    /// Returns the new attempt count, or nil once the retry budget is spent.
+    /// An exhausted entry is still retried at the maximum backoff, so a stable
+    /// log is uploaded when the network returns instead of being parked for a
+    /// year; new content resets the budget in `enqueue`.
     @discardableResult
     public mutating func failed(remotePath: String, now: Double) -> Int? {
         guard let index = entries.firstIndex(where: { $0.remotePath == remotePath }) else { return nil }
-        let attempts = entries[index].attempts + 1
-        guard LogSyncPolicy.shouldRetry(attempt: attempts) else {
-            entries[index].attempts = attempts
-            entries[index].nextAttempt = now + 365 * 86_400
-            return nil
-        }
+        let attempts = min(entries[index].attempts + 1, LogSyncPolicy.maximumRetries)
         entries[index].attempts = attempts
         entries[index].nextAttempt = now + LogSyncPolicy.backoff(attempt: attempts)
-        return attempts
+        return LogSyncPolicy.shouldRetry(attempt: attempts) ? attempts : nil
     }
 
     public func encoded() throws -> Data {
@@ -6389,6 +6396,7 @@ public enum LogRedaction {
             (#"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b"#, "Bearer [REDACTED]"),
             (#"(?i)\"([^\"]*(?:token|secret|password|passwd|api[_-]?key|access_key|private_key)[^\"]*)\"\s*:\s*\"[^\"]*\""#, "\"$1\":\"[REDACTED]\""),
             (#"(?i)\b[A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|PRIVATE_KEY|ACCESS_KEY)[A-Z0-9_]*\s*[:=]\s*\S+"#, "[REDACTED_ENV]"),
+            (#"\beyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){2,4}(?![A-Za-z0-9_.-])"#, "[REDACTED_JWT]"),
             (#"\bgh[pousr]_[A-Za-z0-9]{20,}\b"#, "[REDACTED_TOKEN]"),
             (#"\bgithub_pat_[A-Za-z0-9_]{20,}\b"#, "[REDACTED_TOKEN]"),
             (#"\bsk-[A-Za-z0-9_-]{16,}\b"#, "[REDACTED_TOKEN]"),
@@ -6404,5 +6412,65 @@ public enum LogRedaction {
                                                  options: [.regularExpression, .caseInsensitive])
         }
         return result
+    }
+}
+
+/// Pure policy for the owner's "force it" safety override. Kept in DotCore so
+/// the expiry, exact-action match, three-refusal gate and one-shot reset are
+/// executable tests; `SafetyApprover` supplies the clock and the lock.
+public struct ForceOverridePolicy: Equatable, Sendable {
+    public private(set) var strikes: [String: Int]
+    public private(set) var lastRefused: String?
+    public private(set) var forceKey: String?
+    public private(set) var forceExpiresAt: TimeInterval
+
+    public init() {
+        strikes = [:]
+        lastRefused = nil
+        forceKey = nil
+        forceExpiresAt = 0
+    }
+
+    /// The override can only be armed for the exact action that was refused at
+    /// least `minimumStrikes` times.
+    @discardableResult
+    public mutating func registerStrike(_ action: String, minimumStrikes: Int = 3) -> Int {
+        let count = (strikes[action] ?? 0) + 1
+        strikes[action] = count
+        if count >= minimumStrikes { lastRefused = action }
+        return count
+    }
+
+    public mutating func arm(now: TimeInterval, lifetime: TimeInterval = 120) -> Bool {
+        // An already-armed override cannot be extended. An expired, unconsumed
+        // override is discarded with its strikes, so arming again needs three
+        // fresh refusals rather than inheriting an old pass.
+        if let key = forceKey {
+            guard now > forceExpiresAt else { return false }
+            forceKey = nil
+            forceExpiresAt = 0
+            strikes[key] = 0
+            if lastRefused == key { lastRefused = nil }
+        }
+        guard let key = lastRefused, (strikes[key] ?? 0) >= 3 else { return false }
+        forceKey = key
+        forceExpiresAt = now + lifetime
+        return true
+    }
+
+    /// One free pass for the exact refused action before `expiresAt`; consuming
+    /// it clears that action's strikes so a later refusal needs three fresh ones.
+    public mutating func consume(_ action: String, now: TimeInterval) -> Bool {
+        guard forceKey == action, now <= forceExpiresAt else { return false }
+        forceKey = nil
+        forceExpiresAt = 0
+        strikes[action] = 0
+        if lastRefused == action { lastRefused = nil }
+        return true
+    }
+
+    public mutating func clear(_ action: String) {
+        strikes[action] = 0
+        if lastRefused == action { lastRefused = nil }
     }
 }

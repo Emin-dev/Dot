@@ -16,12 +16,28 @@ import json
 import sys
 import posixpath
 import re
+import urllib.error
 import urllib.request
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 CHUNK = 8 * 1024 * 1024
 RELEASE_PREFIX = "/Emin-dev/Dot/releases/download/"
+# GitHub redirects release assets to its own object hosts; nothing else is accepted.
+REDIRECT_HOSTS = {"github.com", "objects.githubusercontent.com",
+                  "release-assets.githubusercontent.com"}
+
+
+class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Follow GitHub's asset redirects, but never leave HTTPS/GitHub hosting."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        parsed = urlparse(newurl)
+        if parsed.scheme != "https" or parsed.netloc not in REDIRECT_HOSTS:
+            raise urllib.error.HTTPError(
+                newurl, code, f"refusing redirect outside GitHub release hosting: {newurl}",
+                headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def safe_name(value: object) -> str:
@@ -77,7 +93,8 @@ def download(url: str, destination: Path, expected: int) -> None:
     request = urllib.request.Request(url)
     if existing:
         request.add_header("Range", f"bytes={existing}-")
-    with urllib.request.urlopen(request, timeout=120) as response:
+    opener = urllib.request.build_opener(SafeRedirectHandler())
+    with opener.open(request, timeout=120) as response:
         status = getattr(response, "status", 200)
         if status == 206 and existing:
             mode = "ab"
@@ -95,7 +112,7 @@ def download(url: str, destination: Path, expected: int) -> None:
     partial.replace(destination)
 
 
-def join(manifest_path: Path, output: Path, fetch: bool) -> None:
+def join(manifest_path: Path, output: Path, fetch: bool, force: bool = False) -> None:
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schema_version") != 1:
         raise SystemExit("unsupported parts manifest")
@@ -104,6 +121,12 @@ def join(manifest_path: Path, output: Path, fetch: bool) -> None:
         raise SystemExit("parts manifest is empty")
     if sum(int(part["bytes"]) for part in parts) != int(manifest["bytes"]):
         raise SystemExit("part sizes do not add up to the manifest size")
+    if output.is_symlink():
+        raise SystemExit(f"refusing to replace a symlink: {output}")
+    if output.is_dir():
+        raise SystemExit(f"refusing to replace a directory: {output}")
+    if output.exists() and not force:
+        raise SystemExit(f"refusing to replace existing output {output}; pass --force")
     base = manifest_path.parent
     resolved: list[Path] = []
     names: set[str] = set()
@@ -129,8 +152,6 @@ def join(manifest_path: Path, output: Path, fetch: bool) -> None:
                 raise SystemExit(f"missing or wrong-size part: {name}")
             raise SystemExit(f"SHA-256 mismatch: {name}")
         resolved.append(path)
-    if output.is_symlink():
-        raise SystemExit(f"refusing to replace a symlink: {output}")
     staging = output.with_suffix(output.suffix + ".join")
     with staging.open("wb") as out:
         for path in resolved:
@@ -152,10 +173,12 @@ def main() -> int:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--download", action="store_true")
+    parser.add_argument("--force", action="store_true",
+                        help="replace an existing joined output file")
     args = parser.parse_args()
     manifest = json.loads(args.manifest.read_text())
     output = args.output or (args.manifest.parent / safe_name(manifest.get("output")))
-    join(args.manifest, output, args.download)
+    join(args.manifest, output, args.download, args.force)
     return 0
 
 

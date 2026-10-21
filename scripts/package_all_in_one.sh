@@ -6,6 +6,8 @@
 #
 # Requires an authenticated `gh`. Every part is <2 GB, the manifest carries the
 # whole and per-part SHA-256, and join-dot-dmg.command downloads/joins/verifies.
+# Re-running over an existing build-all-in-one directory is refused; set
+# DOT_ALL_IN_ONE_FORCE=1 to replace the whole part set deliberately.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${DOT_ALL_IN_ONE_DMG:?Set DOT_ALL_IN_ONE_DMG to the accepted complete DMG}"
@@ -13,8 +15,11 @@ TAG="${DOT_ALL_IN_ONE_TAG:-all-in-one-v1}"
 OUT="${DOT_ALL_IN_ONE_DIR:-build-all-in-one}"
 BASE="https://github.com/Emin-dev/Dot/releases/download/$TAG"
 [ -f "$DOT_ALL_IN_ONE_DMG" ] || { echo "no DMG at $DOT_ALL_IN_ONE_DMG" >&2; exit 1; }
+FORCE_ARGS=()
+if [ "${DOT_ALL_IN_ONE_FORCE:-0}" = "1" ]; then FORCE_ARGS=(--force); fi
+# The ${arr[@]+...} form is safe under `set -u` on macOS bash 3.2.
 python3 -B scripts/split_release.py "$DOT_ALL_IN_ONE_DMG" --output "$OUT" \
-  --part-size 1900000000 --base-url "$BASE/"
+  --part-size 1900000000 --base-url "$BASE/" ${FORCE_ARGS[@]+"${FORCE_ARGS[@]}"}
 cp packaging/join-dot-dmg.command scripts/join_release.py "$OUT/"
 MANIFEST="$(basename "$DOT_ALL_IN_ONE_DMG").parts.json"
 if gh release view "$TAG" >/dev/null 2>&1; then

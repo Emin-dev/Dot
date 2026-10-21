@@ -41,8 +41,12 @@ class ReviewPipelineContractTests(unittest.TestCase):
         approver = read('src/SafetyApprover.swift')
         self.assertIn('func armForce() -> Bool', approver)
         self.assertIn('consumeForce(for action: String)', approver)
-        self.assertIn('strikes[action] = 0', approver)
+        self.assertIn('policy.arm(now: ProcessInfo.processInfo.systemUptime)', approver)
         self.assertNotIn('forceNext', approver)
+        policy = read('src/InteractionCore.swift')
+        self.assertIn('public struct ForceOverridePolicy', policy)
+        self.assertIn('strikes[action] = 0', policy)
+        self.assertIn('forceExpiresAt = now + lifetime', policy)
         self.assertIn('SafetyApprover.shared.armForce()', read('src/ChatView.swift'))
 
     def test_manual_log_script_refuses_non_log_branches(self):
@@ -57,6 +61,9 @@ class ReviewPipelineContractTests(unittest.TestCase):
             "-----END RSA PRIVATE KEY-----\n"
             "Authorization: Bearer abc123def456\n"
             "sk-live-abcdefghijklmnop1234\n"
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U\n"
+            "eyJhbGciOiJub25lIn0.e30.\n"
+            "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..aaaa.bbbb.cccc\n"
             "Authorization: Basic dXNlcjpwYXNzd29yZA==\n"
             "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI\n"
             '"client_secret": "shhh-do-not-upload"\n'
@@ -68,10 +75,19 @@ class ReviewPipelineContractTests(unittest.TestCase):
                                 input=text, text=True, capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         for secret in ("MIIEowIBAAKCAQEA", "abc123def456", "sk-live-abcdefghijklmnop1234",
+                       "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+                       "eyJhbGciOiJub25lIn0.e30.",
+                       "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIn0..aaaa.bbbb.cccc",
                        "dXNlcjpwYXNzd29yZA==", "wJalrXUtnFEMI", "shhh-do-not-upload",
                        "PGPKEYBODY"):
             self.assertNotIn(secret, result.stdout)
         self.assertIn("[REDACTED_PRIVATE_KEY]", result.stdout)
+        self.assertIn("[REDACTED_JWT]", result.stdout)
+
+    def test_swift_redactor_masks_jwts_like_the_shell_redactor(self):
+        redactor = read('src/InteractionCore.swift')
+        self.assertIn(r'\beyJ[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){2,4}(?![A-Za-z0-9_.-])', redactor)
+        self.assertIn('[REDACTED_JWT]', redactor)
 
     def test_release_tag_must_match_the_built_commit(self):
         workflow = read('.github/workflows/release.yml')

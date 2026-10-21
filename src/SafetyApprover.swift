@@ -14,12 +14,8 @@ final class SafetyApprover: @unchecked Sendable {
     static let shared = SafetyApprover()
 
     private let lock = NSLock()
-    private var strikes: [String: Int] = [:]
-    /// The action that reached three refusals; "force it" can only unlock this
-    /// exact action, and only once.
-    private var lastRefused: String?
-    private var forceKey: String?
-    private var forceExpiresAt: TimeInterval = 0
+    /// The pure policy is tested in DotCore; the clock and lock live here.
+    private var policy = ForceOverridePolicy()
 
     private static let auxiliaryModelPath = "aux/gemma-3-4b-it-Q4_K_M.gguf"
 
@@ -50,10 +46,7 @@ final class SafetyApprover: @unchecked Sendable {
     /// same action three times. Returns false when there is nothing to force.
     func armForce() -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard let key = lastRefused, (strikes[key] ?? 0) >= 3 else { return false }
-        forceKey = key
-        forceExpiresAt = ProcessInfo.processInfo.systemUptime + 120
-        return true
+        return policy.arm(now: ProcessInfo.processInfo.systemUptime)
     }
 
     /// One free pass for the exact refused action, consumed by its next evaluation.
@@ -61,27 +54,17 @@ final class SafetyApprover: @unchecked Sendable {
     /// three fresh refusals before "force it" can arm again.
     private func consumeForce(for action: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        guard forceKey == action,
-              ProcessInfo.processInfo.systemUptime <= forceExpiresAt else { return false }
-        forceKey = nil
-        forceExpiresAt = 0
-        strikes[action] = 0
-        if lastRefused == action { lastRefused = nil }
-        return true
+        return policy.consume(action, now: ProcessInfo.processInfo.systemUptime)
     }
 
     private func clearStrikes(for action: String) {
         lock.lock(); defer { lock.unlock() }
-        strikes[action] = 0
-        if lastRefused == action { lastRefused = nil }
+        policy.clear(action)
     }
 
     func registerStrike(key: String) -> Int {
         lock.lock(); defer { lock.unlock() }
-        let count = (strikes[key] ?? 0) + 1
-        strikes[key] = count
-        if count >= 3 { lastRefused = key }
-        return count
+        return policy.registerStrike(key)
     }
 
     /// Runs the local model and returns its verdict. Bounded by a hard timeout;
