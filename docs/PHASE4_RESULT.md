@@ -166,6 +166,7 @@ runs contracts and split/join checks, packages the model-less default DMG, and u
 | DMG SHA-256 | `dc9561facbf2fbafb91531a79b4d09c95250c5abaa18c47b33e34ab7794978c6` |
 | `Dot.dmg.sha256` | uploaded; content matches the SHA above |
 | Remote asset digest | GitHub API digest `sha256:dc9561fa…4978c6` — matches exactly |
+| Downloaded asset check | `Dot.dmg` was downloaded again and re-hashed locally: same SHA-256 and 1,005,188,103 bytes |
 | Other assets | `join-dot-dmg.command` (1,238 B), `join_release.py` (4,746 B), `README.txt` (1,108 B) |
 
 The DMG is **ad-hoc signed and not notarised**. GitHub caps each asset at 2 GB; the complete
