@@ -22,8 +22,10 @@ env:
   DONOR_SHA256: 942f877fa64dbe338b9ba55d5475d6a3d968ca7132038e7e52d217ff17a3afc3
 jobs:
   package:
-    runs-on: macos-15
-    timeout-minutes: 45
+    # macOS 26 is required: the app deployment floor is 26.4, and the first-open
+    # check must launch the real DMG bundle rather than skip it.
+    runs-on: macos-26
+    timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
