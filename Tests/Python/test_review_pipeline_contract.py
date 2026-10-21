@@ -177,3 +177,35 @@ class Phase6ReviewContractTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class Phase6RealLaunchContractTests(unittest.TestCase):
+    """The real-launch lane must refuse honestly, not bypass the gate."""
+
+    def test_real_launch_workflow_is_dispatch_only_and_uses_the_real_bundle(self):
+        workflow = read('.github/workflows/real-app-check.yml')
+        self.assertIn('workflow_dispatch:', workflow)
+        self.assertNotIn('pull_request:', workflow)
+        self.assertNotIn('push:', workflow)
+        self.assertIn('DONOR_SHA256', workflow)
+        self.assertIn('scripts/package_default_release.sh', workflow)
+        self.assertIn('scripts/real_app_launch_check.sh', workflow)
+        self.assertIn('build/Dot.app', workflow)
+        for bypass in ('DOT_SKIP_HARDWARE', 'DOT_BYPASS', 'forceLaunch', 'gateBypass'):
+            self.assertNotIn(bypass, workflow)
+
+    def test_refusal_is_logged_before_the_blocking_alert(self):
+        source = read('src/InteractionCore.swift')
+        gate = source.split('public static func verifyOnLaunch()', 1)[1]
+        refused = gate.split('case .refuseImpossible(let plan):', 1)[1].split('case .proceed', 1)[0]
+        self.assertIn('DiagnosticChatLogger.record', refused)
+        self.assertLess(refused.index('DiagnosticChatLogger.record'), refused.index('makeAlert(from: plan).runModal()'))
+        self.assertIn('Launch refused.', refused)
+
+    def test_launch_script_asserts_the_exact_minimum_and_no_fallback_text(self):
+        script = read('scripts/real_app_launch_check.sh')
+        self.assertIn("Hardware Does Not Meet Dot's Minimum", script)
+        self.assertIn('Dot needs Apple Silicon M5 Pro class or newer, 48 GB Unified Memory and macOS 27.0 or newer.', script)
+        self.assertIn('The exact Qwen3.8 27B Q4 model runs locally and has no smaller fallback, so Dot cannot start on this Mac.', script)
+        self.assertIn('Not met:', script)
+        self.assertNotIn('--override', script)

@@ -1,0 +1,100 @@
+name: Real app launch check
+
+# Deliberately separate from ci.yml: the standard macOS lane compiles and tests
+# but never launches the app. This lane builds the same default bundle the
+# public DMG ships and launches it for real on a hosted arm64 runner. A hosted
+# runner is below Dot's minimum, so the expected result is the hardware-gate
+# refusal with a clear message. There is no gate bypass, override flag or
+# hidden default in this workflow.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dot-real-app-check
+  cancel-in-progress: false
+
+env:
+  # Same audited runtime-only donor as release.yml. Verify the published
+  # SHA-256 before mounting; never reuse its model weights.
+  DONOR_URL: https://github.com/Emin-dev/Dot/releases/download/public-f6cc73d/Dot.dmg
+  DONOR_SHA256: 942f877fa64dbe338b9ba55d5475d6a3d968ca7132038e7e52d217ff17a3afc3
+
+jobs:
+  launch:
+    # Hosted arm64 macOS. This machine is below the product minimum on purpose:
+    # the lane proves the refusal, not a successful conversation.
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+
+      - name: Runner is arm64 macOS
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = "arm64"
+          sw_vers
+          sysctl -n machdep.cpu.brand_string
+          sysctl -n hw.memsize
+
+      - name: Build Rust runtime binaries
+        run: cargo build --release --bin dot-voice --bin dot-search --bin dot-fetch --bin dot-safety
+
+      - name: Fetch the audited runtime payload (no model weights)
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/donor .tmp/donor/mnt .tmp/runtime .tmp/whisper
+          curl -L --fail --retry 5 --retry-delay 5 -o .tmp/donor/Dot.dmg "$DONOR_URL"
+          echo "$DONOR_SHA256  .tmp/donor/Dot.dmg" | shasum -a 256 -c -
+          hdiutil attach .tmp/donor/Dot.dmg -nobrowse -readonly -mountpoint .tmp/donor/mnt
+          trap 'hdiutil detach .tmp/donor/mnt || true' EXIT
+          /usr/bin/ditto .tmp/donor/mnt/Dot.app/Contents/Resources/Offline .tmp/runtime/Offline
+          /usr/bin/ditto .tmp/donor/mnt/Dot.app/Contents/Frameworks/whisper.framework .tmp/whisper/whisper.framework
+          hdiutil detach .tmp/donor/mnt
+          test -f .tmp/runtime/Offline/runtime-manifest.json
+          test -f .tmp/whisper/whisper.framework/Modules/module.modulemap
+
+      - name: Static contracts and release checks
+        run: |
+          python3 -B scripts/check_contracts.py
+          python3 -B -m unittest Tests.Python.test_release_parts.py -v
+          python3 -B -m unittest Tests.Python.test_review_pipeline_contract.py -v
+          bash -n scripts/package_default_release.sh scripts/real_app_launch_check.sh
+
+      - name: Package the real default app (same bundle as the public DMG)
+        env:
+          DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
+          DOT_WHISPER_FRAMEWORK: .tmp/whisper/whisper.framework
+        run: bash scripts/package_default_release.sh
+
+      - name: Launch the real app and capture the hardware refusal
+        run: bash scripts/real_app_launch_check.sh build/Dot.app .tmp/real-app-check
+
+      - name: Print the launch transcript and state
+        if: always()
+        run: |
+          set +e
+          echo "== launch transcript =="
+          cat .tmp/real-app-check/launch-transcript.txt 2>/dev/null
+          echo "== launch log =="
+          cat .tmp/real-app-check/dot_chat_log.txt 2>/dev/null
+          echo "== console =="
+          sed -n '1,200p' .tmp/real-app-check/console.log 2>/dev/null
+
+      - name: Upload the launch evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dot-real-app-launch-evidence
+          path: .tmp/real-app-check/
+          if-no-files-found: warn

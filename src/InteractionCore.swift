@@ -1310,6 +1310,11 @@ public struct HardwareCompatibility: Sendable {
         case .proceed:
             return true
         case .refuseImpossible(let plan):
+            // Record the refusal before the blocking alert: this is the only
+            // durable evidence on a below-minimum Mac, and it must not claim the
+            // app started.
+            DiagnosticChatLogger.record(role: "system",
+                text: "Launch refused. \(plan.title): \(plan.informativeText)")
             NSApp.activate(ignoringOtherApps: true)
             makeAlert(from: plan).runModal()
             NSApplication.shared.terminate(nil)
