@@ -328,6 +328,8 @@ case "$name" in
     /usr/bin/tee "$@"
     case "$*" in *runtime-finalizer-canary.log*) exit "$STUB_TEE_STATUS" ;; esac ;;
   swift) exit "$STUB_SWIFT_STATUS" ;;
+  codesign)
+    case "$*" in *--entitlements*) echo 'com.apple.security.app-sandbox' ;; esac ;;
 esac
 exit 0
 '''
