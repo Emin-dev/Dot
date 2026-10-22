@@ -22,8 +22,9 @@ The install id is an anonymous stable value (8–32 lowercase alphanumeric chara
 gh api "repos/Emin-dev/Dot/contents/dot?ref=dot-logs" --jq '.[].name'          # install ids
 gh api "repos/Emin-dev/Dot/contents/dot/<install-id>?ref=dot-logs" --jq '.[].name'  # launches
 gh api "repos/Emin-dev/Dot/contents/dot/<install-id>/<launch>?ref=dot-logs" --jq '.[].name'
-gh api "repos/Emin-dev/Dot/contents/dot/<install-id>/<launch>/dot_chat_log.txt?ref=dot-logs" \
-  --jq '.content' | base64 -d > .tmp/dot-log.txt
+# Raw media type: the default JSON response is empty for files over 1 MB.
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/Emin-dev/Dot/contents/dot/<install-id>/<launch>/dot_chat_log.txt?ref=dot-logs" > .tmp/dot-log.txt
 ```
 
 Or clone only the data branch:

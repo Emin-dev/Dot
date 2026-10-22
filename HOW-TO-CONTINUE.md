@@ -8,15 +8,18 @@ The owner test script is [docs/TEST_TODAY.md](docs/TEST_TODAY.md).
 ## Start here
 
 1. `git switch main && git pull --ff-only`
-2. Read `AGENTS.md`, `docs/AI_HANDOFF.md`, `docs/PHASE7_RESULT.md` and the newest
-   file in `~/dev/agent/reviews/`. Do not re-read unchanged files.
+2. Read `AGENTS.md`, `docs/OWNER_DECISIONS.md`, `docs/AI_HANDOFF.md`,
+   `docs/PHASE7_RESULT.md` and the newest file in `~/dev/agent/reviews/`. Do not
+   re-read unchanged files. `docs/OWNER_DECISIONS.md` holds the owner's exact
+   answers (R17 to R21); never ask them again or change those behaviors back.
 3. Code model only: `opencode-go/deepseek-v4.1-flash`. Swift, `dot-voice`, the
    DMG and notarisation run only on GitHub Actions macOS.
 
 ## Current state (2026-10-22)
 
-- Release **`v1.1.0`** is Latest: `Dot.dmg` 793,382,400 bytes, SHA-256
-  `273c724bdfbdbc2dba9ec34edf48d4e09104e0ff2d62d9162db493d01f31e4f3`.
+- Release **`v1.1.2`** (sandboxed, per-user, leave no trace) was Latest before the
+  2026-10-22 owner-decision work; the next release carries R18 to R21. Check
+  `gh release list` for the current Latest and its SHA-256.
 - Model parts are published by CI on `model-parts-v1`: 25 parts,
   22,420,071,166 bytes, manifest SHA-256 `3f355155…8ba765`.
   `Resources/model-parts.json` is committed as `ready`.
@@ -77,3 +80,6 @@ model. Final Phase 7 green run: `39668799150` at `349fd8c`.
   keys/tokens/accounts.
 - Never replace published release assets; a fresh tag or a deliberate owner
   decision is required.
+- Owner behavior decisions R17 to R21 (proactive cadence without forced
+  questions, R18 wake greeting, R19 errors keep Dot living, R20 short reflection
+  note, R21 sandbox exceptions) stay as recorded in `docs/OWNER_DECISIONS.md`.

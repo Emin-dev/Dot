@@ -1,11 +1,27 @@
-# Dot — AI continuation handoff (2026-10-21)
+# Dot — AI continuation handoff (2026-10-22)
 
 **Read this first.** This is the current, evidence-based state for any AI developer continuing Dot.
-The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R17). Where this file and an
+The binding owner rules are in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1–R21). Every owner
+question, the exact answer and the reason for each behavior is in
+[OWNER_DECISIONS.md](OWNER_DECISIONS.md): read it before changing behavior, never re-ask a decided
+question and never revert a decided behavior. Where this file and an
 older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, `CONTINUATION.md` and
 `BUILD_CHECKLIST.md` contain history that is partly superseded; their top notes point here.
 
-## Start here (next worker, 2026-10-21 — Phase 6 verified)
+## Start here (next worker, 2026-10-22, owner decisions R18 to R21)
+
+1. Read [OWNER_DECISIONS.md](OWNER_DECISIONS.md). It quotes the owner's answers for R17 to R21,
+   the branch policy and the offline/hardware limit, and lists the defects fixed on 2026-10-22
+   with the test or guardrail for each.
+2. Behavior now: wake greeting per R18 (random 3 to 10 minute threshold, 80%, warm and
+   time-aware, never "I'm back."); errors per R19 (Dot keeps living, big red banner, logged,
+   engine self-heal); reflection per R20 (one short sentence, no clipboard); sandbox per R21.
+3. Pi gates for this tree: `python3 -B scripts/check_contracts.py` (99 guardrails) and the Python
+   suite. Swift changes were reviewed by hand; macOS CI compiles and runs XCTest.
+4. Owner scope for this phase: no new features. Make every documented promise true, then publish
+   a new DMG. `main` is the only development branch; `dot-logs` stays for log upload.
+
+## Phase 6 notes (2026-10-21, kept as history)
 
 1. Phase 6 ran three independent read-only reviews over the whole product source, fixed every
    verified blocker/major with regression coverage, and added a real-launch lane. The findings
@@ -23,11 +39,24 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
    `TypedInteractionTests`, `VoiceCoordinatorTests`, `EngineIntegrationTests`,
    `ProactiveBehaviorTests`, `ProactiveIntegrationTests`.
 5. Owner acceptance after install is still the only unautomated proof: talk with the default voice
-   (Emma), sleep and wake the Mac while idle (Dot must say "I'm back." once and keep roaming), say
+   (Emma), sleep and wake the Mac while idle (after more than 10 minutes Dot greets warmly most of
+   the time, never "I'm back.", and keeps roaming, per R18), say
    "What do you remember?", watch one proactive comment end without a forced question.
 6. Remaining owner gates (not decided here) stay in "Open owner questions" and
    [QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md): model-part upload, complete all-in-one parts,
    Developer ID/notarisation, log token, R4 and R9 decisions.
+
+## Owner decisions recorded 2026-10-22 (R18 to R21)
+
+Full questions, verbatim answers and code locations: [OWNER_DECISIONS.md](OWNER_DECISIONS.md).
+
+- **R18 wake greeting:** random 3 to 10 minute threshold per sleep, 80% chance, warm lines by time
+  of day, no repeats, no "I'm back.".
+- **R19 errors:** Dot keeps idle motion, roaming and its idle face; a large red banner shows the
+  error; every error is logged and uploaded; engine errors retry at 15, 45 and 120 s.
+- **R20 reflection:** one short spoken sentence, full idea in the file and log, clipboard untouched.
+- **R21 sandbox:** read-only Downloads, Desktop and Documents; Apple Events to System Events,
+  Safari, Chrome, TextEdit, Music and Spotify.
 
 ## Owner decision recorded 2026-10-20
 
@@ -41,11 +70,10 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
 
 ## Open owner questions (behavior and "life")
 
-Ask one at a time, numbered options, record the answer as a rule. Not yet answered:
+Ask one at a time, numbered options, record the answer in OWNER_DECISIONS.md. Answered on
+2026-10-22 and closed: wake greeting (R18), idle life while blocked (R19), self-reflection (R20),
+sandbox exceptions (R21). Not yet answered:
 
-- Wake greeting: say "I'm back." after every display wake, only after a long absence, or never.
-- Idle life while blocked: keep roaming and idle motion while an error is shown, or stay still.
-- Self-reflection every 10 minutes: it currently speaks a long report and overwrites the clipboard.
 - Public log sync: **resolved 2026-10-20** — text-only conversation/app logs auto-upload to the
   dedicated `dot-logs` branch under `dot/<install-id>/<launch>/`, with secrets masked and no images,
   screenshots, audio or memory database. The owner still needs to store the token
@@ -76,7 +104,7 @@ evidence table is in [PHASE4_RESULT.md](PHASE4_RESULT.md).
 - **Stuck after sleep.** An idle sleep blocked Dot with "Listening stopped when your Mac went to sleep";
   the wake greeting then refused to speak and the block stayed, so idle roaming was vetoed for hours
   (`[ROAM] skip: phase=blocked`). Idle sleep no longer blocks, wake clears a sleep block, and both wake
-  paths share one "I'm back." Proven by
+  paths share one greeting (the fixed "I'm back." was later replaced by R18). Proven by
   `TypedInteractionTests.testIdleSleepNeverBlocksAndResumeGreetsOnce`,
   `testSystemWakeClearsTheSleepBlockAndSaysItIsBack` and `testScreenOffPausesAutonomousWorkAndSpeech`.
 - **Spoken commands never matched.** Whisper ends transcripts with "." or "?", so "What do you
@@ -217,7 +245,7 @@ refactor** by another worker:
 ## Suggested next order
 
 1. Owner acceptance session on a Mac at or above the gate: install the Phase 4 DMG → first-launch
-   model download → voice with Emma, sleep/wake ("I'm back." once, roaming resumes), "What do you
+   model download → voice with Emma, sleep/wake (R18 greeting, roaming resumes), "What do you
    remember?", one proactive comment without a forced question, then the broader checklist
    (follow-up, cap, file op, calendar card, video silence, screen-off pause, battery/timer).
 2. Store the log token and confirm one queued upload; verify offline startup with the network disabled

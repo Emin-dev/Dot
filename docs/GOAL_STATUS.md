@@ -3,6 +3,19 @@
 This file is the evidence record for the active goal. Every line below was verified
 by actually running the gate, not by assumption.
 
+## Owner decisions R18 to R21 and code-reading fixes (2026-10-22)
+
+- Owner answers recorded verbatim with code and proof in [OWNER_DECISIONS.md](OWNER_DECISIONS.md):
+  R18 wake greeting, R19 errors keep Dot living, R20 short reflection note, R21 sandbox exceptions.
+- Defects found by reading the code were fixed with a test or guardrail each (offline relaunch,
+  download during display sleep, safety approver context, approver gate for automatic file
+  utilities, scoped file parsing, spoken command punctuation, voice approve/deny, voice picker,
+  log queueing, removal alert). The table is in OWNER_DECISIONS.md.
+- Pi gates: **99 static guardrails** pass; Python suite result is recorded in the commit message
+  and in [PROGRESS.md](PROGRESS.md). Swift changes compile and run only in macOS CI.
+- Not provable here: the minimum-spec Mac run, the 22.4 GB first download, the log token and the
+  live safety-approver session (owner-only).
+
 ## Phase 7b — Gatekeeper one-line install (2026-10-22)
 
 - Root cause: `public-f6cc73d` opened because it was Apple Development signed on

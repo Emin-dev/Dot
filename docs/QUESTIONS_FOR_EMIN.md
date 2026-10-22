@@ -3,6 +3,10 @@
 Answers are not blocking where a safe default is stated; Dot proceeds with the default and the
 default stays easy to change.
 
+Behavior questions already answered (R17 to R21: proactive comments, wake greeting, errors,
+self-reflection, sandbox exceptions) are closed. Their exact answers are in
+[OWNER_DECISIONS.md](OWNER_DECISIONS.md); do not ask them again.
+
 ## 1. Log-upload token (blocking the first real upload)
 
 **What is needed:** one GitHub fine-grained personal access token for `Emin-dev/Dot` with

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-10-22 — Owner decisions R18 to R21 and code-reading fixes
+
+- Decision log for every AI and developer: [docs/OWNER_DECISIONS.md](docs/OWNER_DECISIONS.md)
+  quotes each owner question and answer, the code it changed and the test that proves it.
+- R18: the wake greeting picks a random 3 to 10 minute threshold per sleep, greets 80% of the
+  time with a warm, time-aware line that never repeats a recent one. "I'm back." is gone.
+- R19: an error no longer freezes Dot. Idle motion, roaming and the idle face continue, a large
+  red banner above Dot shows the error, every error is logged for upload, and engine errors
+  retry at 15, 45 and 120 s.
+- R20: the idle self-reflection says one short sentence and never touches the clipboard.
+- R21: narrow sandbox exceptions (read-only Downloads, Desktop, Documents; Apple Events to
+  System Events, Safari, Chrome, TextEdit, Music, Spotify) so the documented page reading, dark
+  mode, sleep, media pause and new-file awareness work under the App Sandbox.
+- Fixes: offline relaunch no longer demands free space for a model already on disk; display
+  sleep keeps the first download going; the safety approver runs a 2,048-token context with a
+  bounded request and treats harness errors as "unavailable"; automatic file utilities pass the
+  approver; scoped file operations parse `--`, flag clusters, relative paths and `~` correctly;
+  spoken commands ignore Whisper's final period; a spoken approve or deny ends the listening turn
+  first; the voice picker lists installed voices only; log metadata is queued before a token
+  exists; "Remove Dot completely" always leaves the command and says what happened.
+- Static guardrails: 99 (was 76).
+
 ## 2026-10-22 — Phase 7s: sandboxed, per-user, leave no trace
 
 - Apple App Sandbox is now on for every packaging path: minimal entitlements,

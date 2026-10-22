@@ -1,5 +1,10 @@
 # dot: product roadmap and build checklist
 
+> **OWNER DECISIONS (2026-10-22):** R18 wake greeting, R19 errors keep Dot living, R20 short
+> reflection note and R21 sandbox exceptions are implemented. The exact questions, answers, code and
+> proof are in [OWNER_DECISIONS.md](OWNER_DECISIONS.md). Where a line below disagrees with R18 to R21,
+> the rule wins; the affected lines are marked.
+
 > **CURRENT STATUS (2026-10-21, PHASE 4 VERIFIED):** the merged real-log fixes are compiled and run on
 > macOS arm64. CI [`39513636141`](https://github.com/Emin-dev/Dot/actions/runs/39513636141) (commit
 > `69ecfbd`): **936 XCTest / 0 failures (1 skipped), 608 `swift test`/0, 614 Python/4 skipped, 62
@@ -7,7 +12,7 @@
 > by release [`v1.1.0-phase4`](https://github.com/Emin-dev/Dot/releases/tag/v1.1.0-phase4)
 > (1,005,188,103 bytes, SHA-256 `dc9561fa…4978c6`, digest verified). See
 > [PHASE4_RESULT.md](PHASE4_RESULT.md) for the per-promise Verified/Partial/Broken matrix. R1, R2, R3, R5, R6, R7 (bounded), R8 (bounded), R11, R12, R13
-> (create/edit/move), R14, R15, R16 (gated), R17 are implemented; **R4 blocked on the payload
+> (create/edit/move), R14, R15, R16 (gated), R17, R18, R19, R20, R21 are implemented; **R4 blocked on the payload
 > decision**, **R9 not built**, **R10 partial**. Read [AI_HANDOFF.md](AI_HANDOFF.md) for current state,
 > blockers, commands and the next plan. The "4 of 97" and older run counts below are **historical
 > checkpoints**, not current completion; unchecked boxes below remain roadmap scope until the Phase 4
@@ -550,7 +555,7 @@ Requested 2026-10-16. All items below are implemented and verified in source and
 - [x] **LLM tool call integration (`type_text` & `press_key`).** Expose `type_text` and `press_key` alongside `ask_user` in `EngineManager` and `QuestionIntentStream` so natural requests like *"type 'hello' in that input"* or *"press Enter"* execute directly without copying to clipboard and asking the user to paste.
 - [x] **Accessibility permission check & friendly guidance.** Verify `AXIsProcessTrusted()` before executing `type_text` or `press_key`; if not granted, prompt the user with clear instructions to enable Dot in **System Settings → Privacy & Security → Accessibility** and open the Accessibility settings pane.
 - [x] **Post-action confirmation with target app name.** Confirm every typing or key-press action to the user with what was typed/pressed and where, e.g. `"Typed 'Continue' into Antigravity."` or `"Pressed Enter in Safari."`.
-- [x] **10-minute idle self-reflection (`IdleSelfReflectionEngine`).** Every 10 minutes of user inactivity, read Dot's own conversation log (`~/Library/Application Support/Dot/Logs/dot_chat_log.txt`, rotated at 2 MB) and identify past failures, missed intents or concrete self-improvement opportunities. Per the owner's 2026-10-17 decision it writes the suggestion to its reflections file and copies it to the clipboard, then **asks** before pasting into another app; it never types unprompted. It analyses only the current app session, skips a reflection when there is nothing new, test processes write to a temporary log, and it reports which writes actually succeeded rather than asserting both. (The original text said it typed automatically; corrected 2026-10-17.)
+- [x] **10-minute idle self-reflection (`IdleSelfReflectionEngine`).** Every 10 minutes of user inactivity, read Dot's own conversation log (`~/Library/Application Support/Dot/Logs/dot_chat_log.txt`, rotated at 2 MB) and identify past failures, missed intents or concrete self-improvement opportunities. Per the owner's 2026-10-17 decision it writes the suggestion to its reflections file and copies it to the clipboard, then **asks** before pasting into another app; it never types unprompted. It analyses only the current app session, skips a reflection when there is nothing new, test processes write to a temporary log, and it reports which writes actually succeeded rather than asserting both. (The original text said it typed automatically; corrected 2026-10-17.) **Superseded by R20 (2026-10-22):** it now says one short sentence, keeps the full idea in its file and the log, and never touches the clipboard or offers a paste.
 - [x] **Proactive duplicate question deduplication (`ProactiveReplyBuffer`).** Prevent spoken/displayed double-questions when the model includes the question in both streamed `content` and the `ask_user` tool call.
 - [x] **Self-codebase indexing & live source reader (`SelfCodebaseReader`).** Dot can inspect, search and list its own Swift files when it can resolve a real source root: the `DOT_SOURCE_ROOT` override, then the `source_root` recorded by `scripts/install_local.sh` in `build-provenance.json`, then the historical checkout if present. A public/clean install has no source tree and now says so honestly instead of naming a path from one development Mac (corrected 2026-10-17).
 - [x] **Native window layout & snapping (`WindowLayoutManager`).** Snap the active external app window to Left Half, Right Half, Top Half, Bottom Half, Maximize or Center via macOS Accessibility (`AXUIElement`).
@@ -572,7 +577,7 @@ Requested 2026-10-16. Implemented and verified in source and native builds.
 - [x] **"Just-Left Page" Screen Memory Ring Buffer (`PreviousScreenMemory`).** Rolling memory buffer indexing recent screen contexts and active app OCR text so Dot answers questions about previously focused windows or tabs without requiring switching back.
 - [x] **File Drag-and-Drop & Direct Drop onto Dot.** Support dragging any text, code, markdown, csv, json, or pdf file directly onto Dot's character to immediately inspect, analyze, and summarize it, plus 1-click restore for `.dotsoul` files.
 - [x] **Darwin Mach RAM Guard & Auto-Archive (`SystemRAMInspector`, `DotSoulManager`).** Kernel-level RAM monitoring with $<0.1\text{ms}$ latency; automatically archives conversation history to disk under $\ge 88\text{--}90\%$ memory pressure before freeing RAM to ensure zero data loss.
-- [x] **1-Click Soul Export & Import (`DotSoulManager`).** Export Dot's memories, rules, and conversation logs into a standalone `.dotsoul` file with Finder reveal, and restore with 1-click or voice command (`"import soul"`).
+- [x] **1-Click Soul Export & Import (`DotSoulManager`).** Export Dot's profile and standing rules (`PROFILE.md`), active project notes (`VOLATILE.md`) and the last 100 KB of the conversation log into a standalone `.dotsoul` file with Finder reveal, and restore the profile and notes with 1-click or voice command (`"import soul"`). Corrected 2026-10-22: the five-tier memory database and the chat log are not restored by import.
 - [x] **Screenshot Auto-Hide (`setupScreenshotAutoHide`).** Automatically hides Dot's window instantly when `Cmd+Shift+3`, `Cmd+Shift+4`, or `Cmd+Shift+5` is pressed so Dot never photobombs user screenshots.
 - [x] **User Spatial Scribble / Circle-to-Ask Gesture (`ScreenScribbleTracker`).** Hold `Ctrl+Option` while dragging the mouse around any area on screen to draw a glowing laser boundary; releasing immediately captures the circled region and prompts Dot to analyze and assist with that exact area.
 - [x] **System Volume Control & Muted-Speaker Clipboard Fallback (`SystemAudioState`).** Voice controls for volume (`"mute"`, `"unmute"`, `"volume up"`, `"volume down"`, `"set volume to X%"`); if the speaker is muted when Dot replies, the reply is automatically copied to the clipboard.
@@ -596,7 +601,9 @@ manifest audit) is the guard that keeps it honest. Any proposal to change engine
 owner decision, not an implementation detail.
 
 **Screen-off pause (2026-10-17):** display sleep and login-screen lock pause all turns, speech,
-proactive work, screen watching, preparation and movement; wake/unlock resumes silently.
+proactive work, screen watching, preparation and movement (a first model download keeps going);
+wake/unlock resumes, and the greeting follows R18 (random 3 to 10 minute threshold, 80%, warm and
+time-aware).
 
 **A5/R13 completion (2026-10-17):** visible text-only-model notice; calendar `edit_event` by title with
 the existing confirmation card. Remaining calendar scope: renaming and editing past/recurring series
@@ -661,7 +668,7 @@ app or browser; keep the reply as text and suppress proactive/follow-up speech. 
   Implemented 2026-10-17: six-hour local result cache (50 entries, 0600) serving hits without a
   runtime launch; offline encyclopedia snapshot and more providers still open.
 - Cold start: live stage-by-stage progress + optional prewarm at login (implemented 2026-10-17: menu-bar title, menu header/accessibility stage, prewarm toggle off by default). Sleep/wake: auto re-arm and say
-  so. Calendar: briefs + create/edit with a confirmation card (implemented 2026-10-17: create and move-next-meeting actions card + approve; arbitrary event selection/edit still open). Battery: optional threshold alerts, off
+  so (greeting per R18). Calendar: briefs + create/edit with a confirmation card (implemented 2026-10-17: create and move-next-meeting actions card + approve; arbitrary event selection/edit still open). Battery: optional threshold alerts, off
   by default (implemented 2026-10-17: context-menu switch, 10/15/20/30% low threshold, charging-start
   toggle, one spoken notice per event).
 - Approvals: **trusted-app allowlist**; per-command card outside it; file operations are automatic (above). Implemented 2026-10-17: contextual app actions card unless trusted; Trusted apps menu toggles the frontmost app; empty by default. File operations are still carded (R7 open).
@@ -703,7 +710,7 @@ honour that rule. (The former 5-second thinking relocation was retired on 2026-1
 
 **File access.** Dot should be able to read and index everything a human user can reach locally, plus all online research material, subject to macOS consent (Full Disk Access where required) and an explicit, discoverable switch. Watched folders, iCloud placeholders and a folder picker are part of this work, not a substitute for it.
 
-**Self-improvement loop.** The 10-minute idle reflection keeps its analysis and writes each suggestion to its own file in Dot's memory. When it detects coding or writing work in progress it may also place the suggestion on the clipboard and **ask** whether to paste; it pastes into the current app only after explicit confirmation. It never types unprompted into another application.
+**Self-improvement loop.** The 10-minute idle reflection keeps its analysis and writes each suggestion to its own file in Dot's memory. It never types unprompted into another application. **R20 (2026-10-22):** it says one short sentence and never places the suggestion on the clipboard or offers a paste.
 
 **Timer alerts.** Audio chime and spoken alert only; no notification permission is requested and no system banner is claimed.
 

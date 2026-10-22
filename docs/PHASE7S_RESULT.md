@@ -24,6 +24,13 @@ signed before the app, and the signature is read back to prove the sandbox
 entitlement is present. No temporary-exception or broad home-directory
 entitlement exists.
 
+**Changed 2026-10-22 by owner decision R21** ([OWNER_DECISIONS.md](OWNER_DECISIONS.md)): the set
+now also has `com.apple.security.files.downloads.read-only`, a read-only home-relative exception for
+`/Desktop/` and `/Documents/`, and an Apple Events exception for System Events, Safari, Chrome,
+TextEdit, Music and Spotify. Without them the documented page reading, dark mode and sleep
+commands, media pause and new-file awareness could not work in the sandbox. There is still no
+write access outside the folder the owner selects.
+
 Every app byte (the 22.4 GB model, logs, health state, history, SQLite index,
 caches and settings) now lands inside
 `~/Library/Containers/app.dot.local/Data/`. The downloaded model and safety aux

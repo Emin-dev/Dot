@@ -1,7 +1,9 @@
 # Dot — Professional Development Brief v2 (owner-answered, 2026-10-17)
 
 > **Current implementation status:** read [AI_HANDOFF.md](AI_HANDOFF.md) for what is implemented,
-> partial, blocked and next. This brief remains the binding spec (R1–R17); older docs may be stale.
+> partial, blocked and next. This brief remains the binding spec (R1–R21); older docs may be stale.
+> Every owner question, the exact answer and why each rule exists: [OWNER_DECISIONS.md](OWNER_DECISIONS.md).
+> Do not re-ask a decided question or revert a decided behavior.
 
 This brief is for the AI development team continuing Dot. It encodes the owner's
 audit answers as binding rules. It supersedes any earlier statement that contradicts it.
@@ -86,7 +88,7 @@ encyclopedia snapshot. DuckDuckGo + Wikipedia stay as the default pair.
 it is clicked.
 
 **R12. Sleep/wake.** After the Mac wakes, Dot **automatically re-arms and says it is
-back**. No manual click required.
+back**. No manual click required. *(The greeting is refined by R18: no fixed "I'm back.")*
 
 **R13. Calendar.** Briefs **plus create/edit events, each with a confirmation card**
 (calendar mutations keep confirmation even though file mutations in R7 do not).
@@ -106,6 +108,28 @@ No approver means no execution. The main engine and model stay untouched.
 **R17. Proactive comments (2026-10-20).** Keep commenting on the owner's chosen cadence
 (Low 10 / Normal 4 / High 1 minute), but end with a question only when the comment genuinely needs
 the owner's reply. No rule may force a question into a share of replies.
+
+**R18. Wake greeting (2026-10-22, refines R12).** Each sleep picks a new random threshold of
+3 to 10 minutes. On wake Dot greets only after an absence longer than that threshold, and then
+with an 80% chance. The line is warm and human, depends on the time of day and on a long absence
+(2 hours or more), and never repeats a recent line. No fixed "I'm back.", no greeting after a few
+seconds, no 30-minute wait. Code: `WakeGreeting` (`src/ProactiveBehavior.swift`),
+`beginAbsence`/`greetAfterWake` (`src/ChatView.swift`).
+
+**R19. Errors keep Dot living (2026-10-22).** An error never changes Dot's look or behavior: idle
+motion, the two-minute roam and the idle face continue. The error shows as large white-on-red text
+in a click-through banner above Dot, is logged as a `dot (error)` line that DotLogSync uploads to
+`dot-logs`, and an engine error heals itself (retries at 15, 45 and 120 s, each logged as
+`[HEAL]`). Code: `PetPhase.isResting`, `IssueBanner`, `scheduleEngineHeal`.
+
+**R20. Self-reflection (2026-10-22).** The 10-minute idle reflection writes the full idea to its
+file and the log, then says one short sentence ("I noted an idea to improve myself."). It never
+touches the clipboard and never offers a paste.
+
+**R21. Sandbox exceptions (2026-10-22).** Keep the App Sandbox and add only: read-only Downloads,
+read-only `~/Desktop/` and `~/Documents/`, and Apple Events to System Events, Safari, Chrome,
+TextEdit, Music and Spotify. Writes stay inside the folder the owner selects. `~` means the
+owner's real home, never the sandbox container.
 
 ## 3. Fixed constraints (never change without the owner)
 

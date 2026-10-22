@@ -3,6 +3,9 @@
 > **AI/contributor handoff:** read [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) for the current build,
 > verified gates, what works/partial/missing and the next steps. Older planning documents are dated
 > history and may be superseded.
+>
+> **Owner decisions:** [docs/OWNER_DECISIONS.md](docs/OWNER_DECISIONS.md) records every behavior
+> question the owner answered (R17 to R21), the exact answer and why. Do not re-ask or revert them.
 
 See **[docs/ROADMAP.md](docs/ROADMAP.md)** for current plans, goals and the new
 per-Dot GitHub log system; **[docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md)** carries the
