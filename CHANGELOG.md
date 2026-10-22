@@ -22,6 +22,8 @@
 - Sandbox compatibility: Splash and `dot-fetch` avoid nested `sandbox-exec`
   under the app container; user-selected simple file utilities run in-process;
   `UserFolderScope` keeps shell/safety targets inside the selected folder.
+- Hosted proof: no-trace run `39714839518` and native run `39714839592` are
+  green at `4384045`; release `v1.1.2` packages the same commit.
 - Phase result: [docs/PHASE7S_RESULT.md](docs/PHASE7S_RESULT.md).
 
 ## 2026-10-22 — Phase 7b: Gatekeeper one-line install

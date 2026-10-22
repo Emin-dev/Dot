@@ -1,8 +1,8 @@
 # Phase 7s — sandboxed, per-user, leave-no-trace Dot
 
-**Status 2026-10-22:** implementation complete on `main` subject to the hosted
-macOS gates in `.github/workflows/privacy-clean.yml` and `release.yml`. This
-document is updated with the exact run IDs once those runs finish.
+**Status 2026-10-22:** implementation complete and green on hosted macOS. The
+no-trace lane and the full native lane both pass; the `v1.1.2` release build is
+the remaining packaging gate.
 
 ## What changed
 
@@ -151,7 +151,22 @@ Local portable gates on the Pi:
 - Snapshot/diff fixture: clean tree passes; Apple transient passes; a
   Dot-owned leftover fails.
 
-Hosted macOS gates and the exact run IDs are added here after the runs finish.
+Hosted macOS gates:
+
+- `Sandboxed install leaves no trace` run
+  [`39714839518`](https://github.com/Emin-dev/Dot/actions/runs/39714839518),
+  **success**, commit `4384045`: snapshot → install → entitlement + kernel
+  self-check → real launch smoke test → uninstall → empty diff. The diff
+  reported only the documented Apple/OS transient paths; zero `app.dot.local`
+  or `Dot.app` paths remained after uninstall.
+- `Native companion checks` run
+  [`39714839592`](https://github.com/Emin-dev/Dot/actions/runs/39714839592),
+  **success**, same commit: `rust-gates`, `swift-test`, `dot-voice`, `macos`
+  (including the full Python/XCTest/SwiftPM lane and zero-warning build).
+- Earlier no-trace iterations exposed and removed real leftovers
+  (`~/Library/Biome/sets/Default/App.Shortcut.Phrase/sourceIdentifier=app.dot.local`)
+  and added only OS-owned Apple/runner paths to the allowlist. Those runs are
+  retained in GitHub history; the green run above is the acceptance evidence.
 
 ## Owner test
 

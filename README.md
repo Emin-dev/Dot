@@ -12,7 +12,7 @@ binding rules R1–R17.
 
 [![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
 
-**Current release: [v1.1.1](https://github.com/Emin-dev/Dot/releases/tag/v1.1.1) (Latest).**
+**Current release: [v1.1.2](https://github.com/Emin-dev/Dot/releases/tag/v1.1.2) (Latest).**
 
 One Terminal line:
 
