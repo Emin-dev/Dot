@@ -239,15 +239,19 @@ State when this session stopped (usage limit reached):
   tokens and trims the oldest conversation to fit", "a wake or second retry never restarts the
   running download", "idle reflection returns before any clipboard write", "Remove Dot never
   returns before leaving the command on the clipboard").
-- Not done because the usage limit stopped the agents. Do these first:
-  1. Read-only reviewer pass over the Swift diff of this session for compile errors and warnings
-     (`-warnings-as-errors`). macOS CI is the real compile proof: check the `Native` CI run on the
-     pushed commit and fix anything red before anything else.
-  2. Promise audit: compare every promise in README, AI_HANDOFF, BUILD_CHECKLIST, GOAL_STATUS and
-     this file against the code, then verify each finding before fixing it.
-  3. If CI is green, publish the next DMG: push tag `v1.1.3` on `main` (or dispatch
-     `release.yml` with tag `v1.1.3`). The release publishes only after the install, quarantine,
-     `spctl` and privacy-clean jobs pass.
+- Native CI on `8100f81` is green (Swift build, XCTest, SwiftPM, Rust, Python, 99 guardrails) after
+  one re-run of a timing-flaky Python test, which `2b17cbb` then fixed.
+- The first v1.1.3 release run (`39850720037`) built and installed the DMG but was cancelled when the
+  no-trace lane failed on an OS daemon database; `ca0e558` allowlists it.
+- A promise audit then found logging leaks into the public `dot-logs` branch; `4714eb0` fixes them
+  (103 guardrails). Every audit finding, fixed and open, is in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md).
+- Do these next, in order:
+  1. Check the Native CI run on the newest `main` commit. Fix anything red first.
+  2. If the v1.1.3 release run started after `4714eb0` is not green and published, read its
+     failed job, fix it, and dispatch `release.yml` with tag `v1.1.3` again (a tag push is
+     blocked from the cloud session; `workflow_dispatch` works).
+  3. Work the open rows in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md), blocker F1 first.
+  4. Re-run the owner-rules audit (R1 to R21), which was stopped before it reported.
 
 ## Questions not yet asked
 

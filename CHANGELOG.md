@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-22 — Public-log privacy fixes and promise audit
+
+- Typed text, clipboard text, screen text, command credentials, e-mail addresses, home-folder names
+  and card-length numbers no longer reach the public `dot-logs` branch; every log line is capped.
+- Failed file/model checks, voice failures in typed turns and refused launches are logged as
+  `dot (error)` and uploaded (R19). The Keychain token is read once per launch.
+- Promise audit with every finding and its status: [docs/AUDIT_2026-10-22.md](docs/AUDIT_2026-10-22.md).
+- CI: the TLS total-deadline test no longer measures its own sleeps; an OS proxy database is
+  allowlisted in the no-trace lane. Static guardrails: 103.
+
 ## 2026-10-22 — Owner decisions R18 to R21 and code-reading fixes
 
 - Decision log for every AI and developer: [docs/OWNER_DECISIONS.md](docs/OWNER_DECISIONS.md)

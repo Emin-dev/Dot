@@ -10,13 +10,15 @@ older document disagree, this file and `DEV_TEAM_PROMPT.md` win. `HANDOVER.md`, 
 
 ## Start here (next worker, 2026-10-22, owner decisions R18 to R21)
 
+0. Open work and every audit finding: [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md) (blocker F1, the
+   movement parser, first). The next steps are at the end of [OWNER_DECISIONS.md](OWNER_DECISIONS.md).
 1. Read [OWNER_DECISIONS.md](OWNER_DECISIONS.md). It quotes the owner's answers for R17 to R21,
    the branch policy and the offline/hardware limit, and lists the defects fixed on 2026-10-22
    with the test or guardrail for each.
 2. Behavior now: wake greeting per R18 (random 3 to 10 minute threshold, 80%, warm and
    time-aware, never "I'm back."); errors per R19 (Dot keeps living, big red banner, logged,
    engine self-heal); reflection per R20 (one short sentence, no clipboard); sandbox per R21.
-3. Pi gates for this tree: `python3 -B scripts/check_contracts.py` (99 guardrails) and the Python
+3. Pi gates for this tree: `python3 -B scripts/check_contracts.py` (103 guardrails) and the Python
    suite. Swift changes were reviewed by hand; macOS CI compiles and runs XCTest.
 4. Owner scope for this phase: no new features. Make every documented promise true, then publish
    a new DMG. `main` is the only development branch; `dot-logs` stays for log upload.
