@@ -31,6 +31,28 @@ pass() { echo "PASS: $*"; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "required command not found: $1"; }
 
 [ "$(uname -s)" = "Darwin" ] || fail "this installer only runs on macOS"
+
+# Dot refuses to start below its minimum. Say so before the long download, also
+# on macOS versions that would refuse the app before Dot can show its own message.
+# This only warns: the release gate installs on a smaller hosted Mac on purpose.
+check_minimum() {
+    local os major chip memory mem_gb reasons=""
+    os="$(sw_vers -productVersion 2>/dev/null || echo 0)"
+    major="${os%%.*}"
+    chip="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo unknown)"
+    memory="$(sysctl -n hw.memsize 2>/dev/null || echo 0)"
+    mem_gb=$(( (memory + 536870912) / 1073741824 ))
+    [ "${major:-0}" -ge 27 ] 2>/dev/null || reasons="$reasons macOS $os (27.0 or newer needed);"
+    [ "$mem_gb" -ge 48 ] || reasons="$reasons $mem_gb GB memory (48 GB needed);"
+    case "$chip" in
+        *"Apple M5 Pro"*|*"Apple M5 Max"*|*"Apple M5 Ultra"*|*"Apple M"[6-9]*|*"Apple M"[1-9][0-9]*) ;;
+        *) reasons="$reasons $chip (Apple M5 Pro class or newer needed);" ;;
+    esac
+    if [ -n "$reasons" ]; then
+        echo "WARNING: Dot needs Apple Silicon M5 Pro class or newer, 48 GB Unified Memory and macOS 27.0 or newer. This Mac has:$reasons Dot installs, but it will show this message and not start here." >&2
+    fi
+}
+check_minimum
 need curl
 need shasum
 need hdiutil

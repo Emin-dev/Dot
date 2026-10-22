@@ -245,13 +245,23 @@ State when this session stopped (usage limit reached):
   no-trace lane failed on an OS daemon database; `ca0e558` allowlists it.
 - A promise audit then found logging leaks into the public `dot-logs` branch; `4714eb0` fixes them
   (103 guardrails). Every audit finding, fixed and open, is in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md).
+- After that, F1 to F10 and D1 to D6 were fixed (`dfa7b6f`, `ee533fc`, `0599102`, `52d5816` and the
+  installer commit after them), each with a guardrail (112 in total). Only F5 (file utilities beyond
+  rm/rmdir/mkdir/touch in the selected folder, and folder access lost on relaunch) is still open.
 - Do these next, in order:
-  1. Check the Native CI run on the newest `main` commit. Fix anything red first.
-  2. If the v1.1.3 release run started after `4714eb0` is not green and published, read its
-     failed job, fix it, and dispatch `release.yml` with tag `v1.1.3` again (a tag push is
-     blocked from the cloud session; `workflow_dispatch` works).
-  3. Work the open rows in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md), blocker F1 first.
+  1. Check the Native CI run on the newest `main` commit (Swift build, XCTest). Fix anything red first;
+     these commits were written without a Swift compiler.
+  2. v1.1.3 was dispatched at `6224aa3` (privacy fixes, not the F/D fixes). If it is published,
+     record its DMG size and SHA-256. Then, once CI on the newest commit is green, dispatch
+     `release.yml` with tag `v1.1.4` (a tag push is blocked from the cloud session;
+     `workflow_dispatch` works).
+  3. F5 in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md): do mv/cp/trash in-process in
+     `ChatModel.runScopedFileOperation` and keep the selected folder across launches with a
+     security-scoped bookmark (needs `com.apple.security.files.bookmarks.app-scope`), or narrow
+     the AI_HANDOFF file list.
   4. Re-run the owner-rules audit (R1 to R21), which was stopped before it reported.
+  5. Owner-only, on a minimum-spec Mac: the 22.4 GB first download with one pause and one quit
+     (proves D1), the live safety approver, then store the log token.
 
 ## Questions not yet asked
 
