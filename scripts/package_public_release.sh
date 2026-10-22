@@ -2,7 +2,7 @@
 # Build the downloadable public app: the complete runtime without the 19.9 GB model.
 #
 # The app verifies its signed manifest and downloads the exact model files from
-# Hugging Face into ~/Library/Application Support/Dot/Models on first launch. The
+# Hugging Face into the App Sandbox container on first launch. The
 # resulting DMG/ZIP must stay under GitHub's 2 GB per-asset limit.
 #
 # Usage:
@@ -79,10 +79,10 @@ PY
 
 echo "==> signing after removing the sealed model resources"
 xattr -cr "$STAGE/Dot.app"
-# Hardened runtime + secure timestamp are what notarytool requires; no --deep
-# (re-signing nested code corrupts the seal).
-codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$STAGE/Dot.app"
-codesign --verify --strict "$STAGE/Dot.app" || fail "staged signature did not verify"
+cp scripts/uninstall-dot.sh "$STAGE/Dot.app/Contents/Resources/uninstall-dot.sh"
+# The same sandboxed signer as the supported release path: nested code first,
+# then the app with entitlements and the hardened runtime.
+bash scripts/sign_sandbox_app.sh "$STAGE/Dot.app" "$SIGN_IDENTITY" || fail "staged signature did not verify"
 
 echo "==> creating $ZIP"
 mkdir -p "$OUT"
@@ -97,7 +97,6 @@ echo "==> creating $DMG"
 DMGROOT="$STAGE/dmg"
 rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
 cp -c -R "$STAGE/Dot.app" "$DMGROOT/Dot.app" 2>/dev/null || cp -R "$STAGE/Dot.app" "$DMGROOT/Dot.app"
-ln -s /Applications "$DMGROOT/Applications"
 rm -f "$DMG"
 hdiutil create -quiet -volname "Dot" -srcfolder "$DMGROOT" -ov -format UDZO "$DMG"
 hdiutil verify -quiet "$DMG" || fail "DMG failed verification"

@@ -2,10 +2,76 @@ import SwiftUI
 import AppKit
 import QuartzCore
 import Combine
+import Darwin
+
+/// CI proof that the installed process really is inside the App Sandbox.
+/// It runs before AppKit starts so a hosted runner can check the kernel-enforced
+/// container without needing a desktop session: the app must have a container
+/// HOME, it must be able to write inside that container, and a write to the real
+/// user home must be denied.
+enum DotSandboxSelfCheck {
+    static func runIfRequested() -> Int32? {
+        guard ProcessInfo.processInfo.environment["DOT_SANDBOX_SELF_CHECK"] == "1" else { return nil }
+        let fileManager = FileManager.default
+        let containerID = ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] ?? ""
+        let home = NSHomeDirectory()
+        let inContainer = home.contains("/Library/Containers/app.dot.local/")
+        var containerWrite = false
+        if let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            let probe = support.appendingPathComponent("sandbox-probe-\(getpid()).txt")
+            do {
+                try fileManager.createDirectory(at: support, withIntermediateDirectories: true)
+                try Data("dot".utf8).write(to: probe)
+                try fileManager.removeItem(at: probe)
+                containerWrite = true
+            } catch {
+                containerWrite = false
+            }
+        }
+        var outsideDenied = false
+        var realHome = home.components(separatedBy: "/Library/Containers/").first
+        if realHome?.hasPrefix("/Users/") != true {
+            realHome = nil
+            if let password = getpwuid(getuid()), let directory = password.pointee.pw_dir {
+                realHome = String(cString: directory)
+            }
+        }
+        if let realHome {
+            let outside = URL(fileURLWithPath: realHome, isDirectory: true)
+                .appendingPathComponent("Library/Application Support/Dot-sandbox-probe-\(getpid()).txt")
+            do {
+                try Data("dot".utf8).write(to: outside)
+                try? fileManager.removeItem(at: outside)
+                outsideDenied = false
+            } catch {
+                // Only a sandbox permission denial proves confinement. Disk-full,
+                // read-only media or a missing home must not pass the self-check.
+                let failure = error as NSError
+                let posix = (failure.userInfo[NSUnderlyingErrorKey] as? NSError)?.code ?? failure.code
+                outsideDenied = posix == Int(EPERM) || posix == Int(EACCES) || failure.code == 513
+            }
+        }
+        let sandboxed = (containerID == "app.dot.local" || inContainer) && containerWrite && outsideDenied
+        let record: [String: Any] = [
+            "event": "sandbox_self_check",
+            "sandboxed": sandboxed,
+            "container_id": containerID,
+            "home": home,
+            "container_write": containerWrite,
+            "outside_write_denied": outsideDenied
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: record, options: [.sortedKeys]),
+           let line = String(data: data, encoding: .utf8) {
+            print(line)
+        }
+        return sandboxed ? 0 : 1
+    }
+}
 
 @main
 struct DotApp {
     @MainActor static func main() {
+        if let status = DotSandboxSelfCheck.runIfRequested() { exit(status) }
         let application = NSApplication.shared
         let delegate = AppDelegate()
         application.delegate = delegate
@@ -542,6 +608,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func showPet() { model?.cancelTurn(); model?.visible = true; cancelMovement(); surface.recall() }
     @objc private func quit() { NSApp.terminate(nil) }
 
+    /// Full removal from inside the sandbox. A sandboxed process cannot delete
+    /// its own bundle or container, so this writes the bundled uninstaller into
+    /// Dot's own private container and asks Terminal to run it once. There is no
+    /// helper, LaunchAgent or privileged tool. If Terminal cannot be opened, the
+    /// exact one-line command is copied to the clipboard instead.
+    @objc private func removeDotCompletely() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Remove Dot completely?"
+        alert.informativeText = "This quits Dot and deletes the app, its sandbox container, logs, downloaded model, preferences and caches. It also resets Dot's microphone and screen-recording approvals. Terminal opens for this one action; nothing is left running afterwards."
+        let remove = alert.addButton(withTitle: "Remove Dot completely")
+        remove.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let download = "curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/uninstall-dot.sh | bash"
+        let bundlePath = Bundle.main.bundleURL.deletingLastPathComponent().path
+        // A quarantined app opened in place can run from App Translocation. Remove
+        // the real per-user install, never the read-only translocated copy.
+        let realHome = NSHomeDirectory().components(separatedBy: "/Library/Containers/").first ?? NSHomeDirectory()
+        let installDir = bundlePath.contains("/AppTranslocation/")
+            ? (realHome as NSString).appendingPathComponent("Applications")
+            : bundlePath
+        guard let bundled = Bundle.main.url(forResource: "uninstall-dot", withExtension: "sh"),
+              let uninstaller = try? String(contentsOf: bundled, encoding: .utf8) else {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(download, forType: .string)
+            let fallback = NSAlert()
+            fallback.messageText = "The bundled uninstaller is missing"
+            fallback.informativeText = "The exact removal command is on your clipboard. Paste it into Terminal to remove Dot: " + download
+            fallback.runModal()
+            return
+        }
+        let quotedInstallDir = "'" + installDir.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let wrapper = """
+        #!/bin/bash
+        export DOT_INSTALL_DIR=\(quotedInstallDir)
+        export DOT_BUNDLE_ID=app.dot.local
+        /usr/bin/env bash -s <<'DOT_UNINSTALL_EMBEDDED'
+        \(uninstaller)
+        DOT_UNINSTALL_EMBEDDED
+        """
+        let commandURL = FileManager.default.temporaryDirectory.appendingPathComponent("Remove Dot.command")
+        do {
+            try? FileManager.default.removeItem(at: commandURL)
+            try wrapper.write(to: commandURL, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: commandURL.path)
+            if NSWorkspace.shared.open(commandURL) { return }
+        } catch {
+            // Fall through to the clipboard command; never claim removal started.
+        }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(download, forType: .string)
+        let fallback = NSAlert()
+        fallback.messageText = "Terminal could not be opened"
+        fallback.informativeText = "The exact removal command is on your clipboard. Paste it into Terminal to remove Dot."
+        fallback.runModal()
+    }
+
     @objc private func stopCurrentAction() {
         cancelMovement()
         model?.stopCurrentTurn()
@@ -768,6 +893,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
         let repoItem = NSMenuItem(title: "View Dot repository on GitHub…", action: #selector(openRepository), keyEquivalent: "")
         repoItem.target = self; menu.addItem(repoItem)
+
+        let removeItem = NSMenuItem(title: "Remove Dot completely…", action: #selector(removeDotCompletely), keyEquivalent: "")
+        removeItem.target = self; menu.addItem(removeItem)
 
         let quitItem = NSMenuItem(title: "Quit Dot", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self; menu.addItem(quitItem)

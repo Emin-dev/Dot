@@ -46,6 +46,7 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
 cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
 cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/Runtime/dot_tls.py Resources/Runtime/splash.sb Resources/Runtime/splash-managed-listener-patch.json "$APP/Contents/Resources/Runtime/"
+cp scripts/uninstall-dot.sh "$APP/Contents/Resources/uninstall-dot.sh"
 cp Resources/bundled-models.json Resources/model-parts.json "$APP/Contents/Resources/"
 cp -R Resources/Research "$APP/Contents/Resources/"
 python3 -B scripts/copy_offline_models.py --source "$DOT_MODEL_PAYLOAD" \
@@ -64,7 +65,7 @@ if [ -z "$SIGN_IDENTITY" ]; then
 fi
 # The complete app ships all three Rust binaries beside its executable. A build
 # without them is not a complete app, so a missing binary stops assembly here.
-for native in dot-search dot-voice dot-fetch; do
+for native in dot-search dot-voice dot-fetch dot-safety; do
   [[ -f "target/release/$native" ]] || { echo "Missing Rust runtime binary target/release/$native; run cargo build --release."; exit 1; }
   cp "target/release/$native" "$APP/Contents/MacOS/$native"
   codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/MacOS/$native"
@@ -98,15 +99,9 @@ record.update({'whisper_input_archive_sha256': whisper['archive_sha256'],
                'whisper_source_manifest_sha256': whisper['source_manifest_sha256']})
 (resources / 'build-provenance.json').write_text(json.dumps(record, indent=2) + '\n')
 PYCODE
-# Hardened runtime + a secure timestamp are what notarytool actually requires;
-# --deep is retired because re-signing nested code corrupts the seal.
-if [[ "$SIGN_IDENTITY" != "-" ]]; then
-  codesign --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$APP"
-else
-  # Ad-hoc fallback: without an identity no timestamp authority will serve us.
-  codesign --force --sign "$SIGN_IDENTITY" --options runtime "$APP"
-fi
-codesign --verify --strict "$APP"
+# App Sandbox entitlements and the hardened runtime are applied to the app after
+# every nested executable and the framework have their own valid seals.
+bash scripts/sign_sandbox_app.sh "$APP" "$SIGN_IDENTITY"
 python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"
 printf 'Bundled app staged for native offline acceptance: %s. No installer released.\n' "$APP"
 printf 'After real relocation/conversation/cancellation tests, run scripts/package_complete.sh with the acceptance record.\n'

@@ -139,7 +139,7 @@ the app is Apple Development signed, not notarised.
    paste from the clipboard), requires Accessibility, and has never been exercised in a real session.
    The reflection now reports which writes actually succeeded instead of always claiming both, analyses
    only the current app session, skips when there is nothing new, and reads the log from
-   `~/Library/Application Support/Dot/Logs/dot_chat_log.txt` (migrated once from Downloads, rotated at
+   `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot_chat_log.txt` (migrated once from Downloads, rotated at
    2 MB); test processes write to a temporary log, so fixture text cannot drive a suggestion.
 7. **Broad file access is partial.** What exists: read a named text file, Spotlight name and content
    search, and a watched folder. What is missing: indexing arbitrary trees, iCloud placeholder handling,

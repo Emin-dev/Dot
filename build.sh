@@ -45,6 +45,7 @@ cp Resources/Runtime/dot_runtime.py Resources/Runtime/dot_process.py Resources/R
 cp Resources/bundled-models.json Resources/model-parts.json "$APP/Contents/Resources/"
 cp -R Resources/Research "$APP/Contents/Resources/"
 cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
+cp scripts/uninstall-dot.sh "$APP/Contents/Resources/uninstall-dot.sh"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 # One minimum-OS policy (macOS 26.4), the same override build_complete.sh applies.
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
@@ -77,14 +78,14 @@ xattr -cr "$APP" 2>/dev/null || true
 # The File Provider can re-apply attributes between the clear and the sign, so
 # retry the pair a bounded number of times instead of failing a good build.
 attempt=1
-until codesign --force --sign - "$APP" 2>/dev/null; do
+until bash scripts/sign_sandbox_app.sh "$APP" - 2>/dev/null; do
     attempt=$((attempt + 1))
     [ "$attempt" -le 6 ] || {
         # The File Provider can keep re-applying attributes to the in-tree bundle for
         # minutes. This sign is a convenience copy: install_local.sh signs and verifies
         # the staged copy in TMPDIR (outside the sync root) with --strict, and fails the
         # install if THAT fails. Warn and continue instead of failing a healthy build.
-        echo "warning: in-tree ad-hoc sign kept failing (detritus reapplied); the staged copy is signed and verified by install_local.sh" >&2
+        echo "warning: in-tree sandbox sign kept failing (detritus reapplied); the staged copy is signed and verified by install_local.sh" >&2
         break
     }
     sleep 1
@@ -100,6 +101,5 @@ codesign --verify --strict "$VERIFY_STAGE/Dot.app"
 rm -rf "$VERIFY_STAGE"
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-stage.XXXXXX")
 cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
 python3 -B scripts/create_dmg.py "$STAGE" build/Dot.dmg
 printf 'Built %s/build/Dot.dmg (development-only, no neural runtimes; ad-hoc signed, not notarized)\n' "$PWD"

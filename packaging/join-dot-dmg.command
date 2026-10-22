@@ -48,7 +48,6 @@ hdiutil verify -quiet "$OUTPUT"
 open "$OUTPUT"
 echo
 echo "Dot is ad-hoc signed and NOT notarised."
-echo "Drag Dot to Applications, then allow the first open with one of:"
-echo "  - Finder: right-click (Control-click) Dot > Open > Open"
-echo "  - System Settings > Privacy & Security > Open Anyway"
-echo "  - Terminal: xattr -dr com.apple.quarantine /Applications/Dot.app"
+echo "This joined DMG is the complete offline app."
+echo "Open it, copy Dot.app to ~/Applications (never /Applications, never sudo), then:"
+echo '  xattr -dr com.apple.quarantine "$HOME/Applications/Dot.app" && open "$HOME/Applications/Dot.app"'

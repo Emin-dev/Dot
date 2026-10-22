@@ -7,7 +7,7 @@ on:
       tag:
         description: "Release tag (drafted at the current main commit)"
         required: true
-        default: "v1.1.1"
+        default: "v1.1.2"
 permissions:
   contents: write
 concurrency:
@@ -97,7 +97,8 @@ jobs:
           python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
           python3 -B -m unittest Tests/Python/test_phase7_contract.py -v
           python3 -B -m unittest Tests/Python/test_phase7b_contract.py -v
-          bash -n scripts/package_default_release.sh scripts/package_all_in_one.sh packaging/join-dot-dmg.command scripts/install-dot.sh scripts/build-and-sign-on-mac.sh scripts/install_acceptance_check.sh
+          python3 -B -m unittest Tests/Python/test_phase7s_contract.py -v
+          bash -n scripts/package_default_release.sh scripts/package_all_in_one.sh packaging/join-dot-dmg.command scripts/install-dot.sh scripts/uninstall-dot.sh scripts/sign_sandbox_app.sh scripts/build-and-sign-on-mac.sh scripts/install_acceptance_check.sh
       - name: Package the default app without model weights
         env:
           DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
@@ -111,7 +112,7 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
           cp build-public/Dot.dmg build-public/Dot.dmg.sha256 release-assets/
-          cp scripts/install-dot.sh scripts/build-and-sign-on-mac.sh scripts/join_release.py release-assets/
+          cp scripts/install-dot.sh scripts/uninstall-dot.sh scripts/build-and-sign-on-mac.sh scripts/join_release.py release-assets/
           cp packaging/join-dot-dmg.command release-assets/
           cp docs/TEST_TODAY.md release-assets/TEST_TODAY.md
           if python3 -c 'import json; raise SystemExit(json.load(open("Resources/model-parts.json"))["status"] != "ready")'; then
@@ -125,9 +126,10 @@ jobs:
           ===============
           The first line is the whole install: it downloads Dot.dmg with curl,
           verifies every published SHA-256, mounts the DMG, installs Dot.app to
-          /Applications, clears com.apple.quarantine, verifies the ad-hoc code
-          signature deeply and opens Dot. The script is idempotent, needs sudo
-          only if /Applications is not writable, and is safe to run again.
+          ~/Applications (never /Applications or sudo), clears
+          com.apple.quarantine from Dot's staged bundle, verifies the App
+          Sandbox entitlements and ad-hoc signature, and opens Dot. The script
+          is idempotent and safe to run again.
 
           Dot.dmg contains the app and its verified local runtime, but not the
           Qwen3.8 27B Q4 weights (~22.4 GB). On first launch Dot verifies the
@@ -141,22 +143,29 @@ jobs:
           First open / Gatekeeper
           -----------------------
           The public build is ad-hoc signed and NOT notarised. The installer
-          clears quarantine for you. If macOS still shows a warning, allow it:
-             - System Settings > Privacy & Security > "Open Anyway", or
-             - Terminal: xattr -dr com.apple.quarantine /Applications/Dot.app,
-               then open /Applications/Dot.app.
-          A no-warning double-click for every Mac needs Developer ID signing and
-          notarisation, which requires Emin's paid Apple Developer account and
-          is owner-only; it is not available in this release.
+          clears quarantine from Dot's staged bundle and verifies the App Sandbox
+          entitlements. Do not change System Settings. If macOS still refuses,
+          the installer prints the exact macOS/Gatekeeper text. A no-warning
+          double-click for every Mac needs Developer ID signing and notarisation,
+          which requires Emin's paid Apple Developer account and is owner-only;
+          it is not available in this release.
 
           If the one-line install is blocked by policy, build on this Mac with
           scripts/build-and-sign-on-mac.sh (in the repository). It builds the
           source, signs with the first "Apple Development" identity found by
           security find-identity -v -p codesigning (ad-hoc fallback), installs
-          to /Applications and opens Dot. That signature only satisfies
+          to ~/Applications and opens Dot. That signature only satisfies
           Gatekeeper on the Mac that owns the certificate.
 
           Then follow TEST_TODAY.md in this release.
+
+          Remove Dot completely
+          ---------------------
+          curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/uninstall-dot.sh | bash
+
+          It removes the app, sandbox container, caches, preferences and model,
+          resets privacy approvals and prints "PASS: your Mac is back to how it
+          was". The in-app menu has the same command under "Remove Dot completely".
 
           All-in-one installer
           ====================
@@ -206,6 +215,12 @@ jobs:
           gh release view "$TAG" --json tagName,isDraft,assets > .tmp/draft-release.json
           test "$(python3 -c 'import json; print(json.load(open(".tmp/draft-release.json"))["isDraft"])')" = "True"
 
+  privacy:
+    # Reusable no-trace lane: snapshot, per-user install, sandbox proof, smoke
+    # test, uninstall and snapshot diff. Publishing waits for it.
+    needs: package
+    uses: ./.github/workflows/privacy-clean.yml
+
   installer-one-liner:
     # (a) The exact documented shape: curl the draft install-dot.sh and pipe it
     # into bash. The draft is served locally because GitHub draft assets need a
@@ -244,13 +259,15 @@ jobs:
           done
           DOT_RELEASE_BASE=http://127.0.0.1:8765 \
             bash -c 'curl -fsSL "$DOT_RELEASE_BASE/install-dot.sh" | bash'
-          bash scripts/install_acceptance_check.sh /Applications/Dot.app 60
+          codesign -d --entitlements - "$HOME/Applications/Dot.app" 2>&1 | grep -q com.apple.security.app-sandbox
+          echo "PASS: the installed app carries com.apple.security.app-sandbox"
+          bash scripts/install_acceptance_check.sh "$HOME/Applications/Dot.app" 60
       - name: Quit Dot and remove the test install
         if: always()
         run: |
           osascript -e 'tell application "Dot" to quit' >/dev/null 2>&1 || true
           pkill -x Dot >/dev/null 2>&1 || true
-          rm -rf /Applications/Dot.app
+          rm -rf "$HOME/Applications/Dot.app" "$HOME/Applications/.dot-install-created-applications"; rmdir "$HOME/Applications" 2>/dev/null || true
 
   quarantine-install:
     # (b) A browser-like DMG: set com.apple.quarantine on the downloaded DMG,
@@ -291,23 +308,25 @@ jobs:
           DOT_DMG="$PWD/.tmp/draft/Dot.dmg" \
           DOT_TEST_QUARANTINE=1 \
             bash .tmp/draft/install-dot.sh
-          if xattr -p com.apple.quarantine .tmp/draft/Dot.dmg >/dev/null 2>&1; then
-            echo "com.apple.quarantine is still present on the downloaded DMG" >&2
+          # The installer never touches xattrs outside Dot's staged bundle, so
+          # the browser-quarantined DMG keeps its attribute until it is deleted.
+          if ! xattr -p com.apple.quarantine .tmp/draft/Dot.dmg >/dev/null 2>&1; then
+            echo "the CI fixture DMG lost its quarantine attribute" >&2
             exit 1
           fi
-          echo "PASS: com.apple.quarantine is gone from the downloaded DMG"
-          if xattr -p com.apple.quarantine /Applications/Dot.app >/dev/null 2>&1; then
-            echo "com.apple.quarantine is still present on /Applications/Dot.app" >&2
+          echo "PASS: the downloaded DMG was not modified"
+          if xattr -p com.apple.quarantine "$HOME/Applications/Dot.app" >/dev/null 2>&1; then
+            echo "com.apple.quarantine is still present on $HOME/Applications/Dot.app" >&2
             exit 1
           fi
-          echo "PASS: com.apple.quarantine is gone from /Applications/Dot.app"
-          bash scripts/install_acceptance_check.sh /Applications/Dot.app 60
+          echo "PASS: com.apple.quarantine is gone from the installed Dot.app"
+          bash scripts/install_acceptance_check.sh "$HOME/Applications/Dot.app" 60
       - name: Quit Dot and remove the test install
         if: always()
         run: |
           osascript -e 'tell application "Dot" to quit' >/dev/null 2>&1 || true
           pkill -x Dot >/dev/null 2>&1 || true
-          rm -rf /Applications/Dot.app
+          rm -rf "$HOME/Applications/Dot.app" "$HOME/Applications/.dot-install-created-applications"; rmdir "$HOME/Applications" 2>/dev/null || true
 
   spctl-codesign:
     # (c) Record the Gatekeeper verdict. "rejected" is the honest expected
@@ -344,14 +363,15 @@ jobs:
           done
           DOT_RELEASE_BASE=http://127.0.0.1:8765 \
             bash -c 'curl -fsSL "$DOT_RELEASE_BASE/install-dot.sh" | bash'
-          codesign --verify --deep --strict /Applications/Dot.app
-          echo "PASS: codesign --verify --deep --strict" >> "$GITHUB_STEP_SUMMARY"
+          codesign --verify --deep --strict "$HOME/Applications/Dot.app"
+          codesign -d --entitlements - "$HOME/Applications/Dot.app" 2>&1 | grep -q com.apple.security.app-sandbox
+          echo "PASS: codesign --verify --deep --strict and App Sandbox entitlement" >> "$GITHUB_STEP_SUMMARY"
           set +e
-          SPCTL_OUTPUT="$(spctl --assess -vv /Applications/Dot.app 2>&1)"
+          SPCTL_OUTPUT="$(spctl --assess -vv "$HOME/Applications/Dot.app" 2>&1)"
           SPCTL_STATUS=$?
           set -e
           {
-            echo "### spctl --assess -vv /Applications/Dot.app"
+            echo "### spctl --assess -vv $HOME/Applications/Dot.app"
             echo '```'
             echo "$SPCTL_OUTPUT"
             echo '```'
@@ -367,16 +387,16 @@ jobs:
         run: |
           osascript -e 'tell application "Dot" to quit' >/dev/null 2>&1 || true
           pkill -x Dot >/dev/null 2>&1 || true
-          rm -rf /Applications/Dot.app
+          rm -rf "$HOME/Applications/Dot.app" "$HOME/Applications/.dot-install-created-applications"; rmdir "$HOME/Applications" 2>/dev/null || true
 
   publish:
     # The release becomes public and Latest only after all three acceptance
     # lanes are green.
-    needs: [installer-one-liner, quarantine-install, spctl-codesign]
+    needs: [installer-one-liner, quarantine-install, spctl-codesign, privacy]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Publish v1.1.1 as Latest only when every acceptance job is green
+      - name: Publish the tagged release as Latest only when every acceptance job is green
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

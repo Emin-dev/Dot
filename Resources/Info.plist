@@ -15,9 +15,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.0</string>
+	<string>1.1.2</string>
 	<key>CFBundleVersion</key>
-	<string>2</string>
+	<string>3</string>
 	<key>CFBundleIconFile</key>
 	<string>Icon</string>
 	<key>LSMinimumSystemVersion</key>
@@ -26,6 +26,8 @@
 	<string>public.app-category.productivity</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Dot reads the screen only when you ask about what is visible, and only for that turn.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Click Dot to speak. Dot records only during that capture and uses its bundled offline English recognizer.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>

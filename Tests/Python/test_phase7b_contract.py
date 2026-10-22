@@ -37,12 +37,13 @@ class Phase7bContractTests(unittest.TestCase):
             "open \"$APP\"",
             "PASS:",
             "FAIL:",
-            "/Applications",
-            "sudo",
+            "com.apple.security.app-sandbox",
+            "never uses sudo",
         ):
             self.assertIn(required, script)
-        self.assertIn("curl never adds quarantine", script)
+        self.assertIn("no quarantine added", script)
         self.assertIn("idempotent", script)
+        self.assertIn("INSTALL_DIR=\"${DOT_INSTALL_DIR:-$HOME/Applications}\"", script)
 
     def test_local_build_script_uses_apple_development_with_adhoc_fallback(self):
         script = read("scripts/build-and-sign-on-mac.sh")
@@ -50,18 +51,21 @@ class Phase7bContractTests(unittest.TestCase):
         self.assertIn("Apple Development", script)
         self.assertIn('SIGN_IDENTITY="-"', script)
         self.assertIn("ad-hoc", script)
-        self.assertIn("/Applications", script)
+        self.assertIn("~/Applications", script)
+        self.assertIn("DOT_INSTALL_DIR:-$HOME/Applications", script)
         self.assertIn('open "$APP"', script)
 
     def test_release_is_draft_until_three_acceptance_jobs_pass(self):
         workflow = read(".github/workflows/release.yml")
         for job in ("installer-one-liner:", "quarantine-install:", "spctl-codesign:"):
             self.assertIn(job, workflow)
-        self.assertIn("needs: [installer-one-liner, quarantine-install, spctl-codesign]", workflow)
+        self.assertIn("needs: [installer-one-liner, quarantine-install, spctl-codesign, privacy]", workflow)
+        self.assertIn("uses: ./.github/workflows/privacy-clean.yml", workflow)
         self.assertIn("--draft", workflow)
         self.assertIn("gh release download", workflow)
         self.assertIn("--draft=false --latest", workflow)
-        self.assertIn("spctl --assess -vv /Applications/Dot.app", workflow)
+        self.assertIn('spctl --assess -vv "$HOME/Applications/Dot.app"', workflow)
+        self.assertIn("com.apple.security.app-sandbox", workflow)
         self.assertIn("GITHUB_STEP_SUMMARY", workflow)
         self.assertIn("*rejected*", workflow)
         self.assertIn("DOT_TEST_QUARANTINE=1", workflow)

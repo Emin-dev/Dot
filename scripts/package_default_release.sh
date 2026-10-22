@@ -66,10 +66,10 @@ record.update({
 path.write_text(json.dumps(record, indent=2, sort_keys=True) + '\n')
 PY
 
-echo "==> signing"
+echo "==> signing for the App Sandbox"
+cp scripts/uninstall-dot.sh "$APP/Contents/Resources/uninstall-dot.sh"
 xattr -cr "$APP"
-codesign --force --sign "$SIGN_IDENTITY" --options runtime "$APP"
-codesign --verify --strict "$APP"
+bash scripts/sign_sandbox_app.sh "$APP" "$SIGN_IDENTITY"
 
 echo "==> packaging $OUT/Dot.dmg"
 mkdir -p "$OUT"
@@ -77,7 +77,6 @@ mkdir -p .tmp
 STAGE="$(mktemp -d "$PWD/.tmp/dot-default.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 /usr/bin/ditto "$APP" "$STAGE/Dot.app"
-ln -s /Applications "$STAGE/Applications"
 rm -f "$OUT/Dot.dmg" "$OUT/Dot.dmg.sha256"
 python3 -B scripts/create_dmg.py "$STAGE" "$OUT/Dot.dmg"
 hdiutil verify -quiet "$OUT/Dot.dmg"

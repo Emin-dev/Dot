@@ -25,7 +25,7 @@ case "$DOT_LOGS_BRANCH" in
     *) echo "refusing to push logs to branch '$DOT_LOGS_BRANCH' (expected dot-logs or dot-*)" >&2; exit 1 ;;
 esac
 
-SUPPORT="${HOME}/Library/Application Support/Dot"
+SUPPORT="${HOME}/Library/Containers/app.dot.local/Data/Library/Application Support/Dot"
 INSTALL_FILE="$SUPPORT/install-id"
 mkdir -p "$SUPPORT"
 if [ -s "$INSTALL_FILE" ]; then

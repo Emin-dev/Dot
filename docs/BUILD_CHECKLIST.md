@@ -191,8 +191,8 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - Recommends parallel background agents when free RAM >= 4GB and memory usage < 75%.
 - [x] **Persistent Soul Manager & Non-Destructive Context Compaction:**
   - Context auto-compaction under memory pressure without deleting facts or conversation notes.
-  - Soul archive directory (`~/Library/Application Support/Dot/Soul/`).
-  - One-click `exportSoul()` creating a portable `.dotsoul` bundle in `~/Downloads/` and `importSoul(from:)`.
+  - Soul archive directory inside the App Sandbox container (`~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Soul/`).
+  - One-click `exportSoul()` creating a portable `.dotsoul` bundle in the sandbox container's `Application Support/Dot/Exports/`, and `importSoul(from:)` for an explicitly supplied file.
 - [x] **Native Screen Scroll Tool (`scroll_screen`):**
   - Exposed `scroll_screen` LLM function schema and fast-paths for scrolling `up`, `down`, `left`, `right`, `top`, `bottom` via CoreGraphics `CGEvent`.
 - [x] **Window Layout & Workspace Management (`snap_window`):**

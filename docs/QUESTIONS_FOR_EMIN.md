@@ -11,7 +11,7 @@ never commit it.
 
 **Why:** Dot can already write `dot/<install-id>/<launch>/...` to the dedicated `dot-logs` branch,
 with an offline queue and backoff. It reads the credential from Keychain service
-`dot-github-token`, then falls back to `~/Library/Application Support/Dot/github.token` (0600).
+`dot-github-token`, then falls back to `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/github.token` (0600).
 No token exists on this machine, so uploads stay queued and the app logs one honest line.
 
 **Exact steps for Emin on the Mac:**
@@ -28,10 +28,10 @@ unset TOKEN
 
 3. Confirm only the service name is visible: `security find-generic-password -s dot-github-token`
    (it prints metadata, not the secret).
-4. Restart Dot. `~/Library/Application Support/Dot/Logs/dot-sync.log` should show one `[SYNC] text logs are uploading ...` line.
+4. Restart Dot. `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot-sync.log` should show one `[SYNC] text logs are uploading ...` line.
 
 **Fallback if Keychain is unavailable:** write the token to
-`~/Library/Application Support/Dot/github.token` with mode 0600. Dot redacts it from logs.
+`~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/github.token` with mode 0600. Dot redacts it from logs.
 
 **Recommended default while waiting:** keep queueing locally; never upload unauthenticated and never
 create a token automatically.

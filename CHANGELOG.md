@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-22 — Phase 7s: sandboxed, per-user, leave no trace
+
+- Apple App Sandbox is now on for every packaging path: minimal entitlements,
+  hardened runtime, nested runtime binaries and whisper signed first, and a
+  read-back check for `com.apple.security.app-sandbox`. All app data, the model,
+  logs, settings and caches live in `~/Library/Containers/app.dot.local/`.
+- Install is per-user in `~/Applications`; never `/Applications`, never sudo,
+  no LaunchAgents/login items/background items/profiles/PATH edits. The
+  installer clears quarantine only on Dot's staged bundle and prints the exact
+  macOS/Gatekeeper text on refusal.
+- Added `scripts/uninstall-dot.sh` and the in-app **Remove Dot completely…**
+  item. Both remove the app, container, group containers, caches, saved state,
+  HTTP/WebKit data, preferences, model and legacy data, reset TCC with
+  `tccutil reset All app.dot.local`, and end with
+  `PASS: your Mac is back to how it was` or a precise `FAIL:`.
+- Added `.github/workflows/privacy-clean.yml`: hosted macOS snapshot → install →
+  sandbox/kernel proof → smoke test → uninstall → snapshot → empty diff with a
+  documented Apple-transient allowlist. `release.yml` now requires this lane
+  before publishing.
+- Sandbox compatibility: Splash and `dot-fetch` avoid nested `sandbox-exec`
+  under the app container; user-selected simple file utilities run in-process;
+  `UserFolderScope` keeps shell/safety targets inside the selected folder.
+- Phase result: [docs/PHASE7S_RESULT.md](docs/PHASE7S_RESULT.md).
+
 ## 2026-10-22 — Phase 7b: Gatekeeper one-line install
 
 - Root cause: `public-f6cc73d` opened on Emin's Mac because it was Apple

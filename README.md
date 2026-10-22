@@ -22,15 +22,28 @@ curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.
 
 It downloads every release part with curl (curl adds no quarantine), verifies
 every SHA-256, joins split parts, mounts the DMG, copies **Dot** into
-**Applications**, clears `com.apple.quarantine`, verifies the ad-hoc signature
-deeply, and opens Dot. It is idempotent and safe to re-run.
+**`~/Applications`** (never `/Applications`, never sudo), clears
+`com.apple.quarantine` from Dot's own staged bundle, verifies the **App Sandbox**
+entitlements and ad-hoc signature, and opens Dot. It is idempotent and safe to
+re-run. All app data (model, logs, settings and caches) stays inside
+`~/Library/Containers/app.dot.local/`; document actions write only to a folder
+you explicitly select.
 
-The public build is **ad-hoc signed and not notarised yet**. If macOS still
-warns, use **System Settings → Privacy & Security → Open Anyway**, or run
-`xattr -dr com.apple.quarantine /Applications/Dot.app` then open Dot. A
-no-warning double-click for every Mac needs Developer ID signing plus
-notarisation, which requires Emin's paid Apple Developer account and is
-owner-only.
+Remove it completely, including the container, model, caches, preferences and
+privacy approvals:
+
+```bash
+curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/uninstall-dot.sh | bash
+```
+
+It ends with `PASS: your Mac is back to how it was`, or a precise `FAIL:` line.
+
+The public build is **ad-hoc signed and not notarised yet**. The installer
+removes quarantine from Dot's own staged bundle and verifies the App Sandbox
+entitlements; do not change System Settings for it. If macOS still refuses, the
+installer prints the exact macOS/Gatekeeper text. A no-warning double-click for
+every Mac needs Developer ID signing plus notarisation, which requires Emin's
+paid Apple Developer account and is owner-only.
 
 The app verifies its runtime, then downloads the exact 22.4 GB local model on
 first launch from the pinned `model-parts-v1` release (revision-pinned Hugging
@@ -48,7 +61,7 @@ bash scripts/build-and-sign-on-mac.sh
 
 It builds locally with Xcode/SwiftPM, signs with the first `Apple Development`
 identity from `security find-identity -v -p codesigning` (ad-hoc fallback),
-installs to `/Applications` and opens Dot. That signature is trusted only on the
+installs to `~/Applications` and opens Dot. That signature is trusted only on the
 Mac that owns the certificate; a public no-warning install still needs Developer
 ID notarisation.
 

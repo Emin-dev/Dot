@@ -1,5 +1,11 @@
 # Phase 7b result — Gatekeeper one-line install
 
+> **Superseded install path (Phase 7s, 2026-10-22):** Dot now installs per-user
+to `~/Applications`, never `/Applications` and never with sudo, and runs in the
+Apple App Sandbox. The `/Applications` and sudo details below are historical
+for `v1.1.1`; use `docs/TEST_TODAY.md` and `docs/PHASE7S_RESULT.md` for the
+current install/remove commands.
+
 **Status 2026-10-22:** release
 [**`v1.1.1`**](https://github.com/Emin-dev/Dot/releases/tag/v1.1.1) is published
 and **Latest**. Every acceptance job is green in run

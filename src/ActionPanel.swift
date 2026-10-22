@@ -83,6 +83,7 @@ final class NativeActionPanelModel: ObservableObject {
             let previous = scopedFolder
             documentExecutor = executor; documentRoot = canonical
             scopedFolder = scoped ? url : nil
+            UserFolderScope.shared.set(canonical)
             previous?.stopAccessingSecurityScopedResource()
             documentReceipts = await executor.receipts()
             readVersion = nil; selection = nil; lastResult = nil; error = nil

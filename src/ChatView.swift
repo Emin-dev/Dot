@@ -307,12 +307,104 @@ final class ChatModel: ObservableObject {
     }
 
     static func runShellCommand(_ command: String) async -> String {
+        // A child shell does not inherit the PowerBox extension for a folder the
+        // owner picked. Simple file utilities are therefore performed in-process,
+        // inside that exact selected folder; every other command still runs through
+        // the sandboxed shell, which can only reach Dot's container.
+        if let result = runScopedFileOperation(command) { return result }
         do {
-            let result = try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command], mergeStandardError: true)
+            let result = try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command],
+                                                  mergeStandardError: true)
             let output = String(decoding: result.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             return output.isEmpty ? "(Exit code \(result.status))" : output
         } catch {
             return "Failed to run command: \(error.localizedDescription)"
+        }
+    }
+
+    /// In-process replacement for the simple file utilities that must act on a
+    /// user-selected folder. It refuses shell syntax, relative escapes and any
+    /// target outside the selected folder. Nil means "not a scoped file operation";
+    /// the caller then uses the sandboxed shell.
+    private static func runScopedFileOperation(_ command: String) -> String? {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 2_000,
+              !trimmed.contains(";"), !trimmed.contains("&&"), !trimmed.contains("||"),
+              !trimmed.contains("|"), !trimmed.contains("`"), !trimmed.contains("$("),
+              !trimmed.contains(">"), !trimmed.contains("<"),
+              let root = UserFolderScope.shared.current else { return nil }
+        let words = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard let name = words.first.map({ ($0 as NSString).lastPathComponent }),
+              ["rm", "rmdir", "mkdir", "touch"].contains(name) else { return nil }
+        var arguments: [String] = []
+        var recursive = false
+        var force = false
+        for word in words.dropFirst() {
+            if word.hasPrefix("-") {
+                if word.contains("r") || word.contains("R") || word == "--recursive" { recursive = true }
+                if word.contains("f") || word == "--force" { force = true }
+                continue
+            }
+            var value = word
+            if value.count >= 2, (value.hasPrefix("'") && value.hasSuffix("'")) ||
+                (value.hasPrefix("\"") && value.hasSuffix("\"")) {
+                value = String(value.dropFirst().dropLast())
+            }
+            guard !value.isEmpty, !value.contains("\0") else { return "Refused: invalid path." }
+            if value == "~" || value.hasPrefix("~/") {
+                let home = NSHomeDirectory().components(separatedBy: "/Library/Containers/").first ?? NSHomeDirectory()
+                value = home + String(value.dropFirst(1))
+            }
+            let url = URL(fileURLWithPath: value).standardizedFileURL.resolvingSymlinksInPath()
+            let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
+            guard url.path == canonicalRoot.path || url.path.hasPrefix(canonicalRoot.path + "/") else {
+                return "Refused: \(url.path) is outside the folder you selected."
+            }
+            arguments.append(url.path)
+        }
+        guard !arguments.isEmpty else { return "Refused: no path given." }
+        let fileManager = FileManager.default
+        do {
+            switch name {
+            case "rm":
+                for path in arguments {
+                    var isDirectory: ObjCBool = false
+                    guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory) else {
+                        if force { continue }
+                        return "Could not remove \(path): no such file or directory."
+                    }
+                    if isDirectory.boolValue && !recursive {
+                        return "Refused: \(path) is a directory; rm needs -r."
+                    }
+                    try fileManager.removeItem(atPath: path)
+                }
+                return "Removed \(arguments.joined(separator: ", "))."
+            case "rmdir":
+                for path in arguments {
+                    var isDirectory: ObjCBool = false
+                    guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
+                          isDirectory.boolValue else {
+                        return "Could not remove \(path): not a directory."
+                    }
+                    guard (try fileManager.contentsOfDirectory(atPath: path)).isEmpty else {
+                        return "Could not remove \(path): directory not empty."
+                    }
+                    try fileManager.removeItem(atPath: path)
+                }
+                return "Removed \(arguments.joined(separator: ", "))."
+            case "mkdir":
+                for path in arguments {
+                    try fileManager.createDirectory(atPath: path, withIntermediateDirectories: true)
+                }
+                return "Created \(arguments.joined(separator: ", "))."
+            default:
+                for path in arguments where !fileManager.fileExists(atPath: path) {
+                    _ = fileManager.createFile(atPath: path, contents: Data())
+                }
+                return "Touched \(arguments.joined(separator: ", "))."
+            }
+        } catch {
+            return "Could not run \(name): \(error.localizedDescription)"
         }
     }
 

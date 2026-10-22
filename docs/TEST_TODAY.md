@@ -16,26 +16,30 @@ Copy this exact line into Terminal and press Return:
 curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
 ```
 
+The line is plain ASCII with no smart quotes. If Terminal asks to confirm pasting,
+choose **Paste Anyway** (or type the line); if macOS blocks the app after that, the
+installer prints the exact macOS/Gatekeeper text instead of hiding it.
+
 The script downloads `Dot.dmg` (and every part when the release uses split
 parts) with curl, which adds no `com.apple.quarantine`; verifies every SHA-256;
-mounts the DMG; copies `Dot.app` to `/Applications`; clears quarantine; runs
-`codesign --verify --deep --strict`; detaches the DMG; and opens Dot. It prints
-`PASS:`/`FAIL:` lines, is idempotent and is safe to run again. It asks for sudo
-only if `/Applications` is not writable.
+mounts the DMG; copies `Dot.app` to **`~/Applications`** (never `/Applications`);
+clears quarantine from Dot's own staged bundle only; verifies the App Sandbox
+entitlements and signature; detaches the DMG; and opens Dot. It prints
+`PASS:`/`FAIL:` lines, is idempotent and never uses sudo. It creates
+`~/Applications` only when it is missing.
 
-**Pass:** the script prints `PASS: Dot is installed` and Dot appears. If it
-prints `FAIL:`, send that line back; do not continue.
+**Pass:** the script prints `PASS: Dot is installed at ~/Applications/Dot.app`
+and Dot appears. If it prints `FAIL:`, send that line back; do not continue. On
+a refusal it also prints the exact macOS/Gatekeeper text, so do not change any
+System Setting.
 
 ### If macOS still blocks the first open
 
-The public build is ad-hoc signed and **not notarised**. Use one of:
-
-- **System Settings → Privacy & Security → Open Anyway**, then open Dot again;
-- Terminal: `xattr -dr com.apple.quarantine /Applications/Dot.app`, then
-  `open /Applications/Dot.app`.
-
-Right-click → Open does not work on every macOS version (including macOS 27),
-which is exactly why the installer clears the attribute for you.
+Do not change any System Setting. The installer already removes quarantine from
+Dot's own staged bundle and verifies the sandbox entitlements and signature. If
+macOS still refuses, the installer prints the exact `open`/Gatekeeper text; send
+that `FAIL:` block back. A no-warning double-click for every Mac still needs
+Developer ID signing plus notarisation, which is owner-only.
 
 ### Owner-only fallback: build and sign on this Mac
 
@@ -48,7 +52,7 @@ bash scripts/build-and-sign-on-mac.sh
 It builds Dot locally with Xcode/SwiftPM and the Rust runtime, signs with the
 first `Apple Development` identity from
 `security find-identity -v -p codesigning` (ad-hoc fallback when none exists),
-installs to `/Applications` and opens Dot. This works because an Apple
+installs to `~/Applications` and opens Dot. This works because an Apple
 Development signature is trusted on the Mac that owns the certificate; it is
 not a public release.
 
@@ -81,7 +85,7 @@ is owner-only, not available today.
    drop or relaunch.
 
    **Pass:** the panel reaches the ready state with no SHA-256 error. Open
-   `~/Library/Application Support/Dot/Logs/dot_chat_log.txt` and confirm it
+   `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot_chat_log.txt` and confirm it
    records model verification success. A "Not enough free disk space" message
    is a real failure — free space and retry from the menu.
 
@@ -122,23 +126,28 @@ is owner-only, not available today.
 Use a disposable folder only.
 
 1. In Terminal: `mkdir -p ~/Desktop/DotSafetyTest && touch ~/Desktop/DotSafetyTest/keep.txt`
-2. Ask Dot to run: `rm -rf ~/Desktop/DotSafetyTest`
-3. Let the local safety approver refuse it **three separate times** (ask again
+2. In Dot's menu open **Tools & History → Mac actions & receipts…** and choose
+   `~/Desktop/DotSafetyTest` as the folder. That is the user-selected folder the
+   sandbox allows Dot to act in; Dot cannot touch the rest of your home.
+3. Ask Dot to run: `rm -rf ~/Desktop/DotSafetyTest`
+4. Let the local safety approver refuse it **three separate times** (ask again
    each time).
-4. After the third refusal, say **"force it"**, then ask for the same command
+5. After the third refusal, say **"force it"**, then ask for the same command
    and approve once more.
-5. Optional: move the folder and retry — the armed override must not apply to a
+6. Optional: move the folder and retry — the armed override must not apply to a
    different action, must expire after 120 seconds, and is one-shot.
 
-   **Pass:** the first three attempts are never executed; the exact refusal,
-   "force it" prompt and approval card are visible; only the exact action runs
-   after the override. Anything else — an early execution, a silent run, or a
-   permanent override — is a failure.
+   **Pass:** the first three attempts are never executed; the exact refusal and
+   "force it" prompt are visible; only the exact action runs after the override.
+   Anything else — an early execution, a silent run, or a permanent override —
+   is a failure.
 
 ## 8. Logs and where to send them
 
-- Main log: `~/Library/Application Support/Dot/Logs/dot_chat_log.txt`
-- Whole folder: `~/Library/Application Support/Dot/Logs/`
+- Main log:
+  `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot_chat_log.txt`
+- Whole folder:
+  `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/`
 - Uploads go to the `dot-logs` branch of `Emin-dev/Dot` under
   `dot/<install-id>/<launch-timestamp-UTC>/` when a log-upload token is in
   Keychain. Without a token they stay queued locally; that is not a failure.
@@ -159,6 +168,26 @@ All of these are true:
 - [ ] Screen context describes one turn; off state is honest
 - [ ] Safety refusal three times, then one-shot `force it` on the scratch folder
 - [ ] Logs contain text only
+
+## 10. Remove Dot completely
+
+When testing is finished, remove Dot with the same release-URL style:
+
+```bash
+curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/uninstall-dot.sh | bash
+```
+
+The in-app menu also has **Remove Dot completely…** (Options / right-click menu);
+it opens Terminal for the same removal because a sandboxed app cannot delete its
+own bundle or container.
+
+**Pass:** it prints `PASS: your Mac is back to how it was`. It quits Dot and
+removes the app, `~/Library/Containers/app.dot.local/`, group containers,
+caches, saved state, HTTP/WebKit stores, preferences, the 22.4 GB model, the
+legacy `Application Support/Dot` folder, LaunchServices registration and resets
+Dot's microphone/screen-recording approvals with `tccutil reset All
+app.dot.local`. It removes `~/Applications` only when the installer created it
+and it is empty. If anything remains it prints a precise `FAIL:` line instead.
 
 Remaining owner-only step: Developer ID signing and notarisation. That needs a
 paid Apple Developer account; it is not required for this test and is tracked in

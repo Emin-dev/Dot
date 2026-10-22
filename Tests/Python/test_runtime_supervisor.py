@@ -243,6 +243,26 @@ class RuntimeBootstrapTests(unittest.TestCase):
         for descriptor in captured:
             with self.assertRaises(OSError): os.fstat(descriptor)
         self.assertTrue(self.state.exists())
+    def test_app_sandbox_branch_execs_python_exactly_once(self):
+        captured = []
+        def exec_fixture(executable, command, environment):
+            captured.append((executable, list(command), dict(environment)))
+            raise OSError(errno.ENOENT, 'fixture exec rejection')
+        with patch.dict(runtime.os.environ, {'DOT_PARENT_APPLICATION_SANDBOX': '1'}), \
+             patch.object(runtime.os, 'execve', side_effect=exec_fixture), \
+             patch.object(runtime.os, 'chdir'), \
+             patch.object(runtime, 'close_unrelated_descriptors'):
+            with self.assertRaises(OSError):
+                runtime.bootstrap(self.arguments(), self.payload.resolve(), self.models.resolve(),
+                                  self.state.resolve(), self.manifest.resolve())
+        self.assertEqual(len(captured), 1)
+        executable, command, environment = captured[0]
+        self.assertEqual(command[0], executable)
+        self.assertEqual(command.count(executable), 1)
+        self.assertEqual(command[1:4], ['-I', '-S', '-B'])
+        self.assertIn('--backend-fd', command)
+        self.assertNotIn('DOT_PARENT_APPLICATION_SANDBOX', environment)
+
     def test_different_profile_is_rejected_before_binding(self):
         args = self.arguments(); args.sandbox_profile = str(self.manifest)
         with patch.object(runtime.tls, 'owned_listener') as bind:

@@ -71,13 +71,20 @@ jobs:
           python3 -B scripts/check_contracts.py
           python3 -B -m unittest Tests/Python/test_release_parts.py -v
           python3 -B -m unittest Tests/Python/test_review_pipeline_contract.py -v
-          bash -n scripts/package_default_release.sh scripts/real_app_launch_check.sh scripts/quarantine_launch_check.sh
+          bash -n scripts/package_default_release.sh scripts/real_app_launch_check.sh scripts/quarantine_launch_check.sh scripts/sign_sandbox_app.sh scripts/install-dot.sh scripts/uninstall-dot.sh
 
       - name: Package the real default app (same bundle as the public DMG)
         env:
           DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
           DOT_WHISPER_FRAMEWORK: .tmp/whisper/whisper.framework
         run: bash scripts/package_default_release.sh
+
+      - name: Verify App Sandbox entitlements and kernel confinement
+        run: |
+          set -euo pipefail
+          codesign -d --entitlements - build/Dot.app 2>&1 | grep -q com.apple.security.app-sandbox
+          DOT_SANDBOX_SELF_CHECK=1 build/Dot.app/Contents/MacOS/Dot | tee .tmp/sandbox-self-check.json
+          grep -q '"sandboxed":true' .tmp/sandbox-self-check.json
 
       - name: Launch the real app and capture the hardware refusal
         run: bash scripts/real_app_launch_check.sh build/Dot.app .tmp/real-app-check

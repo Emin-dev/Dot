@@ -156,9 +156,20 @@ enum ResearchSystemHTTP {
         defer { try? socket.close() }
         let remaining = deadline - ProcessInfo.processInfo.systemUptime
         guard remaining > 0 else { throw ResearchNotebookError.networkFailure }
-        let result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec",
-            arguments: try runtime.arguments(url: url, address: address, remaining: remaining), deadline: deadline,
-            stdoutLimit: ResearchExtraction.maxBytes, stderrLimit: 65_536, standardInput: socket)
+        // Under the App Sandbox the outer profile is already the kernel boundary;
+        // nested sandbox-exec is unnecessary and may be rejected on newer macOS.
+        // The standalone path keeps its strict inner profile.
+        let result: ResearchBoundedProcess.Output
+        if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil {
+            result = try await ResearchBoundedProcess.run(executable: runtime.helper,
+                arguments: try runtime.helperArguments(url: url, address: address, remaining: remaining),
+                deadline: deadline, stdoutLimit: ResearchExtraction.maxBytes,
+                stderrLimit: 65_536, standardInput: socket)
+        } else {
+            result = try await ResearchBoundedProcess.run(executable: "/usr/bin/sandbox-exec",
+                arguments: try runtime.arguments(url: url, address: address, remaining: remaining), deadline: deadline,
+                stdoutLimit: ResearchExtraction.maxBytes, stderrLimit: 65_536, standardInput: socket)
+        }
         if result.status == 63 { throw ResearchNotebookError.limitExceeded }
         guard result.status == 0 else { throw ResearchNotebookError.networkFailure }
         let response = try parseMetadata(result.stderr, url: url)
@@ -272,11 +283,15 @@ struct ResearchFetchRuntime: Sendable {
         guard FileManager.default.isExecutableFile(atPath: helper) else { throw ResearchNotebookError.networkFailure }
     }
 
-    func arguments(url: URL, address: String, remaining: TimeInterval) throws -> [String] {
+    func helperArguments(url: URL, address: String, remaining: TimeInterval) throws -> [String] {
         guard ResearchWebReader.allowed(url), ResearchPublicAddress.allowed(address), remaining > 0 else { throw ResearchNotebookError.networkFailure }
-        return ["-f", profile, "-D", "DOT_SOURCE_HELPER=" + helper,
-                helper, url.absoluteString, address,
+        return [url.absoluteString, address,
                 String(format: "%.3f", locale: Locale(identifier: "en_US_POSIX"), min(30, remaining))]
+    }
+
+    func arguments(url: URL, address: String, remaining: TimeInterval) throws -> [String] {
+        let direct = try helperArguments(url: url, address: address, remaining: remaining)
+        return ["-f", profile, "-D", "DOT_SOURCE_HELPER=" + helper, helper] + direct
     }
 }
 

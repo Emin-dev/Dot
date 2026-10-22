@@ -398,7 +398,7 @@ into the owner's real `~/Downloads/dot_chat_log.txt` (157 lines from one gate ru
 reflection could analyse test text as conversation. Test processes now write to a temporary log
 (`DiagnosticChatLogger.isRunningTests`), and the app writes a `[SYSTEM] App session started` marker on
 launch; the reflection analyses only lines after the latest marker, so old or fixture-written tails are
-ignored. The log now lives in `~/Library/Application Support/Dot/Logs/dot_chat_log.txt` (migrating the
+ignored. The log now lives in `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot_chat_log.txt` (migrating the
 old Downloads file once, rotating at 2 MB) instead of Downloads, and the soul export reads the same
 path. The reflection skips when the current session has no user/Dot lines or nothing new since the last
 reflection, never emits a suggestion from empty input, and clears `lastSuggestion` before skipping so a

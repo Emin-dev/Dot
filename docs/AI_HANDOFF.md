@@ -297,7 +297,7 @@ PATH=/private/tmp/dot-py313/bin:$PATH bash scripts/verify_macos.sh
 
 ## Data layout under Application Support
 
-All durable Dot state lives under `~/Library/Application Support/Dot/` (mode 0700), never `~/Downloads`
+All durable Dot state lives under `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/` (mode 0700), never `~/Downloads`
 (which a notarised/sandboxed build cannot write):
 
 - `Dot/Soul/` — soul archives: compaction snapshots and the export/import targets (`DotSoulManager`).

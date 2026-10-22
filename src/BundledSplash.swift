@@ -99,7 +99,14 @@ final class BundledSplash {
             child.arguments = ["-I", "-S", "-B", launchPaths.helper, "--sandbox-profile", launchPaths.profile,
                                "--payload", launchPaths.payload, "--models", launchPaths.models,
                                "--state", directory.path, "--manifest", launchPaths.manifest]
-            child.environment = ["PATH": "/usr/bin:/bin", "HOME": directory.path, "TMPDIR": directory.path, "PYTHONDONTWRITEBYTECODE": "1"]
+            var environment = ["PATH": "/usr/bin:/bin", "HOME": directory.path, "TMPDIR": directory.path, "PYTHONDONTWRITEBYTECODE": "1"]
+            // Only tell the runtime to skip its inner profile when the kernel has
+            // actually placed this process in the app container. A raw debug build
+            // keeps splash.sb.
+            if ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil {
+                environment["DOT_PARENT_APPLICATION_SANDBOX"] = "1"
+            }
+            child.environment = environment
             child.currentDirectoryURL = directory
             child.standardInput = input; child.standardOutput = stdout; child.standardError = FileHandle.nullDevice
             child.terminationHandler = { [weak self] finished in

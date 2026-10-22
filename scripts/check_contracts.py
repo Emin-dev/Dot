@@ -220,6 +220,55 @@ checks = {
         'public mutating func normalize(now: Double)' in read('src/InteractionCore.swift')
         and 'state.normalize(now: now)' in read('src/DotLogSync.swift')
     ),
+    'app sandbox entitlements are minimal and enforced': (
+        (lambda e: e.get('com.apple.security.app-sandbox') is True
+         and e.get('com.apple.security.network.client') is True
+         and e.get('com.apple.security.network.server') is True
+         and e.get('com.apple.security.device.audio-input') is True
+         and e.get('com.apple.security.files.user-selected.read-write') is True
+         and e.get('com.apple.security.personal-information.calendars') is True
+         and e.get('com.apple.security.automation.apple-events') is True
+         and not any(k.startswith('com.apple.security.temporary-exception') for k in e))(
+            plistlib.loads((root / 'Resources/Dot.entitlements').read_bytes()))
+        and '--entitlements "$ENTITLEMENTS"' in read('scripts/sign_sandbox_app.sh')
+        and '--options runtime' in read('scripts/sign_sandbox_app.sh')
+    ),
+    'every packaging path signs the sandbox entitlements': all(
+        'sign_sandbox_app.sh' in read(path) for path in
+        ('build.sh', 'scripts/package_default_release.sh', 'scripts/build_complete.sh',
+         'scripts/build-and-sign-on-mac.sh', 'scripts/install_local.sh',
+         'scripts/package_public_release.sh')),
+    'installer is per-user and never uses admin': (
+        'INSTALL_DIR="${DOT_INSTALL_DIR:-$HOME/Applications}"' in read('scripts/install-dot.sh')
+        and re.search(r'(?m)^\s*sudo\b', read('scripts/install-dot.sh')) is None
+        and 'com.apple.security.app-sandbox' in read('scripts/install-dot.sh')
+        and 'macOS refused to open Dot' in read('scripts/install-dot.sh')
+    ),
+    'uninstaller removes app, container, data and privacy grants': (
+        'tccutil reset All "$BUNDLE_ID"' in read('scripts/uninstall-dot.sh')
+        and 'Library/Containers/$BUNDLE_ID' in read('scripts/uninstall-dot.sh')
+        and 'Library/Group Containers/group.$BUNDLE_ID' in read('scripts/uninstall-dot.sh')
+        and 'PASS: your Mac is back to how it was' in read('scripts/uninstall-dot.sh')
+        and re.search(r'(?m)^\s*sudo\b', read('scripts/uninstall-dot.sh')) is None
+    ),
+    'in-app removal and sandbox self-check exist without a helper': (
+        'removeDotCompletely()' in read('src/App.swift')
+        and 'DOT_SANDBOX_SELF_CHECK' in read('src/App.swift')
+        and 'outside_write_denied' in read('src/App.swift')
+        and 'SMAppService' not in read('src/App.swift')
+        and 'SMJobBless' not in read('src/App.swift')
+    ),
+    'privacy CI snapshots installs tests uninstalls and diffs': (
+        'privacy_snapshot.py .tmp/snapshot-before.json' in read('.github/workflows/privacy-clean.yml')
+        and 'install-dot.sh" | bash' in read('.github/workflows/privacy-clean.yml')
+        and 'uninstall-dot.sh" | bash' in read('.github/workflows/privacy-clean.yml')
+        and 'privacy_diff.py .tmp/snapshot-before.json .tmp/snapshot-after.json' in read('.github/workflows/privacy-clean.yml')
+        and 'app.dot.local' not in read('scripts/privacy_allowlist.txt')
+    ),
+    'inner runtime sandbox is not nested under the App Sandbox': (
+        'DOT_PARENT_APPLICATION_SANDBOX' in read('src/BundledSplash.swift')
+        and "os.environ.get('DOT_PARENT_APPLICATION_SANDBOX') == '1'" in read('Resources/Runtime/dot_runtime.py')
+    ),
 }
 plistlib.loads((root / 'Resources/Info.plist').read_bytes())
 ET.parse(root / 'Dot.xcodeproj/xcshareddata/xcschemes/Dot.xcscheme')

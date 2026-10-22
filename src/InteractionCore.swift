@@ -63,10 +63,12 @@ func trimConversationalPunctuation(_ text: String) -> String {
 /// pipe buffer (about 64 KiB on macOS), because the child blocks on write and never exits.
 /// Callers keep their own decoding, trimming, limits and error text so no reply string changes.
 enum SubprocessRunner {
-    static func run(executable: String, arguments: [String], mergeStandardError: Bool = false) throws -> (data: Data, status: Int32) {
+    static func run(executable: String, arguments: [String], mergeStandardError: Bool = false,
+                    currentDirectory: URL? = nil) throws -> (data: Data, status: Int32) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if let currentDirectory { process.currentDirectoryURL = currentDirectory }
         let pipe = Pipe()
         process.standardOutput = pipe
         if mergeStandardError { process.standardError = pipe }
@@ -75,6 +77,27 @@ enum SubprocessRunner {
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (data, process.terminationStatus)
+    }
+}
+
+
+/// The one folder the owner explicitly chose for document and shell work. The
+/// App Sandbox already confines Dot to its container plus user-selected folders;
+/// this scope additionally makes the shell start in that chosen folder and gives
+/// the safety approver a concrete target. It never widens the sandbox.
+final class UserFolderScope: @unchecked Sendable {
+    static let shared = UserFolderScope()
+    private let lock = NSLock()
+    private var folder: URL?
+
+    var current: URL? {
+        lock.lock(); defer { lock.unlock() }
+        return folder
+    }
+
+    func set(_ url: URL?) {
+        lock.lock(); defer { lock.unlock() }
+        folder = url?.standardizedFileURL.resolvingSymlinksInPath()
     }
 }
 
@@ -4532,10 +4555,14 @@ public final class DotSoulManager: @unchecked Sendable {
         fmt.dateFormat = "yyyyMMdd_HHmmss"
         let filename = "Dot_Soul_\(fmt.string(from: now)).dotsoul"
 
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            return (nil, "Could not locate Downloads folder.")
+        // A sandboxed Dot writes only inside its own container. Exports live in
+        // Application Support/Dot/Exports and can be moved out through Finder.
+        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return (nil, "Could not locate Dot's application storage.")
         }
-        let exportURL = downloads.appendingPathComponent(filename)
+        let exports = support.appendingPathComponent("Dot/Exports", isDirectory: true)
+        try? FileManager.default.createDirectory(at: exports, withIntermediateDirectories: true)
+        let exportURL = exports.appendingPathComponent(filename)
 
         let brain = PersistentMemoryBrain.shared
         let profile = brain.readProfile()
@@ -4561,9 +4588,10 @@ public final class DotSoulManager: @unchecked Sendable {
     }
 
     public func importLatestSoulFromDownloads() -> (success: Bool, message: String) {
-        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first else {
-            return (false, "Could not locate Downloads folder.")
+        guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return (false, "Could not locate Dot's application storage.")
         }
+        let downloads = support.appendingPathComponent("Dot/Exports", isDirectory: true)
         guard let files = try? FileManager.default.contentsOfDirectory(at: downloads, includingPropertiesForKeys: [.contentModificationDateKey]),
               let latest = files.filter({ $0.pathExtension == "dotsoul" || $0.lastPathComponent.hasPrefix("Dot_Soul_") || $0.lastPathComponent.hasPrefix("DotSoul") })
                 .sorted(by: {
@@ -4571,7 +4599,7 @@ public final class DotSoulManager: @unchecked Sendable {
                     let d2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? Date.distantPast
                     return d1 > d2
                 }).first else {
-            return (false, "No .dotsoul backup file found in Downloads folder.")
+            return (false, "No .dotsoul backup file found in Application Support/Dot/Exports.")
         }
         return importSoul(from: latest)
     }

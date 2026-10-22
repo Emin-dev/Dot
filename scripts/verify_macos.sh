@@ -92,6 +92,7 @@ if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log; then
   echo 'FAIL: warning detected in verification or delivered-app build'; exit 1
 fi
 codesign --verify --strict build/Dot.app
+codesign -d --entitlements - build/Dot.app 2>&1 | grep -q com.apple.security.app-sandbox
 file build/Dot.app/Contents/MacOS/Dot
 python3 -B - <<'PY'
 import json, pathlib, subprocess

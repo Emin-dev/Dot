@@ -1,0 +1,40 @@
+# Paths Apple itself owns and rewrites whenever Launch Services opens an app,
+# TCC resets an approval, or a system daemon refreshes a cache. Every entry has
+# a reason; Dot-owned paths are never listed and therefore always fail the diff.
+~/Library/Caches/com.apple.*|Apple LaunchServices/icon/URL caches refresh when any app is opened
+~/Library/Caches/com.apple.*/*|Apple LaunchServices/icon/URL caches refresh when any app is opened
+~/Library/Preferences/com.apple.*|Apple preference caches refresh after an app launch
+~/Library/Preferences/ByHost/com.apple.*|Apple per-host preference caches refresh after an app launch
+~/Library/Containers/com.apple.*|Apple's own sandbox containers update when Launch Services launches an app
+~/Library/Containers/com.apple.*/*|Apple's own sandbox containers update when Launch Services launches an app
+~/Library/Group Containers/group.com.apple.*|Apple group containers update with system services
+~/Library/Group Containers/group.com.apple.*/*|Apple group containers update with system services
+~/Library/Application Support/com.apple.*|Apple shared services (TCC, sharedfilelist, backgroundtaskmanagement) update during launch and reset
+~/Library/Application Support/com.apple.*/*|Apple shared services (TCC, sharedfilelist, backgroundtaskmanagement) update during launch and reset
+~/Library/Saved Application State/com.apple.*|Apple's saved-state store updates on app lifecycle changes
+~/Library/Saved Application State/com.apple.*/*|Apple's saved-state store updates on app lifecycle changes
+~/Library/HTTPStorages/com.apple.*|Apple HTTP storage updates for system apps
+~/Library/HTTPStorages/com.apple.*/*|Apple HTTP storage updates for system apps
+~/Library/WebKit/com.apple.*|Apple WebKit storage updates for system apps
+~/Library/WebKit/com.apple.*/*|Apple WebKit storage updates for system apps
+~/Library/Cookies/com.apple.*|Apple cookie stores update for system apps
+~/Library/Logs/com.apple.*|Apple system logs may grow while a process launches
+~/Library/Logs/com.apple.*/*|Apple system logs may grow while a process launches
+~/Library/Biome/*|Apple telemetry store is rewritten by OS daemons
+~/Library/Daemon Containers/*|Apple daemon containers are OS-owned runtime state
+~/Library/Metadata/*|Spotlight metadata is refreshed by the OS
+~/Library/Application Support/Knowledge/*|Apple knowledge store is OS-owned
+~/Library/Keychains/*|TCC reset may touch login-keychain metadata
+/Library/Caches/com.apple.*|System-owned Apple caches refresh during app launch
+/Library/Caches/com.apple.*/*|System-owned Apple caches refresh during app launch
+/Library/Preferences/com.apple.*|System Apple preference caches refresh during app launch
+/Library/Application Support/com.apple.*|System Apple shared services refresh during app launch
+/Library/Application Support/com.apple.*/*|System Apple shared services refresh during app launch
+/Library/Containers/com.apple.*|System Apple containers are OS-owned
+/Library/Containers/com.apple.*/*|System Apple containers are OS-owned
+/Library/Group Containers/group.com.apple.*|System Apple group containers are OS-owned
+/Library/Group Containers/group.com.apple.*/*|System Apple group containers are OS-owned
+/Library/Preferences/ByHost/com.apple.*|System per-host Apple preferences refresh during app launch
+/Library/Logs/com.apple.*|System Apple logs may grow during app launch
+/Library/Logs/com.apple.*/*|System Apple logs may grow during app launch
+/Library/Biome/*|System Apple telemetry store is OS-owned

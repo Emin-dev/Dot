@@ -167,12 +167,20 @@ def bootstrap(args, payload, models, state, manifest):
                       # Seatbelt only accepts the localhost token for concrete ports.
                       # Socket adoption independently requires IPv4 127.0.0.1 exactly.
                       'DOT_BACKEND_ADDRESS': f'localhost:{backend_port}', 'DOT_TLS_ADDRESS': f'localhost:{tls_port}'}
-        command = ['/usr/bin/sandbox-exec']
-        for name, value in parameters.items(): command.extend(['-D', name + '=' + str(value)])
-        command.extend(['-f', str(profile), str(python), '-I', '-S', '-B', str(scripts / 'dot_runtime.py'),
-                        '--payload', str(payload), '--models', str(models), '--state', str(state), '--manifest', str(manifest),
-                        '--backend-fd', str(backend.fileno()), '--backend-port', str(backend_port),
-                        '--tls-fd', str(endpoint.fileno()), '--tls-port', str(tls_port)])
+        # Under the App Sandbox the outer profile is already the kernel boundary;
+        # nesting sandbox-exec is unnecessary and can be rejected by macOS. The
+        # standalone runtime keeps its inner profile when that variable is absent.
+        child_arguments = [str(python), '-I', '-S', '-B', str(scripts / 'dot_runtime.py'),
+                           '--payload', str(payload), '--models', str(models), '--state', str(state), '--manifest', str(manifest),
+                           '--backend-fd', str(backend.fileno()), '--backend-port', str(backend_port),
+                           '--tls-fd', str(endpoint.fileno()), '--tls-port', str(tls_port)]
+        if os.environ.get('DOT_PARENT_APPLICATION_SANDBOX') == '1':
+            command = child_arguments
+        else:
+            command = ['/usr/bin/sandbox-exec']
+            for name, value in parameters.items(): command.extend(['-D', name + '=' + str(value)])
+            command.extend(['-f', str(profile)])
+            command.extend(child_arguments)
         environment = {'PATH': '/usr/bin:/bin', 'HOME': str(state), 'TMPDIR': str(state), 'PYTHONDONTWRITEBYTECODE': '1'}
         backend.set_inheritable(True); endpoint.set_inheritable(True)
         os.chdir(state)

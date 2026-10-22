@@ -28,7 +28,7 @@ COMMIT="$(git rev-parse HEAD)"
 
 body=$(cat <<JSON
 {"tag_name":"$TAG","target_commitish":"$COMMIT","name":"Dot $TAG",
- "body":"Dot.dmg (drag to Applications) and Dot.zip. Runtime-only app: on first launch it downloads the exact signed-manifest Qwen3.8-27B model from Hugging Face and verifies every SHA-256. Apple Development signed; not notarised yet. Run scripts/package_public_release.sh to reproduce the assets.",
+ "body":"Install per-user with the one-line installer (curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash). Runtime-only app: on first launch it downloads the exact signed-manifest Qwen3.8-27B model and verifies every SHA-256. App Sandbox enabled; not notarised yet. Remove with uninstall-dot.sh.",
  "draft":false,"prerelease":false}
 JSON
 )
@@ -48,8 +48,11 @@ if [ -z "$id" ]; then
 fi
 echo "release $TAG id=$id"
 
+INSTALL="scripts/install-dot.sh"
+UNINSTALL="scripts/uninstall-dot.sh"
 for pair in "$DMG:Dot.dmg:application/x-apple-diskimage" "$DMGSUM:Dot.dmg.sha256:text/plain" \
-             "$ZIP:Dot.zip:application/zip" "$SUM:Dot.zip.sha256:text/plain"; do
+             "$ZIP:Dot.zip:application/zip" "$SUM:Dot.zip.sha256:text/plain" \
+             "$INSTALL:install-dot.sh:text/plain" "$UNINSTALL:uninstall-dot.sh:text/plain"; do
   file="${pair%%:*}"; rest="${pair#*:}"; name="${rest%%:*}"; type="${rest#*:}"
   echo "uploading $file as $name"
   # --upload-file streams; --data-binary buffers the whole asset in curl and

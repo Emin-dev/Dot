@@ -17,7 +17,7 @@ set -uo pipefail
 APP="${1:-build/Dot.app}"
 OUT="${2:-.tmp/real-app-check}"
 EXE="$APP/Contents/MacOS/Dot"
-SUPPORT="$HOME/Library/Application Support/Dot"
+SUPPORT="$HOME/Library/Containers/app.dot.local/Data/Library/Application Support/Dot"
 LOG="$SUPPORT/Logs/dot_chat_log.txt"
 TRANSCRIPT="$OUT/launch-transcript.txt"
 CONSOLE="$OUT/console.log"

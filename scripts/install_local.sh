@@ -156,9 +156,9 @@ echo "==> signing with $SIGN_IDENTITY"
 # A cloud-synced checkout gets Finder/FileProvider attributes that codesign
 # rejects ("resource fork, Finder information, or similar detritus not allowed").
 xattr -cr "$STAGE/Dot.app"
-# No --deep: re-signing nested code corrupts the seal and blocks notarytool.
-codesign --force --sign "$SIGN_IDENTITY" --timestamp=none "$STAGE/Dot.app"
-codesign --verify --strict "$STAGE/Dot.app" || fail "staged signature did not verify"
+# Sign nested runtime code first, then the app with App Sandbox entitlements
+# and the hardened runtime. No --deep on the finished app.
+bash scripts/sign_sandbox_app.sh "$STAGE/Dot.app" "$SIGN_IDENTITY" || fail "staged signature did not verify"
 
 echo "==> swapping in (previous app kept at $BACKUP)"
 rm -rf "$BACKUP"

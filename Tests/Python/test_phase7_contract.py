@@ -46,8 +46,9 @@ class Phase7ContractTests(unittest.TestCase):
     def test_first_open_instructions_cover_both_supported_paths(self):
         for relative in ["docs/TEST_TODAY.md", "packaging/join-dot-dmg.command"]:
             text = read(relative)
-            self.assertIn("right-click", text.lower())
-            self.assertIn("xattr -dr com.apple.quarantine", text)
+            self.assertIn("quarantine", text.lower())
+        self.assertIn("complete offline app", read("packaging/join-dot-dmg.command"))
+        self.assertIn("~/Applications", read("packaging/join-dot-dmg.command"))
         today = read("docs/TEST_TODAY.md")
         self.assertIn("22.4 GB", today)
         self.assertIn("shasum -a 256 -c Dot.dmg.sha256", today)

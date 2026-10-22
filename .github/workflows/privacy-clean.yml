@@ -1,0 +1,151 @@
+name: Sandboxed install leaves no trace
+
+# Hosted macOS only: never the owner's Mac or the Pi. The lane snapshots the
+# real machine, installs the per-user sandboxed app with the documented
+# curl | bash shape, proves the App Sandbox is active, runs the real launch
+# smoke test, uninstalls with the same release URL style, snapshots again and
+# fails on any difference that is not a documented OS-owned transient cache.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dot-privacy-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  # Same audited runtime-only donor as release.yml. No model weights.
+  DONOR_URL: https://github.com/Emin-dev/Dot/releases/download/public-f6cc73d/Dot.dmg
+  DONOR_SHA256: 942f877fa64dbe338b9ba55d5475d6a3d968ca7132038e7e52d217ff17a3afc3
+
+jobs:
+  no-trace:
+    # Newest available hosted image that can run the macOS 26.4 deployment floor.
+    runs-on: macos-26
+    timeout-minutes: 75
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+
+      - name: Build Rust runtime binaries
+        run: cargo build --release --bin dot-voice --bin dot-search --bin dot-fetch --bin dot-safety
+
+      - name: Fetch the audited runtime payload (no model weights)
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/donor .tmp/donor/mnt .tmp/runtime .tmp/whisper
+          curl -L --fail --retry 5 --retry-delay 5 -o .tmp/donor/Dot.dmg "$DONOR_URL"
+          echo "$DONOR_SHA256  .tmp/donor/Dot.dmg" | shasum -a 256 -c -
+          hdiutil attach .tmp/donor/Dot.dmg -nobrowse -readonly -mountpoint .tmp/donor/mnt
+          trap 'hdiutil detach .tmp/donor/mnt || true' EXIT
+          /usr/bin/ditto .tmp/donor/mnt/Dot.app/Contents/Resources/Offline .tmp/runtime/Offline
+          /usr/bin/ditto .tmp/donor/mnt/Dot.app/Contents/Frameworks/whisper.framework .tmp/whisper/whisper.framework
+          hdiutil detach .tmp/donor/mnt
+          test -f .tmp/runtime/Offline/runtime-manifest.json
+          test -f .tmp/whisper/whisper.framework/Modules/module.modulemap
+
+      - name: Static contracts and shell syntax
+        run: |
+          python3 -B scripts/check_contracts.py
+          python3 -B -m unittest Tests/Python/test_phase7s_contract.py -v
+          bash -n scripts/install-dot.sh scripts/uninstall-dot.sh scripts/sign_sandbox_app.sh \
+            scripts/package_default_release.sh scripts/install_acceptance_check.sh
+
+      - name: Package the sandboxed default app
+        env:
+          DOT_RUNTIME_PAYLOAD: .tmp/runtime/Offline
+          DOT_WHISPER_FRAMEWORK: .tmp/whisper/whisper.framework
+        run: bash scripts/package_default_release.sh
+
+      - name: Snapshot the Mac before anything is installed
+        run: |
+          set -euo pipefail
+          DOT_SNAPSHOT_EXCLUDES="$GITHUB_WORKSPACE:$RUNNER_TEMP" \
+            python3 -B scripts/privacy_snapshot.py .tmp/snapshot-before.json
+
+      - name: Install with the documented curl | bash line
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp/release
+          cp build-public/Dot.dmg build-public/Dot.dmg.sha256 scripts/install-dot.sh scripts/uninstall-dot.sh .tmp/release/
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory .tmp/release > .tmp/http.log 2>&1 &
+          SERVER=$!
+          trap 'kill "$SERVER" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8765/install-dot.sh -o /dev/null && break
+            sleep 1
+          done
+          DOT_RELEASE_BASE=http://127.0.0.1:8765 \
+            bash -c 'curl -fsSL "$DOT_RELEASE_BASE/install-dot.sh" | bash'
+          test -d "$HOME/Applications/Dot.app"
+          test ! -e /Applications/Dot.app
+
+      - name: Prove the running app is sandboxed
+        run: |
+          set -euo pipefail
+          APP="$HOME/Applications/Dot.app"
+          codesign -d --entitlements - "$APP" 2>&1 | tee .tmp/entitlements.txt
+          grep -q com.apple.security.app-sandbox .tmp/entitlements.txt
+          grep -q com.apple.security.network.client .tmp/entitlements.txt
+          grep -q com.apple.security.device.audio-input .tmp/entitlements.txt
+          grep -q com.apple.security.files.user-selected.read-write .tmp/entitlements.txt
+          DOT_SANDBOX_SELF_CHECK=1 "$APP/Contents/MacOS/Dot" | tee .tmp/sandbox-self-check.json
+          grep -q '"sandboxed":true' .tmp/sandbox-self-check.json
+          grep -q '"outside_write_denied":true' .tmp/sandbox-self-check.json
+          echo "PASS: kernel confinement and container-only writes verified" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Smoke test the installed app
+        run: bash scripts/install_acceptance_check.sh "$HOME/Applications/Dot.app" 20
+
+      - name: Uninstall with the documented one-line command
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory .tmp/release > .tmp/http-uninstall.log 2>&1 &
+          SERVER=$!
+          trap 'kill "$SERVER" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8765/uninstall-dot.sh -o /dev/null && break
+            sleep 1
+          done
+          DOT_RELEASE_BASE=http://127.0.0.1:8765 \
+            bash -c 'curl -fsSL "$DOT_RELEASE_BASE/uninstall-dot.sh" | bash' 2>&1 | tee .tmp/uninstall.log
+          grep -q '^PASS: your Mac is back to how it was$' .tmp/uninstall.log
+
+      - name: Snapshot the Mac after uninstall and require no trace
+        run: |
+          set -euo pipefail
+          DOT_SNAPSHOT_EXCLUDES="$GITHUB_WORKSPACE:$RUNNER_TEMP" \
+            python3 -B scripts/privacy_snapshot.py .tmp/snapshot-after.json
+          python3 -B scripts/privacy_diff.py .tmp/snapshot-before.json .tmp/snapshot-after.json
+          # The installer must clean its own TMPDIR work directory even though the
+          # snapshot roots are the user home, /Applications and /Library.
+          if find "$TMPDIR" -maxdepth 1 -name 'dot-install.*' -print -quit | grep -q .; then
+            echo "FAIL: an installer temporary directory remains in TMPDIR" >&2
+            exit 1
+          fi
+          echo "PASS: no installer temporary files remain" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload snapshot evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dot-privacy-evidence
+          path: |
+            .tmp/snapshot-before.json
+            .tmp/snapshot-after.json
+            .tmp/sandbox-self-check.json
+            .tmp/entitlements.txt
+            .tmp/uninstall.log
+          if-no-files-found: warn

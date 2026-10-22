@@ -13,7 +13,6 @@ trap 'rm -rf "$STAGE"' EXIT
 /usr/bin/ditto "$APP" "$STAGE/Dot.app"
 # Verify the relocated copy, including all model bytes and internal link destinations.
 python3 -B scripts/offline_acceptance.py "$STAGE/Dot.app" --receipt "$DOT_OFFLINE_ACCEPTANCE"
-ln -s /Applications "$STAGE/Applications"
 python3 -B scripts/create_dmg.py "$STAGE" build-complete/Dot.dmg
 shasum -a 256 build-complete/Dot.dmg
 printf 'Offline-accepted test installer packaged. Ad-hoc signed; not notarized.\n'

@@ -7,7 +7,7 @@
 # Usage: bash scripts/install_acceptance_check.sh [app-path] [alive-seconds]
 set -euo pipefail
 
-APP="${1:-/Applications/Dot.app}"
+APP="${1:-$HOME/Applications/Dot.app}"
 ALIVE="${2:-60}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }

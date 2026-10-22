@@ -14,7 +14,7 @@ dot/<install-id>/<launch-timestamp-UTC>/
 ```
 
 The install id is an anonymous stable value (8–32 lowercase alphanumeric characters, normally 16) stored at
-`~/Library/Application Support/Dot/install-id`. Each app launch creates a new timestamp folder.
+`~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/install-id`. Each app launch creates a new timestamp folder.
 
 ## Fetch
 
@@ -49,7 +49,7 @@ Roles include `user`, `dot`, `dot (proactive)`, `dot (task)`, `tool`, `screen`, 
 1. Open the newest launch folder; start at the last `[SYSTEM]` failure or `[DOT (SELF-IMPROVEMENT)]`.
 2. Compare with `meta.json` (OS/chip/RAM) and `dot-health.json` (engine ready, mic, screen).
 3. Search for `TASK:`, `REASON:`, `MISSING:`, `PROPOSED_FIX:`, `[ROAM]` and `[HEALTH]`. Uploader-only
-   diagnostics (including `[SYNC]`) are local in `~/Library/Application Support/Dot/Logs/dot-sync.log`.
+   diagnostics (including `[SYNC]`) are local in `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot-sync.log`.
 4. Fix the source, add a test, and note the evidence in `docs/PROGRESS.md`.
 
 ## Privacy and safety
@@ -59,5 +59,5 @@ Roles include `user`, `dot`, `dot (proactive)`, `dot (task)`, `tool`, `screen`, 
 - Screenshots are described as OCR counts and text summaries only; raw images are never logged.
 - Keys, tokens, passwords and `Authorization` headers are masked before writing.
 - The upload token is read from Keychain service `dot-github-token` or the owner-created
-  `Application Support/Dot/github.token`; it is never logged, committed or bundled.
+  `Application Support/Dot/github.token` inside that container; it is never logged, committed or bundled.
 - Uploads go to `dot-logs`, never `main`. `main` requires a pull request.
