@@ -68,6 +68,7 @@ rm -rf \
     "$HOME/Library/Group Containers/group.$BUNDLE_ID" \
     "$HOME/Library/Group Containers/$BUNDLE_ID" \
     "$HOME/Library/Application Support/Dot" \
+    "$HOME/Library/Biome/sets/Default/App.Shortcut.Phrase/sourceIdentifier=$BUNDLE_ID" \
     "$HOME/Library/Application Support/$BUNDLE_ID" \
     "$HOME/Library/Application Scripts/$BUNDLE_ID" \
     "$HOME/Library/Caches/$BUNDLE_ID" \
@@ -123,6 +124,7 @@ for path in \
     "$HOME/Library/Containers/$BUNDLE_ID" \
     "$HOME/Library/Group Containers/group.$BUNDLE_ID" \
     "$HOME/Library/Application Support/Dot" \
+    "$HOME/Library/Biome/sets/Default/App.Shortcut.Phrase/sourceIdentifier=$BUNDLE_ID" \
     "$HOME/Library/Caches/$BUNDLE_ID" \
     "$HOME/Library/Saved Application State/$BUNDLE_ID.savedState" \
     "$HOME/Library/Preferences/$BUNDLE_ID.plist"; do

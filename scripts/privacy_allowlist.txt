@@ -39,3 +39,6 @@
 /Library/Logs/com.apple.*/*|System Apple logs may grow during app launch
 /Library/Biome/*|System Apple telemetry store is OS-owned
 ~/Library/AppleMediaServices/*|Apple media-services analytics store is rewritten by OS daemons
+~/Library/Assistant/*|Apple Siri vocabulary index is rewritten by OS services
+~/Library/Caches/CloudKit/*|Apple CloudKit cache is rewritten by OS daemons
+~/Library/DuetExpertCenter/*|Apple app-prediction caches are rewritten when any app launches
