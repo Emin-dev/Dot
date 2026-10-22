@@ -427,13 +427,25 @@ class TLSAdmissionTests(unittest.TestCase):
         self.relay.io_timeout = 0.35
         raw, client, outgoing, upstream = self.bio_client()
         client.write(b'never completed'); encrypted = outgoing.read()
+        self.assertGreaterEqual(len(encrypted), 13)
+        # One byte every 0.1 s for 1.2 s, sent from a second thread while this
+        # one waits for the worker. A deadline that restarted on each byte would
+        # keep the worker past 1.55 s; the total deadline ends it near 0.35 s.
+        # The test's own sleeps are no longer inside the measured time, so a
+        # loaded runner cannot fail it (0.805 s against 0.8 s on 2026-10-22).
+        stop = threading.Event()
+        def trickle():
+            for byte in encrypted[1:13]:
+                if stop.wait(0.1): return
+                try: raw.sendall(bytes([byte]))
+                except OSError: return
         started = time.monotonic(); raw.sendall(encrypted[:1])
-        for byte in encrypted[1:5]:
-            time.sleep(0.1)
-            try: raw.sendall(bytes([byte]))
-            except OSError: break
-        self.wait_workers(0, timeout=0.3)
-        self.assertLess(time.monotonic() - started, 0.8)
+        sender = threading.Thread(target=trickle, daemon=True); sender.start()
+        try:
+            self.wait_workers(0, timeout=1.1)
+            self.assertLess(time.monotonic() - started, 1.1)
+        finally:
+            stop.set(); sender.join(2)
         self.assertEqual(upstream.recv(1), b'')
 
     def pressure_tls_output(self, client):
