@@ -476,6 +476,17 @@ final class TypedInteractionTests: XCTestCase {
         // A missing file is fine with -f and an error without it.
         XCTAssertEqual(ChatModel.runScopedFileOperation("rm -f gone.txt")?.hasPrefix("Removed"), true)
         XCTAssertEqual(ChatModel.runScopedFileOperation("rm gone.txt")?.hasPrefix("Could not remove"), true)
+        // mv and cp run in-process too, and never overwrite without -f.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("touch a.txt")?.hasPrefix("Touched"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("mkdir archive")?.hasPrefix("Created"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("cp a.txt b.txt")?.hasPrefix("Copied"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("cp a.txt b.txt")?.hasPrefix("Refused"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("cp -f a.txt b.txt")?.hasPrefix("Copied"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("mv a.txt archive")?.hasPrefix("Moved"), true)
+        XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("archive/a.txt").path))
+        XCTAssertFalse(fileManager.fileExists(atPath: root.appendingPathComponent("a.txt").path))
+        XCTAssertEqual(ChatModel.runScopedFileOperation("cp archive copy")?.hasPrefix("Refused"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("mv b.txt ../outside.txt")?.contains("outside the folder you selected"), true)
         // Escapes and shell syntax never run in-process.
         XCTAssertEqual(ChatModel.runScopedFileOperation("rm ../outside.txt")?.contains("outside the folder you selected"), true)
         XCTAssertEqual(ChatModel.runScopedFileOperation("rm /etc/hosts")?.contains("outside the folder you selected"), true)

@@ -200,8 +200,10 @@ refactor** by another worker:
 - **Memory**: five tiers, single SQLite owner, 5–10 key points per conversation into T3, full transcript
   archive in FTS, explicit “remember…” preferences in core, voice-only recall/forget.
 - **Files**: read a named text file (Spotlight suggestion on miss), Spotlight name/content search,
-  autonomous simple file utilities (rm/mv/cp/touch/mkdir/ln/trash/echo/printf/cat/tee/truncate, `find
-  -delete` without `-exec`) and `delete_file`; shells/sudo/substitutions and non-file destructive
+  autonomous simple file utilities and `delete_file`. Inside the folder chosen in Tools & History,
+  rm, rmdir, mkdir, touch, mv, cp and trash run in-process (2026-10-22); ln, tee, truncate, echo,
+  printf, cat and `find -delete` run in the sandboxed shell, which reaches only Dot's container. The
+  chosen folder is kept in memory only and must be chosen again after a relaunch; shells/sudo/substitutions and non-file destructive
   commands still card. Recent-file proactive awareness (Desktop/Documents/Downloads, names only).
 - **Placement/clicks**: full window bounds protected, no overlapping fallback target, swept-path checks
   for trips and the two-minute roam, immediate coverage escape after the short rest, captured-display

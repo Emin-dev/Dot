@@ -346,7 +346,7 @@ final class ChatModel: ObservableObject {
         // Quote-aware, so "My Folder" stays one path; quotes are removed here.
         let words = FileOperationPolicy.tokenize(trimmed)
         guard let name = words.first.map({ ($0 as NSString).lastPathComponent }),
-              ["rm", "rmdir", "mkdir", "touch"].contains(name) else { return nil }
+              ["rm", "rmdir", "mkdir", "touch", "mv", "cp", "trash"].contains(name) else { return nil }
         var arguments: [String] = []
         var recursive = false
         var force = false
@@ -415,6 +415,46 @@ final class ChatModel: ObservableObject {
                     try fileManager.createDirectory(atPath: path, withIntermediateDirectories: true)
                 }
                 return "Created \(arguments.joined(separator: ", "))."
+            case "mv", "cp":
+                // A child shell cannot reach the selected folder, so these run here too.
+                guard arguments.count >= 2, let target = arguments.last else {
+                    return "Refused: \(name) needs a source and a destination."
+                }
+                let sources = arguments.dropLast()
+                var targetIsDirectory: ObjCBool = false
+                let intoFolder = fileManager.fileExists(atPath: target, isDirectory: &targetIsDirectory)
+                    && targetIsDirectory.boolValue
+                guard intoFolder || sources.count == 1 else { return "Refused: \(target) is not a folder." }
+                var done: [String] = []
+                for source in sources {
+                    var sourceIsDirectory: ObjCBool = false
+                    guard fileManager.fileExists(atPath: source, isDirectory: &sourceIsDirectory) else {
+                        return "Could not \(name) \(source): no such file or directory."
+                    }
+                    if name == "cp", sourceIsDirectory.boolValue, !recursive {
+                        return "Refused: \(source) is a directory; cp needs -r."
+                    }
+                    let destination = intoFolder
+                        ? (target as NSString).appendingPathComponent((source as NSString).lastPathComponent)
+                        : target
+                    if fileManager.fileExists(atPath: destination) {
+                        // Replacing an existing item needs -f, so nothing is overwritten by accident.
+                        guard force else { return "Refused: \(destination) already exists; add -f to replace it." }
+                        try fileManager.removeItem(atPath: destination)
+                    }
+                    if name == "mv" {
+                        try fileManager.moveItem(atPath: source, toPath: destination)
+                    } else {
+                        try fileManager.copyItem(atPath: source, toPath: destination)
+                    }
+                    done.append("\(source) → \(destination)")
+                }
+                return (name == "mv" ? "Moved " : "Copied ") + done.joined(separator: ", ") + "."
+            case "trash":
+                for path in arguments {
+                    try fileManager.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
+                }
+                return "Moved \(arguments.joined(separator: ", ")) to the Trash."
             default:
                 for path in arguments where !fileManager.fileExists(atPath: path) {
                     _ = fileManager.createFile(atPath: path, contents: Data())
