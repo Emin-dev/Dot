@@ -512,18 +512,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let flags = event.modifierFlags.intersection([.command, .shift])
             if flags == [.command, .shift] {
                 // Key code 20 is '3', 21 is '4', 23 is '5'
-                if event.keyCode == 20 || event.keyCode == 21 || event.keyCode == 23 {
-                    self?.hideTemporarilyForScreenshot()
+                // Command-Shift-3 captures at once; 4 and 5 wait for a selection,
+                // which often takes longer, so Dot stays hidden for 10 s.
+                if event.keyCode == 20 {
+                    self?.hideTemporarilyForScreenshot(seconds: 2.5)
+                } else if event.keyCode == 21 || event.keyCode == 23 {
+                    self?.hideTemporarilyForScreenshot(seconds: 10)
                 }
             }
         }
     }
 
-    private func hideTemporarilyForScreenshot() {
+    private func hideTemporarilyForScreenshot(seconds: Double) {
         guard let panel = self.panel, panel.alphaValue > 0 else { return }
         panel.alphaValue = 0.0
         Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
             guard let panel = self?.panel, self?.terminating != true else { return }
             await NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.25

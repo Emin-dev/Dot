@@ -167,11 +167,11 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - Automatic clipboard transformation: "summarize clipboard", "translate clipboard to <language>", "explain clipboard", "copy to clipboard <text>".
   - One-click and conversational copy-back to clipboard with immediate feedback.
 - [x] **Comprehensive System & Desktop Control Suite:**
-  - Voice/typed commands for Dark Mode toggle/settings, volume mute/unmute, sleep display/lock screen.
+  - Voice/typed commands for Dark Mode toggle/settings, volume mute/unmute, sleep display/lock screen. ("lock screen" sends Control-Command-Q since 2026-10-22; it used to sleep the whole Mac.)
   - Local file finding with Spotlight `mdfind` ("find file <name>", "locate file <name>").
 - [x] **On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
   - Transparent, non-activating, click-through overlay window rendering smooth glowing rings and callout boxes (`ScreenGuideLaserOverlay`).
-  - Conversational triggering via "point", "laser pointer", "highlight active window", or coordinate targets.
+  - Conversational triggering via "point", "laser pointer" or "highlight active window". (2026-10-22 audit F8: the highlight is a fixed 600x400 box at screen centre, not the window frame, and no voice phrase produces coordinate targets; the model's `point_on_screen` tool does.)
 - [x] **In-Place App Typing & Ghost Text (Type-into-App):**
   - Direct text dictation and insertion into the currently focused application's text field via macOS CoreGraphics synthesized Unicode keyboard events (`InPlaceAppTyping.type`).
   - Conversational commands: "type this: <text>", "type into app: <text>", "dictate: <text>".
@@ -180,7 +180,7 @@ The older exact-helper component benchmark remains distinct: five warm public sy
 - [x] **Keyboard Shortcut Injection (`sendShortcut` via CoreGraphics):**
   - Synthesizes `CGEvent` keyboard shortcuts to the frontmost application.
   - Supports Cmd+R, Cmd+W, Cmd+T, Cmd+C, Cmd+V, Cmd+A, Cmd+Shift+T, Cmd+[, Cmd+], and Ctrl+Cmd+F.
-  - Natural-language fast paths: "refresh this page", "new tab", "close tab", "reopen closed tab", "copy", "paste", "select all".
+  - Natural-language fast paths: "refresh this page", "new tab", "close tab", "reopen closed tab", "paste", "select all". A bare "copy" or "copy that" copies Dot's own last answer (owner request), not Cmd+C in the focused app.
   - Strictly requires Accessibility permission (`AXIsProcessTrusted`) with an informative system settings prompt.
 - [x] **Native Mouse Control (Move, Click, & OCR Element Finding):**
   - `moveMouse(to: CGPoint)` with absolute and relative screen movement ("move mouse to center of screen", "top right", etc.).

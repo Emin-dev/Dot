@@ -1956,10 +1956,11 @@ public enum SystemControlSuite {
             return error == nil ? "Audio unmuted." : "Could not unmute audio."
 
         case .lockScreen:
-            let script = "tell application \"System Events\" to sleep"
+            // Control-Command-Q locks the screen; System Events "sleep" slept the whole Mac.
+            let script = "tell application \"System Events\" to keystroke \"q\" using {control down, command down}"
             var error: NSDictionary?
             NSAppleScript(source: script)?.executeAndReturnError(&error)
-            return error == nil ? "Putting display to sleep." : "Could not lock screen."
+            return error == nil ? "Locking the screen." : "Could not lock screen."
 
         case .findFile(let name):
             do {
