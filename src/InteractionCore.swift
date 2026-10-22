@@ -2080,6 +2080,16 @@ public enum InPlaceAppTyping {
     }
 
     #if canImport(AppKit)
+    /// The app the owner used before Dot's own panel took focus, if it still runs.
+    public static func lastExternalApplication() -> NSRunningApplication? {
+        lock.lock()
+        let pid = lastExternalAppPID
+        lock.unlock()
+        guard let pid, let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated,
+              app.bundleIdentifier != Bundle.main.bundleIdentifier else { return nil }
+        return app
+    }
+
     @MainActor
     public static func prepareFocusedTargetApp() -> String? {
         let ownBundleID = Bundle.main.bundleIdentifier
@@ -4800,7 +4810,13 @@ public final class WholeContextExtractor: @unchecked Sendable {
     public static let shared = WholeContextExtractor()
 
     public func extractActiveDocumentOrWebpageText() -> ActiveTextExtraction {
-        let frontApp = NSWorkspace.shared.frontmostApplication
+        // A typed "read this page" brings Dot's own panel to the front first; read
+        // the app the owner was using before, not Dot.
+        var frontApp = NSWorkspace.shared.frontmostApplication
+        if frontApp?.bundleIdentifier == Bundle.main.bundleIdentifier,
+           let previous = InPlaceAppTyping.lastExternalApplication() {
+            frontApp = previous
+        }
         let appName = (frontApp?.localizedName ?? "").lowercased()
 
         if appName.contains("safari") {
@@ -4810,7 +4826,7 @@ public final class WholeContextExtractor: @unchecked Sendable {
                     set curTab to current tab of front window
                     set pageURL to URL of curTab
                     set pageTitle to name of curTab
-                    set pageText to do JavaScript "document.body.innerText" in curTab
+                    set pageText to text of curTab
                     return pageTitle & "|||" & pageURL & "|||" & pageText
                 end if
             end tell
@@ -4923,6 +4939,12 @@ public final class WholeContextExtractor: @unchecked Sendable {
                 return (output.stringValue, false)
             }
             if let number = error?[NSAppleScript.errorNumber] as? Int, number == -1743 {
+                return (nil, true)
+            }
+            // Chrome refuses page JavaScript until View > Developer > Allow JavaScript
+            // from Apple Events is on: a permission to grant, not "no text".
+            if let message = error?[NSAppleScript.errorMessage] as? String,
+               message.localizedCaseInsensitiveContains("javascript") {
                 return (nil, true)
             }
         }

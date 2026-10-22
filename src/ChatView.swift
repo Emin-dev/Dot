@@ -2484,7 +2484,7 @@ final class ChatModel: ObservableObject {
                     ? String(content.prefix(4_000)) + "\n… (truncated)" : content
                 respondDirectly("\(source):\n\(clipped)", id: id)
             case .permissionDenied:
-                respondDirectly("I could not read the active page because macOS Automation permission is off. Allow Dot under System Settings > Privacy & Security > Automation for that app (Safari also needs Develop > Allow JavaScript from Apple Events), then ask again.", id: id)
+                respondDirectly("I could not read the active page because macOS Automation permission is off. Allow Dot under System Settings > Privacy & Security > Automation for that app (Chrome also needs View > Developer > Allow JavaScript from Apple Events), then ask again.", id: id)
             case .noText:
                 respondDirectly("I could not read the front app's document or page. It may need Automation access, or it may not expose readable text. Try a Safari or Chrome tab, a TextEdit document, or another document-based app.", id: id)
             }
