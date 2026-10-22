@@ -83,6 +83,13 @@ rm -rf \
     "$HOME/Library/Logs/$BUNDLE_ID" \
     || fail "could not remove one of Dot's data folders"
 
+# Per-app cache and temp folders under /var/folders (Metal shader cache and the like).
+for darwin_dir in DARWIN_USER_CACHE_DIR DARWIN_USER_TEMP_DIR; do
+    base="$(getconf "$darwin_dir" 2>/dev/null || true)"
+    [ -n "$base" ] || continue
+    rm -rf "${base%/}/$BUNDLE_ID" || fail "could not remove ${base%/}/$BUNDLE_ID"
+done
+
 for extra in "$HOME/Library/Preferences/ByHost/$BUNDLE_ID"*; do
     [ -e "$extra" ] || continue
     rm -f "$extra" || fail "could not remove $extra"

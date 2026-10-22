@@ -130,7 +130,10 @@ final class OfflinePreparation: ObservableObject {
                 let requiredFree = DownloadBudget.requiredFree(total: plan.total_bytes, reusableBytes: reusable) + staging
                 var volume = folder
                 while !FileManager.default.fileExists(atPath: volume.path) { volume = volume.deletingLastPathComponent() }
-                if let free = (try? FileManager.default.attributesOfFileSystem(forPath: volume.path))?[.systemFreeSize] as? Int64,
+                // The capacity Finder shows as available: it counts purgeable space
+                // (local snapshots, caches) that macOS frees for an important write.
+                if let free = (try? volume.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+                       .volumeAvailableCapacityForImportantUsage,
                    free < requiredFree {
                     throw PreparationFailure.download("Not enough free disk space: the model needs \(ByteCountFormatter.string(fromByteCount: requiredFree, countStyle: .file)), but only \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) is available.")
                 }
@@ -459,6 +462,18 @@ actor ModelProvisioner {
     private func downloadResumable(_ url: URL, to destination: URL, expected: Int64,
                                    expectedHash: String,
                                    report: @escaping @Sendable (Int64) -> Void) async throws {
+        // A part verified on an earlier attempt or launch is reused, never fetched again.
+        if let size = try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize, Int64(size) == expected {
+            do {
+                try await OfflinePayload.verifyHash(destination, bytes: expected, expected: expectedHash)
+                report(expected)
+                return
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                try? FileManager.default.removeItem(at: destination)
+            }
+        }
         let partial = destination.appendingPathExtension("partial")
         var hashesTried = 0
         while true {
@@ -471,6 +486,9 @@ actor ModelProvisioner {
                 } catch is CancellationError {
                     throw CancellationError()
                 } catch let http as PartHTTPFailure {
+                    // A stale resume (its signed URL expired during a long pause) was
+                    // deleted; the next attempt starts a fresh request.
+                    if http.resumed, attempt < 5 { continue }
                     if http.status == 408 || http.status == 429 || http.status >= 500 {
                         if attempt >= 5 { throw PreparationFailure.download("A model part download failed after \(attempt) attempts.") }
                         let seconds = min(30, 1 << (attempt - 1))
@@ -528,7 +546,9 @@ actor ModelProvisioner {
         defer { try? FileManager.default.removeItem(at: temporary) }
         try Task.checkCancellation()
         guard let http = response, (http.statusCode == 200 || http.statusCode == 206) else {
-            throw PartHTTPFailure(status: response?.statusCode ?? 0)
+            // Never keep resume data the server refused: every retry would fail the same way.
+            try? FileManager.default.removeItem(at: resumeURL)
+            throw PartHTTPFailure(status: response?.statusCode ?? 0, resumed: resumeData != nil)
         }
         let append = resumeData == nil && existing > 0 && http.statusCode == 206
         if append {
@@ -560,7 +580,7 @@ actor ModelProvisioner {
     private func downloadPartFile(_ request: URLRequest, resumeData: Data?, progressOffset: Int64,
                                   resumeURL: URL,
                                   report: @escaping @Sendable (Int64) -> Void) async throws -> (URL, HTTPURLResponse?) {
-        let cancellation = PartDownloadCancellation()
+        let cancellation = PartDownloadCancellation(resumeURL: resumeURL)
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 let receiver = PartDownloadReceiver(resumeURL: resumeURL, progressOffset: progressOffset, report: report)
@@ -589,8 +609,11 @@ actor ModelProvisioner {
 /// never leave `ensureModels`.
 private final class PartDownloadCancellation: @unchecked Sendable {
     private let lock = NSLock()
+    private let resumeURL: URL
     private var task: URLSessionDownloadTask?
     private var cancelled = false
+
+    init(resumeURL: URL) { self.resumeURL = resumeURL }
 
     func attach(_ task: URLSessionDownloadTask) {
         lock.lock()
@@ -608,7 +631,12 @@ private final class PartDownloadCancellation: @unchecked Sendable {
         cancelled = true
         let task = self.task
         lock.unlock()
-        task?.cancel()
+        // Keep the bytes received so far: a pause, retry or quit resumes from
+        // here instead of restarting a part of up to 2 GB.
+        let url = resumeURL
+        task?.cancel(byProducingResumeData: { data in
+            if let data { try? data.write(to: url, options: .atomic) }
+        })
     }
 }
 
@@ -661,7 +689,8 @@ private final class PartDownloadReceiver: NSObject, URLSessionDownloadDelegate, 
             let ns = error as NSError
             if let data = ns.userInfo[NSURLSessionDownloadTaskResumeData] as? Data {
                 try? data.write(to: resumeURL, options: .atomic)
-            } else {
+            } else if !(ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled) {
+                // A cancel writes its resume data from its own callback; keep it.
                 try? FileManager.default.removeItem(at: resumeURL)
             }
             if let location { try? FileManager.default.removeItem(at: location) }
@@ -676,7 +705,10 @@ private final class PartDownloadReceiver: NSObject, URLSessionDownloadDelegate, 
     }
 }
 
-private struct PartHTTPFailure: Error { let status: Int }
+private struct PartHTTPFailure: Error {
+    let status: Int
+    var resumed = false
+}
 
 private final class ModelPartProgress: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
     private let offset: Int64

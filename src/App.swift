@@ -656,6 +656,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         let quotedInstallDir = "'" + installDir.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        // Works offline: the uninstaller ships inside Dot.app, so the clipboard
+        // command needs no download (D5 in docs/AUDIT_2026-10-22.md).
+        let quotedScript = "'" + bundled.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let offlineCommand = "DOT_INSTALL_DIR=\(quotedInstallDir) DOT_BUNDLE_ID=app.dot.local bash \(quotedScript)"
         let wrapper = """
         #!/bin/bash
         export DOT_INSTALL_DIR=\(quotedInstallDir)
@@ -677,7 +681,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A file written by a sandboxed app can be quarantined, so Terminal may
         // refuse it even when open() succeeds. Always leave the exact command ready.
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(download, forType: .string)
+        NSPasteboard.general.setString(offlineCommand, forType: .string)
         let fallback = NSAlert()
         fallback.messageText = opened ? "Removal opened in Terminal" : "Terminal could not be opened"
         fallback.informativeText = opened
