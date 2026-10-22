@@ -754,13 +754,18 @@ final class ChatModel: ObservableObject {
 
         // 5. Clipboard
         if clean == "what's on my clipboard" || clean == "what is on my clipboard" || clean == "read clipboard" || clean == "show clipboard" || clean == "clipboard" || clean == "буфер обмена" {
-            if let content = NSPasteboard.general.string(forType: .string), !content.isEmpty {
+            if ClipboardIntelligence.holdsConcealedItem {
+                return "The clipboard holds a password manager item, so I won't read it."
+            }
+            if let content = ClipboardIntelligence.read(), !content.isEmpty {
                 let preview = content.count > 160 ? String(content.prefix(160)) + "…" : content
                 return "Your clipboard contains: \(preview)"
             }
             return "Your clipboard is currently empty."
         }
-        if clean.hasPrefix("copy to clipboard: ") || clean.hasPrefix("copy to clipboard ") || clean.hasPrefix("copy ") {
+        // "copy screen text" is the OCR command further down, not "copy these words".
+        if clean.hasPrefix("copy to clipboard: ") || clean.hasPrefix("copy to clipboard ") || clean.hasPrefix("copy "),
+           !Self.screenTextCopyPhrases.contains(clean) {
             let prefix = clean.hasPrefix("copy to clipboard: ") ? "copy to clipboard: " : (clean.hasPrefix("copy to clipboard ") ? "copy to clipboard " : "copy ")
             let textToCopy = String(trimmed.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
             if !textToCopy.isEmpty {
@@ -929,7 +934,28 @@ final class ChatModel: ObservableObject {
         return nil
     }
 
-    func detectMovementCommand(_ text: String) -> DotMovementCommand? {
+    /// Exact phrases that move Dot without a movement verb. Anything else needs
+    /// "move", "go", "shift" and the like first: before 2026-10-22 any turn that
+    /// merely contained "up", "left" or "center" ("volume up", "upcoming meetings",
+    /// "look up X", "is this right?") moved Dot instead of being answered.
+    static let bareMovementPhrases: Set<String> = [
+        "left", "right", "up", "down", "higher", "lower", "center", "centre", "middle",
+        "to the left", "to the right", "to the center", "to the middle",
+        "top left", "top right", "bottom left", "bottom right", "top-left", "top-right",
+        "bottom-left", "bottom-right", "upper left", "upper right", "lower left", "lower right",
+        "left top", "right top", "left bottom", "right bottom",
+        "away", "aside", "out of the way", "get out of the way", "dodge", "evade", "scoot", "scoot over",
+        "move", "move around", "relocate", "random move", "change position", "somewhere",
+        "somewhere else", "wander", "roam", "random",
+        "влево", "вправо", "вверх", "вниз", "налево", "направо", "наверх", "в центр", "по центру",
+        "посередине", "влево вверх", "вправо вверх", "влево вниз", "вправо вниз",
+        "отойди", "уйди", "в сторону", "двигайся", "подвигайся", "переместись", "смени позицию"
+    ]
+    /// A movement verb aimed at one of these is not about Dot ("move the window left").
+    static let otherMovementTargets = ["window", "tab", "file", "folder", "mouse", "cursor", "pointer",
+                                       "volume", "meeting", "event", "text", "app", "page"]
+
+    static func detectMovementCommand(_ text: String) -> DotMovementCommand? {
         var clean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         clean = trimConversationalPunctuation(clean)
         guard clean.count <= 250 else { return nil }
@@ -962,9 +988,11 @@ final class ChatModel: ObservableObject {
             "put yourself at the ", "put yourself in the ", "put yourself in ", "put yourself on ", "put yourself ",
             "переместись в ", "переместись на ", "подвинься в ", "подвинься на ", "иди в ", "встань в "
         ]
+        var hadVerb = false
         for p in actionPrefixes {
             if clean.hasPrefix(p) {
                 clean = String(clean.dropFirst(p.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                hadVerb = true
             }
         }
         clean = clean.trimmingCharacters(in: CharacterSet(charactersIn: "?!.,:;\"'"))
@@ -974,6 +1002,13 @@ final class ChatModel: ObservableObject {
         if clean.hasPrefix("screen ") {
             clean = String(clean.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        if hadVerb {
+            if otherMovementTargets.contains(where: { clean.contains($0) }) { return nil }
+        } else if !bareMovementPhrases.contains(clean) {
+            return nil
+        }
+        // Whole words only, so "upwork.com" or "getaway" never match "up" or "away".
+        let words = Set(clean.split(whereSeparator: { !($0.isLetter || $0 == "-") }).map(String.init))
 
         // Corner / Center checks
         if clean.contains("top left") || clean.contains("top-left") || clean.contains("upper left") ||
@@ -992,32 +1027,32 @@ final class ChatModel: ObservableObject {
            clean == "right bottom" || clean == "вправо вниз" || clean.contains("правый нижний") {
             return .bottomRight
         }
-        if clean == "center" || clean == "middle" || clean.contains("center") || clean.contains("middle") ||
+        if words.contains("center") || words.contains("centre") || words.contains("middle") ||
            clean == "в центр" || clean.contains("по центру") || clean.contains("посередине") || clean.contains("середин") {
             return .center
         }
 
         // Directional checks
         // Left
-        if clean == "left" || clean.contains("left") || clean == "влево" || clean == "налево" || clean.contains("влево") {
+        if words.contains("left") || clean == "налево" || clean.contains("влево") {
             return .left
         }
         // Right
-        if clean == "right" || clean.contains("right") || clean == "вправо" || clean == "направо" || clean.contains("вправо") {
+        if words.contains("right") || clean == "направо" || clean.contains("вправо") {
             return .right
         }
         // Up
-        if clean == "up" || clean == "higher" || clean.contains("up") || clean == "вверх" || clean == "наверх" || clean.contains("вверх") {
+        if words.contains("up") || words.contains("higher") || clean == "наверх" || clean.contains("вверх") {
             return .up
         }
         // Down
-        if clean == "down" || clean == "lower" || clean.contains("down") || clean == "вниз" || clean.contains("вниз") {
+        if words.contains("down") || words.contains("lower") || clean.contains("вниз") {
             return .down
         }
 
         // Away / Dodge
-        if clean.contains("away") || clean.contains("aside") || clean.contains("out of the way") ||
-           clean.contains("dodge") || clean.contains("evade") || clean.contains("scoot") ||
+        if words.contains("away") || words.contains("aside") || clean.contains("out of the way") ||
+           words.contains("dodge") || words.contains("evade") || words.contains("scoot") ||
            clean == "отойди" || clean == "уйди" || clean.contains("в сторону") {
             return .away
         }
@@ -1947,6 +1982,15 @@ final class ChatModel: ObservableObject {
         }
     }
 
+    static let screenTextCopyPhrases: Set<String> = ["copy screen text", "copy text from screen"]
+
+    /// The system-control clipboard reply carries clipboard text; the log keeps its length.
+    static func loggableSystemReply(_ reply: String) -> String {
+        let prefix = "Your clipboard contains: "
+        guard reply.hasPrefix(prefix) else { return reply }
+        return prefix + "[\(reply.count - prefix.count) characters, text not logged]"
+    }
+
     static func spokenCommand(_ text: String) -> String {
         var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         while let last = value.last, ".?!…".contains(last) { value.removeLast() }
@@ -2753,7 +2797,7 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        if let moveCmd = self.detectMovementCommand(command), let replyText = self.onMove?(moveCmd) {
+        if let moveCmd = Self.detectMovementCommand(command), let replyText = self.onMove?(moveCmd) {
             respondDirectly(replyText, id: id)
             return
         }
@@ -2929,7 +2973,7 @@ final class ChatModel: ObservableObject {
         }
 
         if let systemReply = self.detectSystemControlCommand(command) {
-            respondDirectly(systemReply, id: id)
+            respondDirectly(systemReply, id: id, logAs: Self.loggableSystemReply(systemReply))
             return
         }
 
@@ -2993,7 +3037,7 @@ final class ChatModel: ObservableObject {
 
         // Native Screen OCR
         let lowerScreen = command.lowercased()
-        if lowerScreen == "copy screen text" || lowerScreen == "copy text from screen" || lowerScreen == "ocr screen" || lowerScreen == "extract screen text" || lowerScreen == "extract text from screen" {
+        if Self.screenTextCopyPhrases.contains(trimConversationalPunctuation(lowerScreen)) || lowerScreen == "ocr screen" || lowerScreen == "extract screen text" || lowerScreen == "extract text from screen" {
             work = Task { [weak self] in
                 guard let self, self.gate.accepts(id) else { return }
                 do {

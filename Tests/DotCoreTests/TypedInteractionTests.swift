@@ -420,11 +420,34 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.spokenCommand("open github.com"), "open github.com")
     }
 
+    @MainActor func testMovementNeedsAVerbOrABareDirection() {
+        // Real commands still move Dot.
+        XCTAssertEqual(ChatModel.detectMovementCommand("Move to the top left."), .topLeft)
+        XCTAssertEqual(ChatModel.detectMovementCommand("move yourself to the center of the screen"), .center)
+        XCTAssertEqual(ChatModel.detectMovementCommand("please move a bit to the left"), .left)
+        XCTAssertEqual(ChatModel.detectMovementCommand("go up"), .up)
+        XCTAssertEqual(ChatModel.detectMovementCommand("go away"), .away)
+        XCTAssertEqual(ChatModel.detectMovementCommand("right"), .right)
+        XCTAssertEqual(ChatModel.detectMovementCommand("bottom right"), .bottomRight)
+        XCTAssertEqual(ChatModel.detectMovementCommand("move"), .random)
+        // Ordinary turns that merely contain a direction word are answered, not moves.
+        for turn in ["volume up", "snap window left", "center window", "upcoming meetings",
+                     "look up the weather in Berlin", "remember that I wake up at 7",
+                     "help me update my computer", "is this right?", "turn the volume down",
+                     "move the window to the left", "go to upwork.com"] {
+            XCTAssertNil(ChatModel.detectMovementCommand(turn), turn)
+        }
+    }
+
     @MainActor func testTypedTextNeverReachesTheLog() {
         // A "type ..." command can carry a password into another app's field.
         XCTAssertEqual(ChatModel.loggableUserText("type this: Tr0ub4dor&3"),
                        "[type command: 11 characters, text not logged]")
         XCTAssertEqual(ChatModel.loggableUserText("What do you remember?"), "What do you remember?")
+        XCTAssertEqual(ChatModel.loggableSystemReply("Your clipboard contains: hunter2"),
+                       "Your clipboard contains: [7 characters, text not logged]")
+        XCTAssertEqual(ChatModel.loggableSystemReply("Battery is at 80% (charging)."), "Battery is at 80% (charging).")
+        XCTAssertTrue(ChatModel.screenTextCopyPhrases.contains("copy screen text"))
     }
 
     @MainActor func testScopedFileOperationsStayInsideTheSelectedFolder() throws {

@@ -5049,26 +5049,26 @@ public final class SystemAudioDucker: @unchecked Sendable {
         defer { lock.unlock() }
         #if canImport(AppKit)
         let apps = NSWorkspace.shared.runningApplications
-        if apps.contains(where: { $0.bundleIdentifier == "com.apple.Music" }) {
-            var error: NSDictionary?
-            if let script = NSAppleScript(source: "tell application \"Music\" to if player state is playing then pause") {
-                script.executeAndReturnError(&error)
-                if error == nil {
-                    pausedMusic = true
-                }
-            }
+        if apps.contains(where: { $0.bundleIdentifier == "com.apple.Music" }), Self.pauseIfPlaying("Music") {
+            pausedMusic = true
         }
-        if apps.contains(where: { $0.bundleIdentifier == "com.spotify.client" }) {
-            var error: NSDictionary?
-            if let script = NSAppleScript(source: "tell application \"Spotify\" to if player state is playing then pause") {
-                script.executeAndReturnError(&error)
-                if error == nil {
-                    pausedSpotify = true
-                }
-            }
+        if apps.contains(where: { $0.bundleIdentifier == "com.spotify.client" }), Self.pauseIfPlaying("Spotify") {
+            pausedSpotify = true
         }
         #endif
     }
+
+    #if canImport(AppKit)
+    /// Pauses `app` only while it plays and reports whether it did. A paused
+    /// player is left alone, so the restore never starts music the owner stopped.
+    private static func pauseIfPlaying(_ app: String) -> Bool {
+        let source = "tell application \"\(app)\"\nif player state is playing then\npause\nreturn true\nend if\nreturn false\nend tell"
+        var error: NSDictionary?
+        guard let script = NSAppleScript(source: source) else { return false }
+        let result = script.executeAndReturnError(&error)
+        return error == nil && result.booleanValue
+    }
+    #endif
 
     public func restoreIfDucked() {
         lock.lock()
