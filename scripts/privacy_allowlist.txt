@@ -49,3 +49,4 @@
 ~/Library/Group Containers/group.is.workflow.my.app/*|Apple Shortcuts group container updates when App Intents register
 ~/Library/Logs/hca.log|Hosted-runner host configuration agent log is OS-owned
 ~/Library/PersonalizationPortrait/*|Apple personalization caches are rewritten by OS services
+/Library/Preferences/Audio/com.apple.*|System audio preference cache is rewritten when an app plays audio
