@@ -21,7 +21,7 @@ SKIP_NAMES = {"node_modules", ".git"}
 def command(argv):
     try:
         result = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                timeout=120, check=False)
+                                timeout=30, check=False)
         return result.stdout.decode("utf-8", "replace")
     except (OSError, subprocess.TimeoutExpired) as error:
         return f"unavailable: {error}"
@@ -97,11 +97,11 @@ def excluded(path, excludes):
     return False
 
 
-def walk(root, excludes):
+def walk(root, excludes, max_depth=None):
     entries = {}
-    stack = [root]
+    stack = [(root, 0)]
     while stack:
-        directory = stack.pop()
+        directory, depth = stack.pop()
         try:
             iterator = os.scandir(directory)
         except (PermissionError, FileNotFoundError, NotADirectoryError):
@@ -133,8 +133,8 @@ def walk(root, excludes):
                 if kind == "f":
                     value["t"] = info.st_mtime_ns
                 entries[str(path)] = value
-                if kind == "d":
-                    stack.append(path)
+                if kind == "d" and (max_depth is None or depth + 1 < max_depth):
+                    stack.append((path, depth + 1))
     return entries
 
 
@@ -144,14 +144,18 @@ def main():
     arguments = parser.parse_args()
     raw_excludes = os.environ.get("DOT_SNAPSHOT_EXCLUDES", "")
     excludes = [Path(item).resolve() for item in raw_excludes.split(":") if item]
-    roots = [Path.home(), Path("/Applications"), Path("/Library")]
+    # The home is captured in full. System roots only need their application
+    # bundles and top-level library entries; recursing through Xcode or the
+    # CoreSimulator runtime would take tens of minutes and cannot hide a Dot
+    # install (which would appear at /Applications/Dot.app).
+    roots = [(Path.home(), None), (Path("/Applications"), 2), (Path("/Library"), 3)]
     paths = {}
-    for root in roots:
+    for root, depth in roots:
         if root.is_dir():
-            paths.update(walk(root, excludes))
+            paths.update(walk(root, excludes, depth))
     record = {
         "schema": 1,
-        "roots": [str(root) for root in roots],
+        "roots": [str(root) for root, _ in roots],
         "paths": paths,
         "commands": {name: function(None) for name, function in COMMANDS.items()},
     }
