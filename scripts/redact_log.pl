@@ -32,5 +32,17 @@ $text =~ s/\b(password|passwd|passphrase|secret)\s*[:=]\s*[^\r\n]+/${1}=[REDACTE
 $text =~ s/\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+/${1}=[REDACTED]/gi;
 $text =~ s/\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+/${1}=[REDACTED]/gi;
 $text =~ s/\b(token|api(?:[\s_-]?key))\s+(?:is|was)\s+\S+/${1}=[REDACTED]/gi;
+# Credentials inside commands and URLs (the shell tool logs both).
+$text =~ s/\b([a-z][a-z0-9+.-]*:\/\/[^\s\/:@]+):[^\s\/@]+@/${1}:[REDACTED]@/gi;
+$text =~ s/(\s(?:-u|--user)\s+[^\s:]+):\S+/${1}:[REDACTED]/gi;
+$text =~ s/\b(mysql[a-z]*\b[^\r\n]*?\s)-p\S+/${1}-p[REDACTED]/gi;
+$text =~ s/\bhf_[A-Za-z0-9]{20,}\b/[REDACTED_TOKEN]/gi;
+$text =~ s/\bglpat-[A-Za-z0-9_-]{20,}/[REDACTED_TOKEN]/gi;
+$text =~ s/\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b/[REDACTED_TOKEN]/gi;
+$text =~ s/\bAIza[0-9A-Za-z_-]{35}/[REDACTED_TOKEN]/gi;
+# Personal details: the logs branch is public.
+$text =~ s/\b(?!git@)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/[EMAIL]/gi;
+$text =~ s/(\/Users\/)(?!Shared\b)[^\/\s"'`]+/${1}[USER]/gi;
+$text =~ s/\b(?:\d[ -]?){12,18}\d\b/[NUMBER]/g;
 
 print $text;

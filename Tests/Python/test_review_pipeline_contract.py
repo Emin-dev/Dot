@@ -52,7 +52,8 @@ class ReviewPipelineContractTests(unittest.TestCase):
     def test_manual_log_script_refuses_non_log_branches(self):
         script = read('scripts/dot_log_sync.sh')
         self.assertIn('refusing to push logs to branch', script)
-        self.assertIn('dot-logs|dot-*)', script)
+        self.assertIn('    dot-logs) ;;', script)
+        self.assertNotIn('dot-*', script)
 
     def test_manual_redactor_masks_multiline_pem_and_tokens(self):
         text = (
@@ -83,6 +84,36 @@ class ReviewPipelineContractTests(unittest.TestCase):
             self.assertNotIn(secret, result.stdout)
         self.assertIn("[REDACTED_PRIVATE_KEY]", result.stdout)
         self.assertIn("[REDACTED_JWT]", result.stdout)
+
+    def test_manual_redactor_masks_command_credentials_and_personal_details(self):
+        text = (
+            "curl -u admin:hunter2 https://example.com\n"
+            "git clone https://emin:hunter3@host.example/r.git\n"
+            "mysql -u root -phunter4 shop\n"
+            "hf_abcdefghijklmnopqrstuvwx glpat-abcdefghijklmnopqrstuv sk_live_abcdefghijklmnop12\n"
+            "mail me at emin.dev@example.com\n"
+            "open /Users/emin/clients/acme/notes.txt\n"
+            "card 4111 1111 1111 1111\n"
+            "git@github.com:Emin-dev/Dot.git\n"
+            "Can you remind me to call Alice at 3 PM about the Berlin report?\n"
+        )
+        result = subprocess.run(["perl", str(ROOT / "scripts/redact_log.pl")],
+                                input=text, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        for secret in ("hunter2", "hunter3", "hunter4", "hf_abcdefghij", "glpat-abcdefghij",
+                       "sk_live_abcdefghij", "emin.dev@example.com", "/Users/emin", "4111 1111"):
+            self.assertNotIn(secret, result.stdout)
+        for kept in ("curl -u admin:[REDACTED]", "https://emin:[REDACTED]@host.example",
+                     "/Users/[USER]/clients", "[EMAIL]", "[NUMBER]", "git@github.com:Emin-dev/Dot.git",
+                     "Can you remind me to call Alice at 3 PM about the Berlin report?"):
+            self.assertIn(kept, result.stdout)
+
+    def test_swift_and_shell_redactors_share_the_new_rules(self):
+        swift = read('src/InteractionCore.swift'); perl = read('scripts/redact_log.pl')
+        for marker in ('hf_[A-Za-z0-9]{20,}', 'glpat-[A-Za-z0-9_-]{20,}', '[sr]k_(?:live|test)_',
+                       'AIza[0-9A-Za-z_-]{35}', '(?!git@)', '(?!Shared', '(?:\\d[ -]?){12,18}', 'mysql[a-z]*'):
+            self.assertIn(marker, swift, marker)
+            self.assertIn(marker, perl, marker)
 
     def test_swift_redactor_masks_jwts_like_the_shell_redactor(self):
         redactor = read('src/InteractionCore.swift')
@@ -196,10 +227,15 @@ class Phase6RealLaunchContractTests(unittest.TestCase):
 
     def test_refusal_is_logged_before_the_blocking_alert(self):
         source = read('src/InteractionCore.swift')
-        gate = source.split('public static func verifyOnLaunch()', 1)[1]
+        gate = source.split('public static func verifyOnLaunch(', 1)[1]
         refused = gate.split('case .refuseImpossible(let plan):', 1)[1].split('case .proceed', 1)[0]
         self.assertIn('DiagnosticChatLogger.record', refused)
         self.assertLess(refused.index('DiagnosticChatLogger.record'), refused.index('makeAlert(from: plan).runModal()'))
+        # R19: the refusal is an error line, and the upload starts before the alert.
+        self.assertIn('role: "dot (error)"', refused)
+        self.assertLess(refused.index('DiagnosticChatLogger.record'), refused.index('beforeAlert()'))
+        self.assertLess(refused.index('beforeAlert()'), refused.index('makeAlert(from: plan).runModal()'))
+        self.assertIn('verifyOnLaunch(beforeAlert: { DotLogSync.shared.start() })', read('src/App.swift'))
         self.assertIn('Launch refused.', refused)
 
     def test_launch_script_asserts_the_exact_minimum_and_no_fallback_text(self):

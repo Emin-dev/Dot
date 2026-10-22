@@ -21,8 +21,8 @@ case "$DOT_LOGS_REPO" in
     *) echo "refusing to push logs to '$DOT_LOGS_REPO' (expected Emin-dev/Dot)" >&2; exit 1 ;;
 esac
 case "$DOT_LOGS_BRANCH" in
-    dot-logs|dot-*) ;;
-    *) echo "refusing to push logs to branch '$DOT_LOGS_BRANCH' (expected dot-logs or dot-*)" >&2; exit 1 ;;
+    dot-logs) ;;
+    *) echo "refusing to push logs to branch '$DOT_LOGS_BRANCH' (expected dot-logs)" >&2; exit 1 ;;
 esac
 
 SUPPORT="${HOME}/Library/Containers/app.dot.local/Data/Library/Application Support/Dot"

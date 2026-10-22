@@ -30,6 +30,8 @@ final class DotLogSync: @unchecked Sendable {
     private var branchNextAttempt: Double = 0
     private var metadataQueued = false
     private var prunedOnce = false
+    private var cachedToken: String?
+    private var keychainDeclined = false
     private var lastKeychainStatus: OSStatus?
     private lazy var installID = loadOrCreateInstallID()
     private lazy var launchFolder = LogSyncPolicy.folder(installID: installID, launch: launchDate)
@@ -370,12 +372,21 @@ final class DotLogSync: @unchecked Sendable {
     // MARK: - Token, identity and queue
 
     private func token() -> String? {
-        let keychain = keychainToken()
-        if let value = keychain.value, !value.isEmpty { return value }
-        if keychain.status != errSecItemNotFound, keychain.status != errSecSuccess,
-           keychain.status != lastKeychainStatus {
-            lastKeychainStatus = keychain.status
-            syncLog("[SYNC] Keychain read failed with status \(keychain.status); falling back to the config file")
+        // Read the Keychain once per launch: every read can show macOS's access
+        // dialog, and the sync runs every minute. A denied or cancelled dialog is
+        // not asked again until the next launch.
+        if let cachedToken { return cachedToken }
+        if !keychainDeclined {
+            let keychain = keychainToken()
+            if let value = keychain.value, !value.isEmpty { cachedToken = value; return value }
+            if [errSecAuthFailed, errSecUserCanceled, errSecInteractionNotAllowed].contains(keychain.status) {
+                keychainDeclined = true
+            }
+            if keychain.status != errSecItemNotFound, keychain.status != errSecSuccess,
+               keychain.status != lastKeychainStatus {
+                lastKeychainStatus = keychain.status
+                syncLog("[SYNC] Keychain read failed with status \(keychain.status); falling back to the config file")
+            }
         }
         guard let url = supportDirectory?.appendingPathComponent("github.token"),
               let value = try? String(contentsOf: url, encoding: .utf8)

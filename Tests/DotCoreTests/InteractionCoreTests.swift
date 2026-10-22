@@ -2648,6 +2648,37 @@ final class LogRedactionTests: XCTestCase {
         XCTAssertTrue(masked.contains("[REDACTED_JWT]"))
     }
 
+    func testCommandCredentialsAndPersonalDetailsAreMasked() {
+        let text = """
+        curl -u admin:hunter2 https://example.com
+        git clone https://emin:hunter3@host.example/r.git
+        mysql -u root -phunter4 shop
+        hf_abcdefghijklmnopqrstuvwx glpat-abcdefghijklmnopqrstuv sk_live_abcdefghijklmnop12
+        mail me at emin.dev@example.com
+        open /Users/emin/clients/acme/notes.txt
+        card 4111 1111 1111 1111
+        git@github.com:Emin-dev/Dot.git
+        """
+        let masked = LogRedaction.masked(text)
+        for secret in ["hunter2", "hunter3", "hunter4", "hf_abcdefghij", "glpat-abcdefghij",
+                       "sk_live_abcdefghij", "emin.dev@example.com", "/Users/emin", "4111 1111"] {
+            XCTAssertFalse(masked.contains(secret), "leaked \(secret)")
+        }
+        for kept in ["curl -u admin:[REDACTED]", "https://emin:[REDACTED]@host.example",
+                     "/Users/[USER]/clients", "[EMAIL]", "[NUMBER]", "git@github.com:Emin-dev/Dot.git"] {
+            XCTAssertTrue(masked.contains(kept), "missing \(kept)")
+        }
+    }
+
+    func testOneHugeLineIsCappedAfterMasking() {
+        let huge = "token: ghp_abcdefghijklmnopqrstuvwxyz0123456789 " + String(repeating: "x", count: 50_000)
+        let line = LogRedaction.capped(LogRedaction.masked(huge))
+        XCTAssertFalse(line.contains("ghp_"))
+        XCTAssertLessThan(line.count, LogRedaction.lineCharacterLimit + 100)
+        XCTAssertTrue(line.hasSuffix("more characters not logged]"))
+        XCTAssertEqual(LogRedaction.capped("short"), "short")
+    }
+
     func testNonTextUploadBytesAreDropped() {
         XCTAssertEqual(LogRedaction.masked(Data([0xFF, 0xFE, 0x00])), Data())
     }

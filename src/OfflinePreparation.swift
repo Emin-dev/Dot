@@ -16,7 +16,15 @@ struct BundledModelIndex: Decodable {
 final class OfflinePreparation: ObservableObject {
     static let shared = OfflinePreparation()
     private static let log = Logger(subsystem: "app.dot", category: "timing")
-    @Published private(set) var state: CompanionReadiness = .checking
+    @Published private(set) var state: CompanionReadiness = .checking {
+        didSet {
+            // R19: a failed file or model check is logged and uploaded at once,
+            // not only when the owner clicks Dot.
+            guard case .unavailable(let message) = state, state != oldValue else { return }
+            DiagnosticChatLogger.record(role: "dot (error)", text: "\(message) [preparation]")
+            DotLogSync.shared.requestSync(reason: "preparation-error")
+        }
+    }
     @Published private(set) var progress = 0.0
     /// Visible cold-start detail ("Downloading model") so a 20 GB first launch is
     /// not misreported as a file check.

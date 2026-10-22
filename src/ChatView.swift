@@ -161,18 +161,19 @@ final class ChatModel: ObservableObject {
     /// Dot's own words on screen (the pet itself deliberately shows no text).
     var onShowHistory: (() -> Void)?
 
-    func speakDirect(_ text: String) {
+    /// `logAs` replaces the logged text when the spoken words carry screen text.
+    func speakDirect(_ text: String, logAs: String? = nil) {
         guard !shuttingDown, !screenPaused, phase == .idle else { return }
         // The owner asked Dot not to talk over video. Keep the text visible instead.
         if videoPlayback() {
-            DiagnosticChatLogger.record(role: "dot (silent)", text: text)
+            DiagnosticChatLogger.record(role: "dot (silent)", text: logAs ?? text)
             let id = cancelTurn()
             answer = text
             displayedAnswerTurn = id
             showCaptureOutcome("Video playing — staying quiet.")
             return
         }
-        DiagnosticChatLogger.record(role: "dot", text: text)
+        DiagnosticChatLogger.record(role: "dot", text: logAs ?? text)
         let id = cancelTurn()
         answer = text
         displayedAnswerTurn = id
@@ -1574,8 +1575,8 @@ final class ChatModel: ObservableObject {
                             }
                         }
                         if let stuckEvent = StuckTaskDetector.shared.evaluate(appName: desktop.appName, windowTitle: desktop.windowTitle, ocrText: self.lastStuckOCR, now: now) {
-                            self.speakDirect(stuckEvent.guidance)
-                            DiagnosticChatLogger.record(role: "dot (stuck-guidance)", text: stuckEvent.guidance)
+                            self.speakDirect(stuckEvent.guidance,
+                                             logAs: "I offered help with a persistent error in \(stuckEvent.appName).")
                         } else if !CalendarMeetingAssistant.shared.hasAccess() {
                             // PERM-5: the first proactive tick must not silently return
                             // an empty meeting list because Calendars access is off.
@@ -1935,6 +1936,17 @@ final class ChatModel: ObservableObject {
 
     /// The transcript without Whisper's sentence-final ".", "?" or "!", keeping
     /// case and inner punctuation, for parsers that match whole phrases.
+    /// A "type ..." command's text goes into another app's field and can be a
+    /// password, so the log keeps only its length.
+    static func loggableUserText(_ text: String) -> String {
+        switch InPlaceAppTyping.parseCommand(text) {
+        case .type(let content), .typeAndSubmit(let content):
+            return "[type command: \(content.count) characters, text not logged]"
+        default:
+            return text
+        }
+    }
+
     static func spokenCommand(_ text: String) -> String {
         var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         while let last = value.last, ".?!…".contains(last) { value.removeLast() }
@@ -2586,7 +2598,7 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        DiagnosticChatLogger.record(role: "user", text: text)
+        DiagnosticChatLogger.record(role: "user", text: Self.loggableUserText(text))
         timing(typed ? "text_submitted" : "final_transcript")
         lastAttemptedText = text
         let nowUptime = ProcessInfo.processInfo.systemUptime
@@ -2707,7 +2719,7 @@ final class ChatModel: ObservableObject {
             if outcome.succeeded {
                 usleep(40_000)
                 _ = InPlaceAppTyping.sendKey("Enter")
-                respondDirectly(outcome.confirmation.replacingOccurrences(of: "Typed '\(content)'", with: "Typed '\(content)' and pressed Enter"), id: id)
+                respondDirectly(outcome.confirmation + " Then I pressed Enter.", id: id)
             } else {
                 respondDirectly(outcome.confirmation, id: id)
             }
@@ -3010,7 +3022,8 @@ final class ChatModel: ObservableObject {
                         self.respondDirectly("No text detected on screen.", id: id)
                     } else {
                         let textSample = lines.prefix(10).map(\.text).joined(separator: "\n")
-                        self.respondDirectly("I found \(lines.count) lines of text on screen:\n\n\(textSample)", id: id)
+                        self.respondDirectly("I found \(lines.count) lines of text on screen:\n\n\(textSample)", id: id,
+                                             logAs: "I found \(lines.count) lines of text on screen (text not logged).")
                     }
                 } catch {
                     self.respondDirectly("Could not read screen text: \(error.localizedDescription)", id: id)
@@ -3024,9 +3037,12 @@ final class ChatModel: ObservableObject {
         let clipboardCmd = ClipboardIntelligence.parseCommand(text)
         switch clipboardCmd {
         case .read:
-            if let content = ClipboardIntelligence.read(), !content.isEmpty {
+            if ClipboardIntelligence.holdsConcealedItem {
+                respondDirectly("The clipboard holds a password manager item, so I won't read it.", id: id)
+            } else if let content = ClipboardIntelligence.read(), !content.isEmpty {
                 let preview = content.count > 300 ? String(content.prefix(300)) + "…" : content
-                respondDirectly("Clipboard content: \(preview)", id: id)
+                respondDirectly("Clipboard content: \(preview)", id: id,
+                                logAs: "Read the clipboard aloud (\(content.count) characters, text not logged).")
             } else {
                 respondDirectly("Clipboard is empty.", id: id)
             }
@@ -3155,7 +3171,7 @@ final class ChatModel: ObservableObject {
                     case .typeText(let textToType):
                         let res = InPlaceAppTyping.performTypeText(textToType, checkPermission: true)
                         executedToolConfirmation = res.confirmation
-                        DiagnosticChatLogger.recordTool(name: "type_text", target: textToType, outcome: res.confirmation, succeeded: res.succeeded)
+                        DiagnosticChatLogger.recordTool(name: "type_text", target: "\(textToType.count) characters, text not logged", outcome: res.confirmation, succeeded: res.succeeded)
                     case .pressKey(let keyToPress):
                         let res = InPlaceAppTyping.performPressKey(keyToPress, checkPermission: true)
                         executedToolConfirmation = res.confirmation
@@ -3479,11 +3495,13 @@ final class ChatModel: ObservableObject {
         }
     }
 
-    private func respondDirectly(_ replyText: String, id: UUID) {
+    /// `logAs` replaces the logged text when the reply carries screen or clipboard
+    /// text: the owner sees and hears it, the uploaded log does not (owner rule).
+    private func respondDirectly(_ replyText: String, id: UUID, logAs: String? = nil) {
         // A detached read/recall task can finish after the owner started another
         // turn. Never let its stale text or phase overwrite the new turn.
         guard gate.accepts(id) else { return }
-        DiagnosticChatLogger.record(role: "dot", text: replyText)
+        DiagnosticChatLogger.record(role: "dot", text: logAs ?? replyText)
         self.answer = replyText
         self.history.append(ChatMessage(role: "assistant", content: replyText))
         self.textHistory.recordAssistant(turn: id, text: replyText, event: .generated)
@@ -3549,6 +3567,7 @@ final class ChatModel: ObservableObject {
         guard gate.accepts(id), currentTurnIsTyped, !voiceDeliveryFailed else { return }
         voiceDeliveryFailed = true
         voiceDeliveryNotice = "Voice unavailable. This reply is text only; automatic reply listening is off."
+        DiagnosticChatLogger.record(role: "dot (error)", text: "\(voiceDeliveryNotice ?? "Voice unavailable.") [voice]")
         issue = .voice
         followup.cancel(); automaticReply = false; voiceRoute = nil
         runtime.stopVoice(); chunker = SentenceBuffer()

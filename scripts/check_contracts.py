@@ -157,6 +157,10 @@ checks = {
     'a wake or second retry never restarts the running download': 'if state == .checking, work != nil, !resumeRequested { return }' in read('src/OfflinePreparation.swift'),
     'idle reflection returns before any clipboard write': (lambda f: f.index('guard copyToClipboard else { return Self.shortNote(wroteFile: wroteFile) }') < f.index('ClipboardIntelligence.write(suggestion)'))(read('src/InteractionCore.swift').partition('public func performReflectionAndWriteToAntigravity(')[2]) if 'ClipboardIntelligence.write(suggestion)' in read('src/InteractionCore.swift').partition('public func performReflectionAndWriteToAntigravity(')[2] else False,
     'Remove Dot never returns before leaving the command on the clipboard': 'if opened { return }' not in read('src/App.swift').partition('func removeDotCompletely()')[2].partition('fallback.runModal()\n    }')[0],
+    'typed text, clipboard text and screen text never reach the public log': 'DiagnosticChatLogger.record(role: "user", text: Self.loggableUserText(text))' in chat and 'target: "\\(textToType.count) characters, text not logged"' in chat and 'logAs: "I found \\(lines.count) lines of text on screen (text not logged).")' in chat and 'logAs: "Read the clipboard aloud (\\(content.count) characters, text not logged).")' in chat and 'guard !holdsConcealedItem else { return nil }' in read('src/InteractionCore.swift') and "Typed '\\(text)'" not in read('src/InteractionCore.swift') and 'logAs: "I offered help with a persistent error in' in chat and 'for \\(Int(elapsed))s: \\"\\(signature)\\""' not in read('src/InteractionCore.swift'),
+    'log lines are masked for secrets and personal details and capped in size': 'LogRedaction.capped(LogRedaction.masked(trimmed))' in read('src/InteractionCore.swift') and all(m in read('src/InteractionCore.swift') and m in read('scripts/redact_log.pl') for m in ('hf_[A-Za-z0-9]{20,}', '(?!git@)', '(?!Shared', 'mysql[a-z]*', '[sr]k_(?:live|test)_')),
+    'R19 every error reaches the uploaded log': 'DiagnosticChatLogger.record(role: "dot (error)", text: "\\(message) [preparation]")' in read('src/OfflinePreparation.swift') and '[voice]")' in chat and 'verifyOnLaunch(beforeAlert: { DotLogSync.shared.start() })' in read('src/App.swift'),
+    'the log token is read from Keychain once per launch': 'if let cachedToken { return cachedToken }' in read('src/DotLogSync.swift') and 'keychainDeclined = true' in read('src/DotLogSync.swift'),
     'voice approve and deny end the listening turn first': re.search(r'cancelTurn\(\)\s+approvePendingAction\(\)\s+return', chat) is not None and re.search(r'cancelTurn\(\)\s+denyPendingAction\(\)\s+return', chat) is not None,
     'automatic file utilities pass the R16 safety approver': re.search(r'\|\|\s*FileOperationPolicy\.isAutomaticFileOperation\(command\),\s*let refusal = await self\.safetyRefusal\(for: command\)', chat) is not None,
     'scoped file operations parse options and paths inside the selected folder': 'let words = FileOperationPolicy.tokenize(trimmed)' in chat and 'if word == "--recursive" { recursive = true }' in chat and 'if !optionsEnded, word == "--" { optionsEnded = true; continue }' in chat and 'currentDirectory: UserFolderScope.shared.current' in chat,
@@ -195,7 +199,8 @@ checks = {
     ),
     'manual log script refuses non-log branches and redacts multiline PEM': (
         'refusing to push logs to branch' in read('scripts/dot_log_sync.sh')
-        and 'dot-logs|dot-*)' in read('scripts/dot_log_sync.sh')
+        and '    dot-logs) ;;' in read('scripts/dot_log_sync.sh')
+        and 'dot-*' not in read('scripts/dot_log_sync.sh')
         and 'redact_log.pl' in read('scripts/dot_log_sync.sh')
         and 'PRIVATE KEY(?: BLOCK)?' in read('scripts/redact_log.pl')
         and 'PRIVATE KEY(?: BLOCK)?' in read('src/InteractionCore.swift')

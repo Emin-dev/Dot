@@ -1360,16 +1360,18 @@ public struct HardwareCompatibility: Sendable {
     }
 
     @MainActor
-    public static func verifyOnLaunch() -> Bool {
+    public static func verifyOnLaunch(beforeAlert: () -> Void = {}) -> Bool {
         switch launchGate() {
         case .proceed:
             return true
         case .refuseImpossible(let plan):
             // Record the refusal before the blocking alert: this is the only
             // durable evidence on a below-minimum Mac, and it must not claim the
-            // app started.
-            DiagnosticChatLogger.record(role: "system",
+            // app started. `beforeAlert` starts the log upload (R19), which runs
+            // off the main thread while the owner reads the alert.
+            DiagnosticChatLogger.record(role: "dot (error)",
                 text: "Launch refused. \(plan.title): \(plan.informativeText)")
+            beforeAlert()
             NSApp.activate(ignoringOtherApps: true)
             makeAlert(from: plan).runModal()
             NSApplication.shared.terminate(nil)
@@ -1856,8 +1858,20 @@ public enum ClipboardIntelligence {
         matcher.match(text) ?? .none
     }
 
+    /// Password managers mark copied secrets with these nspasteboard.org types.
+    static let concealedTypes = ["org.nspasteboard.ConcealedType", "org.nspasteboard.TransientType"]
+    public static var holdsConcealedItem: Bool {
+        #if canImport(AppKit)
+        let types = NSPasteboard.general.types?.map(\.rawValue) ?? []
+        return types.contains { concealedTypes.contains($0) }
+        #else
+        return false
+        #endif
+    }
+
     public static func read() -> String? {
         #if canImport(AppKit)
+        guard !holdsConcealedItem else { return nil }
         return NSPasteboard.general.string(forType: .string)?.trimmingCharacters(in: .whitespacesAndNewlines)
         #else
         return nil
@@ -2466,10 +2480,12 @@ public enum InPlaceAppTyping {
         guard ok else {
             return (false, "Could not type text into the focused app.")
         }
+        // Never echo the text: it can be a password, and the reply is spoken and logged.
+        let typed = text.count == 1 ? "1 character" : "\(text.count) characters"
         if let appName, !appName.isEmpty {
-            return (true, "Typed '\(text)' into \(appName) (the focused app).")
+            return (true, "Typed \(typed) into \(appName) (the focused app).")
         }
-        return (true, "Typed '\(text)' into the focused app.")
+        return (true, "Typed \(typed) into the focused app.")
     }
 
     @MainActor
@@ -5326,7 +5342,7 @@ public enum DiagnosticChatLogger {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let timestamp = formatter.string(from: Date())
-        let line = "[\(timestamp)] [\(role.uppercased())] \(LogRedaction.masked(trimmed))\n"
+        let line = "[\(timestamp)] [\(role.uppercased())] \(LogRedaction.capped(LogRedaction.masked(trimmed)))\n"
         guard let data = line.data(using: .utf8) else { return }
 
         lock.lock()
@@ -5858,7 +5874,8 @@ public final class StuckTaskDetector {
                 activeRecord = existing
                 lastGuidanceUptime = now
                 let guidance = formatGuidance(for: signature, app: resolvedApp)
-                DiagnosticChatLogger.recordEvent(category: "stuck_detection", message: "Stuck on error in \(resolvedApp) for \(Int(elapsed))s: \"\(signature)\"")
+                // Screen text and window titles stay out of the log (owner rule).
+                DiagnosticChatLogger.recordEvent(category: "stuck_detection", message: "Stuck on an error in \(resolvedApp) for \(Int(elapsed))s")
                 return StuckErrorEvent(appName: resolvedApp, errorSnippet: signature, guidance: guidance)
             }
             activeRecord = existing
@@ -6509,6 +6526,14 @@ public enum LogRedaction {
         return masked == text ? data : Data(masked.utf8)
     }
 
+    /// Longest logged text per line. A larger command output is cut, so a single
+    /// line can never push a log file past the 4 MB upload limit.
+    public static let lineCharacterLimit = 20_000
+    public static func capped(_ text: String, limit: Int = lineCharacterLimit) -> String {
+        guard text.count > limit else { return text }
+        return String(text.prefix(limit)) + " … [\(text.count - limit) more characters not logged]"
+    }
+
     public static func masked(_ text: String) -> String {
         var result = text
         let rules: [(String, String)] = [
@@ -6528,6 +6553,19 @@ public enum LogRedaction {
             (#"(?i)\b(password|passwd|passphrase|secret)\s+(?:is|was)\s+[^\r\n]+"#, "$1=[REDACTED]"),
             (#"(?i)\b(token|api(?:[\s_-]?key))\s*[:=]\s*\S+"#, "$1=[REDACTED]"),
             (#"(?i)\b(token|api(?:[\s_-]?key))\s+(?:is|was)\s+\S+"#, "$1=[REDACTED]"),
+            // Credentials inside commands and URLs (the shell tool logs both).
+            (#"(?i)\b([a-z][a-z0-9+.-]*://[^\s/:@]+):[^\s/@]+@"#, "$1:[REDACTED]@"),
+            (#"(?i)(\s(?:-u|--user)\s+[^\s:]+):\S+"#, "$1:[REDACTED]"),
+            (#"(?i)\b(mysql[a-z]*\b[^\r\n]*?\s)-p\S+"#, "$1-p[REDACTED]"),
+            (#"\bhf_[A-Za-z0-9]{20,}\b"#, "[REDACTED_TOKEN]"),
+            (#"\bglpat-[A-Za-z0-9_-]{20,}"#, "[REDACTED_TOKEN]"),
+            (#"\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}\b"#, "[REDACTED_TOKEN]"),
+            (#"\bAIza[0-9A-Za-z_-]{35}"#, "[REDACTED_TOKEN]"),
+            // Personal details: the logs branch is public, so e-mail addresses,
+            // the account name in home paths and card-length numbers never upload.
+            (#"\b(?!git@)[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"#, "[EMAIL]"),
+            (#"(/Users/)(?!Shared\b)[^/\s"'`]+"#, "$1[USER]"),
+            (#"\b(?:\d[ -]?){12,18}\d\b"#, "[NUMBER]"),
         ]
         for (pattern, replacement) in rules {
             result = result.replacingOccurrences(of: pattern, with: replacement,

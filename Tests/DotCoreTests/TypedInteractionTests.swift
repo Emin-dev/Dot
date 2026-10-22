@@ -420,6 +420,13 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.spokenCommand("open github.com"), "open github.com")
     }
 
+    @MainActor func testTypedTextNeverReachesTheLog() {
+        // A "type ..." command can carry a password into another app's field.
+        XCTAssertEqual(ChatModel.loggableUserText("type this: Tr0ub4dor&3"),
+                       "[type command: 11 characters, text not logged]")
+        XCTAssertEqual(ChatModel.loggableUserText("What do you remember?"), "What do you remember?")
+    }
+
     @MainActor func testScopedFileOperationsStayInsideTheSelectedFolder() throws {
         let fileManager = FileManager.default
         let root = fileManager.temporaryDirectory.appendingPathComponent("dot-scope-\(UUID().uuidString)", isDirectory: true)

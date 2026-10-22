@@ -135,7 +135,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fnKeyDown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard HardwareCompatibility.verifyOnLaunch() else { return }
+        // A refused launch still uploads its error line (R19).
+        guard HardwareCompatibility.verifyOnLaunch(beforeAlert: { DotLogSync.shared.start() }) else { return }
         NSApp.setActivationPolicy(.accessory)
         DiagnosticChatLogger.record(role: "system", text: "Dot application started")
         activityAssertion = ProcessInfo.processInfo.beginActivity(
