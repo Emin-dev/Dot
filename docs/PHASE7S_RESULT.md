@@ -1,8 +1,8 @@
 # Phase 7s — sandboxed, per-user, leave-no-trace Dot
 
-**Status 2026-10-22:** implementation complete and green on hosted macOS. The
-no-trace lane and the full native lane both pass; the `v1.1.2` release build is
-the remaining packaging gate.
+**Status 2026-10-22:** implementation complete, released and green on hosted
+macOS. Release **`v1.1.2`** is Latest; every acceptance and no-trace job passed
+in run [`39716661710`](https://github.com/Emin-dev/Dot/actions/runs/39716661710).
 
 ## What changed
 
@@ -112,9 +112,12 @@ runs on hosted `macos-26` (never the Pi or Emin's Mac):
    directory;
 7. upload both snapshots and the sandbox evidence as artifacts.
 
-The diff allowlist is only Apple-owned transient cache/log/preferences paths
-that the OS rewrites when Launch Services opens an app or `tccutil` resets an
-approval. Dot-owned paths are never allowlisted. `release.yml` calls this lane
+The diff allowlist is only Apple/OS-owned transient cache, log, preference and
+database paths that macOS rewrites when Launch Services opens an app, TCC resets
+an approval, Shortcuts indexes App Intents, or background agents run. The
+allowlist is in [`scripts/privacy_allowlist.txt`](../scripts/privacy_allowlist.txt)
+with a reason on every line. Dot-owned paths (`app.dot.local`, `Dot.app`) are
+never allowlisted; the diff refuses them before checking any pattern. `release.yml` calls this lane
 as the `privacy` job and will not publish until it is green.
 
 ### 6. Install paste and Gatekeeper
@@ -153,14 +156,19 @@ Local portable gates on the Pi:
 
 Hosted macOS gates:
 
-- `Sandboxed install leaves no trace` run
-  [`39714839518`](https://github.com/Emin-dev/Dot/actions/runs/39714839518),
-  **success**, commit `4384045`: snapshot → install → entitlement + kernel
-  self-check → real launch smoke test → uninstall → empty diff. The diff
-  reported only the documented Apple/OS transient paths; zero `app.dot.local`
-  or `Dot.app` paths remained after uninstall.
-- `Native companion checks` run
-  [`39714839592`](https://github.com/Emin-dev/Dot/actions/runs/39714839592),
+- Release run
+  [`39716661710`](https://github.com/Emin-dev/Dot/actions/runs/39716661710),
+  **success**, commit `ae857da`, tag `v1.1.2`: `package`, `privacy / no-trace`,
+  `installer-one-liner`, `quarantine-install`, `spctl-codesign` and `publish`
+  all green. The release is public, not a draft, and Latest.
+- Final no-trace run
+  [`39722187295`](https://github.com/Emin-dev/Dot/actions/runs/39722187295),
+  **success**, commit `de14804`: snapshot → install → entitlement + kernel
+  self-check → real launch smoke test → uninstall → empty diff and no installer
+  temp directory. The diff reported only the documented Apple/OS transient
+  paths; zero `app.dot.local` or `Dot.app` paths remained after uninstall.
+- Final native run
+  [`39722187386`](https://github.com/Emin-dev/Dot/actions/runs/39722187386),
   **success**, same commit: `rust-gates`, `swift-test`, `dot-voice`, `macos`
   (including the full Python/XCTest/SwiftPM lane and zero-warning build).
 - Earlier no-trace iterations exposed and removed real leftovers
