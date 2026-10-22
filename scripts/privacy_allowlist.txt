@@ -51,3 +51,4 @@
 ~/Library/PersonalizationPortrait/*|Apple personalization caches are rewritten by OS services
 /Library/Preferences/Audio/com.apple.*|System audio preference cache is rewritten when an app plays audio
 ~/Library/Application Support/AddressBook/*|Apple Contacts database is rewritten by OS services
+~/Library/Application Support/networkserviceproxy/*|Apple network service proxy (Private Relay) database is rewritten by OS daemons
