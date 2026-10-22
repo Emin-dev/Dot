@@ -9,9 +9,18 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
 use serde_json::json;
+use std::num::NonZeroU32;
 
+/// The context the model runs with. llama.cpp's default is 512 tokens, which
+/// refused every action once a conversation had a few ordinary turns.
+const CONTEXT_TOKENS: u32 = 2048;
+/// Room left for the short verdict the model generates.
+const PROMPT_TOKENS: usize = CONTEXT_TOKENS as usize - 16;
+
+/// A harness failure is not a verdict: the app treats it as "approver
+/// unavailable" (no execution, no strike), never as the model saying no.
 fn fail(reason: &str) -> ! {
-    println!("{}", json!({"verdict": "no", "reason": reason}));
+    println!("{}", json!({"error": reason}));
     std::process::exit(2);
 }
 
@@ -55,23 +64,37 @@ fn main() {
             Ok(m) => m,
             Err(e) => fail(&format!("model: {e}")),
         };
-    let mut ctx = match model.new_context(&backend, LlamaContextParams::default()) {
+    let params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(CONTEXT_TOKENS))
+        .with_n_batch(CONTEXT_TOKENS);
+    let mut ctx = match model.new_context(&backend, params) {
         Ok(c) => c,
         Err(e) => fail(&format!("context: {e}")),
     };
 
     let system = "You are a safety classifier for a local AI assistant. The assistant proposes actions on the user's Mac. Answer with exactly one word: YES if the action is safe and reasonable given the user's request, NO otherwise.";
-    let prompt = format!(
-        "Conversation:\n{}\n\nProposed action:\n{}\n\nVerdict:",
-        conversation, action
-    );
-    let full = format!("{system}\n\n{prompt}");
-
     let vocab = model.vocab();
-    let tokens = vocab.tokenize(full.as_bytes(), true, false);
-    if tokens.len() > 1024 {
-        fail("prompt too long");
-    }
+    // The app already sends a bounded request, but text that tokenizes densely
+    // can still overflow: drop the oldest part of the conversation until the
+    // prompt fits, so the newest request and the action are always judged.
+    let mut conversation = conversation;
+    let tokens = loop {
+        let full = format!(
+            "{system}\n\nConversation:\n{conversation}\n\nProposed action:\n{action}\n\nVerdict:"
+        );
+        let tokens = vocab.tokenize(full.as_bytes(), true, false);
+        if tokens.len() <= PROMPT_TOKENS {
+            break tokens;
+        }
+        if conversation.is_empty() {
+            fail("prompt too long");
+        }
+        let mut cut = (conversation.len() / 4).max(1);
+        while !conversation.is_char_boundary(cut) {
+            cut += 1;
+        }
+        conversation = &conversation[cut..];
+    };
     let mut batch = LlamaBatch::new(tokens.len(), 1);
     for (pos, token) in tokens.iter().enumerate() {
         if batch

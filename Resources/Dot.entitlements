@@ -16,5 +16,21 @@
 	<true/>
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<key>com.apple.security.files.downloads.read-only</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Desktop/</string>
+		<string>/Documents/</string>
+	</array>
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.apple.systemevents</string>
+		<string>com.apple.Safari</string>
+		<string>com.google.Chrome</string>
+		<string>com.apple.TextEdit</string>
+		<string>com.apple.Music</string>
+		<string>com.spotify.client</string>
+	</array>
 </dict>
 </plist>

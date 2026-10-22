@@ -759,7 +759,7 @@ final class EngineManager: ObservableObject {
                     ], "required": ["layout"], "additionalProperties": false]
                 ]],
                 ["type": "function", "function": [
-                    "name": "execute_command", "description": "Execute a shell or terminal command. Potentially destructive commands (like rm, git reset, kill, sudo) will automatically require explicit user approval via an inline Approval Card.",
+                    "name": "execute_command", "description": "Execute a shell or terminal command. Simple file utilities (rm, mv, cp, mkdir, touch and similar) run after the local safety model approves them; other destructive commands (git reset, kill, sudo, shells) show an Approval Card first.",
                     "strict": true, "parameters": ["type": "object", "properties": [
                         "command": ["type": "string", "minLength": 1, "maxLength": 1000],
                         "explanation": ["type": "string", "maxLength": 300]

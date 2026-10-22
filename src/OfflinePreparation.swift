@@ -114,27 +114,36 @@ final class OfflinePreparation: ObservableObject {
                       Int64(size) == asset.bytes else { continue }
                 reusable += asset.bytes
             }
-            let staging = parts?.parts.map(\.bytes).max() ?? 0
-            let requiredFree = DownloadBudget.requiredFree(total: plan.total_bytes, reusableBytes: reusable) + staging
-            var volume = folder
-            while !FileManager.default.fileExists(atPath: volume.path) { volume = volume.deletingLastPathComponent() }
-            if let free = (try? FileManager.default.attributesOfFileSystem(forPath: volume.path))?[.systemFreeSize] as? Int64,
-               free < requiredFree {
-                throw PreparationFailure.download("Not enough free disk space: the model needs \(ByteCountFormatter.string(fromByteCount: requiredFree, countStyle: .file)), but only \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) is available.")
-            }
-            detail = parts == nil ? "Downloading model" : "Downloading model parts"
-            do {
-                try await ModelProvisioner.shared.ensureModels(at: folder, plan: plan, parts: parts) { [weak self] fraction in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.generation == token else { return }
-                        self.progress = 0.05 + 0.90 * fraction
-                    }
+            // Offline relaunch: every file is already present at its exact size, so
+            // nothing is downloaded and no free space is required; hashes are still
+            // verified below. This used to demand ~6.9 GB free on every launch.
+            if DownloadBudget.needsDownload(total: plan.total_bytes, reusableBytes: reusable) {
+                let staging = parts?.parts.map(\.bytes).max() ?? 0
+                let requiredFree = DownloadBudget.requiredFree(total: plan.total_bytes, reusableBytes: reusable) + staging
+                var volume = folder
+                while !FileManager.default.fileExists(atPath: volume.path) { volume = volume.deletingLastPathComponent() }
+                if let free = (try? FileManager.default.attributesOfFileSystem(forPath: volume.path))?[.systemFreeSize] as? Int64,
+                   free < requiredFree {
+                    throw PreparationFailure.download("Not enough free disk space: the model needs \(ByteCountFormatter.string(fromByteCount: requiredFree, countStyle: .file)), but only \(ByteCountFormatter.string(fromByteCount: free, countStyle: .file)) is available.")
                 }
-            } catch {
+                detail = parts == nil ? "Downloading model" : "Downloading model parts"
+                // Keep the Mac from idle-sleeping through the one-time download.
+                let activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated],
+                    reason: "Downloading Dot's local model")
+                defer { ProcessInfo.processInfo.endActivity(activity) }
+                do {
+                    try await ModelProvisioner.shared.ensureModels(at: folder, plan: plan, parts: parts) { [weak self] fraction in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.generation == token else { return }
+                            self.progress = 0.05 + 0.90 * fraction
+                        }
+                    }
+                } catch {
+                    detail = nil
+                    throw error
+                }
                 detail = nil
-                throw error
             }
-            detail = nil
         }
         // Re-verify every launch. A file with the right size but a bad hash is
         // removed and fetched once more automatically; only a second failure is
@@ -209,13 +218,19 @@ final class OfflinePreparation: ObservableObject {
         }
         guard actual == names else { throw PreparationFailure.integrity }
     }
-    func pause() {
+    /// `keepingDownload` is the display-sleep and lock path: the one-time model
+    /// download keeps going (it used to be cancelled at every display sleep and
+    /// restarted at unlock); only a verification pass pauses.
+    func pause(keepingDownload: Bool = false) {
+        if keepingDownload, state == .checking, detail != nil { return }
         resumeRequested = false
         guard state == .checking else { return }
          generation = UUID(); state = .paused; work?.cancel()
     }
     func retry() {
         guard !ready else { return }
+        // A running check or download is not restarted by a wake or a second retry.
+        if state == .checking, work != nil, !resumeRequested { return }
         if work != nil {
             // Stop an in-flight transfer now (the part downloader forwards task
             // cancellation to URLSession) and start a fresh attempt when it exits.

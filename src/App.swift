@@ -82,6 +82,7 @@ struct DotApp {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let surface = CompanionSurface()
+    private let issueBanner = IssueBanner()
     private var panel: CompanionPanel? { surface.panel }
     private var model: ChatModel?
     private let placement = PlacementCapture()
@@ -371,6 +372,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard phase == .listening else { return }
             Task { @MainActor in self?.recheckWideSpectrumDuringCapture() }
         })
+        // R19: an error keeps Dot's look and life; its words float above Dot.
+        statusObservations.append(model.$phase.combineLatest(preparation.$state)
+            .receive(on: RunLoop.main).sink { [weak self] phase, readiness in
+                Task { @MainActor in self?.showIssue(phase: phase, readiness: readiness) }
+            })
         observations.append(NotificationCenter.default.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self else { return }; self.model?.cancelForInteraction(); self.menuTracking += 1; self.moveGently()
@@ -445,7 +451,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         placement.onSnapshotUpdated = { [weak self] snapshot in
             guard let self, !self.screenIsOff, !self.isAnimatingRoam,
                   let panel = self.panel, let model = self.model,
-                  model.screenEnabled, !model.pinned, model.phase == .idle,
+                  model.screenEnabled, !model.pinned, model.phase.isResting,
                   !model.hovered, model.menuIsOpen == false,
                   NSEvent.pressedMouseButtons == 0 else { return }
             let now = ProcessInfo.processInfo.systemUptime
@@ -491,6 +497,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ScreenScribbleTracker.shared.startMonitoring { [weak model] region in
             model?.handleCircleToAsk(region: region)
         }
+    }
+
+    private func showIssue(phase: PetPhase, readiness: CompanionReadiness) {
+        guard let panel else { return }
+        var text = phase.blockedMessage
+        if text == nil, case .unavailable(let message) = readiness { text = message }
+        issueBanner.update(text: text, above: panel)
     }
 
     private func setupScreenshotAutoHide() {
@@ -651,19 +664,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DOT_UNINSTALL_EMBEDDED
         """
         let commandURL = FileManager.default.temporaryDirectory.appendingPathComponent("Remove Dot.command")
+        var opened = false
         do {
             try? FileManager.default.removeItem(at: commandURL)
             try wrapper.write(to: commandURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: commandURL.path)
-            if NSWorkspace.shared.open(commandURL) { return }
+            opened = NSWorkspace.shared.open(commandURL)
         } catch {
             // Fall through to the clipboard command; never claim removal started.
         }
+        // A file written by a sandboxed app can be quarantined, so Terminal may
+        // refuse it even when open() succeeds. Always leave the exact command ready.
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(download, forType: .string)
         let fallback = NSAlert()
-        fallback.messageText = "Terminal could not be opened"
-        fallback.informativeText = "The exact removal command is on your clipboard. Paste it into Terminal to remove Dot."
+        fallback.messageText = opened ? "Removal opened in Terminal" : "Terminal could not be opened"
+        fallback.informativeText = opened
+            ? "If Terminal shows a warning instead of removing Dot, paste the command on your clipboard into Terminal."
+            : "The exact removal command is on your clipboard. Paste it into Terminal to remove Dot."
         fallback.runModal()
     }
 
@@ -905,7 +923,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleWindowOrAppChange() {
         VideoPlaybackDetector.recordFrontmostApp()
-        guard !isAnimatingRoam, let panel, let model, model.screenEnabled, !model.pinned, model.phase == .idle else { return }
+        guard !isAnimatingRoam, let panel, let model, model.screenEnabled, !model.pinned, model.phase.isResting else { return }
         guard let screen = panel.screen else { return }
 
         placement.invalidate()
@@ -955,7 +973,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         screenLocked = locked
         if locked {
             model?.pauseForScreenOff()
-            OfflinePreparation.shared.pause()
+            OfflinePreparation.shared.pause(keepingDownload: true)
         }
     }
 
@@ -964,7 +982,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.screenLocked = locked
         if displayAsleep || locked {
             model?.pauseForScreenOff()
-            OfflinePreparation.shared.pause()
+            OfflinePreparation.shared.pause(keepingDownload: true)
         } else {
             model?.resumeAfterScreenOn()
             OfflinePreparation.shared.retry()
@@ -1002,7 +1020,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Dot never sits over content for up to 45 s after a roam finished.
         let freshOverlap = snapshot?.valid(displayID: displayID, visible: visible, now: now) == true && isCovered
         let isCursorNear = panel.frame.insetBy(dx: -24, dy: -24).contains(cursor)
-        if eligible && isCovered, !isAnimatingRoam, !roam.isTravelling, model.phase == .idle,
+        if eligible && isCovered, !isAnimatingRoam, !roam.isTravelling, model.phase.isResting,
            (freshOverlap || !roam.isResting(now: now)), now - lastEscapeAttemptAt > 1.5, let snapshot {
             // Content is under Dot: leave immediately, not after a two-minute cadence.
             lastEscapeAttemptAt = now
@@ -1012,13 +1030,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scheduleMovement(interval: 1.0 / 60)
             return
         }
-        if eligible && isCursorNear, !isAnimatingRoam, model.phase == .idle {
+        if eligible && isCursorNear, !isAnimatingRoam, model.phase.isResting {
             performIdleRoam()
             return
         }
 
         let origin = roam.step(frame: panel.frame, visible: visible, cursor: cursor,
-                               paused: !eligible || model.phase != .idle || isAnimatingRoam, now: now, displayID: displayID, snapshot: snapshot)
+                               paused: !eligible || !model.phase.isResting || isAnimatingRoam, now: now, displayID: displayID, snapshot: snapshot)
         let moved = panel.frame.origin != origin
         if moved && !isAnimatingRoam { panel.setFrameOrigin(origin) }
         let pointerNearby = panel.frame.insetBy(dx: -40, dy: -40).contains(cursor)
@@ -1064,7 +1082,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if model.interactionPaused && NSEvent.pressedMouseButtons == 0 {
             model.interactionPaused = false
         }
-        if model.phase != .idle { refusal = "phase=\(model.phase)"; return }
+        if !model.phase.isResting { refusal = "phase=\(model.phase)"; return }
         if !model.screenEnabled { refusal = "screen awareness off"; return }
         if model.pinned { refusal = "pinned"; return }
         if model.hovered { refusal = "pointer on Dot"; return }

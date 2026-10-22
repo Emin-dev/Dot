@@ -139,6 +139,14 @@ final class ChatModel: ObservableObject {
     @Published private(set) var screenPaused = false
     /// R12: the wake greeting is spoken once, when the display is actually back.
     private var wakeGreeted = false
+    /// R18: when this absence began (wall clock, since uptime stops during sleep)
+    /// and the threshold drawn for it; recent lines are not repeated.
+    private var absenceStartedAt: Date?
+    private var absenceThreshold = WakeGreeting.shortestAbsence
+    private var recentWakeGreetings: [String] = []
+    /// Replaceable for deterministic tests.
+    var wakeClock: () -> Date = { Date() }
+    var wakeRandom: () -> Double = { Double.random(in: 0..<1) }
     /// PERM-5: the calendar-denial notice is raised once per session, not every tick.
     private var calendarAccessNoticeShown = false
     private var taskProgress = ResearchTaskProgress()
@@ -314,7 +322,8 @@ final class ChatModel: ObservableObject {
         if let result = runScopedFileOperation(command) { return result }
         do {
             let result = try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command],
-                                                  mergeStandardError: true)
+                                                  mergeStandardError: true,
+                                                  currentDirectory: UserFolderScope.shared.current)
             let output = String(decoding: result.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             return output.isEmpty ? "(Exit code \(result.status))" : output
         } catch {
@@ -326,34 +335,42 @@ final class ChatModel: ObservableObject {
     /// user-selected folder. It refuses shell syntax, relative escapes and any
     /// target outside the selected folder. Nil means "not a scoped file operation";
     /// the caller then uses the sandboxed shell.
-    private static func runScopedFileOperation(_ command: String) -> String? {
+    static func runScopedFileOperation(_ command: String) -> String? {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 2_000,
               !trimmed.contains(";"), !trimmed.contains("&&"), !trimmed.contains("||"),
               !trimmed.contains("|"), !trimmed.contains("`"), !trimmed.contains("$("),
               !trimmed.contains(">"), !trimmed.contains("<"),
               let root = UserFolderScope.shared.current else { return nil }
-        let words = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
+        // Quote-aware, so "My Folder" stays one path; quotes are removed here.
+        let words = FileOperationPolicy.tokenize(trimmed)
         guard let name = words.first.map({ ($0 as NSString).lastPathComponent }),
               ["rm", "rmdir", "mkdir", "touch"].contains(name) else { return nil }
         var arguments: [String] = []
         var recursive = false
         var force = false
+        var optionsEnded = false
         for word in words.dropFirst() {
-            if word.hasPrefix("-") {
-                if word.contains("r") || word.contains("R") || word == "--recursive" { recursive = true }
-                if word.contains("f") || word == "--force" { force = true }
+            if !optionsEnded, word == "--" { optionsEnded = true; continue }
+            if !optionsEnded, word.hasPrefix("--") {
+                // Only the exact long options; "--force" must not imply recursion.
+                if word == "--recursive" { recursive = true }
+                if word == "--force" { force = true }
+                continue
+            }
+            if !optionsEnded, word.hasPrefix("-"), word.count > 1 {
+                let cluster = word.dropFirst()
+                if cluster.contains("r") || cluster.contains("R") { recursive = true }
+                if cluster.contains("f") { force = true }
                 continue
             }
             var value = word
-            if value.count >= 2, (value.hasPrefix("'") && value.hasSuffix("'")) ||
-                (value.hasPrefix("\"") && value.hasSuffix("\"")) {
-                value = String(value.dropFirst().dropLast())
-            }
             guard !value.isEmpty, !value.contains("\0") else { return "Refused: invalid path." }
             if value == "~" || value.hasPrefix("~/") {
-                let home = NSHomeDirectory().components(separatedBy: "/Library/Containers/").first ?? NSHomeDirectory()
-                value = home + String(value.dropFirst(1))
+                value = UserFolderScope.expandingUserHome(value)
+            } else if !value.hasPrefix("/") {
+                // A relative path means "inside the folder you selected".
+                value = root.appendingPathComponent(value).path
             }
             let url = URL(fileURLWithPath: value).standardizedFileURL.resolvingSymlinksInPath()
             let canonicalRoot = root.standardizedFileURL.resolvingSymlinksInPath()
@@ -773,22 +790,16 @@ final class ChatModel: ObservableObject {
 
         // 7. Standard Folders in Finder
         if clean == "open downloads" || clean == "show downloads" || clean == "open downloads folder" || clean == "show downloads folder" {
-            if let url = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
-                NSWorkspace.shared.open(url)
-                return "Opened your Downloads folder."
-            }
+            NSWorkspace.shared.open(UserFolderScope.userFolder("Downloads"))
+            return "Opened your Downloads folder."
         }
         if clean == "open documents" || clean == "show documents" || clean == "open documents folder" || clean == "show documents folder" {
-            if let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                NSWorkspace.shared.open(url)
-                return "Opened your Documents folder."
-            }
+            NSWorkspace.shared.open(UserFolderScope.userFolder("Documents"))
+            return "Opened your Documents folder."
         }
         if clean == "open desktop" || clean == "show desktop" || clean == "open desktop folder" {
-            if let url = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first {
-                NSWorkspace.shared.open(url)
-                return "Opened your Desktop folder."
-            }
+            NSWorkspace.shared.open(UserFolderScope.userFolder("Desktop"))
+            return "Opened your Desktop folder."
         }
         if clean == "open applications" || clean == "show applications" || clean == "open applications folder" || clean == "show applications folder" {
             if let url = FileManager.default.urls(for: .applicationDirectory, in: .localDomainMask).first {
@@ -892,9 +903,7 @@ final class ChatModel: ObservableObject {
                 candidates.append(root.appendingPathComponent("src").appendingPathComponent(pathStr))
             }
             candidates.append(URL(fileURLWithPath: pathStr))
-            if let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
-                candidates.append(docs.appendingPathComponent(pathStr))
-            }
+            candidates.append(UserFolderScope.userFolder("Documents").appendingPathComponent(pathStr))
             for candidate in candidates {
                 if FileManager.default.fileExists(atPath: candidate.path), let content = try? String(contentsOf: candidate, encoding: .utf8) {
                     NSPasteboard.general.clearContents()
@@ -1493,6 +1502,7 @@ final class ChatModel: ObservableObject {
         guard !screenPaused else { return }
         screenPaused = true
         wakeGreeted = false
+        beginAbsence()
         cancelTurn()
         stopProactivity()
         followup.cancel()
@@ -1542,12 +1552,8 @@ final class ChatModel: ObservableObject {
                     self.updateProactiveContext()
                     if now - self.lastFileScanAt > 300 {
                         self.lastFileScanAt = now
-                        let roots = [
-                            FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
-                            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-                            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-                        ].compactMap { $0 }
-                        if let newest = FileInsightScanner.recentFiles(in: roots, limit: 1).first {
+                        // R21: the owner's real folders, readable under the sandbox.
+                        if let newest = FileInsightScanner.recentFiles(in: UserFolderScope.watchedFolders, limit: 1).first {
                             let key = "file:\(newest.folder)/\(newest.name):\(Int(newest.modifiedAt.timeIntervalSince1970))"
                             if let previous = self.lastFileInsightKey, previous != key {
                                 _ = self.proactive.offerContext(key: key, reason: .workspaceChanged)
@@ -1599,14 +1605,14 @@ final class ChatModel: ObservableObject {
                       IdleSelfReflectionEngine.shared.shouldTriggerReflection() else {
                     continue
                 }
-                let report = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity()
-                // Nothing new is not an event: do not speak or offer a stale suggestion.
-                guard report != IdleSelfReflectionEngine.noNewMaterialMessage else { continue }
-                offerPasteIfAvailable()
-                DiagnosticChatLogger.record(role: "dot (10m-self-reflection)", text: report)
-                // Speak what actually happened; the old fixed sentence claimed both
-                // writes even when the file or clipboard write had failed.
-                self.speakDirect(report)
+                // R20 (owner answer 2026-10-22): a short spoken note, the full idea in
+                // the reflections file and the uploaded log, and never the clipboard.
+                let note = IdleSelfReflectionEngine.shared.performReflectionAndWriteToAntigravity(copyToClipboard: false)
+                // Nothing new is not an event: do not speak a stale suggestion.
+                guard note != IdleSelfReflectionEngine.noNewMaterialMessage else { continue }
+                DiagnosticChatLogger.record(role: "dot (10m-self-reflection)",
+                                            text: IdleSelfReflectionEngine.shared.lastSuggestion ?? note)
+                self.speakDirect(note)
             }
             self?.selfReflectionTicker = nil
         }
@@ -1659,7 +1665,7 @@ final class ChatModel: ObservableObject {
     @discardableResult
     func updateIdleMotion(now: Double, externallyPaused: Bool, pointerNearby: Bool, reduceMotion: Bool, moved: Bool) -> Bool {
         if moved { idleMotion.noteMovement(at: now) }
-        let context = IdleMotionContext(visible: visible, idle: phase == .idle && !followupPending,
+        let context = IdleMotionContext(visible: visible, idle: phase.isResting && !followupPending,
             paused: externallyPaused || proactive.paused || historyPresented,
             pinned: pinned, dragging: interactionPaused, pointerNearby: pointerNearby || hovered,
             reduceMotion: reduceMotion, motionScale: skinPreferences.motionDetail.movementScale,
@@ -1925,6 +1931,14 @@ final class ChatModel: ObservableObject {
     static func commandPhrase(_ text: String) -> String {
         text.lowercased().trimmingCharacters(in: CharacterSet.whitespacesAndNewlines
             .union(CharacterSet(charactersIn: ".?!,;:…")))
+    }
+
+    /// The transcript without Whisper's sentence-final ".", "?" or "!", keeping
+    /// case and inner punctuation, for parsers that match whole phrases.
+    static func spokenCommand(_ text: String) -> String {
+        var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = value.last, ".?!…".contains(last) { value.removeLast() }
+        return value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func isMemoryListRequest(_ phrase: String) -> Bool {
@@ -2328,10 +2342,15 @@ final class ChatModel: ObservableObject {
             let approvals = (pendingApproval?.isDestructive ?? true)
                 ? ["approve", "approved", "run it", "do it"]
                 : ["approve", "approved", "run it", "do it", "yes", "yeah", "sure", "okay", "ok", "go ahead", "paste it", "paste"]
+            // The spoken answer ends this listening turn first: the result is
+            // spoken through speakDirect, which only speaks from idle, so a voice
+            // "Approve" used to run the action silently and leave Dot listening.
             if approvals.contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
+                cancelTurn()
                 approvePendingAction()
                 return
             } else if ["deny", "no", "cancel", "stop", "don't do it", "reject", "nevermind", "abort"].contains(lower) || lower.hasPrefix("deny") || lower.hasPrefix("cancel") {
+                cancelTurn()
                 denyPendingAction()
                 return
             }
@@ -2361,7 +2380,8 @@ final class ChatModel: ObservableObject {
         if pendingApproval == nil, let path = Self.fileReadRequest(from: copyPhrase) {
             Task { [weak self] in
                 guard let self, self.gate.accepts(id) else { return }
-                let expanded = (path as NSString).expandingTildeInPath
+                // "~" is the owner's home, not the sandbox container's.
+                let expanded = UserFolderScope.expandingUserHome(path)
                 var isDirectory: ObjCBool = false
                 guard FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
                       !isDirectory.boolValue else {
@@ -2374,6 +2394,12 @@ final class ChatModel: ObservableObject {
                     } else {
                         self.respondDirectly("I cannot find a file at \(expanded), and Spotlight has no name match for \"\(query)\".", id: id)
                     }
+                    return
+                }
+                guard FileManager.default.isReadableFile(atPath: expanded) else {
+                    // The App Sandbox reaches only Dot's own folders and the folder the
+                    // owner chose; say so instead of blaming the file's contents.
+                    self.respondDirectly("I'm not allowed to open \(expanded). Open Tools & History, then Mac actions & receipts, choose its folder, and ask again.", id: id)
                     return
                 }
                 guard let attributes = try? FileManager.default.attributesOfItem(atPath: expanded),
@@ -2402,7 +2428,7 @@ final class ChatModel: ObservableObject {
                     ? String(content.prefix(4_000)) + "\n… (truncated)" : content
                 respondDirectly("\(source):\n\(clipped)", id: id)
             case .permissionDenied:
-                respondDirectly("I could not read the active page because Accessibility access is off. Enable Dot in System Settings > Privacy & Security > Accessibility, then ask again.", id: id)
+                respondDirectly("I could not read the active page because macOS Automation permission is off. Allow Dot under System Settings > Privacy & Security > Automation for that app (Safari also needs Develop > Allow JavaScript from Apple Events), then ask again.", id: id)
             case .noText:
                 respondDirectly("I could not read the front app's document or page. It may need Automation access, or it may not expose readable text. Try a Safari or Chrome tab, a TextEdit document, or another document-based app.", id: id)
             }
@@ -2447,12 +2473,20 @@ final class ChatModel: ObservableObject {
         // R4 voice settings: all four British voices stay available; only the chosen
         // one is loaded, and the change applies from Dot's next reply.
         if pendingApproval == nil, let choice = Self.voiceCommand(from: copyPhrase) {
+            // Report only what this install can speak: the release payload may
+            // carry Isabella alone, and the picker used to claim the others.
+            let root = Bundle.main.resourceURL?.appendingPathComponent("Offline/Voice", isDirectory: true)
+                ?? URL(fileURLWithPath: "/", isDirectory: true)
+            let installed = DotVoice.installed(root: root)
+            let speaking = DotVoice.launchVoice(selected: DotVoice.selected(), root: root)
+            let names = installed.map(DotVoice.spokenName).joined(separator: ", ")
             if choice == "?" {
-                let current = DotVoice.selected()
-                respondDirectly("Voices: emma (default), isabella, alice and lily. You are using \(current). Say \"use voice alice\" to switch.", id: id)
-            } else {
+                respondDirectly("Installed voices: \(names.isEmpty ? "none" : names). I'm speaking with \(DotVoice.spokenName(speaking)).", id: id)
+            } else if installed.contains(choice) {
                 UserDefaults.standard.set(choice, forKey: DotVoice.defaultsKey)
-                respondDirectly("Voice set to \(choice). I will speak with it from my next reply.", id: id)
+                respondDirectly("Voice set to \(DotVoice.spokenName(choice)). I will speak with it from my next reply.", id: id)
+            } else {
+                respondDirectly("The \(DotVoice.spokenName(choice)) voice isn't installed on this Mac, so I'll keep speaking with \(DotVoice.spokenName(speaking)). Installed: \(names.isEmpty ? "none" : names).", id: id)
             }
             return
         }
@@ -2586,7 +2620,10 @@ final class ChatModel: ObservableObject {
         }
 
         // Check Contextual Developer & App Workflows (Milestone 3)
-        let lowerContextualText = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        // Command parsers compare whole phrases; Whisper's sentence-final "." or "?"
+        // ("Open Safari.") made every one of them miss. Typed content keeps `text`.
+        let command = Self.spokenCommand(text)
+        let lowerContextualText = command.lowercased()
         let activeContext = ActiveDesktopContext.current()
         let detectedApp = ContextualWorkflowApp.identify(bundleID: nil, appName: activeContext.appName)
 
@@ -2696,7 +2733,7 @@ final class ChatModel: ObservableObject {
             break
         }
 
-        let scrollCmd = ScrollControlEngine.parseCommand(text)
+        let scrollCmd = ScrollControlEngine.parseCommand(command)
         if case .scroll(let direction, let amount) = scrollCmd {
             let ok = ScrollControlEngine.scroll(direction: direction, amount: amount)
             let reply = ok ? "Scrolled \(direction.rawValue)." : "Could not scroll \(direction.rawValue). Check Accessibility permissions."
@@ -2704,29 +2741,29 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        if let moveCmd = self.detectMovementCommand(text), let replyText = self.onMove?(moveCmd) {
+        if let moveCmd = self.detectMovementCommand(command), let replyText = self.onMove?(moveCmd) {
             respondDirectly(replyText, id: id)
             return
         }
 
-        if let windowLayout = WindowLayoutManager.parseCommand(text) {
+        if let windowLayout = WindowLayoutManager.parseCommand(command) {
             let reply = WindowLayoutManager.applyLayout(windowLayout)
             respondDirectly(reply, id: id)
             return
         }
 
-        if let workspaceReply = WindowLayoutManager.executeWorkspaceAction(text) {
+        if let workspaceReply = WindowLayoutManager.executeWorkspaceAction(command) {
             respondDirectly(workspaceReply, id: id)
             return
         }
 
-        let simCmd = SimulatorControlSuite.parseCommand(text)
+        let simCmd = SimulatorControlSuite.parseCommand(command)
         if simCmd != .none, let simReply = SimulatorControlSuite.execute(simCmd) {
             respondDirectly(simReply, id: id)
             return
         }
 
-        if NeuralMetricsInspector.isMetricsQuery(text) {
+        if NeuralMetricsInspector.isMetricsQuery(command) {
             let report = NeuralMetricsInspector.currentReport(
                 engineReady: runtime.isReady(),
                 activeTimersCount: SmartTimerScheduler.shared.activeTimers().count
@@ -2735,7 +2772,7 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        let lowerClean = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let lowerClean = command.lowercased()
         if lowerClean == "export soul" || lowerClean == "export my soul" || lowerClean == "export soul memory" || lowerClean == "backup memory" {
             let (_, msg) = DotSoulManager.shared.exportSoul()
             respondDirectly(msg, id: id)
@@ -2794,7 +2831,7 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        let timerCmd = SmartTimerParser.parse(text)
+        let timerCmd = SmartTimerParser.parse(command)
         switch timerCmd {
         case .create(let seconds, let label):
             _ = SmartTimerScheduler.shared.schedule(seconds: seconds, label: label) { [weak self] firedTimer in
@@ -2826,7 +2863,7 @@ final class ChatModel: ObservableObject {
             break
         }
 
-        if let action = self.detectNativeAction(text) {
+        if let action = self.detectNativeAction(command) {
             work = Task { [weak self] in
                 guard let self, self.gate.accepts(id) else { return }
                 let result = await self.onExecuteAction?(action)
@@ -2879,13 +2916,13 @@ final class ChatModel: ObservableObject {
             return
         }
 
-        if let systemReply = self.detectSystemControlCommand(text) {
+        if let systemReply = self.detectSystemControlCommand(command) {
             respondDirectly(systemReply, id: id)
             return
         }
 
         // Calendar & Meeting Preparation
-        let calCmd = CalendarMeetingAssistant.parseCommand(text)
+        let calCmd = CalendarMeetingAssistant.parseCommand(command)
         switch calCmd {
         case .todaySchedule:
             work = Task { [weak self] in
@@ -2918,7 +2955,7 @@ final class ChatModel: ObservableObject {
         }
 
         // On-Screen Laser Pointer & Guidance
-        let laserCmd = LaserPointerParser.parse(text)
+        let laserCmd = LaserPointerParser.parse(command)
         switch laserCmd {
         case .pointToCenter:
             let center = NSScreen.main.map { CGPoint(x: $0.frame.midX, y: $0.frame.midY) } ?? CGPoint(x: 500, y: 500)
@@ -2943,7 +2980,7 @@ final class ChatModel: ObservableObject {
         }
 
         // Native Screen OCR
-        let lowerScreen = text.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowerScreen = command.lowercased()
         if lowerScreen == "copy screen text" || lowerScreen == "copy text from screen" || lowerScreen == "ocr screen" || lowerScreen == "extract screen text" || lowerScreen == "extract text from screen" {
             work = Task { [weak self] in
                 guard let self, self.gate.accepts(id) else { return }
@@ -3056,7 +3093,7 @@ final class ChatModel: ObservableObject {
             }
         }
 
-        if let query = self.detectWebSearchQuery(text) {
+        if let query = self.detectWebSearchQuery(command) {
             self.onRequestResearch?(query)
         }
 
@@ -3168,7 +3205,8 @@ final class ChatModel: ObservableObject {
                             self.pendingApproval = req
                             executedToolConfirmation = "This command requires your approval. Click Approve or say 'Approve' to run: \(command)."
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: "Awaiting user approval", succeeded: true)
-                        } else if ActionApprovalRequest.isPotentiallyDestructive(command),
+                        } else if ActionApprovalRequest.isPotentiallyDestructive(command)
+                                    || FileOperationPolicy.isAutomaticFileOperation(command),
                                   let refusal = await self.safetyRefusal(for: command) {
                             executedToolConfirmation = refusal
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: refusal, succeeded: false)
@@ -3462,6 +3500,31 @@ final class ChatModel: ObservableObject {
         DiagnosticChatLogger.record(role: "dot (error)", text: "\(message) [\(issue)]")
         self.issue = issue; phase = .blocked(message)
         publishHealthSnapshot()
+        if issue == .engine { scheduleEngineHeal(for: message) }
+    }
+
+    /// R19 self-heal: an engine failure retries on its own, three times with
+    /// growing gaps, and clears the error the moment the engine answers again.
+    /// Every attempt is logged, so the uploaded log shows what healed and what did not.
+    private var healTask: Task<Void, Never>?
+    private func scheduleEngineHeal(for message: String) {
+        healTask?.cancel()
+        healTask = Task { @MainActor [weak self] in
+            for (attempt, delay) in [15.0, 45.0, 120.0].enumerated() {
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                guard let self, !Task.isCancelled, !self.shuttingDown, !self.screenPaused,
+                      self.phase.blockedMessage == message else { return }
+                let answered = (try? await self.engine.verifyConnection()) != nil
+                guard !Task.isCancelled, self.phase.blockedMessage == message else { return }
+                DiagnosticChatLogger.record(role: "system",
+                    text: "[HEAL] engine retry \(attempt + 1)/3: \(answered ? "answering again" : "still not answering")")
+                if answered {
+                    self.issue = nil; self.phase = .idle
+                    self.publishHealthSnapshot()
+                    return
+                }
+            }
+        }
     }
 
     private func enqueueVoice(_ text: String, id: UUID) {
@@ -3551,7 +3614,7 @@ final class ChatModel: ObservableObject {
         if case .blocked = savedPhase { issue = savedIssue; phase = savedPhase }
     }
     func cancelForEnvironment(reason: VoiceCaptureEndReason) {
-        if reason == .systemSleep { wakeGreeted = false }
+        if reason == .systemSleep { wakeGreeted = false; beginAbsence() }
         if stt.captureState != .idle {
             stt.cancel(reason: reason)
         } else if reason == .permissionLost || !turnInProgress {
@@ -3577,11 +3640,28 @@ final class ChatModel: ObservableObject {
             issue = nil; phase = .idle
         }
     }
-    /// One "I'm back." per sleep or screen-off, whichever wake path arrives first.
+    /// The first of sleep, display-off or lock starts the absence and draws its
+    /// own three-to-ten-minute threshold.
+    private func beginAbsence() {
+        guard absenceStartedAt == nil else { return }
+        absenceStartedAt = wakeClock()
+        absenceThreshold = WakeGreeting.threshold(roll: wakeRandom())
+    }
+    /// R18: at most one greeting per absence, whichever wake path arrives first,
+    /// spoken about four times in five once the absence passed its threshold.
     private func greetAfterWake() {
         guard !wakeGreeted else { return }
         wakeGreeted = true
-        speakDirect("I'm back.")
+        guard let started = absenceStartedAt else { return }
+        absenceStartedAt = nil
+        let now = wakeClock()
+        let away = now.timeIntervalSince(started)
+        guard WakeGreeting.shouldGreet(awaySeconds: away, threshold: absenceThreshold, roll: wakeRandom()) else { return }
+        let line = WakeGreeting.line(awaySeconds: away, hour: Calendar.current.component(.hour, from: now),
+                                     pick: Int(wakeRandom() * 1_000), avoiding: recentWakeGreetings)
+        recentWakeGreetings.append(line)
+        if recentWakeGreetings.count > 6 { recentWakeGreetings.removeFirst() }
+        speakDirect(line)
     }
     /// R12: a wake is not a failure. Clear the sleep-induced block, re-arm the
     /// proactive scheduler and say Dot is back. The audio route needs a moment to
@@ -3603,7 +3683,7 @@ final class ChatModel: ObservableObject {
         greetAfterWake()
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
-    func beginShutdown() { shuttingDown = true; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; screenWatchTask?.cancel(); screenWatchTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
+    func beginShutdown() { shuttingDown = true; healTask?.cancel(); healTask = nil; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; screenWatchTask?.cancel(); screenWatchTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
     func shutdown() { stopProactivity(); cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 
@@ -3615,18 +3695,17 @@ struct PetView: View {
     @ObservedObject private var preparation = OfflinePreparation.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// R19: an error never changes Dot's face; the banner above Dot carries it.
+    private var displayPhase: PetPhase { model.phase.blockedMessage == nil ? model.phase : .idle }
     private var emotion: PetEmotion {
-        if case .blocked = model.phase { return .puzzled }
-        if model.issue != nil { return .puzzled }
         if model.taskHalo != .hidden || stt.transcribing {
             return .working
         }
-        switch model.phase {
-        case .idle: return .idle
+        switch displayPhase {
+        case .idle, .blocked: return .idle
         case .listening: return .listening
         case .thinking: return .thinking
         case .speaking: return .speaking
-        case .blocked: return .puzzled
         }
     }
 
@@ -3654,7 +3733,7 @@ struct PetView: View {
                 taskHaloView
                 PetCharacter(
                     emotion: emotion,
-                    phase: model.phase,
+                    phase: displayPhase,
                     level: stt.level,
                     still: reduceMotion || (model.pinned && !model.phase.isActive),
                     skin: skins.selected,

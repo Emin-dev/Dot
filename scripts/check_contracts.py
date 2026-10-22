@@ -146,6 +146,22 @@ checks = {
         and 'NSAlert' not in read('src/DotLogSync.swift')
         and re.search(r'\bissue\s*=', read('src/DotLogSync.swift')) is None
     ),
+    'R18 wake greeting is varied, time-aware and bounded': 'WakeGreeting.shouldGreet(awaySeconds: away' in chat and 'static let greetChance = 0.8' in read('src/ProactiveBehavior.swift') and 'shortestAbsence = 180.0' in read('src/ProactiveBehavior.swift') and 'longestAbsence = 600.0' in read('src/ProactiveBehavior.swift') and "speakDirect(\"I'm back.\")" not in chat,
+    'R19 errors keep Dot living, show a banner and heal the engine': 'private let issueBanner = IssueBanner()' in read('src/App.swift') and read('src/App.swift').count('model.phase.isResting') >= 5 and 'model.phase == .idle' not in read('src/App.swift') and '.puzzled' not in chat and 'if issue == .engine { scheduleEngineHeal(for: message) }' in chat and 'ignoresMouseEvents = true' in read('src/CompanionPanel.swift'),
+    'safety approver request fits its context and harness failures never count as refusals': 'with_n_ctx(NonZeroU32::new(CONTEXT_TOKENS))' in read('crates/dot-safety/src/main.rs') and 'json!({"error": reason})' in read('crates/dot-safety/src/main.rs') and 'process.standardError = FileHandle.nullDevice' in read('src/SafetyApprover.swift') and 'Self.recent(conversation)' in read('src/SafetyApprover.swift') and 'if let error = object["error"] as? String { return .unavailable(reason: error) }' in read('src/SafetyApprover.swift'),
+    'an offline relaunch with the model on disk needs no download or free space': 'if DownloadBudget.needsDownload(total: plan.total_bytes, reusableBytes: reusable) {' in read('src/OfflinePreparation.swift'),
+    'display sleep and lock never stop the one-time model download': read('src/App.swift').count('OfflinePreparation.shared.pause(keepingDownload: true)') == 2 and 'if keepingDownload, state == .checking, detail != nil { return }' in read('src/OfflinePreparation.swift'),
+    'R20 idle self-reflection is a short spoken note and never touches the clipboard': 'performReflectionAndWriteToAntigravity(copyToClipboard: false)' in chat and 'guard copyToClipboard else { return Self.shortNote(wroteFile: wroteFile) }' in read('src/InteractionCore.swift'),
+    'R19 banner is wired and a healed engine clears the error': re.search(r'model\.\$phase\.combineLatest\(preparation\.\$state\)\s+\.receive\(on: RunLoop\.main\)\.sink \{ \[weak self\] phase, readiness in\s+Task \{ @MainActor in self\?\.showIssue\(phase: phase, readiness: readiness\) \}', read('src/App.swift')) is not None and re.search(r'if answered \{\s+self\.issue = nil; self\.phase = \.idle', chat) is not None,
+    'safety approver context is 2,048 tokens and trims the oldest conversation to fit': 'const CONTEXT_TOKENS: u32 = 2048;' in read('crates/dot-safety/src/main.rs') and '.with_n_batch(CONTEXT_TOKENS)' in read('crates/dot-safety/src/main.rs') and 'conversation = &conversation[cut..];' in read('crates/dot-safety/src/main.rs') and 'if tokens.len() <= PROMPT_TOKENS {' in read('crates/dot-safety/src/main.rs') and re.search(r'static let conversationCharacters = 3_000\n', read('src/SafetyApprover.swift')) is not None and re.search(r'static let actionCharacters = 1_000\n', read('src/SafetyApprover.swift')) is not None,
+    'a wake or second retry never restarts the running download': 'if state == .checking, work != nil, !resumeRequested { return }' in read('src/OfflinePreparation.swift'),
+    'idle reflection returns before any clipboard write': (lambda f: f.index('guard copyToClipboard else { return Self.shortNote(wroteFile: wroteFile) }') < f.index('ClipboardIntelligence.write(suggestion)'))(read('src/InteractionCore.swift').partition('public func performReflectionAndWriteToAntigravity(')[2]) if 'ClipboardIntelligence.write(suggestion)' in read('src/InteractionCore.swift').partition('public func performReflectionAndWriteToAntigravity(')[2] else False,
+    'Remove Dot never returns before leaving the command on the clipboard': 'if opened { return }' not in read('src/App.swift').partition('func removeDotCompletely()')[2].partition('fallback.runModal()\n    }')[0],
+    'voice approve and deny end the listening turn first': re.search(r'cancelTurn\(\)\s+approvePendingAction\(\)\s+return', chat) is not None and re.search(r'cancelTurn\(\)\s+denyPendingAction\(\)\s+return', chat) is not None,
+    'automatic file utilities pass the R16 safety approver': re.search(r'\|\|\s*FileOperationPolicy\.isAutomaticFileOperation\(command\),\s*let refusal = await self\.safetyRefusal\(for: command\)', chat) is not None,
+    'scoped file operations parse options and paths inside the selected folder': 'let words = FileOperationPolicy.tokenize(trimmed)' in chat and 'if word == "--recursive" { recursive = true }' in chat and 'if !optionsEnded, word == "--" { optionsEnded = true; continue }' in chat and 'currentDirectory: UserFolderScope.shared.current' in chat,
+    'every launch is queued for log upload before the token check': re.search(r'writeMetadataIfNeeded\(\)\s+enqueueCurrentFiles\(\)\s+guard let token = token\(\) else', read('src/DotLogSync.swift')) is not None,
+    'Remove Dot always leaves the command and says what happened': re.search(r'NSPasteboard\.general\.setString\(download, forType: \.string\)\s+let fallback = NSAlert\(\)\s+fallback\.messageText = opened \? "Removal opened in Terminal" : "Terminal could not be opened"', read('src/App.swift')) is not None,
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
     'default app safety approver finds the downloaded aux model': (
         'OfflinePreparation.shared.root' in read('src/SafetyApprover.swift')
@@ -228,7 +244,12 @@ checks = {
          and e.get('com.apple.security.files.user-selected.read-write') is True
          and e.get('com.apple.security.personal-information.calendars') is True
          and e.get('com.apple.security.automation.apple-events') is True
-         and not any(k.startswith('com.apple.security.temporary-exception') for k in e))(
+         # R21 (owner answer 2026-10-22): exactly these read-only and Apple-event exceptions.
+         and {k for k in e if k.startswith('com.apple.security.temporary-exception')} == {
+             'com.apple.security.temporary-exception.files.home-relative-path.read-only',
+             'com.apple.security.temporary-exception.apple-events'}
+         and e.get('com.apple.security.temporary-exception.files.home-relative-path.read-only') == ['/Desktop/', '/Documents/']
+         and e.get('com.apple.security.files.downloads.read-only') is True)(
             plistlib.loads((root / 'Resources/Dot.entitlements').read_bytes()))
         and '--entitlements "$ENTITLEMENTS"' in read('scripts/sign_sandbox_app.sh')
         and '--options runtime' in read('scripts/sign_sandbox_app.sh')

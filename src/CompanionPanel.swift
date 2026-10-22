@@ -1,4 +1,80 @@
 import AppKit
+import SwiftUI
+
+/// R19 (owner answer 2026-10-22): a failure never changes how Dot looks or lives.
+/// Its words float above Dot in large text instead: a click-through child panel
+/// that moves with Dot and flips below it near the top of the screen.
+@MainActor
+final class IssueBanner {
+    static let size = NSSize(width: 320, height: 112)
+    private var window: NSPanel?
+    private var host: NSHostingView<IssueBannerView>?
+    private var moveObserver: NSObjectProtocol?
+    private var text = ""
+
+    func update(text: String?, above parent: NSWindow) {
+        guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { hide(); return }
+        let banner = window ?? make()
+        self.text = text
+        if banner.parent !== parent {
+            banner.parent?.removeChildWindow(banner)
+            parent.addChildWindow(banner, ordered: .above)
+            if let moveObserver { NotificationCenter.default.removeObserver(moveObserver) }
+            moveObserver = NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: parent, queue: .main) { [weak self, weak parent] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let parent, let window = self.window, window.isVisible else { return }
+                    self.position(window, around: parent)
+                }
+            }
+        }
+        position(banner, around: parent)
+        if parent.isVisible { banner.orderFront(nil) }
+    }
+
+    func hide() { window?.orderOut(nil) }
+
+    private func make() -> NSPanel {
+        let panel = NSPanel(contentRect: NSRect(origin: .zero, size: Self.size),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.identifier = NSUserInterfaceItemIdentifier("dot.issue")
+        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
+        panel.ignoresMouseEvents = true; panel.level = .floating; panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        let view = NSHostingView(rootView: IssueBannerView(text: "", above: true))
+        panel.contentView = view
+        window = panel; host = view
+        return panel
+    }
+
+    private func position(_ banner: NSWindow, around parent: NSWindow) {
+        let pet = parent.frame
+        let visible = parent.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? pet
+        var origin = CGPoint(x: pet.midX - Self.size.width / 2, y: pet.maxY - 8)
+        let above = origin.y + Self.size.height <= visible.maxY
+        if !above { origin.y = pet.minY - Self.size.height + 8 }
+        origin.x = min(max(origin.x, visible.minX), visible.maxX - Self.size.width)
+        host?.rootView = IssueBannerView(text: text, above: above)
+        banner.setFrame(NSRect(origin: origin, size: Self.size), display: true)
+    }
+}
+
+struct IssueBannerView: View {
+    let text: String
+    /// Above Dot the text sits on Dot's head; below it, under Dot's feet.
+    let above: Bool
+    var body: some View {
+        Text(text)
+            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .multilineTextAlignment(.center)
+            .lineLimit(4)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.red.opacity(0.88)))
+            .frame(width: IssueBanner.size.width, height: IssueBanner.size.height, alignment: above ? .bottom : .top)
+            .accessibilityHidden(true)
+    }
+}
 
 /// The application owns one reusable surface. Menus and OS permission prompts are separate system UI.
 @MainActor

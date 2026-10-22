@@ -414,6 +414,43 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.commandPhrase("Read file notes.txt"), "read file notes.txt")
         XCTAssertTrue(ChatModel.isMemoryListRequest(ChatModel.commandPhrase("What do you remember about me?")))
         XCTAssertFalse(ChatModel.isMemoryListRequest(ChatModel.commandPhrase("What do you remember about Paris?")))
+        // Whole-phrase parsers get the transcript without its sentence-final mark, case kept.
+        XCTAssertEqual(ChatModel.spokenCommand(" Open Safari. "), "Open Safari")
+        XCTAssertEqual(ChatModel.spokenCommand("Check RAM?!"), "Check RAM")
+        XCTAssertEqual(ChatModel.spokenCommand("open github.com"), "open github.com")
+    }
+
+    @MainActor func testScopedFileOperationsStayInsideTheSelectedFolder() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent("dot-scope-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let previous = UserFolderScope.shared.current
+        defer { UserFolderScope.shared.set(previous); try? fileManager.removeItem(at: root) }
+
+        UserFolderScope.shared.set(nil)
+        XCTAssertNil(ChatModel.runScopedFileOperation("mkdir Notes"), "no selected folder means the sandboxed shell")
+        UserFolderScope.shared.set(root)
+        let folder = root.appendingPathComponent("My Folder").path
+
+        // Quotes keep one path; a relative path means inside the selected folder.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("mkdir \"My Folder\"")?.hasPrefix("Created"), true)
+        XCTAssertTrue(fileManager.fileExists(atPath: folder))
+        // "--" ends the options, so "-notes.txt" is a file name.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("touch -- -notes.txt")?.hasPrefix("Touched"), true)
+        XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("-notes.txt").path))
+        // "--force" never implies recursion.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("rm --force \"My Folder\"")?.hasPrefix("Refused"), true)
+        XCTAssertTrue(fileManager.fileExists(atPath: folder))
+        XCTAssertEqual(ChatModel.runScopedFileOperation("rm -rf \"My Folder\"")?.hasPrefix("Removed"), true)
+        XCTAssertFalse(fileManager.fileExists(atPath: folder))
+        // A missing file is fine with -f and an error without it.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("rm -f gone.txt")?.hasPrefix("Removed"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("rm gone.txt")?.hasPrefix("Could not remove"), true)
+        // Escapes and shell syntax never run in-process.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("rm ../outside.txt")?.contains("outside the folder you selected"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("rm /etc/hosts")?.contains("outside the folder you selected"), true)
+        XCTAssertNil(ChatModel.runScopedFileOperation("rm a.txt; rm b.txt"))
+        XCTAssertNil(ChatModel.runScopedFileOperation("ls -la"))
     }
 
     @MainActor func testPageReadRequestIsExactAndDoesNotStealOrdinaryTurns() {
@@ -443,8 +480,15 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.spotlightNameQuery(from: "/Users/me/Documents/budget.csv"), "budget.csv")
     }
 
+    /// R18: every human-like wake line, for assertions that a greeting was spoken.
+    private static let wakeLines = WakeGreeting.PartOfDay.allCases.flatMap { part in
+        [false, true].flatMap { WakeGreeting.lines(for: part, long: $0) }
+    }
+
     @MainActor func testScreenOffPausesAutonomousWorkAndSpeech() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        f.model.wakeClock = { now }; f.model.wakeRandom = { 0 }
         f.model.startProactivity()
         f.model.speakDirect("hello")
         XCTAssertTrue(f.enqueued.contains("hello"))
@@ -456,34 +500,82 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertFalse(f.enqueued.contains("hidden"))
         f.model.stt.onFinal?(UUID(), "ignored")
 
+        now += 11 * 60
         f.model.resumeAfterScreenOn()
         XCTAssertFalse(f.model.screenPaused)
-        // R12: resume greets on its own, and the voice path is live again afterwards.
-        XCTAssertTrue(f.enqueued.contains("I'm back."), "Resume must speak the wake greeting")
+        // R12/R18: after a real absence resume greets on its own, and the voice path is live again.
+        XCTAssertTrue(Self.wakeLines.contains(f.enqueued.last ?? ""), "Resume must speak a wake greeting")
         guard case .speaking = f.model.phase else { return XCTFail("The greeting must start playback") }
     }
 
     @MainActor func testSystemWakeClearsTheSleepBlockAndSaysItIsBack() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        f.model.wakeClock = { now }; f.model.wakeRandom = { 0 }
         f.model.speakDirect("hello")
         f.model.cancelForEnvironment(reason: .systemSleep)
         guard case .blocked = f.model.phase else { return XCTFail("Sleep during speech must block the turn") }
+        now += 11 * 60
         f.model.handleSystemWake()
         XCTAssertNil(f.model.issue)
-        XCTAssertTrue(f.enqueued.contains("I'm back."))
+        XCTAssertTrue(Self.wakeLines.contains(f.enqueued.last ?? ""))
         guard case .speaking = f.model.phase else { return XCTFail("The greeting must start playback") }
     }
 
     @MainActor func testIdleSleepNeverBlocksAndResumeGreetsOnce() async throws {
         let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        f.model.wakeClock = { now }; f.model.wakeRandom = { 0 }
         f.model.pauseForScreenOff()
         f.model.cancelForEnvironment(reason: .systemSleep)
         XCTAssertEqual(f.model.phase, .idle, "Sleeping while idle interrupts nothing")
         XCTAssertNil(f.model.issue)
+        now += 11 * 60
         f.model.resumeAfterScreenOn()
         f.speaking = false; f.model.cancelTurn()
         f.model.handleSystemWake()
-        XCTAssertEqual(f.enqueued.filter { $0 == "I'm back." }.count, 1, "Both wake paths share one greeting")
+        XCTAssertEqual(f.enqueued.filter { Self.wakeLines.contains($0) }.count, 1, "Both wake paths share one greeting")
+    }
+
+    /// The approver's 2,048-token context must always hold the request; at 512
+    /// tokens it refused every file action once a conversation had a few turns.
+    func testSafetyApproverRequestAlwaysFitsItsContext() {
+        let long = (0..<500).map { "user: line \($0) with some words" }.joined(separator: "\n")
+        let bounded = SafetyApprover.recent(long)
+        XCTAssertLessThanOrEqual(bounded.count, SafetyApprover.conversationCharacters)
+        XCTAssertTrue(bounded.hasSuffix("line 499 with some words"), "the newest turn is kept")
+        XCTAssertTrue(bounded.hasPrefix("user: line"), "the cut lands at a line start")
+        XCTAssertEqual(SafetyApprover.recent("short"), "short")
+    }
+
+    /// R19 (owner answer 2026-10-22): an error never stops Dot from living.
+    @MainActor func testBlockedDotKeepsIdleMotionAndShowsItsMessage() async throws {
+        XCTAssertTrue(PetPhase.blocked("Microphone access is off.").isResting)
+        XCTAssertTrue(PetPhase.idle.isResting)
+        XCTAssertFalse(PetPhase.speaking.isResting)
+        XCTAssertEqual(PetPhase.blocked("Engine offline").blockedMessage, "Engine offline")
+        XCTAssertNil(PetPhase.idle.blockedMessage)
+
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        f.model.speakDirect("hello")
+        f.model.cancelForEnvironment(reason: .routeChanged)
+        guard case .blocked = f.model.phase else { return XCTFail("A device change during speech must block") }
+        f.speaking = false
+        _ = f.model.updateIdleMotion(now: 1_000, externallyPaused: false, pointerNearby: false, reduceMotion: false, moved: false)
+        XCTAssertTrue(f.model.updateIdleMotion(now: 1_050, externallyPaused: false, pointerNearby: false, reduceMotion: false, moved: false),
+                      "Idle motion continues while the error is shown")
+    }
+
+    @MainActor func testShortAbsenceOrUnluckyRollStaysSilent() async throws {
+        let f = try TypedFixture(); addTeardownBlock { await f.close() }
+        var now = Date(timeIntervalSince1970: 1_800_000_000)
+        var roll = 0.0
+        f.model.wakeClock = { now }; f.model.wakeRandom = { roll }
+        // Threshold drawn at 3 minutes; a 2-minute absence is too short.
+        f.model.pauseForScreenOff(); now += 120; f.model.resumeAfterScreenOn()
+        // A long absence with a roll at or above 0.8 is the one time in five Dot stays quiet.
+        f.model.pauseForScreenOff(); now += 20 * 60; roll = 0.9; f.model.resumeAfterScreenOn()
+        XCTAssertFalse(f.enqueued.contains { Self.wakeLines.contains($0) })
     }
 
     @MainActor func testFinalSpokenQuestionArmsTheFollowupWithoutAToolCall() {

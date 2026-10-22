@@ -41,7 +41,18 @@ class Phase7sContractTests(unittest.TestCase):
             "com.apple.security.files.user-selected.read-write",
             "com.apple.security.personal-information.calendars",
             "com.apple.security.automation.apple-events",
+            # R21 (owner answer 2026-10-22): narrow exceptions so the documented
+            # page reader, dark mode/sleep, media pausing and file awareness work.
+            "com.apple.security.files.downloads.read-only",
+            "com.apple.security.temporary-exception.files.home-relative-path.read-only",
+            "com.apple.security.temporary-exception.apple-events",
         })
+        self.assertEqual(entitlements["com.apple.security.temporary-exception.files.home-relative-path.read-only"],
+                         ["/Desktop/", "/Documents/"])
+        self.assertEqual(entitlements["com.apple.security.temporary-exception.apple-events"], [
+            "com.apple.systemevents", "com.apple.Safari", "com.google.Chrome",
+            "com.apple.TextEdit", "com.apple.Music", "com.spotify.client",
+        ])
 
     def test_every_packaging_path_signs_with_entitlements_and_runtime(self):
         signer = read("scripts/sign_sandbox_app.sh")
@@ -146,8 +157,12 @@ class Phase7sContractTests(unittest.TestCase):
         for forbidden in ("LaunchAgents", "LaunchDaemons", "sudo", "launchctl load"):
             self.assertNotIn(forbidden, workflow)
         entitlements = plistlib.loads((ROOT / "Resources/Dot.entitlements").read_bytes())
-        self.assertFalse(any(key.startswith("com.apple.security.temporary-exception")
-                             for key in entitlements))
+        # R21 allows only the two read-only/Apple-event exceptions, never a write path.
+        exceptions = {key for key in entitlements if key.startswith("com.apple.security.temporary-exception")}
+        self.assertEqual(exceptions, {
+            "com.apple.security.temporary-exception.files.home-relative-path.read-only",
+            "com.apple.security.temporary-exception.apple-events",
+        })
 
 
 class PrivacySnapshotDiffTests(unittest.TestCase):

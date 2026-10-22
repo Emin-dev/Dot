@@ -14,6 +14,34 @@ final class ProactiveBehaviorTests: XCTestCase {
         XCTAssertFalse(prompt.contains("call ask_user with a short natural follow-up question"))
     }
 
+    /// R18 (owner answer 2026-10-22): greet about 80% of the time, only past a
+    /// per-absence threshold between 3 and 10 minutes, by time of day, without repeats.
+    func testWakeGreetingThresholdChanceAndTimeOfDay() {
+        XCTAssertEqual(WakeGreeting.threshold(roll: 0), 180)
+        XCTAssertEqual(WakeGreeting.threshold(roll: 1), 600)
+        XCTAssertEqual(WakeGreeting.threshold(roll: 0.5), 390)
+        XCTAssertFalse(WakeGreeting.shouldGreet(awaySeconds: 1, threshold: 180, roll: 0))
+        XCTAssertFalse(WakeGreeting.shouldGreet(awaySeconds: 179, threshold: 180, roll: 0))
+        XCTAssertTrue(WakeGreeting.shouldGreet(awaySeconds: 180, threshold: 180, roll: 0.79))
+        XCTAssertFalse(WakeGreeting.shouldGreet(awaySeconds: 3_600, threshold: 180, roll: 0.8))
+        XCTAssertEqual(WakeGreeting.partOfDay(hour: 8), .morning)
+        XCTAssertEqual(WakeGreeting.partOfDay(hour: 14), .afternoon)
+        XCTAssertEqual(WakeGreeting.partOfDay(hour: 19), .evening)
+        XCTAssertEqual(WakeGreeting.partOfDay(hour: 2), .night)
+        XCTAssertTrue(WakeGreeting.line(awaySeconds: 10_000, hour: 8, pick: 0, avoiding: []).contains("orning"))
+    }
+
+    func testWakeGreetingNeverRepeatsARecentLine() {
+        var recent: [String] = []
+        for pick in 0..<4 {
+            let line = WakeGreeting.line(awaySeconds: 600, hour: 14, pick: pick * 7, avoiding: recent)
+            XCTAssertFalse(recent.contains(line), line)
+            recent.append(line)
+        }
+        XCTAssertEqual(Set(recent).count, 4)
+        XCTAssertFalse(recent.contains("I'm back."), "No fixed robotic sentence")
+    }
+
     func testEveryPresetWaitsItsExactMonotonicInterval() throws {
         XCTAssertEqual(ProactiveFrequency.high.interval, 60)
         XCTAssertEqual(ProactiveFrequency.normal.interval, 240)

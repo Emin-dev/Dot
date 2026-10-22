@@ -111,17 +111,19 @@ final class DotLogSync: @unchecked Sendable {
         running = true
         defer { running = false }
 
+        guard supportDirectory != nil, logsDirectory != nil else { return }
+        createPrivateDirectory()
+        pruneSnapshotsIfNeeded()
+
+        // Queue this launch's metadata and logs even without a token, so every
+        // launch made before the owner stores it is uploaded once a token exists.
+        writeMetadataIfNeeded()
+        enqueueCurrentFiles()
         guard let token = token() else {
             notice("no-log-token",
                    "[SYNC] log upload is waiting for the owner's GitHub token in Keychain service \(Self.keychainService)")
             return
         }
-        guard supportDirectory != nil, logsDirectory != nil else { return }
-        createPrivateDirectory()
-        pruneSnapshotsIfNeeded()
-
-        writeMetadataIfNeeded()
-        enqueueCurrentFiles()
         flush(token: token)
     }
 

@@ -134,7 +134,7 @@ class Phase6ReviewContractTests(unittest.TestCase):
         method = source.split('private func respondDirectly(', 1)[1]
         method = method.split('\n    }', 1)[0]
         self.assertIn('guard gate.accepts(id) else { return }', method)
-        for marker in ('let expanded = (path as NSString).expandingTildeInPath',
+        for marker in ('let expanded = UserFolderScope.expandingUserHome(path)',
                        'var removed = 0', 'var lines: [String] = []'):
             task = source.split(marker, 1)[0].rsplit('Task { [weak self] in', 1)[1]
             self.assertIn('self.gate.accepts(id)', task)

@@ -157,6 +157,9 @@ final class VoiceEventTests: XCTestCase {
                                     "/payload/Voice/model/voices/bf_alice.pt"]
         XCTAssertEqual(DotVoice.launchVoice(selected: "bf_alice", root: root, exists: present.contains), "bf_alice")
         XCTAssertEqual(DotVoice.launchVoice(selected: "bf_emma", root: root, exists: present.contains), "bf_isabella")
+        // The picker lists only voices whose embedding is on disk.
+        XCTAssertEqual(DotVoice.installed(root: root, exists: present.contains), ["bf_isabella", "bf_alice"])
+        XCTAssertEqual(DotVoice.spokenName("bf_isabella"), "isabella")
     }
     func testVoiceAudioRequiresValidRequestAndTurn() {
         XCTAssertNotNil(event(audio))
@@ -520,6 +523,22 @@ final class ProvisioningContractTests: XCTestCase {
     func testSpaceBudgetNeverCreditsMoreThanPayload() {
         XCTAssertEqual(DownloadBudget.requiredFree(total: 20, reusableBytes: 100), 5_000_000_000)
         XCTAssertEqual(DownloadBudget.requiredFree(total: 20, reusableBytes: -1), 5_000_000_020)
+    }
+    /// Inside the App Sandbox "~" must still mean the owner's home folder.
+    func testTildeIsTheOwnersHomeNotTheSandboxContainer() {
+        let sandbox = "/Users/emin/Library/Containers/app.dot.local/Data"
+        XCTAssertEqual(UserFolderScope.userHome(sandboxHome: sandbox), "/Users/emin")
+        XCTAssertEqual(UserFolderScope.expandingUserHome("~/Notes/a.txt", sandboxHome: sandbox), "/Users/emin/Notes/a.txt")
+        XCTAssertEqual(UserFolderScope.expandingUserHome("~", sandboxHome: sandbox), "/Users/emin")
+        XCTAssertEqual(UserFolderScope.expandingUserHome("/tmp/a", sandboxHome: sandbox), "/tmp/a")
+        XCTAssertEqual(UserFolderScope.userHome(sandboxHome: "/Users/emin"), "/Users/emin")
+    }
+    /// An offline relaunch with the whole model on disk downloads nothing, so it
+    /// must not be refused for free space (it demanded ~6.9 GB on every launch).
+    func testCompleteModelOnDiskNeedsNoDownloadOrFreeSpace() {
+        XCTAssertFalse(DownloadBudget.needsDownload(total: 22_400_000_000, reusableBytes: 22_400_000_000))
+        XCTAssertTrue(DownloadBudget.needsDownload(total: 22_400_000_000, reusableBytes: 22_399_999_999))
+        XCTAssertTrue(DownloadBudget.needsDownload(total: 22_400_000_000, reusableBytes: 0))
     }
     func testScreenPrivacyChoiceSurvivesNewReader() {
         let name = "DotPrivacyTest." + UUID().uuidString
@@ -2147,6 +2166,22 @@ final class SelfReflectionEmptyInputTests: XCTestCase {
         XCTAssertEqual(engine.performReflectionAndWriteToAntigravity(logURL: url),
                        IdleSelfReflectionEngine.noNewMaterialMessage)
         XCTAssertNil(engine.lastSuggestion)
+    }
+
+    /// R20 (owner answer 2026-10-22): the idle reflection speaks one short note and
+    /// keeps the full idea in its file; it never builds the long clipboard report.
+    @MainActor func testIdleReflectionSpeaksAShortNoteAndKeepsTheIdeaInItsFile() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dot-reflect-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("dot_chat_log.txt")
+        try Data("[SYSTEM] App session started\n[2026-10-22T10:00:00Z] [USER] Check RAM.\n".utf8).write(to: url)
+        let engine = IdleSelfReflectionEngine()
+        let note = engine.performReflectionAndWriteToAntigravity(logURL: url, copyToClipboard: false)
+        XCTAssertEqual(note, IdleSelfReflectionEngine.shortNote(wroteFile: true))
+        let saved = try String(contentsOf: try XCTUnwrap(DiagnosticChatLogger.reflectionsFileURL(for: url)), encoding: .utf8)
+        XCTAssertTrue(saved.contains(try XCTUnwrap(engine.lastSuggestion)))
     }
 }
 

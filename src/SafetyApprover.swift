@@ -62,6 +62,18 @@ final class SafetyApprover: @unchecked Sendable {
         policy.clear(action)
     }
 
+    static let conversationCharacters = 3_000
+    static let actionCharacters = 1_000
+    /// The newest `limit` characters, cut at a line start when one is close by.
+    static func recent(_ conversation: String, limit: Int = conversationCharacters) -> String {
+        guard conversation.count > limit else { return conversation }
+        let tail = conversation.suffix(limit)
+        if let newline = tail.firstIndex(of: "\n"), tail.distance(from: tail.startIndex, to: newline) < 200 {
+            return String(tail[tail.index(after: newline)...])
+        }
+        return String(tail)
+    }
+
     func registerStrike(key: String) -> Int {
         lock.lock(); defer { lock.unlock() }
         return policy.registerStrike(key)
@@ -73,17 +85,22 @@ final class SafetyApprover: @unchecked Sendable {
         if consumeForce(for: action) { return .allowed }
         guard let binary = binaryURL else { return .unavailable(reason: "approver binary missing") }
         guard let model = await modelURL() else { return .unavailable(reason: "approver model missing") }
-        let request: [String: String] = ["conversation": conversation, "action": action]
+        // The approver runs a 2,048-token context: send the newest part of the
+        // conversation and a bounded action so every request fits.
+        let request: [String: String] = ["conversation": Self.recent(conversation),
+                                         "action": String(action.prefix(Self.actionCharacters))]
         guard let body = try? JSONSerialization.data(withJSONObject: request) else {
             return .unavailable(reason: "request encoding failed")
         }
         let process = Process()
         process.executableURL = binary
         process.arguments = ["--model", model.path]
-        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        let stdin = Pipe(), stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = stderr
+        // llama.cpp logs its model load to stderr; an unread pipe filled up and
+        // stalled the approver until the watchdog killed it.
+        process.standardError = FileHandle.nullDevice
         do {
             try process.run()
             stdin.fileHandleForWriting.write(body)
@@ -101,9 +118,13 @@ final class SafetyApprover: @unchecked Sendable {
         let data = stdout.fileHandleForReading.readDataToEndOfFile()
         watchdog.cancel()
         process.waitUntilExit()
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let verdict = object["verdict"] as? String else {
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return .unavailable(reason: "approver gave no verdict")
+        }
+        // A harness failure is not the model saying no: no execution and no strike.
+        if let error = object["error"] as? String { return .unavailable(reason: error) }
+        guard process.terminationStatus == 0, let verdict = object["verdict"] as? String else {
+            return .unavailable(reason: (object["reason"] as? String) ?? "approver gave no verdict")
         }
         let reason = (object["reason"] as? String) ?? ""
         if verdict == "yes" {

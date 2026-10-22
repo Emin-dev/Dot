@@ -87,6 +87,24 @@ enum SubprocessRunner {
 /// the safety approver a concrete target. It never widens the sandbox.
 final class UserFolderScope: @unchecked Sendable {
     static let shared = UserFolderScope()
+
+    /// The owner's real home folder. Inside the App Sandbox NSHomeDirectory() is
+    /// the container (~/Library/Containers/<id>/Data), so "~" would point there.
+    static func userHome(sandboxHome: String = NSHomeDirectory()) -> String {
+        sandboxHome.components(separatedBy: "/Library/Containers/").first ?? sandboxHome
+    }
+    static func expandingUserHome(_ path: String, sandboxHome: String = NSHomeDirectory()) -> String {
+        guard path == "~" || path.hasPrefix("~/") else { return path }
+        return userHome(sandboxHome: sandboxHome) + String(path.dropFirst())
+    }
+    /// The owner's real Desktop, Documents or Downloads folder. R21 grants read
+    /// access to exactly these; FileManager's .desktopDirectory and friends name
+    /// the container's copies inside the App Sandbox.
+    static func userFolder(_ name: String, sandboxHome: String = NSHomeDirectory()) -> URL {
+        URL(fileURLWithPath: userHome(sandboxHome: sandboxHome), isDirectory: true)
+            .appendingPathComponent(name, isDirectory: true)
+    }
+    static var watchedFolders: [URL] { ["Desktop", "Documents", "Downloads"].map { userFolder($0) } }
     private let lock = NSLock()
     private var folder: URL?
 
@@ -290,6 +308,15 @@ enum DotVoice {
         let voices = (exists(model.path) ? model : root).appendingPathComponent("voices", isDirectory: true)
         return exists(voices.appendingPathComponent(selected + ".pt").path) ? selected : alwaysBundled
     }
+    /// The British voices whose embedding this install actually carries; the
+    /// release payload may ship only Isabella, so a picker must never promise more.
+    static func installed(root: URL, exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }) -> [String] {
+        british.filter { launchVoice(selected: $0, root: root, exists: exists) == $0 }
+    }
+    /// "bf_isabella" -> "isabella".
+    static func spokenName(_ voice: String) -> String {
+        voice.hasPrefix("bf_") ? String(voice.dropFirst(3)) : voice
+    }
 }
 
 /// Strict framing for Dot's bundled Bionic helper, not an installed daemon API.
@@ -435,6 +462,11 @@ struct StreamUpdateBuffer {
 struct DownloadBudget {
     static func requiredFree(total: Int64, reusableBytes: Int64) -> Int64 {
         max(0, total - min(total, max(0, reusableBytes))) + 5_000_000_000
+    }
+    /// A model already on disk at its exact sizes downloads nothing, so an offline
+    /// relaunch must not demand free space or report "Downloading".
+    static func needsDownload(total: Int64, reusableBytes: Int64) -> Bool {
+        reusableBytes < total
     }
 }
 enum ScreenPrivacyPreference {
@@ -2566,7 +2598,9 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
     }
 
     @MainActor
-    public func performReflectionAndWriteToAntigravity(logURL: URL? = nil) -> String {
+    /// `copyToClipboard` is only for the owner's explicit "self reflect" command;
+    /// the idle ticker never touches the clipboard (R20, owner answer 2026-10-22).
+    public func performReflectionAndWriteToAntigravity(logURL: URL? = nil, copyToClipboard: Bool = true) -> String {
         markReflected()
         lock.lock(); lastSuggestion = nil; lock.unlock()
         let url = logURL ?? DiagnosticChatLogger.logFileURL
@@ -2620,8 +2654,15 @@ public final class IdleSelfReflectionEngine: @unchecked Sendable {
         // The owner asked for this: never type into another application unprompted.
         // The suggestion is written to its own file above and copied to the clipboard
         // so it can be pasted deliberately, and Dot states what actually happened.
+        guard copyToClipboard else { return Self.shortNote(wroteFile: wroteFile) }
         let copied = ClipboardIntelligence.write(suggestion)
         return Self.reflectionReport(suggestion: suggestion, readLog: true, wroteFile: wroteFile, copied: copied)
+    }
+
+    /// R20: what the idle reflection says aloud: one short sentence. The full
+    /// suggestion goes to the reflections file and the uploaded log instead.
+    static func shortNote(wroteFile: Bool) -> String {
+        wroteFile ? "I noted an idea to improve myself." : "I had an idea to improve myself, but couldn't save it."
     }
 
     static func reflectionReport(suggestion: String, readLog: Bool, wroteFile: Bool, copied: Bool) -> String {
@@ -2847,10 +2888,14 @@ public enum SimulatorControlSuite {
             }
             return "Xcode Simulator.app was not found in /Applications/Xcode.app."
         case .screenshot:
-            guard let desktop = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first else {
-                return "Could not resolve Desktop directory."
+            // Under the App Sandbox the Desktop is read-only (R21); the screenshot goes
+            // to Dot's own Documents folder and is revealed in Finder.
+            guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+                return "Could not resolve Dot's Documents folder."
             }
-            let outURL = desktop.appendingPathComponent("simulator_screenshot_\(Int(Date().timeIntervalSince1970)).png")
+            let folder = support.appendingPathComponent("Dot/Documents", isDirectory: true)
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let outURL = folder.appendingPathComponent("simulator_screenshot_\(Int(Date().timeIntervalSince1970)).png")
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
             process.arguments = ["simctl", "io", "booted", "screenshot", outURL.path]
@@ -2858,7 +2903,8 @@ public enum SimulatorControlSuite {
                 try process.run()
                 process.waitUntilExit()
                 if process.terminationStatus == 0 {
-                    return "Saved iOS Simulator screenshot to Desktop (\(outURL.lastPathComponent))."
+                    NSWorkspace.shared.activateFileViewerSelecting([outURL])
+                    return "Saved the iOS Simulator screenshot to Dot's Documents folder (\(outURL.lastPathComponent)) and showed it in Finder."
                 }
                 return "No booted iOS Simulator found to capture screenshot."
             } catch {
@@ -3538,8 +3584,8 @@ public final class AutonomousMacAgent {
 
         // 1. Check most recent file in ~/Downloads modified within the last 15 minutes
         var recentDownload: String? = nil
-        if let downloadsURL = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
-           let items = try? FileManager.default.contentsOfDirectory(
+        let downloadsURL = UserFolderScope.userFolder("Downloads")
+        if let items = try? FileManager.default.contentsOfDirectory(
                at: downloadsURL,
                includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey],
                options: [.skipsHiddenFiles]
@@ -3606,12 +3652,7 @@ public final class AutonomousMacAgent {
             }
         }
 
-        let roots = [
-            FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask).first,
-            FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first,
-            FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
-        ].compactMap { $0 }
-        let recentFiles = FileInsightScanner.recentFiles(in: roots)
+        let recentFiles = FileInsightScanner.recentFiles(in: UserFolderScope.watchedFolders)
         return AutonomousWorkspaceSnapshot(
             activeApp: appName,
             windowTitle: winTitle,
@@ -4581,7 +4622,7 @@ public final class DotSoulManager: @unchecked Sendable {
             let data = try JSONSerialization.data(withJSONObject: soulExport, options: [.prettyPrinted, .sortedKeys])
             try data.write(to: exportURL)
             NSWorkspace.shared.activateFileViewerSelecting([exportURL])
-            return (exportURL, "Dot's soul exported successfully to \(exportURL.path). All memories, notes, and conversations are safely saved! You can transfer this file to any Mac and import it.")
+            return (exportURL, "Dot's soul exported successfully to \(exportURL.path). It holds your profile and standing rules, active project notes and the latest conversation log; the five-tier memory database is not included. You can transfer this file to any Mac and import it.")
         } catch {
             return (nil, "Failed to export Dot's soul: \(error.localizedDescription)")
         }
@@ -5419,7 +5460,7 @@ public enum FileOperationPolicy {
 
     /// Minimal quote-aware splitter; enough to identify the executable and reject
     /// path targets without pretending to be a shell parser.
-    private static func tokenize(_ segment: String) -> [String] {
+    static func tokenize(_ segment: String) -> [String] {
         var tokens: [String] = []
         var current = ""
         var quote: Character?

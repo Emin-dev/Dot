@@ -70,6 +70,74 @@ struct ProactiveConversationEvidence {
     }
 }
 
+/// R18 (owner answer 2026-10-22): after a real absence Dot greets like a person,
+/// not with one fixed sentence. Each absence draws its own threshold between three
+/// and ten minutes; past it, Dot greets about four times in five, by time of day
+/// and by how long the owner was away, never repeating a recent line.
+enum WakeGreeting {
+    static let shortestAbsence = 180.0
+    static let longestAbsence = 600.0
+    static let greetChance = 0.8
+    static let longAbsence = 2.0 * 3_600
+
+    /// The absence threshold for one sleep or lock, from a roll in 0..<1.
+    static func threshold(roll: Double) -> Double {
+        let unit = roll.isFinite ? min(max(roll, 0), 1) : 0
+        return shortestAbsence + (longestAbsence - shortestAbsence) * unit
+    }
+    static func shouldGreet(awaySeconds: Double, threshold: Double, roll: Double) -> Bool {
+        awaySeconds.isFinite && threshold.isFinite && awaySeconds >= threshold && roll < greetChance
+    }
+
+    enum PartOfDay: CaseIterable { case morning, afternoon, evening, night }
+    static func partOfDay(hour: Int) -> PartOfDay {
+        switch hour {
+        case 5..<12: return .morning
+        case 12..<17: return .afternoon
+        case 17..<22: return .evening
+        default: return .night
+        }
+    }
+
+    static func lines(for part: PartOfDay, long: Bool) -> [String] {
+        switch (part, long) {
+        case (.morning, false):
+            return ["There you are. Ready when you are.", "Welcome back. Shall we carry on?",
+                    "Hello again. Still a lovely morning.", "Back already? Good, let's keep going."]
+        case (.morning, true):
+            return ["Good morning! Lovely to see you.", "Morning! I hope you slept well.",
+                    "Good morning. A fresh start, then.", "Morning, you. I'm all set when you are."]
+        case (.afternoon, false):
+            return ["Welcome back. Where were we?", "Hello again. I'm right here.",
+                    "There you are. Ready to pick up where we left off?", "Nice to have you back."]
+        case (.afternoon, true):
+            return ["Good afternoon! Nice to have you back.", "Afternoon. That was a proper break.",
+                    "Hello again, and good afternoon.", "Welcome back. I hope the break did you good."]
+        case (.evening, false):
+            return ["Welcome back. Still going strong?", "There you are again.",
+                    "Hello again. I'm here whenever you need me.", "Back for a bit more this evening?"]
+        case (.evening, true):
+            return ["Good evening! Lovely to see you.", "Evening. I hope the day treated you well.",
+                    "Good evening, and welcome back.", "Hello this evening. Shall we see what's next?"]
+        case (.night, false):
+            return ["Back again? I'm right here.", "Still up? I'm here if you need me.",
+                    "Hello again. Let's keep it gentle, it's late.", "There you are. Burning the midnight oil?"]
+        case (.night, true):
+            return ["Hello, night owl. I'm here.", "A late one tonight. I'm ready when you are.",
+                    "Welcome back. It's late, so I'll keep things quiet.", "Hello again. The night is ours, then."]
+        }
+    }
+
+    /// One greeting for this wake. `pick` is any random integer; lines spoken
+    /// recently are skipped while another line is still available.
+    static func line(awaySeconds: Double, hour: Int, pick: Int, avoiding recent: [String]) -> String {
+        let pool = lines(for: partOfDay(hour: hour), long: awaySeconds >= longAbsence)
+        let fresh = pool.filter { !recent.contains($0) }
+        let choices = fresh.isEmpty ? pool : fresh
+        return choices[abs(pick % choices.count)]
+    }
+}
+
 /// No intermediate content may reach speech. Only a successfully completed
 /// engine response is interpreted, and a no-op cannot carry a question invitation.
 struct ProactiveReplyBuffer {
