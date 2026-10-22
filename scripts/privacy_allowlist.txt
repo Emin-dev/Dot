@@ -46,3 +46,6 @@
 ~/Library/IntelligencePlatform/*|Apple intelligence database is rewritten by OS services
 ~/Library/Shortcuts/*|Apple Shortcuts tool database indexes installed App Intents
 ~/Library/Weather/*|Apple Weather database is rewritten by OS services
+~/Library/Group Containers/group.is.workflow.my.app/*|Apple Shortcuts group container updates when App Intents register
+~/Library/Logs/hca.log|Hosted-runner host configuration agent log is OS-owned
+~/Library/PersonalizationPortrait/*|Apple personalization caches are rewritten by OS services
