@@ -144,6 +144,13 @@ def main():
     arguments = parser.parse_args()
     raw_excludes = os.environ.get("DOT_SNAPSHOT_EXCLUDES", "")
     excludes = [Path(item).resolve() for item in raw_excludes.split(":") if item]
+    # Hosted-runner infrastructure writes its own diagnostic logs under the
+    # runner's home while the workflow is running. It is not part of the Mac
+    # state this test is proving clean.
+    for name in ("actions-runner", "work", "hostedtoolcache"):
+        candidate = Path.home() / name
+        if candidate.exists():
+            excludes.append(candidate.resolve())
     # The home is captured in full. System roots only need their application
     # bundles and top-level library entries; recursing through Xcode or the
     # CoreSimulator runtime would take tens of minutes and cannot hide a Dot

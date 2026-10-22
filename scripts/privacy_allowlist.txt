@@ -42,3 +42,7 @@
 ~/Library/Assistant/*|Apple Siri vocabulary index is rewritten by OS services
 ~/Library/Caches/CloudKit/*|Apple CloudKit cache is rewritten by OS daemons
 ~/Library/DuetExpertCenter/*|Apple app-prediction caches are rewritten when any app launches
+~/Library/IdentityServices/*|Apple ID query cache is rewritten by OS services
+~/Library/IntelligencePlatform/*|Apple intelligence database is rewritten by OS services
+~/Library/Shortcuts/*|Apple Shortcuts tool database indexes installed App Intents
+~/Library/Weather/*|Apple Weather database is rewritten by OS services
