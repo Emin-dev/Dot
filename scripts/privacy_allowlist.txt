@@ -38,3 +38,4 @@
 /Library/Logs/com.apple.*|System Apple logs may grow during app launch
 /Library/Logs/com.apple.*/*|System Apple logs may grow during app launch
 /Library/Biome/*|System Apple telemetry store is OS-owned
+~/Library/AppleMediaServices/*|Apple media-services analytics store is rewritten by OS daemons
