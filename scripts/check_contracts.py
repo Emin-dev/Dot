@@ -178,6 +178,7 @@ checks = {
     'a pending card is withdrawn when the owner moves on': 'DiagnosticChatLogger.recordTool(name: "approval_withdrawn", target: req.command,' in chat and chat.index('approval_withdrawn') < chat.index('let copyPhrase = Self.commandPhrase(text)'),
     'R16 file-writing programs keep the card': '"rsync", "ditto", "unzip", "tar", "sqlite3", "wget", "patch", "shred"' in read('src/InteractionCore.swift') and 'if name == "sed", later.contains(where:' in read('src/InteractionCore.swift') and 'case "restore", "rm":' in read('src/InteractionCore.swift'),
     'R11 engine stages update only a progress banner and a finished check clears it': 'if let current = self.phase.blockedMessage, Self.isProgressMessage(current) {' in chat and 'self.block(Self.progressMessage(for: stage ?? ""), issue: .unknown)' not in chat,
+    'R22 the chosen folder is kept across launches as a security-scoped bookmark': 'url.bookmarkData(options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'URL(resolvingBookmarkData: data, options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'NativeActionPanel(model: NativeActionPanelModel(folderBookmarks: .standard))' in read('src/App.swift') and 'await self.actionPanel.model.restoreSavedFolder()' in read('src/App.swift') and 'selectFolder(docDir, remember: false)' in read('src/App.swift'),
     'voice approve and deny end the listening turn first': re.search(r'cancelTurn\(\)\s+approvePendingAction\(\)\s+return', chat) is not None and re.search(r'cancelTurn\(\)\s+denyPendingAction\(\)\s+return', chat) is not None,
     'automatic file utilities pass the R16 safety approver': re.search(r'\|\|\s*FileOperationPolicy\.isAutomaticFileOperation\(command\),\s*let refusal = await self\.safetyRefusal\(for: command\)', chat) is not None,
     'scoped file operations parse options and paths inside the selected folder': 'let words = FileOperationPolicy.tokenize(trimmed)' in chat and 'if word == "--recursive" { recursive = true }' in chat and 'if !optionsEnded, word == "--" { optionsEnded = true; continue }' in chat and 'currentDirectory: UserFolderScope.shared.current' in chat,
@@ -271,7 +272,10 @@ checks = {
              'com.apple.security.temporary-exception.files.home-relative-path.read-only',
              'com.apple.security.temporary-exception.apple-events'}
          and e.get('com.apple.security.temporary-exception.files.home-relative-path.read-only') == ['/Desktop/', '/Documents/']
-         and e.get('com.apple.security.files.downloads.read-only') is True)(
+         and e.get('com.apple.security.files.downloads.read-only') is True
+         # R22 (owner answer 2026-10-23): the chosen folder is kept as a bookmark.
+         and e.get('com.apple.security.files.bookmarks.app-scope') is True
+         and len(e) == 11)(
             plistlib.loads((root / 'Resources/Dot.entitlements').read_bytes()))
         and '--entitlements "$ENTITLEMENTS"' in read('scripts/sign_sandbox_app.sh')
         and '--options runtime' in read('scripts/sign_sandbox_app.sh')

@@ -1,7 +1,7 @@
 # Dot — Professional Development Brief v2 (owner-answered, 2026-10-17)
 
 > **Current implementation status:** read [AI_HANDOFF.md](AI_HANDOFF.md) for what is implemented,
-> partial, blocked and next. This brief remains the binding spec (R1–R21); older docs may be stale.
+> partial, blocked and next. This brief remains the binding spec (R1–R22); older docs may be stale.
 > Every owner question, the exact answer and why each rule exists: [OWNER_DECISIONS.md](OWNER_DECISIONS.md).
 > Do not re-ask a decided question or revert a decided behavior.
 
@@ -130,6 +130,10 @@ touches the clipboard and never offers a paste.
 read-only `~/Desktop/` and `~/Documents/`, and Apple Events to System Events, Safari, Chrome,
 TextEdit, Music and Spotify. Writes stay inside the folder the owner selects. `~` means the
 owner's real home, never the sandbox container.
+
+**R22. Folder across launches (2026-10-23).** The folder the owner picks for file actions is kept
+as a security-scoped bookmark (`com.apple.security.files.bookmarks.app-scope`) and reopened at
+launch. The automatic container folder is never saved.
 
 ## 3. Fixed constraints (never change without the owner)
 

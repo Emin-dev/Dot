@@ -43,9 +43,15 @@ final class NativeActionPanelModel: ObservableObject {
     private var acceptingActions = true
     private var requestID: UUID?
     private var flushWaiters: [CheckedContinuation<Void, Never>] = []
+    /// R22 (owner answer 2026-10-23): the folder the owner picks is kept across launches
+    /// as a security-scoped bookmark. Nil in tests, so no test shares a saved folder.
+    private let folderBookmarks: UserDefaults?
+    static let folderBookmarkKey = "dot.documentFolderBookmark"
 
-    init(applicationStorage: URL? = nil, workspace: any NativeWorkspaceAccess = SystemNativeWorkspaceAccess()) {
+    init(applicationStorage: URL? = nil, workspace: any NativeWorkspaceAccess = SystemNativeWorkspaceAccess(),
+         folderBookmarks: UserDefaults? = nil) {
         self.workspace = workspace
+        self.folderBookmarks = folderBookmarks
         self.applicationStorage = applicationStorage ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
             .first?.appendingPathComponent("Dot/Actions", isDirectory: true)
     }
@@ -71,7 +77,7 @@ final class NativeActionPanelModel: ObservableObject {
 
     /// Folder selection is an explicit native UI action. No background scan or
     /// permission request occurs, and a failed selection retains the prior scope.
-    @discardableResult func selectFolder(_ url: URL) async -> Bool {
+    @discardableResult func selectFolder(_ url: URL, remember: Bool = true) async -> Bool {
         guard acceptingActions, !busy else { error = NativeActionError.busy.localizedDescription; return false }
         guard url.isFileURL else { error = NativeActionError.unsafePath.localizedDescription; return false }
         let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
@@ -84,6 +90,10 @@ final class NativeActionPanelModel: ObservableObject {
             documentExecutor = executor; documentRoot = canonical
             scopedFolder = scoped ? url : nil
             UserFolderScope.shared.set(canonical)
+            if remember, let folderBookmarks,
+               let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
+                folderBookmarks.set(bookmark, forKey: Self.folderBookmarkKey)
+            }
             previous?.stopAccessingSecurityScopedResource()
             documentReceipts = await executor.receipts()
             readVersion = nil; selection = nil; lastResult = nil; error = nil
@@ -94,6 +104,21 @@ final class NativeActionPanelModel: ObservableObject {
             self.error = (error as? NativeActionError)?.localizedDescription ?? "The document folder could not be opened."
             return false
         }
+    }
+
+    /// R22: reopen the folder the owner picked last time. A bookmark that no longer
+    /// resolves (folder deleted or moved off this Mac) is dropped; a stale one is
+    /// refreshed by selecting the folder again.
+    @discardableResult func restoreSavedFolder() async -> Bool {
+        guard let folderBookmarks, let data = folderBookmarks.data(forKey: Self.folderBookmarkKey) else { return false }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope],
+                                 relativeTo: nil, bookmarkDataIsStale: &stale),
+              await selectFolder(url) else {
+            folderBookmarks.removeObject(forKey: Self.folderBookmarkKey)
+            return false
+        }
+        return true
     }
 
     /// Typed requests are the only executor entry point. File/web contents are

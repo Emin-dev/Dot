@@ -46,6 +46,8 @@ class Phase7sContractTests(unittest.TestCase):
             "com.apple.security.files.downloads.read-only",
             "com.apple.security.temporary-exception.files.home-relative-path.read-only",
             "com.apple.security.temporary-exception.apple-events",
+            # R22 (owner answer 2026-10-23): keep the chosen folder across launches.
+            "com.apple.security.files.bookmarks.app-scope",
         })
         self.assertEqual(entitlements["com.apple.security.temporary-exception.files.home-relative-path.read-only"],
                          ["/Desktop/", "/Documents/"])

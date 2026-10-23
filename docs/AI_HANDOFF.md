@@ -204,7 +204,7 @@ refactor** by another worker:
   autonomous simple file utilities and `delete_file`. Inside the folder chosen in Tools & History,
   rm, rmdir, mkdir, touch, mv, cp and trash run in-process (2026-10-22); ln, tee, truncate, echo,
   printf, cat and `find -delete` run in the sandboxed shell, which reaches only Dot's container. The
-  chosen folder is kept in memory only and must be chosen again after a relaunch; shells/sudo/substitutions and non-file destructive
+  chosen folder is kept across launches as a security-scoped bookmark (R22); shells/sudo/substitutions and non-file destructive
   commands still card. Recent-file proactive awareness (Desktop/Documents/Downloads, names only).
 - **Placement/clicks**: full window bounds protected, no overlapping fallback target, swept-path checks
   for trips and the two-minute roam, immediate coverage escape after the short rest, captured-display

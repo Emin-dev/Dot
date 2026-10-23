@@ -91,7 +91,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let typedPanel = TypedInteractionPanel()
     private let sourcePanel = SourceReferencePanel()
     private let researchPanel = ResearchPanel(model: ResearchNotebookModel(webReader: OfflinePayload.sourceReader()))
-    private let actionPanel = NativeActionPanel()
+    private let actionPanel = NativeActionPanel(model: NativeActionPanelModel(folderBookmarks: .standard))
     private var webResearchPanel: WebResearchPanel?
     private var visibleUtilities = Set<String>()
     private var terminating = false
@@ -163,7 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let docDir = support?.appendingPathComponent("Dot/Documents", isDirectory: true)
                 if let docDir {
                     try? FileManager.default.createDirectory(at: docDir, withIntermediateDirectories: true)
-                    _ = await self.actionPanel.model.selectFolder(docDir)
+                    _ = await self.actionPanel.model.selectFolder(docDir, remember: false)
                 }
             }
             return await self.actionPanel.model.execute(action)
@@ -184,6 +184,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sourcePanel.onVisibility = { [weak self] in self?.utilityVisibility("source", visible: $0) }
         researchPanel.onVisibility = { [weak self] in self?.utilityVisibility("research", visible: $0) }
         actionPanel.onVisibility = { [weak self] in self?.utilityVisibility("actions", visible: $0) }
+        // R22: the folder chosen last time is ready again without asking.
+        Task { @MainActor [weak self] in
+            guard let self, await self.actionPanel.model.restoreSavedFolder() else { return }
+            DiagnosticChatLogger.record(role: "system", text: "Reopened the folder chosen for file actions.")
+        }
         voiceEnvironment.isActive = { [weak model] in model?.phase.isActive == true }
         voiceEnvironment.onChange = { [weak model, weak webResearch] reason in
             webResearch?.foregroundPause(); model?.cancelForEnvironment(reason: reason)

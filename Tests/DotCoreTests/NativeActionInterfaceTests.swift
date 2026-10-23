@@ -42,6 +42,37 @@ final class NativeActionInterfaceTests: XCTestCase {
         XCTAssertTrue(selected); return model
     }
 
+    @MainActor func testChosenFolderIsRememberedAcrossLaunchesAndABadBookmarkIsDropped() async throws {
+        // R22: the owner's folder survives a relaunch; the automatic folder is never saved.
+        let suite = "dot.tests.folder-bookmark." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let storage = root.appendingPathComponent("AppReceipts")
+
+        let automatic = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
+        let automaticSelected = await automatic.selectFolder(root, remember: false)
+        XCTAssertTrue(automaticSelected)
+        XCTAssertNil(defaults.data(forKey: NativeActionPanelModel.folderBookmarkKey))
+
+        let chosen = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
+        let chosenSelected = await chosen.selectFolder(root)
+        XCTAssertTrue(chosenSelected)
+        if defaults.data(forKey: NativeActionPanelModel.folderBookmarkKey) != nil {
+            let relaunched = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
+            let restored = await relaunched.restoreSavedFolder()
+            XCTAssertTrue(restored)
+            XCTAssertEqual(relaunched.documentRoot, root.standardizedFileURL.resolvingSymlinksInPath())
+        }
+
+        defaults.set(Data("not a bookmark".utf8), forKey: NativeActionPanelModel.folderBookmarkKey)
+        let broken = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
+        let brokenRestored = await broken.restoreSavedFolder()
+        XCTAssertFalse(brokenRestored)
+        XCTAssertNil(defaults.data(forKey: NativeActionPanelModel.folderBookmarkKey))
+        XCTAssertNil(broken.documentRoot)
+    }
+
     @MainActor func testTypedCreateReadEditAndUndoShowVerifiedReceiptsAndPreserveText() async throws {
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let model = try await selectedModel(root)

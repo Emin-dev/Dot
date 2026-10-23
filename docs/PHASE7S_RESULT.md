@@ -31,6 +31,9 @@ TextEdit, Music and Spotify. Without them the documented page reading, dark mode
 commands, media pause and new-file awareness could not work in the sandbox. There is still no
 write access outside the folder the owner selects.
 
+**Changed 2026-10-23 by owner decision R22:** `com.apple.security.files.bookmarks.app-scope` keeps the
+folder the owner selects across launches as a security-scoped bookmark.
+
 Every app byte (the 22.4 GB model, logs, health state, history, SQLite index,
 caches and settings) now lands inside
 `~/Library/Containers/app.dot.local/Data/`. The downloaded model and safety aux

@@ -45,6 +45,7 @@ How these were applied:
 | R20 | 2026-10-22 | Self-reflection | "Short spoken note" | Implemented |
 | R21 | 2026-10-22 | Sandbox exceptions | "Allow them (Recommended)" | Implemented |
 | Branches | 2026-10-22 | Repository branches | "keep only one main default branch" | Applied (see below) |
+| R22 | 2026-10-23 | Folder across launches | "yes add" | Implemented |
 | Offline and Macs | 2026-10-22 | "work on all new macOS devices always independently offline" | Offline after first launch; hardware limit stays | Explained (see below) |
 
 ## R17. Proactive comments (2026-10-20)
@@ -173,6 +174,25 @@ How these were applied:
   entitlements are minimal and enforced" (it pins the exact R21 set).
 - Do not: remove these exceptions (the features break again), widen them to the whole home
   folder, or add write access outside the selected folder.
+
+## R22. Keep the chosen folder across launches (2026-10-23)
+
+- Question asked: "Today Dot forgets the folder you choose for file actions each time it restarts.
+  Keeping it needs one more sandbox permission, a saved folder bookmark."
+- Options offered: 1. Add it, so Dot remembers the folder across restarts (Recommended). 2. Keep it as
+  is, and choose the folder again after each restart.
+- Owner answer (typed, verbatim): "yes add and improve dot as you recommending and suggesting, improve
+  and finish building. make sure it is ready for production."
+- Rule: the folder the owner picks in Tools & History, then Mac actions & receipts, is saved as a
+  security-scoped bookmark and reopened at launch. A bookmark that no longer resolves is dropped.
+  The automatic folder inside Dot's container is never saved.
+- Code: `com.apple.security.files.bookmarks.app-scope` in `Resources/Dot.entitlements`;
+  `NativeActionPanelModel.selectFolder(_:remember:)` and `restoreSavedFolder()`
+  (`src/ActionPanel.swift`); restore at launch in `src/App.swift`.
+- Proof: `NativeActionInterfaceTests.testChosenFolderIsRememberedAcrossLaunchesAndABadBookmarkIsDropped`,
+  guardrail "R22 the chosen folder is kept across launches as a security-scoped bookmark", the exact
+  entitlement set in `Tests/Python/test_phase7s_contract.py`.
+- Do not: remove the bookmark entitlement, or save the automatic container folder.
 
 ## Branch policy (2026-10-22)
 
