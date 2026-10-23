@@ -154,6 +154,11 @@ refactor** by another worker:
 
 ## Current build and gates
 
+- **Production readiness (2026-10-23):** all documented promises in the audit are fixed and tested,
+  Native CI is green, and every release gate passes. The one remaining production blocker is
+  Developer ID signing and notarisation, which needs Emin's Apple Developer credentials and a
+  runtime-manifest change; see [QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md) section 10. The other
+  owner-only steps are the real minimum-spec Mac run and storing the log token.
 - Release **`v1.1.3`** (published 2026-10-22, run `39858375138`, commit `6224aa3`): `Dot.dmg` **793,384,448 bytes**, SHA-256 `831c5a0ffb03db35dd783aab47fb920c23a8fa8cb0328caf8f7901f652c88b20`. It carries R18 to R21 and the public-log privacy fixes. Every release gate passed: install, quarantine, `spctl`/`codesign` and the no-trace lane. Release **`v1.1.4`** (published 2026-10-23, run `39949028372`, commit `265abd6`): `Dot.dmg` **793,335,296 bytes**, SHA-256 `6ba718c7b2051143598596735977541d088f0915d5629856318dea278317fad4`, all release gates green. It adds the audit fixes F1 to F7, F9, F10 and D1 to D6. The owner-rules fixes R-1 to R-9 and F8 (`aa790c5`, `d96c04a`, `3a62727`) go into the next release once Native CI on `3a62727` is green.
 - Phase 7b release **`v1.1.1`** (Latest) is owner-testable from one Terminal line:
   `curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash`.

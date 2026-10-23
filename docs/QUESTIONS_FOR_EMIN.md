@@ -117,9 +117,24 @@ This uploads `Dot.dmg.partNNN`, `Dot.dmg.parts.json`, `join-dot-dmg.command` and
 `join_release.py` to the `all-in-one-v1` release. Users double-click the command; it
 downloads missing parts, verifies every part and the joined DMG, then opens it.
 
-## 10. Signing / notarization for a fully public DMG
+## 10. Signing / notarization for a fully public DMG (the one production blocker)
 
-The CI release DMG is ad-hoc signed and not notarized because the repository has no
-Developer ID certificate or notarization credential. Publishing a Gatekeeper-clean app
-needs Emin's Apple Developer account (`SIGN_IDENTITY`, `notarytool` credentials). The
-current release notes say this explicitly rather than claiming a distributable build.
+Today every release is ad-hoc signed and not notarised. It installs and runs through the one-line
+installer, and every release gate (install, quarantine, `spctl`/`codesign`, no-trace) is green. A
+double-click install with no warning on any Mac needs Developer ID signing plus notarisation.
+
+What only Emin can provide (never created by an AI, per AGENTS.md):
+
+1. A paid Apple Developer account and a **Developer ID Application** certificate exported as `.p12`.
+2. An app-specific password (or App Store Connect API key) for `notarytool`, plus the team id.
+3. These stored as repository secrets, for example `DEVELOPER_ID_P12_BASE64`,
+   `DEVELOPER_ID_P12_PASSWORD`, `NOTARY_APPLE_ID`, `NOTARY_TEAM_ID`, `NOTARY_PASSWORD`.
+
+The engineering step after that (found 2026-10-23): notarisation rejects any unsigned Mach-O file,
+and the bundled Splash/Python runtime in `Contents/Resources/Offline` holds many. Signing them
+changes their bytes, but `OfflinePayload` checks every runtime file against
+`runtime-manifest.json` at launch. So the release must sign those binaries with the Developer ID and
+the hardened runtime, then regenerate the manifest from the signed files (or have the manifest
+record pre-signature hashes plus a `codesign --verify` check). Only then can `release.yml` run
+`xcrun notarytool submit --wait` and `xcrun stapler staple` on `Dot.dmg`. This needs one real
+notarised run to finish; it cannot be proved without the credentials.
