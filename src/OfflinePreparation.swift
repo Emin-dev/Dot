@@ -710,22 +710,6 @@ private struct PartHTTPFailure: Error {
     var resumed = false
 }
 
-private final class ModelPartProgress: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let offset: Int64
-    private let onProgress: @Sendable (Int64, Int64) -> Void
-    init(offset: Int64, _ onProgress: @escaping @Sendable (Int64, Int64) -> Void) {
-        self.offset = offset
-        self.onProgress = onProgress
-    }
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didWriteData bytesWritten: Int64, totalBytesWritten: Int64,
-                    totalBytesExpectedToWrite: Int64) {
-        onProgress(offset + totalBytesWritten, totalBytesExpectedToWrite)
-    }
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask,
-                    didFinishDownloadingTo location: URL) {}
-}
-
 private final class ModelDownloadProgress: NSObject, URLSessionTaskDelegate, URLSessionDownloadDelegate, @unchecked Sendable {
     private let onProgress: @Sendable (Int64, Int64) -> Void
     init(_ onProgress: @escaping @Sendable (Int64, Int64) -> Void) {

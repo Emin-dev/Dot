@@ -314,6 +314,13 @@ checks = {
         and 'privacy_diff.py .tmp/snapshot-before.json .tmp/snapshot-after.json' in read('.github/workflows/privacy-clean.yml')
         and 'app.dot.local' not in read('scripts/privacy_allowlist.txt')
     ),
+    'dead code removed on 2026-10-23 stays removed': not any(
+        name in read(path)
+        for path in ('src/InteractionCore.swift', 'src/OfflinePreparation.swift', 'src/PlacementCapture.swift')
+        for name in ('wakeMissedNotice', 'shutdownNotice(dropped', 'extractImportantFacts', 'persistFacts',
+                     'ExtractedMemoryFact', 'InteractiveWalkthroughManager', 'ModelPartProgress',
+                     'consumeLastDiagnostic')
+    ),
     'a push to main cannot cancel the release no-trace gate': (
         'group: dot-privacy-${{ github.workflow }}-' in read('.github/workflows/privacy-clean.yml')
         and 'uses: ./.github/workflows/privacy-clean.yml' in read('.github/workflows/release.yml')
