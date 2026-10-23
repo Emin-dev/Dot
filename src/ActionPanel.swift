@@ -90,6 +90,7 @@ final class NativeActionPanelModel: ObservableObject {
             documentExecutor = executor; documentRoot = canonical
             scopedFolder = scoped ? url : nil
             UserFolderScope.shared.set(canonical)
+            Self.recordActionFolder(canonical)
             if remember, let folderBookmarks,
                let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
                 folderBookmarks.set(bookmark, forKey: Self.folderBookmarkKey)
@@ -104,6 +105,21 @@ final class NativeActionPanelModel: ObservableObject {
             self.error = (error as? NativeActionError)?.localizedDescription ?? "The document folder could not be opened."
             return false
         }
+    }
+
+    /// Every folder that holds a `.dot-actions` folder is listed in Dot's own container,
+    /// so the uninstaller can remove those folders too and leave nothing of Dot behind.
+    static func recordActionFolder(_ folder: URL, listURL: URL? = nil) {
+        guard let list = listURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?.appendingPathComponent("Dot/action-folders.txt") else { return }
+        let path = folder.path
+        guard !path.contains("\n"), path.hasPrefix("/") else { return }
+        var lines = ((try? String(contentsOf: list, encoding: .utf8)) ?? "")
+            .split(separator: "\n").map(String.init)
+        guard !lines.contains(path) else { return }
+        lines.append(path)
+        try? FileManager.default.createDirectory(at: list.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? (lines.suffix(200).joined(separator: "\n") + "\n").write(to: list, atomically: true, encoding: .utf8)
     }
 
     /// R22: reopen the folder the owner picked last time. A bookmark that no longer

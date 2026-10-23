@@ -46,6 +46,7 @@ How these were applied:
 | R21 | 2026-10-22 | Sandbox exceptions | "Allow them (Recommended)" | Implemented |
 | Branches | 2026-10-22 | Repository branches | "keep only one main default branch" | Applied (see below) |
 | R22 | 2026-10-23 | Folder across launches | "yes add" | Implemented |
+| Full removal | 2026-10-23 | "delete itself ... same as after format ... only dot!" | Implemented, see [UNINSTALL_COVERAGE.md](UNINSTALL_COVERAGE.md) |
 | Offline and Macs | 2026-10-22 | "work on all new macOS devices always independently offline" | Offline after first launch; hardware limit stays | Explained (see below) |
 
 ## R17. Proactive comments (2026-10-20)

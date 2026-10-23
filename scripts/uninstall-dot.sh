@@ -62,6 +62,54 @@ if [ -e "$LEGACY_APP" ]; then
     fi
 fi
 
+# Dot keeps receipts and recovery copies in a private .dot-actions folder inside
+# each folder the owner chose for file actions, and lists those folders in its
+# container. Remove only a .dot-actions folder that Dot owns (its lock and ledger
+# files), never a symlink, never anything else in the owner's folder.
+ACTION_FOLDERS="$HOME/Library/Containers/$BUNDLE_ID/Data/Library/Application Support/Dot/action-folders.txt"
+if [ -f "$ACTION_FOLDERS" ]; then
+    while IFS= read -r folder || [ -n "$folder" ]; do
+        case "$folder" in /*) ;; *) continue ;; esac
+        target="$folder/.dot-actions"
+        [ -d "$target" ] && [ ! -L "$target" ] && [ -O "$target" ] || continue
+        [ -f "$target/owner.lock" ] || continue
+        rm -rf "$target" || fail "could not remove $target"
+    done < "$ACTION_FOLDERS"
+fi
+
+# A Dock tile the owner pinned would stay behind as a "?" icon. Remove only Dot's
+# tile, through cfprefsd, and restart the Dock so it takes effect.
+DOCK_STATE="$(defaults read com.apple.dock 2>/dev/null || true)"
+if [[ "$DOCK_STATE" == *"$BUNDLE_ID"* ]]; then
+    DOCK_DIR="$(mktemp -d -t dot-dock)"
+    DOCK_PLIST="$DOCK_DIR/dock.plist"
+    defaults export com.apple.dock "$DOCK_PLIST"
+    for section in persistent-apps recent-apps; do
+        index=0
+        while /usr/libexec/PlistBuddy -c "Print :$section:$index" "$DOCK_PLIST" >/dev/null 2>&1; do
+            id="$(/usr/libexec/PlistBuddy -c "Print :$section:$index:tile-data:bundle-identifier" "$DOCK_PLIST" 2>/dev/null || true)"
+            if [ "$id" = "$BUNDLE_ID" ]; then
+                /usr/libexec/PlistBuddy -c "Delete :$section:$index" "$DOCK_PLIST"
+            else
+                index=$((index + 1))
+            fi
+        done
+    done
+    defaults import com.apple.dock "$DOCK_PLIST"
+    rm -rf "$DOCK_DIR"
+    killall Dock >/dev/null 2>&1 || true
+fi
+
+# A browser download of Dot leaves a row in the quarantine-events history. Delete
+# only rows that point at this repository's releases.
+QUARANTINE_DB="$HOME/Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2"
+if [ -f "$QUARANTINE_DB" ] && command -v sqlite3 >/dev/null 2>&1; then
+    WHERE="LSQuarantineDataURLString LIKE '%github.com/Emin-dev/Dot/%' OR LSQuarantineOriginURLString LIKE '%github.com/Emin-dev/Dot/%'"
+    if [ "$(sqlite3 "$QUARANTINE_DB" "SELECT count(*) FROM LSQuarantineEvent WHERE $WHERE;" 2>/dev/null || echo 0)" != "0" ]; then
+        sqlite3 "$QUARANTINE_DB" "DELETE FROM LSQuarantineEvent WHERE $WHERE;" || fail "could not remove Dot's download history rows"
+    fi
+fi
+
 # Every location the app, TCC and WebKit can create for this bundle id.
 rm -rf \
     "$HOME/Library/Containers/$BUNDLE_ID" \
@@ -81,7 +129,20 @@ rm -rf \
     "$HOME/Library/Preferences/$BUNDLE_ID.plist" \
     "$HOME/Library/Logs/Dot" \
     "$HOME/Library/Logs/$BUNDLE_ID" \
+    "$HOME/Library/Autosave Information/$BUNDLE_ID" \
+    "$HOME/Library/Application Support/Caches/$BUNDLE_ID" \
+    "$HOME/Library/Caches/com.apple.helpd/Generated/$BUNDLE_ID" \
     || fail "could not remove one of Dot's data folders"
+
+# Crash-reporter records and any launch agent named for Dot (Dot installs none).
+for extra in "$HOME/Library/Application Support/CrashReporter/Dot_"*.plist \
+             "$HOME/Library/LaunchAgents/$BUNDLE_ID"*.plist; do
+    [ -e "$extra" ] || continue
+    case "$extra" in
+        */LaunchAgents/*) launchctl bootout "gui/$(id -u)" "$extra" >/dev/null 2>&1 || true ;;
+    esac
+    rm -f "$extra" || fail "could not remove $extra"
+done
 
 # Per-app cache and temp folders under /var/folders (Metal shader cache and the like).
 for darwin_dir in DARWIN_USER_CACHE_DIR DARWIN_USER_TEMP_DIR; do

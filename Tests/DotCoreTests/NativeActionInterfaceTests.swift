@@ -42,6 +42,15 @@ final class NativeActionInterfaceTests: XCTestCase {
         XCTAssertTrue(selected); return model
     }
 
+    @MainActor func testEveryActionFolderIsListedOnceForTheUninstaller() throws {
+        let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
+        let list = root.appendingPathComponent("Dot/action-folders.txt")
+        NativeActionPanelModel.recordActionFolder(URL(fileURLWithPath: "/Users/owner/Work"), listURL: list)
+        NativeActionPanelModel.recordActionFolder(URL(fileURLWithPath: "/Users/owner/Work"), listURL: list)
+        NativeActionPanelModel.recordActionFolder(URL(fileURLWithPath: "/Users/owner/Notes"), listURL: list)
+        XCTAssertEqual(try String(contentsOf: list, encoding: .utf8), "/Users/owner/Work\n/Users/owner/Notes\n")
+    }
+
     @MainActor func testChosenFolderIsRememberedAcrossLaunchesAndABadBookmarkIsDropped() async throws {
         // R22: the owner's folder survives a relaunch; the automatic folder is never saved.
         let suite = "dot.tests.folder-bookmark." + UUID().uuidString
