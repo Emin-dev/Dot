@@ -248,19 +248,17 @@ State when this session stopped (usage limit reached):
 - After that, F1 to F10 and D1 to D6 were fixed (`dfa7b6f`, `ee533fc`, `0599102`, `52d5816` and the
   installer commit after them), each with a guardrail (112 in total). Only F5 (file utilities beyond
   rm/rmdir/mkdir/touch in the selected folder, and folder access lost on relaunch) is still open.
+- 2026-10-23: v1.1.3 and v1.1.4 are published (sizes and SHA-256 in AI_HANDOFF). The owner-rules audit
+  (R-1 to R-9) and F8 are fixed in `aa790c5`, `d96c04a` and `3a62727` (120 guardrails).
 - Do these next, in order:
-  1. Check the Native CI run on the newest `main` commit (Swift build, XCTest). Fix anything red first;
-     these commits were written without a Swift compiler.
-  2. v1.1.3 was dispatched at `6224aa3` (privacy fixes, not the F/D fixes). If it is published,
-     record its DMG size and SHA-256. Then, once CI on the newest commit is green, dispatch
-     `release.yml` with tag `v1.1.4` (a tag push is blocked from the cloud session;
-     `workflow_dispatch` works).
-  3. F5 in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md): do mv/cp/trash in-process in
-     `ChatModel.runScopedFileOperation` and keep the selected folder across launches with a
-     security-scoped bookmark (needs `com.apple.security.files.bookmarks.app-scope`), or narrow
-     the AI_HANDOFF file list.
-  4. Re-run the owner-rules audit (R1 to R21), which was stopped before it reported.
-  5. Owner-only, on a minimum-spec Mac: the 22.4 GB first download with one pause and one quit
+  1. Check the Native CI run on the newest `main` commit; these commits were written without a Swift
+     compiler. Fix anything red first.
+  2. When it is green, dispatch `release.yml` with tag `v1.1.5` (a tag push is blocked from the cloud
+     session; `workflow_dispatch` works) and record the DMG in AI_HANDOFF and GOAL_STATUS.
+  3. Only open item in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md): F5, keeping the selected folder
+     across launches. It needs the `com.apple.security.files.bookmarks.app-scope` entitlement, which
+     is an owner decision like R21. Ask Emin with numbered options before adding it.
+  4. Owner-only, on a minimum-spec Mac: the 22.4 GB first download with one pause and one quit
      (proves D1), the live safety approver, then store the log token.
 
 ## Questions not yet asked
