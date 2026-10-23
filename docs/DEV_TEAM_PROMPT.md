@@ -1,4 +1,4 @@
-# Dot rules (R1 to R22)
+# Dot rules (R1 to R24)
 
 Binding rules from the owner. The exact questions and answers behind them are in
 [OWNER_DECISIONS.md](OWNER_DECISIONS.md); the current state is in [AI_HANDOFF.md](AI_HANDOFF.md).
@@ -128,6 +128,15 @@ owner's real home, never the sandbox container.
 **R22. Folder across launches (2026-10-23).** The folder the owner picks for file actions is kept
 as a security-scoped bookmark (`com.apple.security.files.bookmarks.app-scope`) and reopened at
 launch. The automatic container folder is never saved.
+
+**R23. Screen change by Apple Vision (2026-10-23).** Screen watching measures change with Apple
+Vision feature prints (`VNGenerateImageFeaturePrintRequest`, revision 2) of a 256x160 capture,
+not an exact pixel hash. A distance below `ScreenFeaturePrint.changeThreshold` is the same screen.
+Prints stay in memory; they are never stored, logged or sent. No V-JEPA and no extra model.
+
+**R24. Apple-native first (2026-10-23).** Prefer macOS frameworks over added libraries, scripts or
+models whenever they do the job. A replacement that changes a fixed constraint in section 3 still
+needs the owner.
 
 ## 3. Fixed constraints (never change without the owner)
 

@@ -39,7 +39,7 @@ point to [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md). The long history is in
 ## Bounded on purpose
 
 - File awareness covers names in Desktop, Documents and Downloads; no full-disk index.
-- Screen watching uses small fingerprints plus OCR; no video understanding.
+- Screen watching uses Apple Vision feature prints plus OCR (R23); no video understanding.
 - Calendar edits change start and duration of a named upcoming event; no recurring series.
 - Clicks need Accessibility and Screen Recording.
 

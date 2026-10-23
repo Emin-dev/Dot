@@ -56,11 +56,12 @@ Swift builds, XCTest and the DMG run in GitHub Actions on macOS (`.github/workfl
 | --- | --- |
 | [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) | start here: state, commands, next steps |
 | [docs/OWNER_DECISIONS.md](docs/OWNER_DECISIONS.md) | the owner's answers; do not re-ask or revert |
-| [docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md) | binding rules R1 to R22 |
+| [docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md) | binding rules R1 to R24 |
 | [docs/BUILD_CHECKLIST.md](docs/BUILD_CHECKLIST.md) | what Dot does and how each part is proved |
 | [docs/TEST_TODAY.md](docs/TEST_TODAY.md) | the owner's test on a real Mac |
 | [docs/QUESTIONS_FOR_EMIN.md](docs/QUESTIONS_FOR_EMIN.md) | what only the owner can provide |
-| [docs/AUDIT_2026-10-22.md](docs/AUDIT_2026-10-22.md) | the last full audit and its fixes |
+| [docs/AUDIT_2026-10-23.md](docs/AUDIT_2026-10-23.md) | the latest audit: delete, speed up, secure, Apple-native |
+| [docs/AUDIT_2026-10-22.md](docs/AUDIT_2026-10-22.md) | the promise audit and its fixes |
 | [CHANGELOG.md](CHANGELOG.md) | what changed |
 
 Technical notes are in [docs/reference](docs/reference); history is in [docs/archive](docs/archive).

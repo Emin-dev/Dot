@@ -5,7 +5,11 @@ dot to improve app speed and make it more useful? if not how here you will add t
 models? and which local alternative you will use instead of jev?" Read as LLaVA (image and text
 models) and V-JEPA (Meta's video model).
 
-## What Dot uses today
+Decision: option 1, Apple Vision feature prints, recorded as R23 in
+[OWNER_DECISIONS.md](../OWNER_DECISIONS.md). Steps 1, 2 and 5 below are built; steps 3 and 4 wait
+for measured distances from real use.
+
+## What Dot uses before R23
 
 | Job | Model or API | Code |
 | --- | --- | --- |
@@ -13,7 +17,7 @@ models) and V-JEPA (Meta's video model).
 | Speed | DFlash2 draft model (3.8 GB): it proposes the next tokens and the 27B checks them in one pass (speculative decoding). Optional prewarm at launch (R11). | `llm-draft/` |
 | Safety checks | Gemma 3 4B Q4 (2.5 GB file), the R16 approver | `crates/dot-safety`, `src/SafetyApprover.swift` |
 | Screen text | Apple Vision `VNRecognizeTextRequest`, on device | `src/InteractionCore.swift`, `src/ScreenContext.swift` |
-| Is the screen changing | an exact hash of a 32x24 grayscale frame (mouse pointer hidden): one every 3 minutes when idle; after a change or mouse movement, one every 2 s for 10 to 50 s, then a 60 s cooldown | `ScreenContext.captureFingerprint`, `ScreenWatchState` |
+| Is the screen changing | an exact hash of a 32x24 grayscale frame (mouse pointer hidden): one every 3 minutes when idle; after a change or mouse movement, one every 2 s for 10 to 50 s, then a 60 s cooldown | `ScreenContext.captureFingerprint` (removed by R23), `ScreenWatchState` |
 
 There is no separate LLaVA and no V-JEPA. A separate LLaVA would repeat what the 27B already does and
 take RAM from it.
@@ -39,9 +43,10 @@ Apple Vision feature prints (`VNGenerateImageFeaturePrintRequest`). They are par
 download, run on device, and give a distance between two frames. This fits the owner's stated
 preference for Apple's own tools (chat, 2026-10-23).
 
-1. Replace the hash with a feature print of the same 160x120 capture; keep only the last print in
-   memory.
-2. Count a change only above a distance threshold, tuned on test frames.
+1. Replace the hash with a feature print of a 256x160 capture, computed off the main thread; keep
+   only the last print in memory.
+2. Count a change only at or above a distance threshold (0.1 to start). The fixture test prints the
+   measured distances in CI; retune from those and from real screens.
 3. "Same scene for N minutes" feeds stuck-error help; "large change" feeds proactive comments at the
    chosen Proactivity cadence.
 4. Send a screenshot to the 27B only on a large change.

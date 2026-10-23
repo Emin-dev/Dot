@@ -11,7 +11,7 @@ Rules for this file:
   entry `Superseded by ...`. Never edit the quoted answer.
 - Each entry names the code and the test or guardrail that proves it. If you touch that code,
   keep the test green. If a test seems wrong, read the entry first.
-- The binding rule list is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1 to R22). The current
+- The binding rule list is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1 to R24). The current
   state is [AI_HANDOFF.md](AI_HANDOFF.md).
 
 ## Owner instructions for the 2026-10-20 to 2026-10-22 sessions (verbatim)
@@ -46,6 +46,8 @@ How these were applied:
 | R21 | 2026-10-22 | Sandbox exceptions | "Allow them (Recommended)" | Implemented |
 | Branches | 2026-10-22 | Repository branches | "keep only one main default branch" | Applied (see below) |
 | R22 | 2026-10-23 | Folder across launches | "yes add" | Implemented |
+| R23 | 2026-10-23 | Screen change detection | "1" (Apple Vision feature prints now) | Implemented |
+| R24 | 2026-10-23 | Apple-native first | "use mostly apple native solutions only" | Standing rule |
 | Full removal | 2026-10-23 | "delete itself ... same as after format ... only dot!" | Implemented, see [UNINSTALL_COVERAGE.md](UNINSTALL_COVERAGE.md) |
 | Offline and Macs | 2026-10-22 | "work on all new macOS devices always independently offline" | Offline after first launch; hardware limit stays | Explained (see below) |
 
@@ -194,6 +196,34 @@ How these were applied:
   guardrail "R22 the chosen folder is kept across launches as a security-scoped bookmark", the exact
   entitlement set in `Tests/Python/test_phase7s_contract.py`.
 - Do not: remove the bookmark entitlement, or save the automatic container folder.
+
+## R23. Screen change measured by Apple Vision feature prints (2026-10-23)
+
+- Owner question (verbatim): "explain how you used deception models like Laya or jjev in dot to
+  improve app speed and make it more useful? if not how here you will add this new kind of models?
+  and which local alternative you will use instead of jev?" Read as LLaVA and V-JEPA; the answer is
+  [reference/perception-models.md](reference/perception-models.md).
+- Options offered: 1. Add Apple Vision feature prints now (Recommended). 2. Feature prints now,
+  FastVLM later. 3. Keep it as it is.
+- Owner answer (typed, verbatim): "1 and find other issues that can be deleted or optimized to make
+  app faster more secure more capable and use mostly apple native solutions only."
+- Rule: the adaptive screen watch (R8) compares Apple Vision feature prints of a 256x160 capture.
+  Only a distance at or above `ScreenFeaturePrint.changeThreshold` counts as a change, so a ticking
+  clock or a blinking caret no longer keeps the watch running. Prints stay in memory only.
+- Code: `ScreenFeaturePrint` and `ScreenContext.captureFeaturePrint()` (`src/ScreenContext.swift`);
+  the watch loop in `startAdaptiveScreenWatch` (`src/ChatView.swift`).
+- Proof: `ScreenContextTests.testFeaturePrintIgnoresATickingClockButSeesANewWindow`, guardrail
+  "R23 screen change is measured by Apple Vision feature prints".
+- Do not: bring back the exact pixel hash, store or log a print or frame, or add V-JEPA or another
+  model for this.
+
+## R24. Apple-native first (2026-10-23)
+
+- Owner instruction (same answer as R23): "use mostly apple native solutions only."
+- Rule: prefer macOS frameworks (Vision, Speech, AVFoundation, CoreAudio, Accessibility,
+  EventKit, Network, Security, SQLite) over added libraries, scripts or models whenever they do the
+  job. Changing a fixed constraint (model, voices, safety approver) still needs a new owner answer.
+- Findings from the audit this started: [AUDIT_2026-10-23.md](AUDIT_2026-10-23.md).
 
 ## Branch policy (2026-10-22)
 

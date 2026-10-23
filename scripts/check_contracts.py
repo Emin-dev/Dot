@@ -314,6 +314,17 @@ checks = {
         and 'privacy_diff.py .tmp/snapshot-before.json .tmp/snapshot-after.json' in read('.github/workflows/privacy-clean.yml')
         and 'app.dot.local' not in read('scripts/privacy_allowlist.txt')
     ),
+    'R23 screen change is measured by Apple Vision feature prints': (
+        'VNGenerateImageFeaturePrintRequestRevision2' in read('src/ScreenContext.swift')
+        and 'func captureFeaturePrint() async -> ScreenFeaturePrint?' in read('src/ScreenContext.swift')
+        and 'current.differs(from: $0)' in read('src/ChatView.swift')
+        and 'captureFingerprint' not in read('src/ScreenContext.swift') + read('src/ChatView.swift')
+        and 'testFeaturePrintIgnoresATickingClockButSeesANewWindow' in read('Tests/DotCoreTests/InteractionCoreTests.swift')
+        and not re.search(r'record\w*\(|\.notice\(|\.log\(|\.write\(|print\(|NSLog\(',
+                          read('src/ChatView.swift').split('private func startAdaptiveScreenWatch')[1].split('    /// R5:')[0]
+                          + read('src/ScreenContext.swift').split('func captureFeaturePrint()')[1].split('func captureSilentScreenSnapshot')[0]
+                          + read('src/ScreenContext.swift').split('struct ScreenFeaturePrint')[1])
+    ),
     'dead code removed on 2026-10-23 stays removed': not any(
         name in read(path)
         for path in ('src/InteractionCore.swift', 'src/OfflinePreparation.swift', 'src/PlacementCapture.swift')

@@ -1484,7 +1484,7 @@ final class ChatModel: ObservableObject {
     }
     func prewarmIfEnabled() { startPrewarmIfEnabled() }
 
-    /// R8: one idle fingerprint every three minutes; a screen change or real mouse
+    /// R8, R23: one idle feature print every three minutes; a screen change or real mouse
     /// movement starts a 10–50 s watch extended while the screen keeps changing. Every
     /// capture is gated by the visible Screen awareness switch, permission and low-power
     /// state. The final watch step records an OCR snapshot for the next turn's context.
@@ -1492,7 +1492,7 @@ final class ChatModel: ObservableObject {
         guard screenWatchTask == nil else { return }
         screenWatchTask = Task { @MainActor [weak self] in
             var state = ScreenWatchState()
-            var lastFingerprint: UInt64?
+            var lastPrint: ScreenFeaturePrint?
             var pendingChange = false
             var lastMouse = NSEvent.mouseLocation
             while !Task.isCancelled {
@@ -1513,12 +1513,14 @@ final class ChatModel: ObservableObject {
                 case .none:
                     break
                 case .idleSnapshot, .captureFrame:
-                    if let fingerprint = await self.screen.captureFingerprint() {
-                        pendingChange = lastFingerprint.map { $0 != fingerprint } ?? false
-                        lastFingerprint = fingerprint
+                    // R23: only a real change (a new window, page or dialog) keeps the
+                    // watch going; a ticking clock or a blinking caret does not.
+                    if let current = await self.screen.captureFeaturePrint() {
+                        pendingChange = lastPrint.map { current.differs(from: $0) } ?? false
+                        lastPrint = current
                     }
                 case .startWatch:
-                    lastFingerprint = await self.screen.captureFingerprint()
+                    lastPrint = await self.screen.captureFeaturePrint()
                 case .stop:
                     await self.screen.captureSilentScreenSnapshot()
                 }

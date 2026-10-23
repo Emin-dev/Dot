@@ -433,6 +433,45 @@ final class ScreenContextTests: XCTestCase {
 }
 
 extension ScreenContextTests {
+    /// R23: a ticking menu-bar clock is the same screen; a different window is a change.
+    func testFeaturePrintIgnoresATickingClockButSeesANewWindow() throws {
+        func frame(clockTicked: Bool, photo: Bool) throws -> CGImage {
+            let width = 256, height = 160
+            let context = try XCTUnwrap(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                                  space: CGColorSpaceCreateDeviceRGB(),
+                                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.setFillColor(CGColor(red: 0.93, green: 0.93, blue: 0.95, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            if photo {
+                let colors: [(CGFloat, CGFloat, CGFloat)] = [(0.9, 0.3, 0.2), (0.2, 0.6, 0.9), (0.3, 0.8, 0.4), (0.95, 0.8, 0.2)]
+                for (index, color) in colors.enumerated() {
+                    context.setFillColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
+                    context.fill(CGRect(x: (index % 2) * 128, y: (index / 2) * 76, width: 128, height: 76))
+                }
+            } else {
+                // An editor window with rows of text.
+                context.setFillColor(CGColor(red: 0.12, green: 0.13, blue: 0.16, alpha: 1))
+                context.fill(CGRect(x: 16, y: 12, width: 224, height: 132))
+                context.setFillColor(CGColor(red: 0.8, green: 0.82, blue: 0.86, alpha: 1))
+                for row in 0..<14 { context.fill(CGRect(x: 24, y: 20 + row * 8, width: 40 + (row * 37) % 150, height: 3)) }
+            }
+            // The menu-bar clock: a few pixels that change every minute.
+            context.setFillColor(CGColor(gray: clockTicked ? 0.1 : 0.6, alpha: 1))
+            context.fill(CGRect(x: 236, y: 153, width: 6, height: 3))
+            return try XCTUnwrap(context.makeImage())
+        }
+        let editor = try XCTUnwrap(ScreenFeaturePrint(image: frame(clockTicked: false, photo: false)))
+        let editorLater = try XCTUnwrap(ScreenFeaturePrint(image: frame(clockTicked: true, photo: false)))
+        let photo = try XCTUnwrap(ScreenFeaturePrint(image: frame(clockTicked: false, photo: true)))
+        let tick = try XCTUnwrap(editorLater.distance(to: editor))
+        let newWindow = try XCTUnwrap(photo.distance(to: editor))
+        print("R23 feature-print distances: clock tick \(tick), new window \(newWindow)")
+        XCTAssertFalse(editorLater.differs(from: editor), "clock tick distance \(tick)")
+        XCTAssertTrue(photo.differs(from: editor), "new window distance \(newWindow)")
+        XCTAssertFalse(editor.differs(from: editor))
+        XCTAssertGreaterThan(newWindow, 3 * tick)
+    }
+
     func testStaleCaptureCallbackHasAccurateFailure() {
         let old = UUID(), current = UUID(); var gate = active(current)
         XCTAssertThrowsError(try gate.capturedJPEG(jpeg, width: 10, height: 10, turn: old, acquiredAt: 1, now: 1)) {

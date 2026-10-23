@@ -252,9 +252,10 @@ final class ScreenContext {
         return ([], selected)
         #endif
     }
-    /// R8: a cheap 32x24 grayscale fingerprint used to decide whether the screen is
-    /// changing. No OCR and no model payload; the cursor is excluded.
-    func captureFingerprint() async -> UInt64? {
+    /// R8, R23: an Apple Vision feature print of a small capture, used only to measure
+    /// how much the screen changed. No OCR and no model payload; Dot's own windows and
+    /// the pointer are excluded, and the print stays in memory.
+    func captureFeaturePrint() async -> ScreenFeaturePrint? {
         guard enabled, Self.preflight() else { return nil }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -264,28 +265,13 @@ final class ScreenContext {
             let own = content.applications.filter { $0.processID == ProcessInfo.processInfo.processIdentifier }
             let filter = SCContentFilter(display: display, excludingApplications: own, exceptingWindows: [])
             let configuration = SCStreamConfiguration()
-            configuration.width = 160
-            configuration.height = 120
+            configuration.width = 256
+            configuration.height = 160
             configuration.showsCursor = false
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-            return Self.fingerprint(of: image)
+            // Vision runs off the main thread, like the OCR above.
+            return await Task.detached(priority: .utility) { ScreenFeaturePrint(image: image) }.value
         } catch { return nil }
-    }
-
-    static func fingerprint(of image: CGImage) -> UInt64? {
-        let width = 32, height = 24
-        var pixels = [UInt8](repeating: 0, count: width * height)
-        return pixels.withUnsafeMutableBytes { raw -> UInt64? in
-            guard let context = CGContext(data: raw.baseAddress, width: width, height: height,
-                                          bitsPerComponent: 8, bytesPerRow: width,
-                                          space: CGColorSpaceCreateDeviceGray(),
-                                          bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
-            context.interpolationQuality = .low
-            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-            var hash: UInt64 = 14_695_981_039_346_656_037
-            for byte in raw { hash = (hash ^ UInt64(byte)) &* 1_099_511_628_211 }
-            return hash
-        }
     }
 
     func captureSilentScreenSnapshot() async {
@@ -325,5 +311,42 @@ final class ScreenContext {
             case .unsupported: return "My local model hasn't enabled screen vision. I haven't seen your screen."
             }
         }
+    }
+}
+
+/// R23: an Apple Vision feature print of one small screen capture. The distance between
+/// two prints says how much the screen changed, so a ticking clock or a blinking caret no
+/// longer counts as a change the way any changed pixel did with the old hash. Prints are
+/// kept in memory only; they are never stored, logged or sent anywhere.
+/// `@unchecked Sendable`: the observation is an immutable Vision result that is only read.
+struct ScreenFeaturePrint: @unchecked Sendable {
+    /// At or above this distance the screen changed (a new window, page or dialog); below
+    /// it the screen is the same. The fixture test prints both distances in CI; retune this
+    /// from those numbers and from real screens.
+    static let changeThreshold: Float = 0.1
+
+    private let observation: VNFeaturePrintObservation
+
+    init?(image: CGImage) {
+        let request = VNGenerateImageFeaturePrintRequest()
+        request.revision = VNGenerateImageFeaturePrintRequestRevision2
+        request.imageCropAndScaleOption = .scaleFill
+        do {
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+        } catch { return nil }
+        guard let observation = request.results?.first else { return nil }
+        self.observation = observation
+    }
+
+    func distance(to other: ScreenFeaturePrint) -> Float? {
+        var distance: Float = 0
+        do { try observation.computeDistance(&distance, to: other.observation) } catch { return nil }
+        return distance
+    }
+
+    /// A print that cannot be compared counts as a change, so watching never stops on an
+    /// error.
+    func differs(from earlier: ScreenFeaturePrint) -> Bool {
+        (distance(to: earlier) ?? .infinity) >= Self.changeThreshold
     }
 }
