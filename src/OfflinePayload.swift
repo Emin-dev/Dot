@@ -97,7 +97,12 @@ actor OfflinePayload {
               values.fileSize.map(Int64.init) == bytes else { throw OfflineFailure.corrupt }
         let file = try FileHandle(forReadingFrom: url); defer { try? file.close() }
         var digest = SHA256(), read: Int64 = 0
-        while let data = try file.read(upToCount: 1_048_576), !data.isEmpty {
+        // Up to 8 MiB per read for multi-gigabyte models, never more than the file needs (one
+        // byte more detects a file that grew); each chunk is released before the next.
+        while true {
+            let wanted = Int(min(max(1, bytes - read + 1), 8_388_608))
+            let data = try autoreleasepool { try file.read(upToCount: wanted) }
+            guard let data, !data.isEmpty else { break }
             try Task.checkCancellation()
             read += Int64(data.count); guard read <= bytes else { throw OfflineFailure.corrupt }; digest.update(data: data)
         }
@@ -105,7 +110,8 @@ actor OfflinePayload {
     }
     nonisolated static func verifyHash(_ url: URL, bytes: Int64, expected: String) async throws {
         try Task.checkCancellation()
-        let task = Task.detached(priority: .utility) { try hash(url, bytes: bytes, expected: expected) }
+        // The owner waits on this check before Dot can answer, so it is user-initiated work.
+        let task = Task.detached(priority: .userInitiated) { try hash(url, bytes: bytes, expected: expected) }
         try await withTaskCancellationHandler(operation: { try await task.value }, onCancel: { task.cancel() })
     }
     nonisolated static func audit(_ root: URL) throws {

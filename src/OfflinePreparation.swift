@@ -14,6 +14,8 @@ struct BundledModelIndex: Decodable {
 /// and verified against the signed hashes; no external folder or substitute is used.
 @MainActor
 final class OfflinePreparation: ObservableObject {
+    /// Model files hashed at once at launch: enough for the SSD to set the pace (audit P1).
+    nonisolated static let concurrentHashes = 3
     static let shared = OfflinePreparation()
     private static let log = Logger(subsystem: "app.dot", category: "timing")
     @Published private(set) var state: CompanionReadiness = .checking {
@@ -169,22 +171,37 @@ final class OfflinePreparation: ObservableObject {
             // still re-hashes it, but its progress must continue from 90%, not jump back.
             let progressBase = useBundled ? 0.0 : 0.90
             let progressSpan = useBundled ? 0.95 : 0.05
-            for asset in plan.files {
-                try Task.checkCancellation()
-                let path = try OfflinePayload.safePath(asset.path, root: folder)
-                do {
-                    try await OfflinePayload.verifyHash(path, bytes: asset.bytes, expected: asset.sha256)
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if useBundled { throw error }
-                    failed.append(asset)
-                    try? FileManager.default.removeItem(at: path)
+            // Audit P1: three files hash at once, so the SSD, not one core, sets the pace of
+            // the 22.4 GB check at every launch. Every file is still hashed in full.
+            try await withThrowingTaskGroup(of: (BundledModelIndex.Asset, URL, Error?).self) { group in
+                var queue = plan.files.makeIterator()
+                func startNext() throws {
+                    guard let asset = queue.next() else { return }
+                    let path = try OfflinePayload.safePath(asset.path, root: folder)
+                    group.addTask {
+                        do {
+                            try await OfflinePayload.verifyHash(path, bytes: asset.bytes, expected: asset.sha256)
+                            return (asset, path, nil)
+                        } catch is CancellationError {
+                            throw CancellationError()
+                        } catch {
+                            return (asset, path, error)
+                        }
+                    }
                 }
-                try Task.checkCancellation()
-                guard generation == token else { throw CancellationError() }
-                completed += asset.bytes
-                progress = progressBase + progressSpan * Double(completed) / Double(plan.total_bytes)
+                for _ in 0..<Self.concurrentHashes { try startNext() }
+                while let (asset, path, error) = try await group.next() {
+                    try Task.checkCancellation()
+                    guard generation == token else { throw CancellationError() }
+                    if let error {
+                        if useBundled { throw error }
+                        failed.append(asset)
+                        try? FileManager.default.removeItem(at: path)
+                    }
+                    completed += asset.bytes
+                    progress = progressBase + progressSpan * Double(completed) / Double(plan.total_bytes)
+                    try startNext()
+                }
             }
             guard !failed.isEmpty else { break }
             guard !repaired else {
@@ -726,7 +743,8 @@ private final class ModelDownloadProgress: NSObject, URLSessionTaskDelegate, URL
                     didFinishDownloadingTo location: URL) {}
 }
 
-/// Exactly two full verification streams. Any failure cancels and drains the sibling.
+/// Exactly two full verification streams (the model stream hashes up to
+/// `OfflinePreparation.concurrentHashes` files at once). Any failure cancels and drains the sibling.
 /// This never trusts a metadata cache or starts an inference process.
 enum PayloadVerification {
     private enum Part: Sendable { case runtime, models(URL) }

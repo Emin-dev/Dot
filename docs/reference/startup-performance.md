@@ -10,7 +10,7 @@ Cold Splash readiness was about 18.1 seconds; a second turn reused the same proc
 
 ## Bounded changes
 
-- Run runtime verification and model verification as exactly two structured tasks. Keep every content hash, exact file-closure, path, size, symlink and cancellation check. Model files are still checked serially. Either failure cancels and drains its sibling. Neither progress completion nor talk readiness is published until both pass.
+- Run runtime verification and model verification as exactly two structured tasks. Keep every content hash, exact file-closure, path, size, symlink and cancellation check. Model files are hashed three at a time inside the model task (audit P1, 2026-10-23). Either failure cancels and drains its sibling. Neither progress completion nor talk readiness is published until both pass.
 - At an explicit accepted click, check/request screen permission before microphone startup when Screen context is enabled. Actual capture still happens just before the reply, rechecks permission and never silently falls back. Disabling Screen context persists and skips both checks/capture.
 - After microphone recording actually starts, initialize the existing app-owned Splash and voice processes while the user talks. The final transcript awaits that same warm attempt; chat still verifies current runtime identity. Stop invalidates the turn and cancels its pending work. Ready processes remain owned by the app for reuse until Quit.
 - Keep the user's three-second silence interval. No microphone, screenshot, permission request or inference starts on app launch. Clicking while file checks are incomplete never queues recording; the compact checking indicator and right-click progress remain available.
