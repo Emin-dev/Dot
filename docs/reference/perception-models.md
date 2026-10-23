@@ -46,7 +46,8 @@ preference for Apple's own tools (chat, 2026-10-23).
 1. Replace the hash with a feature print of a 256x160 capture, computed off the main thread; keep
    only the last print in memory.
 2. Count a change only at or above a distance threshold (0.1 to start). The fixture test prints the
-   measured distances in CI; retune from those and from real screens.
+   measured distances in CI: on 2026-10-23 (run `40003269001`) a clock tick measured 0.068 and a new
+   window 0.935. Retune from those and from real screens.
 3. "Same scene for N minutes" feeds stuck-error help; "large change" feeds proactive comments at the
    chosen Proactivity cadence.
 4. Send a screenshot to the 27B only on a large change.

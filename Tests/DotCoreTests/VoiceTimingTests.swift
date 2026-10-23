@@ -586,6 +586,31 @@ final class CapturedPCMTimingTests: XCTestCase {
         XCTAssertNil(released.evidence)
     }
 
+    /// R25: captured samples convert to the 16 kHz 16-bit mono format a speech model asks for,
+    /// and bad input is refused instead of being sent to the recognizer.
+    func testCapturedSamplesConvertToTheRecognizerFormat() throws {
+        let format = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true))
+        let samples = (0..<48_000).map { Float(sin(Double($0) * 0.05) * 0.3) }
+        let buffer = try WhisperRecognizer.buffer(samples, sampleRate: 48_000, format: format)
+        XCTAssertEqual(buffer.format.commonFormat, .pcmFormatInt16)
+        XCTAssertEqual(buffer.format.sampleRate, 16_000)
+        XCTAssertEqual(Double(buffer.frameLength), 16_000, accuracy: 400)
+        // The sound survives: a 0.3 sine peaks near 0.3 x 32,767.
+        let channel = try XCTUnwrap(buffer.int16ChannelData?[0])
+        let peak = (0..<Int(buffer.frameLength)).map { abs(Int(channel[$0])) }.max() ?? 0
+        XCTAssertTrue((8_000...11_000).contains(peak), "peak \(peak)")
+        // The 16 kHz float format the bundled recognizer uses converts too.
+        let float = try XCTUnwrap(AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false))
+        XCTAssertEqual(Double(try WhisperRecognizer.buffer(samples, sampleRate: 48_000, format: float).frameLength), 16_000, accuracy: 400)
+        // R1: more than five minutes is too long, not an unreadable format.
+        XCTAssertThrowsError(try WhisperRecognizer.buffer([Float](repeating: 0.1, count: 8_000 * 301 + 1), sampleRate: 8_000, format: format)) {
+            guard case RecognitionFailure.tooLong = $0 else { return XCTFail("\($0)") }
+        }
+        XCTAssertThrowsError(try WhisperRecognizer.buffer([], sampleRate: 48_000, format: format))
+        XCTAssertThrowsError(try WhisperRecognizer.buffer([Float.nan], sampleRate: 48_000, format: format))
+        XCTAssertThrowsError(try WhisperRecognizer.buffer(samples, sampleRate: 4_000, format: format))
+    }
+
     @MainActor func testSTTManagerPublishesForcedFinishEvidenceForTheCoordinator() {
         let manager = STTManager()
         var published: (UUID, VoiceCaptureTimingEvidence)?

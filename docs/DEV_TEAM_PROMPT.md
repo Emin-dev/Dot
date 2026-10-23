@@ -1,4 +1,4 @@
-# Dot rules (R1 to R24)
+# Dot rules (R1 to R25)
 
 Binding rules from the owner. The exact questions and answers behind them are in
 [OWNER_DECISIONS.md](OWNER_DECISIONS.md); the current state is in [AI_HANDOFF.md](AI_HANDOFF.md).
@@ -137,6 +137,12 @@ Prints stay in memory; they are never stored, logged or sent. No V-JEPA and no e
 **R24. Apple-native first (2026-10-23).** Prefer macOS frameworks over added libraries, scripts or
 models whenever they do the job. A replacement that changes a fixed constraint in section 3 still
 needs the owner.
+
+**R25. Speech-to-text on Apple SpeechAnalyzer (2026-10-23).** Voice turns are transcribed with
+Apple's on-device SpeechAnalyzer and SpeechTranscriber (English, final results). The system
+installs the English model once at first launch; after that no network is needed. whisper.cpp is
+only a fallback until it is removed from the payload. Never use the server-based
+`SFSpeechRecognizer`.
 
 ## 3. Fixed constraints (never change without the owner)
 

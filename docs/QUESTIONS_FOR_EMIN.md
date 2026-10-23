@@ -82,3 +82,11 @@ Ask one at a time with 2 to 4 numbered options, then record the answer in OWNER_
 - R9 self-modification: a writable plugin layer with snapshots, self-test, rollback and a Rust
   watcher, or not at all.
 - Personality between turns: idle animations, small reactions, mood.
+- From [AUDIT_2026-10-23.md](AUDIT_2026-10-23.md), in order of value (N3 answered: R25):
+  - S1: approval card for typing, keys and clicks when a turn carries page or screen text.
+  - N5, N7, N10: search, page fetching and the Splash link on Apple frameworks instead of Rust and
+    Python helpers.
+  - S3: whether proactive comments about the screen are logged in full or masked.
+  - D9: remove the old `dots/` per-install logs from the public repository.
+  - S9, N12, S10: an XPC helper for the runtime, Data Protection Keychain, a logs-only token (all
+    after Developer ID signing).

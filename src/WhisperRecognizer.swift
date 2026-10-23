@@ -3,6 +3,7 @@
 #endif
 import Foundation
 import AVFoundation
+import Speech
 #if canImport(whisper)
 import whisper
 #endif
@@ -15,15 +16,112 @@ final class RecognitionCancellation: @unchecked Sendable {
 }
 
 enum RecognitionFailure: LocalizedError {
-    case unavailable, format, tooLong, failed, empty
+    case unavailable, modelNotReady, format, tooLong, failed, empty
     var errorDescription: String? {
         switch self {
         case .unavailable: return "This installation is missing its bundled English voice recognizer. Please install the complete Dot build."
+        case .modelNotReady: return "Apple's English speech model is not on this Mac yet. I asked macOS to download it; stay online and click me again in a few minutes."
         case .format: return "I couldn't read that microphone format. Try another microphone."
         case .tooLong: return "That recording was too long to transcribe locally. Click me and try again with a shorter turn."
         case .failed: return "Local transcription stopped. Click me to try again."
         case .empty: return "I didn't catch any words. Click me and try again."
         }
+    }
+}
+
+/// R25: which recognizer a voice turn uses. On macOS 26 and later it is Apple's on-device
+/// SpeechAnalyzer; whisper.cpp stays only as the fallback until its payload is removed.
+enum NativeRecognizer {
+    static var available: Bool {
+        if #available(macOS 26.0, *), SpeechTranscriber.isAvailable { return true }
+        return WhisperRecognizer.available
+    }
+    static var usesAppleSpeech: Bool {
+        if #available(macOS 26.0, *) { return SpeechTranscriber.isAvailable }
+        return false
+    }
+}
+
+/// R25: speech-to-text with Apple SpeechAnalyzer and SpeechTranscriber, entirely on this Mac.
+/// The system downloads the English model once (at first launch, with the main model) and
+/// keeps it for every app; after that transcription needs no network. R3: English only.
+@available(macOS 26.0, *)
+enum AppleSpeechRecognizer {
+    static let language = Locale(identifier: "en-US")
+
+    private static func transcriber() async throws -> SpeechTranscriber {
+        guard SpeechTranscriber.isAvailable,
+              let locale = await SpeechTranscriber.supportedLocale(equivalentTo: language) else {
+            throw RecognitionFailure.unavailable
+        }
+        // Final results only: the turn is transcribed once, after the silence rule ends it.
+        return SpeechTranscriber(locale: locale, transcriptionOptions: [], reportingOptions: [], attributeOptions: [])
+    }
+
+    /// True when the English model is installed, so a turn can be transcribed offline now.
+    static func isReady() async -> Bool {
+        guard let module = try? await transcriber() else { return false }
+        return await AssetInventory.status(forModules: [module]) == .installed
+    }
+
+    /// Installs the English speech model when it is missing. Nil means ready. The download can
+    /// return before it is done (the system retries after a network error), so the status is
+    /// checked afterwards.
+    static func prepareAssets() async -> String? {
+        do {
+            let module = try await transcriber()
+            if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
+                try await request.downloadAndInstall()
+            }
+            let status = await AssetInventory.status(forModules: [module])
+            if status == .installed { return nil }
+            if status == .downloading { return "Apple's English speech model is still downloading." }
+            if status == .unsupported { return "Apple's English speech model is not supported on this Mac." }
+            return "Apple's English speech model is not downloaded yet; Dot asks again at the next voice turn."
+        } catch {
+            return "The English speech model could not be installed yet: \(error.localizedDescription)"
+        }
+    }
+
+    static func transcribe(_ samples: [Float], sampleRate: Double, cancellation: RecognitionCancellation) async throws -> String {
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        let module = try await transcriber()
+        // Fail fast: installing is prepareAssets' job at launch, never a wait inside a turn.
+        guard await AssetInventory.status(forModules: [module]) == .installed,
+              let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
+            throw RecognitionFailure.modelNotReady
+        }
+        let buffer = try WhisperRecognizer.buffer(samples, sampleRate: sampleRate, format: format)
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        let (input, builder) = AsyncStream.makeStream(of: AnalyzerInput.self)
+        builder.yield(AnalyzerInput(buffer: buffer))
+        builder.finish()
+        let analyzer = SpeechAnalyzer(modules: [module])
+        // Results are read while the analyzer consumes the input.
+        let collector = Task { () throws -> String in
+            var text = ""
+            for try await result in module.results where result.isFinal {
+                text += (text.isEmpty ? "" : " ") + String(result.text.characters)
+            }
+            return text
+        }
+        do {
+            if let last = try await analyzer.analyzeSequence(input) {
+                try await analyzer.finalizeAndFinish(through: last)
+            } else {
+                await analyzer.cancelAndFinishNow()
+            }
+        } catch {
+            collector.cancel()
+            await analyzer.cancelAndFinishNow()
+            throw RecognitionFailure.failed
+        }
+        let raw: String
+        do { raw = try await collector.value } catch { throw RecognitionFailure.failed }
+        guard !cancellation.isCancelled else { throw CancellationError() }
+        let words = SpokenTranscript.words(raw)
+        guard !words.isEmpty else { throw RecognitionFailure.empty }
+        return words
     }
 }
 
@@ -104,10 +202,20 @@ final class WhisperRecognizer: @unchecked Sendable {
         }
     }
     private static func convert(_ samples: [Float], sampleRate: Double) throws -> [Float] {
+        guard let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false) else {
+            throw RecognitionFailure.format
+        }
+        let output = try buffer(samples, sampleRate: sampleRate, format: outputFormat)
+        guard let data = output.floatChannelData?.pointee else { throw RecognitionFailure.format }
+        guard output.frameLength <= 16000 * 301 else { throw RecognitionFailure.tooLong }
+        return Array(UnsafeBufferPointer(start: data, count: Int(output.frameLength)))
+    }
+
+    /// The captured mono samples converted to the format a recognizer asks for.
+    static func buffer(_ samples: [Float], sampleRate: Double, format outputFormat: AVAudioFormat) throws -> AVAudioPCMBuffer {
         guard sampleRate.isFinite, (8000...96000).contains(sampleRate), !samples.isEmpty,
               samples.allSatisfy(\.isFinite),
               let inputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false),
-              let outputFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false),
               let input = AVAudioPCMBuffer(pcmFormat: inputFormat, frameCapacity: AVAudioFrameCount(samples.count)),
               let destination = input.floatChannelData?.pointee else { throw RecognitionFailure.format }
         // R1: turns may listen for five minutes, so the recognizer must accept the
@@ -117,16 +225,14 @@ final class WhisperRecognizer: @unchecked Sendable {
         input.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { if let source = $0.baseAddress { destination.update(from: source, count: samples.count) } }
         guard let converter = AVAudioConverter(from: inputFormat, to: outputFormat),
-              let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(ceil(Double(samples.count) * 16000 / sampleRate) + 4096)) else { throw RecognitionFailure.format }
+              let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: AVAudioFrameCount(ceil(Double(samples.count) * outputFormat.sampleRate / sampleRate) + 4096)) else { throw RecognitionFailure.format }
         var supplied = false
         var error: NSError?
         let status = converter.convert(to: output, error: &error) { _, flag in
             if supplied { flag.pointee = .endOfStream; return nil }
             supplied = true; flag.pointee = .haveData; return input
         }
-        guard error == nil, status != .error, let data = output.floatChannelData?.pointee,
-              output.frameLength > 0 else { throw RecognitionFailure.format }
-        guard output.frameLength <= 16000 * 301 else { throw RecognitionFailure.tooLong }
-        return Array(UnsafeBufferPointer(start: data, count: Int(output.frameLength)))
+        guard error == nil, status != .error, output.frameLength > 0 else { throw RecognitionFailure.format }
+        return output
     }
 }

@@ -29,7 +29,7 @@
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Dot reads the screen only when you ask about what is visible, and only for that turn.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Click Dot to speak. Dot records only during that capture and uses its bundled offline English recognizer.</string>
+	<string>Click Dot to speak. Dot records only during that capture and turns it into text with Apple's on-device English recognizer.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Dot uses your calendar to prepare meeting briefs and remind you of upcoming events.</string>
 	<key>NSAppleEventsUsageDescription</key>

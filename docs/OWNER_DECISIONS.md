@@ -11,7 +11,7 @@ Rules for this file:
   entry `Superseded by ...`. Never edit the quoted answer.
 - Each entry names the code and the test or guardrail that proves it. If you touch that code,
   keep the test green. If a test seems wrong, read the entry first.
-- The binding rule list is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1 to R24). The current
+- The binding rule list is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1 to R25). The current
   state is [AI_HANDOFF.md](AI_HANDOFF.md).
 
 ## Owner instructions for the 2026-10-20 to 2026-10-22 sessions (verbatim)
@@ -48,6 +48,7 @@ How these were applied:
 | R22 | 2026-10-23 | Folder across launches | "yes add" | Implemented |
 | R23 | 2026-10-23 | Screen change detection | "1" (Apple Vision feature prints now) | Implemented |
 | R24 | 2026-10-23 | Apple-native first | "use mostly apple native solutions only" | Standing rule |
+| R25 | 2026-10-23 | Speech-to-text | "yes 1" (Apple SpeechAnalyzer) | Step 1 built; whisper removal next |
 | Full removal | 2026-10-23 | "delete itself ... same as after format ... only dot!" | Implemented, see [UNINSTALL_COVERAGE.md](UNINSTALL_COVERAGE.md) |
 | Offline and Macs | 2026-10-22 | "work on all new macOS devices always independently offline" | Offline after first launch; hardware limit stays | Explained (see below) |
 
@@ -225,6 +226,26 @@ How these were applied:
   job. Changing a fixed constraint (model, voices, safety approver) still needs a new owner answer.
 - Findings from the audit this started: [AUDIT_2026-10-23.md](AUDIT_2026-10-23.md).
 
+## R25. Speech-to-text on Apple SpeechAnalyzer (2026-10-23)
+
+- Question asked: "Today Whisper turns your speech into text: it runs on the CPU, takes 153 MB, and
+  only starts once you stop talking. Apple's SpeechAnalyzer runs on your Mac too ... Should Dot
+  switch?"
+- Options offered: 1. Yes, switch to Apple SpeechAnalyzer (Recommended). 2. Test both on your voice
+  first, then decide. 3. Keep Whisper.
+- Owner answer (typed, verbatim): "yes 1"
+- Rule: voice turns are transcribed with `SpeechAnalyzer` and `SpeechTranscriber` (English, final
+  results), on device. The English model is installed through `AssetInventory` at first launch,
+  with the main model download; afterwards no network is needed. whisper.cpp stays only as a
+  fallback until step 2 removes it and its 153 MB from the payload.
+- Code: `AppleSpeechRecognizer` and `NativeRecognizer` (`src/WhisperRecognizer.swift`), the
+  transcription call in `STTManager.finishCapture` (`src/Speech.swift`), asset preparation in
+  `startPreparation` (`src/ChatView.swift`).
+- Proof: `VoiceTimingTests.testCapturedSamplesConvertToTheRecognizerFormat`, guardrail "R25
+  speech-to-text runs on Apple SpeechAnalyzer on device". Accuracy on the owner's voice is checked
+  in [TEST_TODAY.md](TEST_TODAY.md) section 3.
+- Do not: use the server-based `SFSpeechRecognizer`, or bring whisper.cpp back as the main path.
+
 ## Branch policy (2026-10-22)
 
 - Owner instruction: "keep only one main default branch in repo."
@@ -265,7 +286,7 @@ them; each has a test or guardrail.
 | Offline relaunch | A relaunch with the full model on disk still demanded about 6.9 GB free space and could block Dot offline | Budget check, "Downloading" text and `ensureModels` run only when `DownloadBudget.needsDownload` | `InteractionCoreTests.testCompleteModelOnDiskNeedsNoDownloadOrFreeSpace`, guardrail "an offline relaunch with the model on disk needs no download or free space" |
 | First download | Display sleep or a locked launch cancelled the 22.4 GB download | `OfflinePreparation.pause(keepingDownload: true)`; the download holds a user-initiated activity; `retry()` never starts a second copy | guardrail "display sleep and lock never stop the one-time model download" |
 | Safety approver (R16) | Gemma ran with llama.cpp's 512-token default context, so long conversations made every file action fail; its stderr pipe could fill and stall it; a harness error looked like the model saying no | 2,048-token context; request limited to the newest 3,000 conversation characters and 1,000 action characters, and the approver drops the oldest conversation text until the prompt fits; stderr discarded; `{"error":...}` or a non-zero exit means "approver unavailable" (no execution, no strike) | `TypedInteractionTests.testSafetyApproverRequestAlwaysFitsItsContext`, guardrails "safety approver request fits its context and harness failures never count as refusals" and "safety approver context is 2,048 tokens and trims the oldest conversation to fit" |
-| Automatic file ops (R7, R16) | Some automatic file utilities ran without the approver | Every `FileOperationPolicy.isAutomaticFileOperation` command passes `safetyRefusal` first | guardrails "model file mutations pass the R16 safety approver first" and "automatic file utilities pass the R16 safety approver" |
+| Automatic file ops (R7, R16) | Some automatic file utilities ran without the approver | Every `FileOperationPolicy.isAutomaticFileOperation` command passes `safetyRefusal` first | guardrails "model file mutations pass the R16 safety approver first" and "every command that is not read-only passes the R16 safety approver" |
 | Scoped file ops | Flag parsing, `--`, relative paths and `~` were wrong inside the selected folder | `FileOperationPolicy.tokenize`, real flag clusters, exact `--recursive`/`--force`, relative paths from the selected root, `~` as the owner's home; shell commands run in the selected folder | `TypedInteractionTests.testScopedFileOperationsStayInsideTheSelectedFolder`, guardrail "scoped file operations parse options and paths inside the selected folder" |
 | Spoken commands | A spoken "Scroll down." or "Turn on dark mode." kept Whisper's final period and missed many command matchers | `ChatView.spokenCommand(_:)` trims sentence-final `.?!…` for every command matcher; typing and clipboard keep the raw text | `TypedInteractionTests.testSpokenCommandsIgnoreWhisperPunctuation` |
 | Voice approve or deny | A spoken "Approve" ran the action silently and left Dot listening, because the result is spoken only from idle | `cancelTurn()` before `approvePendingAction()`/`denyPendingAction()` | guardrail "voice approve and deny end the listening turn first" |

@@ -1294,7 +1294,18 @@ final class ChatModel: ObservableObject {
         screenEnabled = ScreenPrivacyPreference.enabled(in: defaults)
         self.runtime = runtime ?? ChatRuntime(
             isReady: { OfflinePreparation.shared.ready },
-            startPreparation: { OfflinePreparation.shared.start(nativeRecognizerAvailable: WhisperRecognizer.available) },
+            startPreparation: {
+                OfflinePreparation.shared.start(nativeRecognizerAvailable: NativeRecognizer.available)
+                // R25: fetch Apple's English speech model with the first-launch download, so
+                // later voice turns work offline.
+                if #available(macOS 26.0, *), NativeRecognizer.usesAppleSpeech {
+                    Task.detached(priority: .utility) {
+                        if let problem = await AppleSpeechRecognizer.prepareAssets() {
+                            DiagnosticChatLogger.record(role: "system", text: problem)
+                        }
+                    }
+                }
+            },
             microphoneAuthorized: { AVCaptureDevice.authorizationStatus(for: .audio) == .authorized },
             currentRoute: { VoiceAudioRoute.current() }, screenAuthorized: { CGPreflightScreenCaptureAccess() },
             startVoice: { try tts.start(id: $0) }, enqueueVoice: { tts.enqueue($0, id: $1) },

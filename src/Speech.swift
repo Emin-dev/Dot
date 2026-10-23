@@ -158,7 +158,12 @@ final class STTManager: ObservableObject {
             let payload = try await OfflinePayload.shared.validate()
             guard continueStarting(id) else { return }
             modelURL = payload.appendingPathComponent("STT/ggml-base.en.bin")
-            guard WhisperRecognizer.available else { throw RecognitionFailure.unavailable }
+            guard NativeRecognizer.available else { throw RecognitionFailure.unavailable }
+            // R25: with no bundled recognizer, say so before recording, not after the turn.
+            if !WhisperRecognizer.available, #available(macOS 26.0, *), !(await AppleSpeechRecognizer.isReady()) {
+                Task.detached(priority: .utility) { _ = await AppleSpeechRecognizer.prepareAssets() }
+                throw RecognitionFailure.modelNotReady
+            }
         } catch {
             guard continueStarting(id) else { return }
             if error is CancellationError { endCapture(id, reason: .intentionalCancellation) }
@@ -277,7 +282,22 @@ final class STTManager: ObservableObject {
         inference = Task { [weak self] in
             guard let self else { return }
             do {
-                let text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
+                // R25: Apple's on-device recognizer once its English model is installed;
+                // until then the bundled recognizer, when this build has one.
+                var useApple = false
+                if #available(macOS 26.0, *), NativeRecognizer.usesAppleSpeech {
+                    useApple = await AppleSpeechRecognizer.isReady()
+                    // Not installed yet: ask macOS again, so a later turn uses Apple's model.
+                    if !useApple { Task.detached(priority: .utility) { _ = await AppleSpeechRecognizer.prepareAssets() } }
+                }
+                let text: String
+                if useApple, #available(macOS 26.0, *) {
+                    text = try await AppleSpeechRecognizer.transcribe(samples, sampleRate: pcm.rate, cancellation: token)
+                } else if !WhisperRecognizer.available {
+                    throw RecognitionFailure.modelNotReady
+                } else {
+                    text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
+                }
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }
                 guard self.microphonePermission == .authorized else { self.endCapture(id, reason: .permissionLost); return }
                 self.transcript = text; self.resetCapture(); self.onFinal?(id, text)

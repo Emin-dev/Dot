@@ -39,7 +39,15 @@ swift_sources = ''.join(path.read_text() for path in sorted((root / 'src').glob(
 engine, speech, chat = map(read, ['src/Engine.swift', 'src/Speech.swift', 'src/ChatView.swift'])
 checks = {
     'no borrowed runtime or broad process kills': not re.search(r'pkill|llama-server|DOT_SPLASH_URL|splashURL', engine),
-    'bundled native recognizer required': 'WhisperRecognizer.available' in speech and 'SFSpeechRecognizer' not in speech,
+    'bundled native recognizer required': 'NativeRecognizer.available' in speech and 'SFSpeechRecognizer' not in speech,
+    'R25 speech-to-text runs on Apple SpeechAnalyzer on device': (
+        'SpeechAnalyzer(modules: [module])' in read('src/WhisperRecognizer.swift')
+        and 'AssetInventory.assetInstallationRequest(supporting: [module])' in read('src/WhisperRecognizer.swift')
+        and 'SFSpeechRecognizer' not in read('src/WhisperRecognizer.swift')
+        and 'AppleSpeechRecognizer.transcribe(samples' in speech
+        and 'AppleSpeechRecognizer.prepareAssets()' in chat
+        and 'testCapturedSamplesConvertToTheRecognizerFormat' in read('Tests/DotCoreTests/VoiceTimingTests.swift')
+    ),
     'capture task rejects stale generation': 'guard let self, !Task.isCancelled, self.gate.accepts(id)' in chat,
     'capture checks cancellation before permissions': re.search(r'func start\(id: UUID, settings: VoiceTimingSettings, invitation: Bool\) async \{\s*guard !Task.isCancelled', speech) is not None,
     'capture checks cancellation after setup and microphone await': speech.count('guard continueStarting(id) else { return }') >= 5 and 'guard capture == id else { return false }' in speech and 'guard !Task.isCancelled else { endCapture(id, reason: .intentionalCancellation)' in speech,

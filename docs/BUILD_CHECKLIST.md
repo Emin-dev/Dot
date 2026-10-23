@@ -11,6 +11,8 @@ point to [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md). The long history is in
   listening with a spoken notice at the cap (R1); follow-up listening after a real question; typed
   turns; quiet over video; pauses when the screen sleeps or locks.
 - **Voice:** local Kokoro British voices; a missing voice falls back to the bundled Isabella (R4).
+  Speech-to-text is Apple's on-device SpeechAnalyzer (R25); its English model downloads once at
+  first launch.
 - **Wake greeting:** warm, time-aware, about 80% of wakes after a random 3 to 10 minute absence (R18).
 - **Errors:** Dot keeps living, shows a large banner, logs the error, heals the engine and clears
   one-off errors by itself (R19).
