@@ -15,8 +15,10 @@ on:
 permissions:
   contents: read
 
+# github.workflow is the caller's name under workflow_call, so the release's
+# no-trace gate has its own group and a push to main can never replace it.
 concurrency:
-  group: dot-privacy-${{ github.head_ref || github.ref_name }}
+  group: dot-privacy-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: false
 
 env:

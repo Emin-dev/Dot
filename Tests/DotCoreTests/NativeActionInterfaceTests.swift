@@ -58,27 +58,56 @@ final class NativeActionInterfaceTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let root = try directory(); defer { try? FileManager.default.removeItem(at: root) }
         let storage = root.appendingPathComponent("AppReceipts")
+        // Each folder's .dot-actions/owner.lock admits one live executor, as in the app,
+        // so every model below gets its own folder or ends before the next one opens it.
+        let automaticFolder = root.appendingPathComponent("Automatic", isDirectory: true)
+        let chosenFolder = root.appendingPathComponent("Chosen", isDirectory: true)
+        for folder in [automaticFolder, chosenFolder] {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+
+        // Whether this test host can make security-scoped bookmarks is checked, not assumed.
+        let bookmarksWork = (try? chosenFolder.bookmarkData(options: [.withSecurityScope],
+                                                            includingResourceValuesForKeys: nil, relativeTo: nil)) != nil
+        let key = NativeActionPanelModel.folderBookmarkKey
 
         let automatic = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
-        let automaticSelected = await automatic.selectFolder(root, remember: false)
+        let automaticSelected = await automatic.selectFolder(automaticFolder, remember: false)
         XCTAssertTrue(automaticSelected)
-        XCTAssertNil(defaults.data(forKey: NativeActionPanelModel.folderBookmarkKey))
+        XCTAssertNil(defaults.data(forKey: key))
+        // Picking the automatic folder by hand makes it the remembered one.
+        let pickedByHand = await automatic.selectFolder(automaticFolder)
+        XCTAssertTrue(pickedByHand)
+        XCTAssertEqual(defaults.data(forKey: key) != nil, bookmarksWork)
+        defaults.removeObject(forKey: key)
 
-        let chosen = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
-        let chosenSelected = await chosen.selectFolder(root)
-        XCTAssertTrue(chosenSelected)
-        if defaults.data(forKey: NativeActionPanelModel.folderBookmarkKey) != nil {
+        do {
+            let chosen = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
+            let chosenSelected = await chosen.selectFolder(chosenFolder)
+            XCTAssertTrue(chosenSelected)
+            XCTAssertEqual(defaults.data(forKey: key) != nil, bookmarksWork)
+            if bookmarksWork {
+                // A Dot that is still quitting holds the folder's lock: this reopen fails,
+                // and the owner's folder stays saved for the next launch.
+                let early = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
+                let earlyRestored = await early.restoreSavedFolder()
+                XCTAssertFalse(earlyRestored)
+                XCTAssertNotNil(defaults.data(forKey: key))
+            }
+            XCTAssertNotNil(chosen.documentRoot, "keeps the first model, and its lock, alive until here")
+        }
+        if bookmarksWork {
             let relaunched = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
             let restored = await relaunched.restoreSavedFolder()
             XCTAssertTrue(restored)
-            XCTAssertEqual(relaunched.documentRoot, root.standardizedFileURL.resolvingSymlinksInPath())
+            XCTAssertEqual(relaunched.documentRoot?.path, chosenFolder.standardizedFileURL.resolvingSymlinksInPath().path)
         }
 
-        defaults.set(Data("not a bookmark".utf8), forKey: NativeActionPanelModel.folderBookmarkKey)
+        defaults.set(Data("not a bookmark".utf8), forKey: key)
         let broken = NativeActionPanelModel(applicationStorage: storage, workspace: ActionPanelWorkspace(), folderBookmarks: defaults)
         let brokenRestored = await broken.restoreSavedFolder()
         XCTAssertFalse(brokenRestored)
-        XCTAssertNil(defaults.data(forKey: NativeActionPanelModel.folderBookmarkKey))
+        XCTAssertNil(defaults.data(forKey: key))
         XCTAssertNil(broken.documentRoot)
     }
 

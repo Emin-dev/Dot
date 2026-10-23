@@ -178,7 +178,7 @@ checks = {
     'a pending card is withdrawn when the owner moves on': 'DiagnosticChatLogger.recordTool(name: "approval_withdrawn", target: req.command,' in chat and chat.index('approval_withdrawn') < chat.index('let copyPhrase = Self.commandPhrase(text)'),
     'R16 file-writing programs keep the card': '"rsync", "ditto", "unzip", "tar", "sqlite3", "wget", "patch", "shred"' in read('src/InteractionCore.swift') and 'if name == "sed", later.contains(where:' in read('src/InteractionCore.swift') and 'case "restore", "rm":' in read('src/InteractionCore.swift'),
     'R11 engine stages update only a progress banner and a finished check clears it': 'if let current = self.phase.blockedMessage, Self.isProgressMessage(current) {' in chat and 'self.block(Self.progressMessage(for: stage ?? ""), issue: .unknown)' not in chat,
-    'R22 the chosen folder is kept across launches as a security-scoped bookmark': 'url.bookmarkData(options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'URL(resolvingBookmarkData: data, options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'NativeActionPanel(model: NativeActionPanelModel(folderBookmarks: .standard))' in read('src/App.swift') and 'await self.actionPanel.model.restoreSavedFolder()' in read('src/App.swift') and 'selectFolder(docDir, remember: false)' in read('src/App.swift'),
+    'R22 the chosen folder is kept across launches as a security-scoped bookmark': 'url.bookmarkData(options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'URL(resolvingBookmarkData: data, options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'NativeActionPanel(model: NativeActionPanelModel(folderBookmarks: .standard))' in read('src/App.swift') and 'await self.actionPanel.model.restoreSavedFolder()' in read('src/App.swift') and 'selectFolder(docDir, remember: false)' in read('src/App.swift') and '        return await selectFolder(url)\n    }' in read('src/ActionPanel.swift'),
     'removal also deletes the Keychain log token': 'while security delete-generic-password -s dot-github-token >/dev/null 2>&1; do :; done' in read('scripts/uninstall-dot.sh') and 'dot-github-token' in read('src/DotLogSync.swift'),
     'removal also clears .dot-actions folders, Dot Dock tiles, download history rows and crash records': 'Self.recordActionFolder(canonical)' in read('src/ActionPanel.swift') and '[ -f "$target/owner.lock" ] || continue' in read('scripts/uninstall-dot.sh') and '[ ! -L "$target" ]' in read('scripts/uninstall-dot.sh') and 'defaults import com.apple.dock "$DOCK_PLIST"' in read('scripts/uninstall-dot.sh') and "LSQuarantineDataURLString LIKE '%github.com/Emin-dev/Dot/%'" in read('scripts/uninstall-dot.sh') and '/CrashReporter/Dot_' in read('scripts/uninstall-dot.sh'),
     'voice approve and deny end the listening turn first': re.search(r'cancelTurn\(\)\s+approvePendingAction\(\)\s+return', chat) is not None and re.search(r'cancelTurn\(\)\s+denyPendingAction\(\)\s+return', chat) is not None,
@@ -313,6 +313,10 @@ checks = {
         and 'uninstall-dot.sh" | bash' in read('.github/workflows/privacy-clean.yml')
         and 'privacy_diff.py .tmp/snapshot-before.json .tmp/snapshot-after.json' in read('.github/workflows/privacy-clean.yml')
         and 'app.dot.local' not in read('scripts/privacy_allowlist.txt')
+    ),
+    'a push to main cannot cancel the release no-trace gate': (
+        'group: dot-privacy-${{ github.workflow }}-' in read('.github/workflows/privacy-clean.yml')
+        and 'uses: ./.github/workflows/privacy-clean.yml' in read('.github/workflows/release.yml')
     ),
     'inner runtime sandbox is not nested under the App Sandbox': (
         'DOT_PARENT_APPLICATION_SANDBOX' in read('src/BundledSplash.swift')

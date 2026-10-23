@@ -81,7 +81,11 @@ final class NativeActionPanelModel: ObservableObject {
         guard acceptingActions, !busy else { error = NativeActionError.busy.localizedDescription; return false }
         guard url.isFileURL else { error = NativeActionError.unsafePath.localizedDescription; return false }
         let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
-        if canonical == documentRoot { error = nil; return true }
+        if canonical == documentRoot {
+            // Picking the automatic folder by hand still makes it the remembered one.
+            if remember { saveBookmark(url) }
+            error = nil; return true
+        }
         busy = true; defer { busy = false }
         let scoped = url.startAccessingSecurityScopedResource()
         do {
@@ -91,10 +95,7 @@ final class NativeActionPanelModel: ObservableObject {
             scopedFolder = scoped ? url : nil
             UserFolderScope.shared.set(canonical)
             Self.recordActionFolder(canonical)
-            if remember, let folderBookmarks,
-               let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil) {
-                folderBookmarks.set(bookmark, forKey: Self.folderBookmarkKey)
-            }
+            if remember { saveBookmark(url) }
             previous?.stopAccessingSecurityScopedResource()
             documentReceipts = await executor.receipts()
             readVersion = nil; selection = nil; lastResult = nil; error = nil
@@ -122,19 +123,26 @@ final class NativeActionPanelModel: ObservableObject {
         try? (lines.suffix(200).joined(separator: "\n") + "\n").write(to: list, atomically: true, encoding: .utf8)
     }
 
-    /// R22: reopen the folder the owner picked last time. A bookmark that no longer
-    /// resolves (folder deleted or moved off this Mac) is dropped; a stale one is
-    /// refreshed by selecting the folder again.
+    private func saveBookmark(_ url: URL) {
+        guard let folderBookmarks,
+              let bookmark = try? url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        else { return }
+        folderBookmarks.set(bookmark, forKey: Self.folderBookmarkKey)
+    }
+
+    /// R22: reopen the folder the owner picked last time. Only a bookmark that no
+    /// longer resolves (folder deleted or moved off this Mac) is dropped; a folder that
+    /// cannot open right now (busy, or still locked by a Dot that is quitting) keeps
+    /// it for the next launch. A stale one is refreshed by selecting the folder again.
     @discardableResult func restoreSavedFolder() async -> Bool {
         guard let folderBookmarks, let data = folderBookmarks.data(forKey: Self.folderBookmarkKey) else { return false }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: data, options: [.withSecurityScope],
-                                 relativeTo: nil, bookmarkDataIsStale: &stale),
-              await selectFolder(url) else {
+                                 relativeTo: nil, bookmarkDataIsStale: &stale) else {
             folderBookmarks.removeObject(forKey: Self.folderBookmarkKey)
             return false
         }
-        return true
+        return await selectFolder(url)
     }
 
     /// Typed requests are the only executor entry point. File/web contents are

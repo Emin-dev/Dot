@@ -186,8 +186,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         actionPanel.onVisibility = { [weak self] in self?.utilityVisibility("actions", visible: $0) }
         // R22: the folder chosen last time is ready again without asking.
         Task { @MainActor [weak self] in
-            guard let self, await self.actionPanel.model.restoreSavedFolder() else { return }
-            DiagnosticChatLogger.record(role: "system", text: "Reopened the folder chosen for file actions.")
+            guard let self else { return }
+            if await self.actionPanel.model.restoreSavedFolder() {
+                DiagnosticChatLogger.record(role: "system", text: "Reopened the folder chosen for file actions.")
+            } else if let error = self.actionPanel.model.error {
+                DiagnosticChatLogger.record(role: "system", text: "The folder chosen for file actions did not reopen: \(error)")
+            }
         }
         voiceEnvironment.isActive = { [weak model] in model?.phase.isActive == true }
         voiceEnvironment.onChange = { [weak model, weak webResearch] reason in
