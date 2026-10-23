@@ -208,8 +208,8 @@ actor MemoryTierStore {
 
     /// Full-text recall. Superseded records are excluded and every hit is touched so the
     /// most useful memories are the most recently accessed ones.
-    func recall(query: String, limit: Int = 20, now: Date) async throws -> [MemoryRecord] {
-        let hits = try await facts.searchMemories(query: query, limit: max(1, limit))
+    func recall(query: String, limit: Int = 20, now: Date, strictOnly: Bool = false) async throws -> [MemoryRecord] {
+        let hits = try await facts.searchMemories(query: query, limit: max(1, limit), strictOnly: strictOnly)
         guard !hits.isEmpty else { return [] }
         return try await facts.withMemoryConnection { db in
             for hit in hits {

@@ -491,11 +491,14 @@ actor LocalFTSStore {
         return readMemoryRows(stmt: stmt)
     }
 
-    func searchMemories(query: String, includeStale: Bool = false, limit: Int = 20) throws -> [MemoryFactRecord] {
+    /// `strictOnly` skips the any-word fallback: "forget about X" must delete only
+    /// memories that contain every meaningful word of X.
+    func searchMemories(query: String, includeStale: Bool = false, limit: Int = 20,
+                        strictOnly: Bool = false) throws -> [MemoryFactRecord] {
         let strictQuery = sanitizeFTSQuery(query, joinOperator: "AND")
         guard !strictQuery.isEmpty else { return [] }
         let strictResults = try performSearchMemories(ftsQuery: strictQuery, includeStale: includeStale, limit: limit)
-        if !strictResults.isEmpty { return strictResults }
+        if !strictResults.isEmpty || strictOnly { return strictResults }
 
         let broadQuery = sanitizeFTSQuery(query, joinOperator: "OR")
         guard !broadQuery.isEmpty, broadQuery != strictQuery else { return [] }

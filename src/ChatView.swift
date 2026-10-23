@@ -84,6 +84,10 @@ final class ChatModel: ObservableObject {
     private var batteryPolicy = BatteryAlertPolicy()
     private var prewarmTask: Task<Void, Never>?
     private var memorySummaryTask: Task<Void, Never>?
+    /// Messages already turned into key points. R5 summarises each part of a
+    /// conversation once; it used to re-summarise the whole history after every
+    /// answer. Ids, not a count: `history` is trimmed from the front.
+    private var summarisedMessageIDs = Set<UUID>()
     private var screenWatchTask: Task<Void, Never>?
     private var lastFileInsightKey: String?
     private var lastFileScanAt = 0.0
@@ -275,14 +279,9 @@ final class ChatModel: ObservableObject {
                 return
             }
             if isDelete {
-                do {
-                    try FileManager.default.removeItem(atPath: target)
-                    DiagnosticChatLogger.recordTool(name: "delete_file", target: target, outcome: "File deleted successfully", succeeded: true)
-                    self.speakDirect("Approved. File deleted.")
-                } catch {
-                    DiagnosticChatLogger.recordTool(name: "delete_file", target: target, outcome: error.localizedDescription, succeeded: false)
-                    self.speakDirect("Could not delete file: \(error.localizedDescription)")
-                }
+                let result = Self.deleteInAllowedFolder(target)
+                DiagnosticChatLogger.recordTool(name: "delete_file", target: target, outcome: result.message, succeeded: result.succeeded)
+                self.speakDirect(result.succeeded ? "Approved. File deleted." : result.message)
             } else {
                 let output = await Self.runShellCommand(cmd)
                 DiagnosticChatLogger.recordTool(name: "execute_command", target: cmd, outcome: output, succeeded: true)
@@ -1535,7 +1534,9 @@ final class ChatModel: ObservableObject {
 
     private func summariseConversationIntoKeyPoints() async {
         guard let memory else { return }
-        let lines = history.map { MemoryKeyPointExtractor.Line(role: $0.role, text: $0.content) }
+        let snapshotIDs = Set(history.map(\.id))
+        let lines = history.filter { !summarisedMessageIDs.contains($0.id) }
+            .map { MemoryKeyPointExtractor.Line(role: $0.role, text: $0.content) }
         guard let prompt = MemoryKeyPointExtractor.prompt(for: lines) else { return }
         var output = ""
         do {
@@ -1547,6 +1548,8 @@ final class ChatModel: ObservableObject {
             return
         }
         let points = MemoryKeyPointExtractor.parse(output)
+        // Only ids still in history are kept, so the set never grows without bound.
+        summarisedMessageIDs = snapshotIDs
         guard !points.isEmpty else { return }
         for point in points {
             _ = try? await memory.remember(text: point, tier: .keyPoints, source: .inferred, now: Date())
@@ -2024,6 +2027,36 @@ final class ChatModel: ObservableObject {
 
     static let screenTextCopyPhrases: Set<String> = ["copy screen text", "copy text from screen"]
 
+    /// `delete_file` follows the rules `rm` follows: "~" is the owner's home, a
+    /// relative name is inside the selected folder, and only the selected folder
+    /// or Dot's own container can be deleted from. It used to remove the raw path.
+    static func deleteInAllowedFolder(_ path: String, sandboxHome: String = NSHomeDirectory()) -> (succeeded: Bool, message: String) {
+        let selected = UserFolderScope.shared.current
+        var value = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.contains("\0") else { return (false, "Refused: invalid path.") }
+        if value == "~" || value.hasPrefix("~/") {
+            value = UserFolderScope.expandingUserHome(value, sandboxHome: sandboxHome)
+        } else if !value.hasPrefix("/") {
+            guard let selected else {
+                return (false, "Choose the folder first: open Tools & History, then Mac actions & receipts.")
+            }
+            value = selected.appendingPathComponent(value).path
+        }
+        let url = URL(fileURLWithPath: value).standardizedFileURL.resolvingSymlinksInPath()
+        let roots = [selected, URL(fileURLWithPath: sandboxHome, isDirectory: true)]
+            .compactMap { $0?.standardizedFileURL.resolvingSymlinksInPath().path }
+        // Strictly inside: never the selected folder or the container itself.
+        guard roots.contains(where: { url.path.hasPrefix($0 + "/") }) else {
+            return (false, "Refused: \(url.path) is outside the folder you selected.")
+        }
+        do {
+            try FileManager.default.removeItem(at: url)
+            return (true, "Deleted \(url.path).")
+        } catch {
+            return (false, "Could not delete \(url.path): \(error.localizedDescription)")
+        }
+    }
+
     /// The front window of the app the owner is using (never Dot), in Cocoa
     /// screen coordinates, so "highlight active window" outlines the real window.
     /// Window bounds need no Screen Recording permission; titles are not read.
@@ -2074,6 +2107,10 @@ final class ChatModel: ObservableObject {
                     "i prefer", "i like", "i don't like", "i dont like", "i hate",
                     "from now on", "always use", "never use", "always do", "never do"]
         guard lower.count <= 240, cues.contains(where: { lower.contains($0) }) else { return nil }
+        // R5: without an explicit "remember", only a short stated preference counts;
+        // a question ("I like this song, what's it called?") is never a memory.
+        let explicit = ["remember that", "remember this", "remember:"].contains(where: { lower.contains($0) })
+        if !explicit, lower.contains("?") || lower.count > 120 { return nil }
         var fact = text
         for marker in ["remember that", "remember this", "remember:"] {
             if let range = fact.range(of: marker, options: .caseInsensitive) {
@@ -2565,7 +2602,9 @@ final class ChatModel: ObservableObject {
                 guard let self, self.gate.accepts(id) else { return }
                 var removed = 0
                 if let memory = self.memory,
-                   let matches = try? await memory.recall(query: subject, limit: 5, now: Date()) {
+                   // Every word must match: an any-word match deleted unrelated memories
+                   // ("forget about the dentist on Friday" removed "Friday pizza night").
+                   let matches = try? await memory.recall(query: subject, limit: 5, now: Date(), strictOnly: true) {
                     for match in matches.prefix(5) where (try? await memory.forget(id: match.id)) == true {
                         removed += 1
                     }
@@ -3244,20 +3283,8 @@ final class ChatModel: ObservableObject {
                         chatInput[lastIdx] = ChatMessage(role: chatInput[lastIdx].role, content: chatInput[lastIdx].content + assembledCtx)
                     }
                 }
-                Task { [weak self] in
-                    guard let self else { return }
-                    let facts = PersistentMemoryBrain.extractImportantFacts(from: text)
-                    if !facts.isEmpty {
-                        PersistentMemoryBrain.shared.persistFacts(facts)
-                        for f in facts {
-                            _ = try? await self.ftsStore.saveMemory(
-                                category: f.isCorrection ? .userCorrection : (f.isVolatile ? .projectContext : .userPreference),
-                                fact: f.fact,
-                                isCorrection: f.isCorrection
-                            )
-                        }
-                    }
-                }
+                // R5: no per-turn capture of the owner's raw sentences. Memory gets the
+                // 5-10 key points after a conversation and explicit "remember ..." facts.
                 let snapshot = chatInput
                 var executedToolConfirmation: String?
                 let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
@@ -3345,14 +3372,9 @@ final class ChatModel: ObservableObject {
                             DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: refusal, succeeded: false)
                             break
                         }
-                        do {
-                            try FileManager.default.removeItem(atPath: path)
-                            executedToolConfirmation = "Deleted \(path)."
-                            DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: "File deleted successfully", succeeded: true)
-                        } catch {
-                            executedToolConfirmation = "Could not delete \(path): \(error.localizedDescription)"
-                            DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: error.localizedDescription, succeeded: false)
-                        }
+                        let result = Self.deleteInAllowedFolder(path)
+                        executedToolConfirmation = result.message
+                        DiagnosticChatLogger.recordTool(name: "delete_file", target: path, outcome: result.message, succeeded: result.succeeded)
                     case .contextualWorkflow(let app, let action):
                         if TrustedAppStore(defaults: self.defaults).isTrusted(app) {
                             let workflowApp = ContextualWorkflowApp(rawValue: app.lowercased()) ?? .unknown

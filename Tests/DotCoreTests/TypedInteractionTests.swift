@@ -405,6 +405,9 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.factToRemember(from: "Please remember: my name is Bob"), "my name is Bob")
         XCTAssertEqual(ChatModel.factToRemember(from: "I prefer oat milk"), "I prefer oat milk")
         XCTAssertNil(ChatModel.factToRemember(from: "what is the weather"))
+        // R5: a question or a long sentence is not a stored preference.
+        XCTAssertNil(ChatModel.factToRemember(from: "I like this song, what's it called?"))
+        XCTAssertEqual(ChatModel.factToRemember(from: "Remember that my dentist is on Friday?"), "my dentist is on Friday?")
         XCTAssertNil(ChatModel.factToRemember(from: String(repeating: "a", count: 241) + " I like tea"))
     }
 
@@ -437,6 +440,36 @@ final class TypedInteractionTests: XCTestCase {
                      "move the window to the left", "go to upwork.com"] {
             XCTAssertNil(ChatModel.detectMovementCommand(turn), turn)
         }
+    }
+
+    @MainActor func testDeleteFileStaysInsideTheSelectedFolderOrTheContainer() throws {
+        let fileManager = FileManager.default
+        let root = fileManager.temporaryDirectory.appendingPathComponent("dot-delete-\(UUID().uuidString)", isDirectory: true)
+        let container = fileManager.temporaryDirectory.appendingPathComponent("dot-container-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: container, withIntermediateDirectories: true)
+        let previous = UserFolderScope.shared.current
+        defer {
+            UserFolderScope.shared.set(previous)
+            try? fileManager.removeItem(at: root); try? fileManager.removeItem(at: container)
+        }
+        UserFolderScope.shared.set(nil)
+        XCTAssertFalse(ChatModel.deleteInAllowedFolder("notes.txt", sandboxHome: container.path).succeeded)
+
+        UserFolderScope.shared.set(root)
+        fileManager.createFile(atPath: root.appendingPathComponent("notes.txt").path, contents: Data())
+        fileManager.createFile(atPath: container.appendingPathComponent("cache.txt").path, contents: Data())
+        XCTAssertTrue(ChatModel.deleteInAllowedFolder("notes.txt", sandboxHome: container.path).succeeded)
+        XCTAssertFalse(fileManager.fileExists(atPath: root.appendingPathComponent("notes.txt").path))
+        XCTAssertTrue(ChatModel.deleteInAllowedFolder(container.appendingPathComponent("cache.txt").path,
+                                                      sandboxHome: container.path).succeeded)
+        // Outside both, the folders themselves, and "~" outside the selected folder are refused.
+        XCTAssertFalse(ChatModel.deleteInAllowedFolder("/etc/hosts", sandboxHome: container.path).succeeded)
+        XCTAssertFalse(ChatModel.deleteInAllowedFolder(root.path, sandboxHome: container.path).succeeded)
+        XCTAssertFalse(ChatModel.deleteInAllowedFolder(container.path, sandboxHome: container.path).succeeded)
+        XCTAssertFalse(ChatModel.deleteInAllowedFolder("~/Desktop/report.pdf",
+                                                       sandboxHome: "/Users/emin/Library/Containers/app.dot.local/Data").succeeded)
+        XCTAssertTrue(fileManager.fileExists(atPath: root.path))
     }
 
     @MainActor func testTypedTextNeverReachesTheLog() {

@@ -124,6 +124,19 @@ final class LocalFTSTests: XCTestCase {
         XCTAssertTrue(results.first?.snippet.contains("ScreenCaptureKit") == true)
     }
 
+    func testStrictSearchNeverFallsBackToAnyWord() async throws {
+        // R6: "forget about X" deletes strict matches only.
+        let store = try LocalFTSStore(inMemory: true)
+        _ = try await store.saveMemory(category: .learnedFact, fact: "Friday pizza night with the team")
+        _ = try await store.saveMemory(category: .learnedFact, fact: "Dentist appointment on Friday at 3 PM")
+        let broad = try await store.searchMemories(query: "pizza Tuesday")
+        XCTAssertFalse(broad.isEmpty, "ordinary recall may widen to any word")
+        let strict = try await store.searchMemories(query: "pizza Tuesday", strictOnly: true)
+        XCTAssertTrue(strict.isEmpty)
+        let exact = try await store.searchMemories(query: "the dentist on Friday", strictOnly: true)
+        XCTAssertEqual(exact.map(\.fact), ["Dentist appointment on Friday at 3 PM"])
+    }
+
     func testClearAll() async throws {
         let store = try LocalFTSStore(inMemory: true)
         _ = try await store.saveMemory(category: .projectContext, fact: "Dot companion local only")
