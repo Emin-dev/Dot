@@ -58,6 +58,11 @@ jobs:
           test -f .tmp/runtime/Offline/runtime-manifest.json
           test -f .tmp/whisper/whisper.framework/Modules/module.modulemap
 
+      # Diagnostic only: it never gates the no-trace lane or the release that calls it.
+      - name: Describe the runtime payload (read-only, for audit N1)
+        continue-on-error: true
+        run: python3 -I -B scripts/describe_runtime_manifest.py .tmp/runtime/Offline/runtime-manifest.json
+
       - name: Static contracts and shell syntax
         run: |
           python3 -B scripts/check_contracts.py
