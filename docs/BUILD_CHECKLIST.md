@@ -171,7 +171,7 @@ The older exact-helper component benchmark remains distinct: five warm public sy
   - Local file finding with Spotlight `mdfind` ("find file <name>", "locate file <name>").
 - [x] **On-Screen Visual Guidance & Highlight Rings (Laser Pointer):**
   - Transparent, non-activating, click-through overlay window rendering smooth glowing rings and callout boxes (`ScreenGuideLaserOverlay`).
-  - Conversational triggering via "point", "laser pointer" or "highlight active window". (2026-10-22 audit F8: the highlight is a fixed 600x400 box at screen centre, not the window frame, and no voice phrase produces coordinate targets; the model's `point_on_screen` tool does.)
+  - Conversational triggering via "point", "laser pointer" or "highlight active window". (Since 2026-10-23 the highlight outlines the front window of the app in use, with a centred box only as a fallback. No voice phrase produces coordinate targets; the model's `point_on_screen` tool does.)
 - [x] **In-Place App Typing & Ghost Text (Type-into-App):**
   - Direct text dictation and insertion into the currently focused application's text field via macOS CoreGraphics synthesized Unicode keyboard events (`InPlaceAppTyping.type`).
   - Conversational commands: "type this: <text>", "type into app: <text>", "dictate: <text>".

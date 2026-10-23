@@ -2024,6 +2024,28 @@ final class ChatModel: ObservableObject {
 
     static let screenTextCopyPhrases: Set<String> = ["copy screen text", "copy text from screen"]
 
+    /// The front window of the app the owner is using (never Dot), in Cocoa
+    /// screen coordinates, so "highlight active window" outlines the real window.
+    /// Window bounds need no Screen Recording permission; titles are not read.
+    static func activeExternalWindowFrame() -> CGRect? {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        var targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if targetPID == ownPID { targetPID = InPlaceAppTyping.lastExternalApplication()?.processIdentifier }
+        guard let targetPID,
+              let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]],
+              let primaryHeight = NSScreen.screens.first?.frame.height else { return nil }
+        for window in windows {
+            guard (window[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == targetPID,
+                  (window[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let values = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: values as CFDictionary),
+                  rect.width > 40, rect.height > 40 else { continue }
+            // Window-list bounds start at the top left of the primary display.
+            return CGRect(x: rect.minX, y: primaryHeight - rect.maxY, width: rect.width, height: rect.height)
+        }
+        return nil
+    }
+
     /// The system-control clipboard reply carries clipboard text; the log keeps its length.
     static func loggableSystemReply(_ reply: String) -> String {
         let prefix = "Your clipboard contains: "
@@ -3061,7 +3083,7 @@ final class ChatModel: ObservableObject {
         case .highlightActiveWindow:
             if let screen = NSScreen.main {
                 let centerBox = CGRect(x: screen.frame.midX - 300, y: screen.frame.midY - 200, width: 600, height: 400)
-                ScreenGuideLaserOverlay.shared.highlightRect(centerBox)
+                ScreenGuideLaserOverlay.shared.highlightRect(Self.activeExternalWindowFrame() ?? centerBox)
                 let desktop = ActiveDesktopContext.current()
                 let name = desktop.appName ?? "active window"
                 respondDirectly("Highlighting \(name).", id: id)
