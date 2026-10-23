@@ -5,7 +5,7 @@ placement must not make an outbound request. The only network-capable surfaces
 are the documented optional ones: GitHub log sync, Hugging Face model
 provisioning, user-requested own-source/research reads, and the keyed research
 providers. This is a source contract; native disconnected acceptance remains an
-owner-run gate (docs/offline-acceptance.md).
+owner-run gate (docs/reference/offline-acceptance.md).
 """
 import re
 import unittest

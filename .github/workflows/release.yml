@@ -172,7 +172,7 @@ jobs:
           The complete DMG is 22+ GB and GitHub limits each asset to 2 GB. Its
           owner-produced parts (Dot.dmg.partNNN + Dot.dmg.parts.json) are NOT
           published yet; the released DMG plus the first-launch model download
-          is the supported install today. See docs/QUESTIONS_FOR_EMIN.md §8-10.
+          is the supported install today. See docs/QUESTIONS_FOR_EMIN.md sections 2 and 3.
           EOF
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

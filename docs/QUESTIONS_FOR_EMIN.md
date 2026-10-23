@@ -1,13 +1,12 @@
-# Questions for Emin
+# What only Emin can provide
 
-Answers are not blocking where a safe default is stated; Dot proceeds with the default and the
-default stays easy to change.
+Everything else is decided; the answers are in [OWNER_DECISIONS.md](OWNER_DECISIONS.md) and are not
+asked again. Settled defaults (change only with a new answer): logs are text only on `dot-logs`;
+minimum M5 Pro class, 48 GB, macOS 27; the fixed Qwen3.8 27B Q4 model; British Kokoro voices with
+Isabella as fallback; model parts hosted on the `model-parts-v1` release. The full earlier version
+of this file is [archive/QUESTIONS_FOR_EMIN_FULL.md](archive/QUESTIONS_FOR_EMIN_FULL.md).
 
-Behavior questions already answered (R17 to R21: proactive comments, wake greeting, errors,
-self-reflection, sandbox exceptions) are closed. Their exact answers are in
-[OWNER_DECISIONS.md](OWNER_DECISIONS.md); do not ask them again.
-
-## 1. Log-upload token (blocking the first real upload)
+## 1. Log-upload token (needed for the first real upload)
 
 **What is needed:** one GitHub fine-grained personal access token for `Emin-dev/Dot` with
 **Contents: Read and write**. A classic token with `repo` also works. Do **not** send it in chat and
@@ -40,84 +39,7 @@ unset TOKEN
 **Recommended default while waiting:** keep queueing locally; never upload unauthenticated and never
 create a token automatically.
 
-## 2. Log scope
-
-**Recommended default (implemented):** full user and Dot conversation text, tool outcomes, app and
-system events, health snapshots and launch metadata. No images, screenshots, audio, microphone
-captures or the memory database. Screenshots only as OCR line counts/short anonymized descriptions.
-
-Change by editing `src/DotLogSync.swift` (+ tests) if a narrower scope is wanted.
-
-## 3. Logs branch and layout
-
-**Recommended default (implemented):** branch `dot-logs`; path
-`dot/<16-char-anonymous-install-id>/<YYYY-MM-DDTHH-MM-SSZ>/`; one new folder per launch; 2 MB
-rotation with one rotated file; offline queue capped at 64 entries with 8 exponential attempts,
-then at most one retry per hour while the entry stays queued.
-
-Change by editing `LogSyncPolicy` in `src/InteractionCore.swift` (+ tests).
-
-## 4. Hardware minimum
-
-**Recommended default (implemented):** refuse to launch below Apple Silicon M5 Pro class, 48 GB
-Unified Memory or macOS 27 with one clear blocking message. The exact Qwen3.8 27B Q4 Splash model has
-no smaller fallback.
-
-Change by editing `HardwareCompatibility` in `src/InteractionCore.swift` (+ tests).
-
-## 5. Model
-
-**Recommended default (implemented):** exactly `mlx-community/Qwen3.8-27B-4bit` on Splash. No
-smaller replacement and no automatic substitution. The separate Gemma-3-4B safety approver remains
-the only auxiliary model and never answers conversations.
-
-## 6. Main branch protection
-
-`main` is protected with a pull-request requirement (no force-push, no deletion). Administrators can
-still merge directly, which keeps the current single-owner workflow possible. The logs token only
-needs the unprotected `dot-logs` branch.
-
-## 7. Voice list
-
-**Recommended default (implemented):** every bundled British Kokoro voice is accepted; a missing
-selected voice falls back to the bundled `bf_isabella` with an honest log line. No cloud TTS.
-
-## 8. Model part hosting (no longer owner-gated)
-
-**Resolved by the `Publish model parts` workflow** (`.github/workflows/model-parts.yml`,
-`workflow_dispatch`). It needs nothing from Emin: it uses the built-in `GITHUB_TOKEN`,
-fetches the pinned Qwen3.8 27B Q4 files from their official public repositories,
-verifies every file against `Resources/bundled-models.json`, splits them into
-<2 GB parts and uploads the parts plus `model-parts.json` to the `model-parts-v1`
-release. The release workflow then bundles that plan into `Dot.dmg`, so the app's
-primary route is the pinned Emin-dev/Dot parts; revision-pinned Hugging Face files
-remain the hash-checked fallback.
-
-The workflow streams one file at a time, so it fits a hosted runner (~6 GB peak,
-22.4 GB total transfer) and refuses to replace an existing release. The manual route
-below is kept only for a deliberate re-split:
-
-```bash
-python3 scripts/model_parts.py --models "$HOME/Applications/Dot.app/Contents/Resources/OfflineModels" \
-  --output build-parts --tag model-parts-v1
-# upload every build-parts/*.partNNN plus build-parts/model-parts.json by hand
-cp build-parts/model-parts.json Resources/model-parts.json
-```
-
-## 9. All-in-one installer parts (owner-run, after complete acceptance)
-
-The complete DMG is about 22 GB, so GitHub requires <2 GB parts. After the complete
-installer exists and passes native acceptance:
-
-```bash
-DOT_ALL_IN_ONE_DMG=build-complete/Dot.dmg bash scripts/package_all_in_one.sh
-```
-
-This uploads `Dot.dmg.partNNN`, `Dot.dmg.parts.json`, `join-dot-dmg.command` and
-`join_release.py` to the `all-in-one-v1` release. Users double-click the command; it
-downloads missing parts, verifies every part and the joined DMG, then opens it.
-
-## 10. Signing / notarization for a fully public DMG (the one production blocker)
+## 2. Developer ID signing and notarisation (the one production blocker)
 
 Today every release is ad-hoc signed and not notarised. It installs and runs through the one-line
 installer, and every release gate (install, quarantine, `spctl`/`codesign`, no-trace) is green. A
@@ -138,3 +60,25 @@ the hardened runtime, then regenerate the manifest from the signed files (or hav
 record pre-signature hashes plus a `codesign --verify` check). Only then can `release.yml` run
 `xcrun notarytool submit --wait` and `xcrun stapler staple` on `Dot.dmg`. This needs one real
 notarised run to finish; it cannot be proved without the credentials.
+
+## 3. All-in-one DMG (owner-run, optional)
+
+The complete DMG is about 22 GB, so GitHub requires <2 GB parts. After the complete
+installer exists and passes native acceptance:
+
+```bash
+DOT_ALL_IN_ONE_DMG=build-complete/Dot.dmg bash scripts/package_all_in_one.sh
+```
+
+This uploads `Dot.dmg.partNNN`, `Dot.dmg.parts.json`, `join-dot-dmg.command` and
+`join_release.py` to the `all-in-one-v1` release. Users double-click the command; it
+downloads missing parts, verifies every part and the joined DMG, then opens it.
+
+## 4. Not decided yet
+
+Ask one at a time with 2 to 4 numbered options, then record the answer in OWNER_DECISIONS.md.
+
+- R4 voice upgrade: evaluate Chatterbox or Orpheus against Kokoro, or keep Kokoro.
+- R9 self-modification: a writable plugin layer with snapshots, self-test, rollback and a Rust
+  watcher, or not at all.
+- Personality between turns: idle animations, small reactions, mood.

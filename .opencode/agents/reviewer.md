@@ -47,7 +47,7 @@ mutation paths; do not look for a way around them.
 
 Scope: review the requested diff (usually `git diff <base>..HEAD`) and the live
 promises in `README.md`, `docs/AI_HANDOFF.md`, `docs/BUILD_CHECKLIST.md`,
-`docs/GOAL_STATUS.md`, `docs/PHASE*_RESULT.md`.
+`docs/OWNER_DECISIONS.md`, `docs/AUDIT_2026-10-22.md`.
 
 Look for: correctness bugs, edge cases, race conditions, silent failure paths,
 contract violations, security/privacy mistakes, and missing tests for changed

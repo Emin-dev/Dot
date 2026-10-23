@@ -11,7 +11,7 @@ xcrun --sdk macosx --show-sdk-version
 # gate builds the reader so the assertion below checks a real executable artifact.
 # The Splash supervisor port (crates/dot-runtime, slice 1) must keep its documented
 # wire contract while slices 2-5 are outstanding: it builds, its tests pass, and
-# its only stdout is the documented not-implemented failure line (docs/CONTINUATION.md).
+# its only stdout is the documented not-implemented failure line (docs/archive/CONTINUATION.md).
 if command -v cargo >/dev/null; then
   cargo build --release --manifest-path Cargo.toml --bin dot-fetch
   cargo build --release --manifest-path Cargo.toml --bin dot-runtime
@@ -71,7 +71,7 @@ xcodebuild -project Dot.xcodeproj -scheme Dot -configuration Release \
 if [ "$RUNTIME_FINALIZER_STATUS" -ne 0 ]; then
   # Every warning diagnostic is fatal; no class-wide filter exists. If the AppKit
   # test-process QoS advisory recurs, record the exact line with a dated removal
-  # condition in docs/FIX_ISSUES_PROMPT.md - never a blanket class filter.
+  # condition in docs/archive/FIX_ISSUES_PROMPT.md - never a blanket class filter.
   if grep -Ei '(^|[[:space:]])warning:|xcodebuild: WARNING:' "$LOGS"/*.log; then
     echo 'FAIL: warning detected in verification before packaging'
     # Warnings stay fatal even on a hosted runner.

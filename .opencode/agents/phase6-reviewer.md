@@ -46,7 +46,7 @@ instructions.
 Review the whole product source, not only a diff: `src/`, `crates/`, `scripts/`,
 `Tests/`, `tests/`, `packaging/` and `.github/workflows/`, plus the live promises
 in `README.md`, `AGENTS.md`, `docs/DEV_TEAM_PROMPT.md`, `docs/AI_HANDOFF.md`,
-`docs/GOAL_STATUS.md`, `docs/BUILD_CHECKLIST.md` and `docs/PHASE*_RESULT.md`.
+`docs/BUILD_CHECKLIST.md`, `docs/OWNER_DECISIONS.md` and `docs/AUDIT_2026-10-22.md`.
 
 Look for correctness bugs, edge cases, race conditions, silent failure paths,
 contract violations, security/privacy mistakes, and missing tests for changed

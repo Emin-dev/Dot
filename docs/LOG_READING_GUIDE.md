@@ -51,7 +51,7 @@ Roles include `user`, `dot`, `dot (proactive)`, `dot (task)`, `tool`, `screen`, 
 2. Compare with `meta.json` (OS/chip/RAM) and `dot-health.json` (engine ready, mic, screen).
 3. Search for `TASK:`, `REASON:`, `MISSING:`, `PROPOSED_FIX:`, `[ROAM]` and `[HEALTH]`. Uploader-only
    diagnostics (including `[SYNC]`) are local in `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot-sync.log`.
-4. Fix the source, add a test, and note the evidence in `docs/PROGRESS.md`.
+4. Fix the source, add a test, and note the evidence in `CHANGELOG.md`.
 
 ## Privacy and safety
 

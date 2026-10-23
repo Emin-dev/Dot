@@ -5,8 +5,9 @@ Dot is a local, offline-first macOS AI companion: Swift/AppKit app + Rust crates
 
 ## Goal
 
-Make every promise in `README.md`, `docs/AI_HANDOFF.md`, `docs/BUILD_CHECKLIST.md` and
-`docs/GOAL_STATUS.md` actually work and be tested. No new features except the logging system.
+Make every promise in `README.md`, `docs/AI_HANDOFF.md` and `docs/BUILD_CHECKLIST.md` actually
+work and be tested. Owner answers in `docs/OWNER_DECISIONS.md` are binding. No new features except
+the logging system.
 
 ## Owner rules
 

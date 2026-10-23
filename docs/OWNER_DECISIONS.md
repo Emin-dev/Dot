@@ -11,7 +11,7 @@ Rules for this file:
   entry `Superseded by ...`. Never edit the quoted answer.
 - Each entry names the code and the test or guardrail that proves it. If you touch that code,
   keep the test green. If a test seems wrong, read the entry first.
-- The binding rule list is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1 to R21). The current
+- The binding rule list is [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md) (R1 to R22). The current
   state is [AI_HANDOFF.md](AI_HANDOFF.md).
 
 ## Owner instructions for the 2026-10-20 to 2026-10-22 sessions (verbatim)
@@ -223,7 +223,7 @@ How these were applied:
     class Mac with 48 GB and macOS 27 or later. A smaller Mac gets one clear refusal message at
     launch. This is a hardware limit of the owner's model choice, not a bug.
 - Do not: add a smaller model to reach more Macs, lower the hardware gate, or bundle model files
-  into the DMG without the owner's all-in-one decision (`QUESTIONS_FOR_EMIN.md` section 9).
+  into the DMG without the owner's all-in-one decision (`QUESTIONS_FOR_EMIN.md` section 3).
 
 ## Defects fixed while reading the code (2026-10-22)
 
@@ -245,49 +245,12 @@ them; each has a test or guardrail.
 | Remove Dot completely | Failure to open Terminal was silent | The command is always copied and an alert says whether Terminal opened | guardrail "Remove Dot always leaves the command and says what happened" |
 | Docs | Soul export and log fetch instructions did not match the code | `BUILD_CHECKLIST.md` soul export line; `LOG_READING_GUIDE.md` uses `Accept: application/vnd.github.raw` | doc review |
 
-## Handoff for the next AI (2026-10-22, end of session)
+## Current state and next steps
 
-State when this session stopped (usage limit reached):
-
-- Done and pushed: every change listed above, 99 static guardrails passing, Python suite 670 pass,
-  28 skipped, 2 IPv6-only errors (`test_authenticated_transport`, hosts `::` and
-  `::ffff:127.0.0.1`) that fail the same way on the base commit in a container without IPv6.
-- `dot-safety` was type-checked with `cargo check` on a CPU-only copy (Metal needs macOS).
-- Tester agent report: all new guards fail when their change is reverted; 8 weaker spots it found
-  (banner sink, heal clearing, 512-token context, missing `with_n_batch`, unbounded request size,
-  `retry()` early return, clipboard order, Remove Dot early return) now have guards
-  ("R19 banner is wired and a healed engine clears the error", "safety approver context is 2,048
-  tokens and trims the oldest conversation to fit", "a wake or second retry never restarts the
-  running download", "idle reflection returns before any clipboard write", "Remove Dot never
-  returns before leaving the command on the clipboard").
-- Native CI on `8100f81` is green (Swift build, XCTest, SwiftPM, Rust, Python, 99 guardrails) after
-  one re-run of a timing-flaky Python test, which `2b17cbb` then fixed.
-- The first v1.1.3 release run (`39850720037`) built and installed the DMG but was cancelled when the
-  no-trace lane failed on an OS daemon database; `ca0e558` allowlists it.
-- A promise audit then found logging leaks into the public `dot-logs` branch; `4714eb0` fixes them
-  (103 guardrails). Every audit finding, fixed and open, is in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md).
-- After that, F1 to F10 and D1 to D6 were fixed (`dfa7b6f`, `ee533fc`, `0599102`, `52d5816` and the
-  installer commit after them), each with a guardrail (112 in total). Only F5 (file utilities beyond
-  rm/rmdir/mkdir/touch in the selected folder, and folder access lost on relaunch) is still open.
-- 2026-10-23: v1.1.3 and v1.1.4 are published (sizes and SHA-256 in AI_HANDOFF). The owner-rules audit
-  (R-1 to R-9) and F8 are fixed in `aa790c5`, `d96c04a` and `3a62727` (120 guardrails).
-- Do these next, in order:
-  1. Check the Native CI run on the newest `main` commit; these commits were written without a Swift
-     compiler. Fix anything red first.
-  2. When it is green, dispatch `release.yml` with tag `v1.1.5` (a tag push is blocked from the cloud
-     session; `workflow_dispatch` works) and record the DMG in AI_HANDOFF and GOAL_STATUS.
-  3. Only open item in [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md): F5, keeping the selected folder
-     across launches. It needs the `com.apple.security.files.bookmarks.app-scope` entitlement, which
-     is an owner decision like R21. Ask Emin with numbered options before adding it.
-  4. Owner-only, on a minimum-spec Mac: the 22.4 GB first download with one pause and one quit
-     (proves D1), the live safety approver, then store the log token.
+See [AI_HANDOFF.md](AI_HANDOFF.md). Every audit finding and its fix is in
+[AUDIT_2026-10-22.md](AUDIT_2026-10-22.md).
 
 ## Questions not yet asked
 
-Ask these one at a time, with 2 to 4 numbered options, after reading the related code. Record the
-answer here before building.
-
-- Personality between turns: idle animations, small reactions, mood. Today Dot has idle motion,
-  the two-minute roam, proactive comments (R17) and the wake greeting (R18).
-- R4 voice upgrade (Chatterbox or Orpheus against Kokoro) and R9 self-modification design, both
-  listed in [QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md).
+Listed in [QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md) section 4. Ask one at a time, with 2 to 4
+numbered options, and record the answer here before building.

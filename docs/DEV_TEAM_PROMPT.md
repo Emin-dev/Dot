@@ -1,14 +1,9 @@
-# Dot — Professional Development Brief v2 (owner-answered, 2026-10-17)
+# Dot rules (R1 to R22)
 
-> **Current implementation status:** read [AI_HANDOFF.md](AI_HANDOFF.md) for what is implemented,
-> partial, blocked and next. This brief remains the binding spec (R1–R22); older docs may be stale.
-> Every owner question, the exact answer and why each rule exists: [OWNER_DECISIONS.md](OWNER_DECISIONS.md).
-> Do not re-ask a decided question or revert a decided behavior.
-
-This brief is for the AI development team continuing Dot. It encodes the owner's
-audit answers as binding rules. It supersedes any earlier statement that contradicts it.
-Read `docs/HANDOVER.md`, `docs/CONTINUATION.md`, `docs/BUILD_CHECKLIST.md` and the
-workspace file `DOT_AUDIT.md` for the full evidence base.
+Binding rules from the owner. The exact questions and answers behind them are in
+[OWNER_DECISIONS.md](OWNER_DECISIONS.md); the current state is in [AI_HANDOFF.md](AI_HANDOFF.md).
+A rule changes only when Emin gives a new answer. The longer 2026-10-17 brief, with its old state
+and work plan, is in [archive/DEV_TEAM_PROMPT_FULL.md](archive/DEV_TEAM_PROMPT_FULL.md).
 
 ## 1. Product vision and end goal
 
@@ -20,11 +15,10 @@ that silently do nothing, so **observed behaviour is the only currency**:
 - after each change: typecheck → focused suite → full gate → `bash scripts/install_local.sh`;
 - a feature is not "done" until the owner has exercised it once in a real session.
 
-## 2. Owner decisions — binding rules (answers from the 2026-10-17 audit)
+## 2. Binding rules
 
 **R1. Listening.** A turn may listen for up to **5 minutes**, then Dot answers with
-whatever was heard and says the cap was reached. Never a silent cut-off. (Today it is
-60 seconds: `VoiceTiming.maximumDuration`.)
+whatever was heard and says the cap was reached. Never a silent cut-off.
 
 **R2. Hands-free.** **No wake word.** Click or hold-Fn only. The microphone is never
 open in the background.
@@ -149,85 +143,7 @@ launch. The automatic container folder is never saved.
 - Single branch `main`; commit + push after testing; installed app provenance must
   match HEAD via `scripts/install_local.sh`.
 
-## 4. Current verified state (commit `555d504`)
-
-Gates: Xcode build OK; full XCTest lane 860/0; `swift test` 546/0; Python suite 604
-passed 4 skipped; 53 static guardrails; all three Rust binaries build; payload audit
-passes. `verify_macos.sh` fails only on the by-design finalizer canary and one
-load-flaky search test. Permission prompts for microphone and Screen Recording now
-fire on the first interaction (both defects fixed and installed).
-
-## 5. Known open logical defects (fix these early)
-
-1. QoS priority inversion: turn-pipeline task runs at Default priority while the UI
-   waits at User-interactive — set `.userInitiated` and remove the gate's warning
-   filter in the same commit. **Fixed 2026-10-18 (batch 9):** the turn task is
-   `.userInitiated` and both AppKit QoS warning filters were removed from
-   `scripts/verify_macos.sh`; no blanket class filter remains and every warning
-   diagnostic is fatal again.
-2. Placement validates a snapshot after its 10 s lifetime every cycle
-   (`reason=expired elapsed≈10475ms`) — refresh before validating in the caller;
-   never raise the lifetime.
-3. Calendar/reminders discard the permission result (`_ = await requestAccess()`)
-   and fail silently — surface denials with the Settings pane.
-4. Screen is prepared with `requestPermission: false` at the typed/proactive sites —
-   one consistent ask-on-need policy.
-5. Splash has no health loop (16× "stopped answering" in the log) — liveness probe
-   plus one bounded restart and an honest message.
-6. Memory: second SQLite connection (~120 lines via a `withConnection` accessor),
-   heuristic capture (replaced by R5), concatenation ageing (replace with R5
-   summarisation). **Status 2026-10-18:** the second connection and heuristic capture
-   are gone (single store, R5 key points); **concatenation ageing remains open.**
-7. Diagnostic log lives in Downloads and only proves anything after a real session —
-   move to Application Support, rotate, log every turn outcome.
-8. ~540 audited dead lines, in one verified batch of deletions per commit.
-9. The load-flaky search fixture test — make readiness deterministic; never raise
-   `startupSeconds`.
-10. Self-improvement "paste" types through Accessibility rather than pasting — under
-    R9 this becomes self-application with diff approval; the paste offer can stay as
-    a separate convenience.
-
-Remaining open exceptions recorded 2026-10-18 (batch 9-scripts-project-docs): the
-**61-second recognizer input bound** (`WhisperRecognizer` rejects audio past 61 s while the
-R1 listening cap is five minutes), **concatenation ageing** (item 6), **keyed providers**
-(R10/P6 optional keyed providers, not built) and **Rust-side items** (`crates/dot-runtime`
-slices 2–5; the shipped supervisor/TLS relay is still Python).
-
-## 6. The failure class this team must keep hunting
-
-The owner's core complaint: code that exists, compiles and has tests, but can never
-fire in practice (the microphone request sat behind two guards; the screen code
-wrote "access granted" before asking and then never asked again). Apply five checks
-to every capability before calling it done:
-- Is the OS request reachable from a real user action, before any readiness guard?
-- Who writes each persisted flag/marker, and in what order relative to the prompt?
-- Does a persisted flag suppress a future prompt forever?
-- Does failure reach the owner as a visible message, or only a log line?
-- Does a `guard` or early `return` sit before the feature?
-
-## 7. Work plan with acceptance criteria
-
-- **P1 (quick wins):** R1 five-minute listen with a spoken cap notice; R12 sleep
-  re-arm; R3/R6 confirmations; visible calendar and Accessibility denials; QoS fix;
-  placement refresh; Splash liveness probe. Accept: each exercised in one real session.
-- **P2 (memory):** R5 key-point summarisation per conversation + searchable archive;
-  single SQLite connection; "don't remember that" correction path.
-- **P3 (autonomy):** R7 full file tools without approval; R15 trusted-app allowlist
-  with the card retained outside it; proactive file-based suggestions.
-- **P4 (screen):** R8 adaptive watching — idle snapshot every few minutes, continuous
-  10–50 s capture on change, battery-aware, with a visible pause switch.
-- **P5 (self-healing):** R9 snapshots, one-change-one-test-one-rollback, the fixed
-  Rust watcher worker, sealed fallback, emergency canary, 10-snapshot retention.
-- **P6 (research):** R10 provider plug-ins, news, optional keyed providers, local
-  index + cached results, optional offline encyclopedia snapshot.
-- **P7 (voice):** R4 Kokoro British-female picker now; Chatterbox/Orpheus evaluation
-  behind the same interface next.
-- **P8 (startup):** R11 live progress + optional login prewarm.
-- **P9 (calendar/battery):** R13 create/edit with confirmation; R14 optional alerts.
-- **P10 (release):** first-launch payload downloader, licence closure, notarisation,
-  clean second-Mac acceptance.
-
-## 8. Never do
+## 4. Never do
 
 - Never raise a timeout, delete a test, relax an assertion or widen a filter to make a
   gate green. Fix the cause; if a filter must exist, record it and remove it with the fix.

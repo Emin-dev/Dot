@@ -1,130 +1,66 @@
-# dot — floating local companion
+# Dot
 
-> **AI/contributor handoff:** read [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) for the current build,
-> verified gates, what works/partial/missing and the next steps. Older planning documents are dated
-> history and may be superseded.
->
-> **Owner decisions:** [docs/OWNER_DECISIONS.md](docs/OWNER_DECISIONS.md) records every behavior
-> question the owner answered (R17 to R21), the exact answer and why. Do not re-ask or revert them.
+A small local AI companion for macOS. It floats on your screen, listens when you click it, answers
+aloud, remembers key points, comments on what you are doing and acts on your Mac. After a one-time
+model download it works fully offline.
 
-See **[docs/ROADMAP.md](docs/ROADMAP.md)** for current plans, goals and the new
-per-Dot GitHub log system; **[docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md)** carries the
-binding rules R1–R17.
+## Requirements
 
-## Install Dot
+- Apple Silicon M5 Pro class or newer, 48 GB Unified Memory, macOS 27 or newer.
+- About 35 GB free disk for the one-time 22.4 GB model download.
 
-[![Download Dot for macOS](https://img.shields.io/badge/Download-Dot%20for%20macOS-2ea44f?style=for-the-badge&logo=apple)](https://github.com/Emin-dev/Dot/releases/latest)
+Dot uses one fixed model, Qwen3.8 27B Q4 on Splash, with no smaller fallback. A Mac below the
+minimum gets one clear message.
 
-**Current release: [v1.1.2](https://github.com/Emin-dev/Dot/releases/tag/v1.1.2) (Latest).**
-
-One Terminal line:
+## Install
 
 ```bash
 curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
 ```
 
-It downloads every release part with curl (curl adds no quarantine), verifies
-every SHA-256, joins split parts, mounts the DMG, copies **Dot** into
-**`~/Applications`** (never `/Applications`, never sudo), clears
-`com.apple.quarantine` from Dot's own staged bundle, verifies the **App Sandbox**
-entitlements and ad-hoc signature, and opens Dot. It is idempotent and safe to
-re-run. All app data (model, logs, settings and caches) stays inside
-`~/Library/Containers/app.dot.local/`; document actions write only to a folder
-you explicitly select.
+The installer verifies every SHA-256, installs Dot into `~/Applications` (no sudo) and opens it.
+The release is ad-hoc signed and not notarised yet; see
+[docs/QUESTIONS_FOR_EMIN.md](docs/QUESTIONS_FOR_EMIN.md) section 2.
 
-Remove it completely, including the container, model, caches, preferences and
-privacy approvals:
+## Remove
+
+Use **Remove Dot completely…** in Dot's menu, or:
 
 ```bash
 curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/uninstall-dot.sh | bash
 ```
 
-It ends with `PASS: your Mac is back to how it was`, or a precise `FAIL:` line.
+It removes the app and everything Dot created and ends with `PASS: your Mac is back to how it was`.
+What it covers: [docs/UNINSTALL_COVERAGE.md](docs/UNINSTALL_COVERAGE.md).
 
-The public build is **ad-hoc signed and not notarised yet**. The installer
-removes quarantine from Dot's own staged bundle and verifies the App Sandbox
-entitlements; do not change System Settings for it. If macOS still refuses, the
-installer prints the exact macOS/Gatekeeper text. A no-warning double-click for
-every Mac needs Developer ID signing plus notarisation, which requires Emin's
-paid Apple Developer account and is owner-only.
+## Privacy
 
-The app verifies its runtime, then downloads the exact 22.4 GB local model on
-first launch from the pinned `model-parts-v1` release (revision-pinned Hugging
-Face files are the hash-checked fallback), checking every file's SHA-256 against
-the bundled manifest. Allow at least **35 GB** of free disk and a stable
-connection. The full owner test is [docs/TEST_TODAY.md](docs/TEST_TODAY.md).
+- Apple App Sandbox. All data stays in `~/Library/Containers/app.dot.local/`.
+- Read-only access to Desktop, Documents and Downloads; writes only in the folder you choose.
+- Logs are text only, with passwords, tokens and personal details masked. They upload only after
+  you store a token ([docs/LOG_READING_GUIDE.md](docs/LOG_READING_GUIDE.md)).
 
-Minimum: Apple Silicon M5 Pro class, 48 GB Unified Memory, macOS 27+.
-
-If the download is blocked by policy, build and sign on the owner's Mac:
+## Build and test
 
 ```bash
-bash scripts/build-and-sign-on-mac.sh
+python3 -B -m unittest discover -s Tests/Python
+python3 -B scripts/check_contracts.py
+cargo test -p dot-research -p dot-runtime
 ```
 
-It builds locally with Xcode/SwiftPM, signs with the first `Apple Development`
-identity from `security find-identity -v -p codesigning` (ad-hoc fallback),
-installs to `~/Applications` and opens Dot. That signature is trusted only on the
-Mac that owns the certificate; a public no-warning install still needs Developer
-ID notarisation.
+Swift builds, XCTest and the DMG run in GitHub Actions on macOS (`.github/workflows`).
 
-Developers with an existing complete payload can build from source:
+## Docs
 
-```bash
-git clone https://github.com/Emin-dev/Dot.git && cd Dot && bash scripts/install_local.sh
-```
+| File | For |
+| --- | --- |
+| [docs/AI_HANDOFF.md](docs/AI_HANDOFF.md) | start here: state, commands, next steps |
+| [docs/OWNER_DECISIONS.md](docs/OWNER_DECISIONS.md) | the owner's answers; do not re-ask or revert |
+| [docs/DEV_TEAM_PROMPT.md](docs/DEV_TEAM_PROMPT.md) | binding rules R1 to R22 |
+| [docs/BUILD_CHECKLIST.md](docs/BUILD_CHECKLIST.md) | what Dot does and how each part is proved |
+| [docs/TEST_TODAY.md](docs/TEST_TODAY.md) | the owner's test on a real Mac |
+| [docs/QUESTIONS_FOR_EMIN.md](docs/QUESTIONS_FOR_EMIN.md) | what only the owner can provide |
+| [docs/AUDIT_2026-10-22.md](docs/AUDIT_2026-10-22.md) | the last full audit and its fixes |
+| [CHANGELOG.md](CHANGELOG.md) | what changed |
 
-**[Product roadmap and build checklist](docs/BUILD_CHECKLIST.md)** — full stack, ranked workflows, configurable timing/activity and accepted design direction. **[View the final-lineup v3 concept board](docs/design/dot-face-directions-v3.png)** · **[interactive motion study](docs/design/dot-face-motion-directions.html)** ([download HTML](https://raw.githubusercontent.com/Emin-dev/Dot/main/docs/design/dot-face-motion-directions.html); save and open in a browser) · [prototype validation](docs/design/dot-face-motion-validation.md) · [artifact index](docs/design/README.md) · [plain-text checklist](docs/BUILD_CHECKLIST.txt). [Verified progress](docs/PROGRESS.md) separates source, tests, installation and unpublished work. [Current continuation handoff](docs/CONTINUATION.md) records active ownership, recovery and next steps, with meaningful checkpoints approximately every ten minutes during implementation.
-
-**Checklist implementation is authorized in tested stages.** After design review, the user explicitly said “yes build app based on our checklist.” The listening/question-follow-up loop is the first milestone, alongside a separate reviewable native skin/settings batch; it is no longer the overall scope limit. Do not repeat settled start/theme questions. Keep the working app and fixed Splash/Qwen/British Kokoro baseline intact; installation remains a separate step.
-
-**Native Settings will offer 11 skins: Original plus Pearl, Mochi, Cloudlet, Pip, Dew, Ripple, Sprout, Veil, Halo and Nova. Original stays default until changed.** Veil replaces Fold at position 8 as a nearly invisible transparent bubble/lens. The v3 board, motion study and validation report are delivered; the v2 Fold board/prompt remain historical. The prototype covers 120 composed state/expression combinations per face, not 120 reviewed production animation clips or real speech synchronization. Initial native rendering exists in the candidate below; the 120-reviewed-recipe library per new skin, phoneme alignment and full performance/device acceptance remain open. Record and publish new decisions as discussed.
-
-**Latest expression direction:** all faces stay smiling, warm and friendly, including focus, thinking and research; use open rounded eyes/highlights, relaxed arched brows and an upturned resting mouth, with friendly articulated speech and independent truthful task labels. The corrected warm-face/layout motion export is published with rerun author logic checks, but **no fresh browser review was available**. Earlier 736/390/320 px checks apply to the pre-correction version; the owner has accepted the corrected design and confirmed building, while fresh technical browser and candidate hardware acceptance remain separate.
-
-**Merged milestone:** [PR #2](https://github.com/Emin-dev/Dot/pull/2) at [`6aa5b89`](https://github.com/Emin-dev/Dot/commit/6aa5b89a8fa6ede0dca2c65a03a80221b566b0bc) adds configurable listening, the bounded final-question reply loop, compact diagnostics and eleven persisted native appearance choices. **129 Python / 175 SwiftPM / 277 native XCTest / 49 guards**, sandbox checks, Debug/Release/development packaging and complete offline assembly passed with zero warnings. PR #2 merged normally at [`f718e87`](https://github.com/Emin-dev/Dot/commit/f718e870cd14148c1b20c03c7adc822f9981bf31), while its exact tested candidate remains uninstalled, not notarized and not hardware-accepted; the installed `b26a145` app is unchanged. [Candidate receipt and native contact sheets](https://github.com/Emin-dev/Dot/blob/6aa5b89a8fa6ede0dca2c65a03a80221b566b0bc/docs/verification/voice-and-native-skins.md). Five shared friendly recipes and amplitude-driven speaking are an initial implementation, not the 120-per-skin production library or phoneme alignment.
-
-**Development workflow:** main is the single ongoing working/default branch. Parallel agents use file ownership or temporary detached checkouts; one integration owner reviews and publishes without force-push or discarding work. Continue the full checklist through testing and delivery before final hand-off, keeping conditional gates and remaining acceptance explicit.
-
-The description below is the current installed baseline. The target adds proactive screen/file context, online research, native settings/options and staged Rust services; those capabilities are not installed by this documentation update.
-
-A native macOS floating companion. Click to talk; click during an answer to interrupt and listen again. Drag to move without starting the microphone. Right-click for Pin, screen privacy, Clear conversation, or Quit. The menu-bar paw recalls Dot.
-
-## Build status
-
-The installed baseline implements a single floating dot with a small right-click menu. That installed build has no app settings, setup, folder-selection or chat windows, or persistent text label below the dot; the newer timer/appearance options are merged source, not installed behavior. Verification progress, issues and screen use have small indicators on the character; detailed errors remain in the menu and accessibility value. Shift-F10 and the accessibility Options action open the same menu; Escape stops the current action.
-
-**The complete personal build was installed and opened on the owner’s Mac; the runtime-only public v1.1.0 DMG with the first-launch model download is published, while Developer ID notarisation and the owner's fresh-Mac acceptance remain gates.** The bundled voice dependency closure, local speech/model components, relocation and screen-aware reply path have passed native checks, and the owner reports voice working. The safe-placement repair passed 190 native XCTest checks, complete assembly and an installed real screen-map check; broader mixed-display behavior and a fresh owner smoke test remain open. Ordinary CI/development DMGs still omit the neural payload and cannot talk. See [the current contributor checklist](docs/PROGRESS.md) for tested behavior, uninstalled feature work and remaining release gates.
-
-The current complete personal build contains Splash 1.3.1, English Whisper base.en, the Bionic-derived Kokoro voice, all runtime dependencies and the complete 22,420,071,166-byte Qwen3.8-27B Q4 / draft / vision model selection. Unified provisioning: the owner bundle remains complete and offline-capable; the public runtime-only download fetches the same manifest-verified 22,420,071,166-byte model files on first launch. At launch, Dot verifies the embedded runtime and (when present) the embedded models, with pause/retry in its context menu. A failed download is a visible error; no substitute model or external folder is ever accepted. Copying the complete app carries its immutable assets with it. Native relocation/component checks have passed; clean second-Mac installation and the full public-release acceptance matrix remain open.
-
-## Installed interaction and privacy
-
-- Splash is the only LLM runtime. The exact target is `mlx-community/Qwen3.8-27B-4bit`; this is a checkpoint publisher name, not use of the MLX inference engine. No automatic model or runtime substitution.
-- Thinking remains on at low effort, with a 1,536-token budget. Reasoning is not spoken.
-- Microphone capture starts only after an explicit click and OS microphone permission. Three seconds without detected speech activity ends capture. English transcription uses the bundled Whisper C library locally, with a one-minute recording bound.
-- A new click cancels the old capture, generation and audio. Stale results cannot restart the microphone or replace the new turn.
-- Screen context is captured for an explicit conversation just before its reply, and sparse local placement checks can analyze the screen while idle after macOS Screen Recording permission. Placement never requests permission and uses the same off switch. Its on/off preference persists. Images are bounded, used once, excluded from conversation history, and never uploaded to a remote model. A denied/unavailable capture is reported honestly; turn off Screen context to continue voice-only.
-- The Bionic-derived Kokoro helper uses CPU inference and denies network access. No built-in voice fallback is selected silently.
-- Random roaming is disabled. Conservative local placement protects other windows, text and visually occupied regions; missing/stale/uncertain screen analysis means staying still. Short clear escape paths pause for interaction, speech, pinning and Reduce Motion. Manual drag works without screen access. Reduce Transparency provides an opaque body.
-- File, browser and autonomous computer actions are not implemented. Dot does not execute instructions from screen content.
-
-Conversation state stays in memory and disappears on quit. Dot writes text logs locally and, by the owner's explicit decision, auto-uploads them to the dedicated `dot-logs` branch of `Emin-dev/Dot` under `dot/<install-id>/<launch-timestamp>/`; this channel is text-only (no images, screenshots, audio or microphone recordings), masks keys/tokens/passwords, and cannot change `main`. See [the log reading guide](docs/LOG_READING_GUIDE.md). The token is read from Keychain/config and is never bundled. The public app's only other network path is the manifest-verified model download from the pinned `model-parts-v1` release, with the two reviewed Hugging Face repositories as the hash-checked fallback. Its owned Splash endpoint is loopback-only; the voice helper denies network access. The [future research/context contract](docs/BUILD_CHECKLIST.md#screen-files-and-online-research) adds online retrieval and explicitly authorized use of relevant screen/file data in web requests while retaining local AI, speech and memory.
-
-## Development and verification
-
-The UI development target builds on macOS 15+. The complete Splash runtime requires macOS 27+. The minimum is Apple Silicon M5 Pro class or newer with 48 GB Unified Memory; Dot checks this at launch and shows one clear blocking message if the Mac does not meet it, because the exact Qwen3.8 27B Q4 model has no smaller fallback. The bundle deployment floor remains macOS 26.4 for the current Xcode SDK/CI; the runtime gate above still refuses anything below macOS 27. The personal test hardware is M5 Pro/48 GB. See [hardware and release gaps](docs/PROGRESS.md#hardware-and-distribution-targets); other-Mac support is not yet certified.
-
-- Open `Dot.xcodeproj`, choose shared `Dot` scheme, then Product → Test.
-- `swift test` runs the portable pure-core suite. The Xcode target additionally runs mocked network and pipe tests.
-- `python3 -B -m unittest discover -s Tests/Python -v` runs model-free protocol, assembly and supervisor fixtures.
-- `bash scripts/verify_macos.sh` runs Python/sandbox tests, SwiftPM, Debug XCTest, Release and development packaging, then rejects warnings in all logs.
-- `bash build.sh` creates `build/Dot.dmg`, an ad-hoc signed, unnotarized **development build without neural runtimes**.
-- `DOT_WHISPER_FRAMEWORK=/verified/macos/whisper.framework bash scripts/verify_whisper_link.sh` compiles the real native recognizer branch without executing the app or models.
-- `DOT_RUNTIME_PAYLOAD=/audited/payload DOT_MODEL_PAYLOAD=/verified/models DOT_WHISPER_ARCHIVE=/verified/whisper-v1.7.6-xcframework.zip bash scripts/build_complete.sh` requires all three local inputs and a complete runtime manifest/import probe. It verifies model hashes before and after copying, embeds the native recognizer, signs and stages `build-complete/Dot.app` for native acceptance. It does not produce a distributable installer yet. The recognizer framework is derived from the pinned archive by `scripts/verify_whisper_input.py`; a bare framework directory is deliberately rejected.
-- After real native relocation/offline/conversation/cancellation tests, `DOT_OFFLINE_ACCEPTANCE=/verified/evidence/acceptance.json bash scripts/package_complete.sh` binds the test evidence to the exact app fingerprint, rechecks the relocated staging copy, and creates the unnotarized test DMG. See [acceptance record contract](docs/offline-acceptance.md).
-
-
-Standard CI does not download models or establish real neural speech, microphone quality, screen permissions, interactive UI correctness or offline inference. Those are separate native device gates. See [self-contained build plan](docs/self-contained-build-plan.md), [voice bridge](docs/voice-bridge.md), [screen contract](docs/screen-context-contract.md), and [roaming policy](docs/roaming-policy.md).
-
-This rebuild starts from `56041cf00d1d6b7c2f87590fdd1fbbbbb216e996`. Original Mac-only edits were not copied and their tests do not validate this branch. Removed generated binaries remain recoverable in the original history and preservation manifest. The reviewed rebuild is now merged into main, with the original history preserved.
+Technical notes are in [docs/reference](docs/reference); history is in [docs/archive](docs/archive).
