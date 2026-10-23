@@ -94,7 +94,7 @@ back**. No manual click required. *(The greeting is refined by R18: no fixed "I'
 apps skip the card. Everything outside the allowlist keeps the per-command card. File
 operations are automatic per R7.
 
-**R16. Auxiliary model (2026-10-19).** A small local model, Gemma-3-4B Q4 (~4 GB), handles
+**R16. Auxiliary model (2026-10-19).** A small local model, Gemma-3-4B Q4 (2.5 GB file), handles
 fast narrow tasks and is the R7 safety approver: every file mutation Dot chooses, including the
 model's own `delete_file` and automatic destructive file commands, is checked before it runs.
 No approver means no execution. The main engine and model stay untouched.

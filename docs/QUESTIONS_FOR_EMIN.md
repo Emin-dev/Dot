@@ -82,3 +82,6 @@ Ask one at a time with 2 to 4 numbered options, then record the answer in OWNER_
 - R9 self-modification: a writable plugin layer with snapshots, self-test, rollback and a Rust
   watcher, or not at all.
 - Personality between turns: idle animations, small reactions, mood.
+- Perception (asked 2026-10-23): replace the all-or-nothing screen hash with Apple Vision feature
+  prints (no new model), add Apple FastVLM later, or keep it as is. Details and why not V-JEPA:
+  [reference/perception-models.md](reference/perception-models.md).
