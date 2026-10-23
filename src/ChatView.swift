@@ -269,7 +269,7 @@ final class ChatModel: ObservableObject {
             case .denied(let reason):
                 let strikes = SafetyApprover.shared.registerStrike(key: actionText)
                 if strikes >= 3 {
-                    self.block("The safety check refused this three times (\(reason)). It is your call now: say \"force it\" and approve again to run it as-is.", issue: .unknown, clearsAfter: 20)
+                    self.block("The safety check refused this three times (\(reason)): \(actionText.prefix(120)). It is your call now: say \"force it\" and approve again to run it as-is.", issue: .unknown, clearsAfter: 20)
                 } else {
                     self.block("The safety check refused (\(reason)). I'll try a different approach next time.", issue: .unknown, clearsAfter: 15)
                 }
@@ -300,7 +300,7 @@ final class ChatModel: ObservableObject {
             return nil
         case .denied(let reason):
             return SafetyApprover.shared.registerStrike(key: action) >= 3
-                ? "The safety check refused this three times (\(reason)). Say \"force it\" and ask again to run it as-is."
+                ? "The safety check refused this three times (\(reason)): \(action.prefix(120)). Say \"force it\" and ask again to run it as-is."
                 : "The safety check refused (\(reason)), so I did not run it."
         case .unavailable(let reason):
             return "The safety check is unavailable (\(reason)), so I did not run it."
@@ -320,15 +320,29 @@ final class ChatModel: ObservableObject {
         // inside that exact selected folder; every other command still runs through
         // the sandboxed shell, which can only reach Dot's container.
         if let result = runScopedFileOperation(command) { return result }
+        let directory = UserFolderScope.shared.current
         do {
-            let result = try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command],
-                                                  mergeStandardError: true,
-                                                  currentDirectory: UserFolderScope.shared.current)
+            // Off the main thread, so a slow command never freezes Dot.
+            let result = try await Task.detached(priority: .userInitiated) {
+                try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command],
+                                         mergeStandardError: true, currentDirectory: directory)
+            }.value
             let output = String(decoding: result.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            return output.isEmpty ? "(Exit code \(result.status))" : output
+            let note = result.stopped ? "Stopped after 30 seconds or 1 MB of output." : ""
+            if output.isEmpty { return note.isEmpty ? "(Exit code \(result.status))" : note }
+            return note.isEmpty ? output : output + "\n" + note
         } catch {
             return "Failed to run command: \(error.localizedDescription)"
         }
+    }
+
+    /// Two paths name one file when they share its identity: on the default
+    /// case-insensitive APFS `Report.txt` and `report.txt` are one file, and so are hard links.
+    static func isSameFile(_ first: String, _ second: String) -> Bool {
+        let key: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        guard let one = try? URL(fileURLWithPath: first).resourceValues(forKeys: key).fileResourceIdentifier,
+              let two = try? URL(fileURLWithPath: second).resourceValues(forKeys: key).fileResourceIdentifier else { return false }
+        return one.isEqual(two)
     }
 
     /// In-process replacement for the simple file utilities that must act on a
@@ -380,6 +394,13 @@ final class ChatModel: ObservableObject {
             arguments.append(url.path)
         }
         guard !arguments.isEmpty else { return "Refused: no path given." }
+        // Audit S7: the selected folder itself is never removed or moved away, only what is
+        // inside it (`rm -rf .` used to delete it). It may still be the destination of mv.
+        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let removedPaths: [String] = name == "mv" ? Array(arguments.dropLast()) : ["rm", "rmdir", "trash"].contains(name) ? arguments : []
+        guard !removedPaths.contains(rootPath) else {
+            return "Refused: that is the folder you selected itself; I only change what is inside it."
+        }
         let fileManager = FileManager.default
         do {
             switch name {
@@ -436,6 +457,11 @@ final class ChatModel: ObservableObject {
                     let destination = intoFolder
                         ? (target as NSString).appendingPathComponent((source as NSString).lastPathComponent)
                         : target
+                    guard (destination as NSString).standardizingPath != (source as NSString).standardizingPath,
+                          !Self.isSameFile(source, destination) else {
+                        // `mv -f a.txt .` used to delete a.txt as the "existing destination".
+                        return "Refused: \(source) is already there."
+                    }
                     if fileManager.fileExists(atPath: destination) {
                         // Replacing an existing item needs -f, so nothing is overwritten by accident.
                         guard force else { return "Refused: \(destination) already exists; add -f to replace it." }
@@ -2520,7 +2546,9 @@ final class ChatModel: ObservableObject {
             // The spoken answer ends this listening turn first: the result is
             // spoken through speakDirect, which only speaks from idle, so a voice
             // "Approve" used to run the action silently and leave Dot listening.
-            if approvals.contains(lower) || lower.hasPrefix("approve") || lower.hasPrefix("confirm") {
+            // Whole phrases only (audit S5): "confirm the time of my meeting" is a new
+            // request, not an approval of a pending delete.
+            if approvals.contains(lower) || ["approve it", "approve that", "confirm", "confirmed", "confirm it"].contains(lower) {
                 cancelTurn()
                 approvePendingAction()
                 return
@@ -3374,16 +3402,25 @@ final class ChatModel: ObservableObject {
                             DiagnosticChatLogger.recordTool(name: "snap_window", target: layout, outcome: executedToolConfirmation ?? "", succeeded: false)
                         }
                     case .executeCommand(let command, let explanation):
-                        // R7: file utilities are autonomous; every other destructive
-                        // command keeps the card.
-                        if ActionApprovalRequest.isPotentiallyDestructive(command),
-                           !FileOperationPolicy.isAutomaticFileOperation(command) {
+                        // R7: file utilities are autonomous; every other destructive,
+                        // network, credential or launcher command keeps the card. Only
+                        // read-only commands skip the safety approver; all others ask it.
+                        let needsCard = ActionApprovalRequest.isPotentiallyDestructive(command)
+                            && !FileOperationPolicy.isAutomaticFileOperation(command)
+                        // Scalars, not characters: combining marks cannot stretch the card, and
+                        // format characters (bidi overrides, zero-width) cannot reorder or hide text.
+                        if needsCard, command.unicodeScalars.count > ActionApprovalRequest.maximumShownCommand
+                            || command.unicodeScalars.contains(where: { [.control, .format, .lineSeparator, .paragraphSeparator].contains($0.properties.generalCategory) }) {
+                            // Audit S5: the card must show the whole command on one small card, so a
+                            // longer one, or one with line breaks or control characters, is never offered.
+                            executedToolConfirmation = "That command is too long or has hidden line breaks, so I cannot show it in full on the approval card and did not run it. Ask for it in shorter steps."
+                            DiagnosticChatLogger.recordTool(name: "execute_command", target: String(command.prefix(120)), outcome: "Refused: too long for the approval card", succeeded: false)
+                        } else if needsCard {
                             let req = ActionApprovalRequest(title: "Execute Command", detail: explanation ?? "Terminal command requires approval", target: command, isDestructive: true, command: command)
                             self.pendingApproval = req
                             executedToolConfirmation = "This command requires your approval. Click Approve or say 'Approve' to run: \(command)."
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: "Awaiting user approval", succeeded: true)
-                        } else if ActionApprovalRequest.isPotentiallyDestructive(command)
-                                    || FileOperationPolicy.isAutomaticFileOperation(command),
+                        } else if !FileOperationPolicy.isReadOnlyCommand(command),
                                   let refusal = await self.safetyRefusal(for: command) {
                             executedToolConfirmation = refusal
                             DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: refusal, succeeded: false)
@@ -4083,6 +4120,13 @@ enum CompanionStatusText {
 
 struct ActionApprovalOverlay: View {
     let request: ActionApprovalRequest
+
+    /// A calendar card leads with the new time, so a long title cannot push it out of view.
+    static func shownText(for request: ActionApprovalRequest) -> String {
+        guard let draft = request.calendarDraft else { return request.command }
+        let formatter = DateFormatter(); formatter.dateStyle = .short; formatter.timeStyle = .short
+        return "\(formatter.string(from: draft.startDate)), \(draft.durationMinutes) min: \(draft.title)"
+    }
     let onApprove: () -> Void
     let onDeny: () -> Void
 
@@ -4096,11 +4140,16 @@ struct ActionApprovalOverlay: View {
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.white)
             }
-            Text(request.command)
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundColor(.white.opacity(0.85))
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
+            // The whole command, never a two-line prefix that hides the rest (audit S5):
+            // a card command is at most `ActionApprovalRequest.maximumShownCommand` long.
+            // A calendar card shows its new time too.
+            Text(Self.shownText(for: request))
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.white.opacity(0.9))
+                .multilineTextAlignment(.leading)
+                .lineLimit(request.isDestructive ? nil : 3)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 4)
             HStack(spacing: 6) {
                 Button(action: onApprove) {

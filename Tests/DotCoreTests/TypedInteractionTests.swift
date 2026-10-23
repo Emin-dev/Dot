@@ -532,6 +532,22 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.runScopedFileOperation("rm ../outside.txt")?.contains("outside the folder you selected"), true)
         XCTAssertEqual(ChatModel.runScopedFileOperation("rm /etc/hosts")?.contains("outside the folder you selected"), true)
         XCTAssertNil(ChatModel.runScopedFileOperation("rm a.txt; rm b.txt"))
+        // Audit S7: the selected folder itself is never removed or moved away.
+        for command in ["rm -rf .", "rm -rf \"\(root.path)\"", "rmdir .", "trash .", "mv . archive"] {
+            XCTAssertEqual(ChatModel.runScopedFileOperation(command)?.hasPrefix("Refused: that is the folder you selected"), true, command)
+        }
+        XCTAssertTrue(fileManager.fileExists(atPath: root.path))
+        XCTAssertEqual(ChatModel.runScopedFileOperation("mv archive/a.txt .")?.hasPrefix("Moved"), true)
+        // Moving or copying a file onto itself used to delete it as the "existing destination".
+        XCTAssertEqual(ChatModel.runScopedFileOperation("mv -f a.txt .")?.hasPrefix("Refused"), true)
+        XCTAssertEqual(ChatModel.runScopedFileOperation("cp -f a.txt a.txt")?.hasPrefix("Refused"), true)
+        XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("a.txt").path))
+        // On a case-insensitive volume Report.txt and report.txt are one file.
+        XCTAssertEqual(ChatModel.runScopedFileOperation("touch Report.txt")?.hasPrefix("Touched"), true)
+        if fileManager.fileExists(atPath: root.appendingPathComponent("report.txt").path) {
+            XCTAssertEqual(ChatModel.runScopedFileOperation("mv -f Report.txt report.txt")?.hasPrefix("Refused"), true)
+            XCTAssertTrue(fileManager.fileExists(atPath: root.appendingPathComponent("Report.txt").path))
+        }
         XCTAssertNil(ChatModel.runScopedFileOperation("ls -la"))
     }
 

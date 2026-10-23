@@ -75,6 +75,20 @@ jobs:
       - name: Test dot-voice protocol parsing
         run: cargo test --release -p dot-voice
 
+  dot-safety:
+    # The R16 approver's prompt fencing and verdict parsing. llama.cpp builds with Metal, so
+    # macOS only; a job of its own keeps the dot-voice job inside its time limit.
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Test dot-safety prompt fencing and verdict parsing
+        run: cargo test --release -p dot-safety
+
   macos:
     # Standard public-repository runner. Test Python is provisioned explicitly.
     # No neural payloads, app launch, dependency caches, microphone access,

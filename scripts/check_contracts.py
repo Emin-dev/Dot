@@ -182,8 +182,11 @@ checks = {
     'removal also deletes the Keychain log token': 'while security delete-generic-password -s dot-github-token >/dev/null 2>&1; do :; done' in read('scripts/uninstall-dot.sh') and 'dot-github-token' in read('src/DotLogSync.swift'),
     'removal also clears .dot-actions folders, Dot Dock tiles, download history rows and crash records': 'Self.recordActionFolder(canonical)' in read('src/ActionPanel.swift') and '[ -f "$target/owner.lock" ] || continue' in read('scripts/uninstall-dot.sh') and '[ ! -L "$target" ]' in read('scripts/uninstall-dot.sh') and 'defaults import com.apple.dock "$DOCK_PLIST"' in read('scripts/uninstall-dot.sh') and "LSQuarantineDataURLString LIKE '%github.com/Emin-dev/Dot/%'" in read('scripts/uninstall-dot.sh') and '/CrashReporter/Dot_' in read('scripts/uninstall-dot.sh'),
     'voice approve and deny end the listening turn first': re.search(r'cancelTurn\(\)\s+approvePendingAction\(\)\s+return', chat) is not None and re.search(r'cancelTurn\(\)\s+denyPendingAction\(\)\s+return', chat) is not None,
-    'automatic file utilities pass the R16 safety approver': re.search(r'\|\|\s*FileOperationPolicy\.isAutomaticFileOperation\(command\),\s*let refusal = await self\.safetyRefusal\(for: command\)', chat) is not None,
-    'scoped file operations parse options and paths inside the selected folder': 'let words = FileOperationPolicy.tokenize(trimmed)' in chat and 'if word == "--recursive" { recursive = true }' in chat and 'if !optionsEnded, word == "--" { optionsEnded = true; continue }' in chat and 'currentDirectory: UserFolderScope.shared.current' in chat,
+    'every command that is not read-only passes the R16 safety approver': re.search(r'!FileOperationPolicy\.isReadOnlyCommand\(command\),\s*let refusal = await self\.safetyRefusal\(for: command\)', chat) is not None
+        and 'testOnlyReadOnlyCommandsSkipTheApprover' in read('Tests/DotCoreTests/InteractionCoreTests.swift')
+        and '"security", "open"' in read('src/InteractionCore.swift')
+        and 'testNetworkCredentialAndLauncherCommandsKeepTheCard' in read('Tests/DotCoreTests/InteractionCoreTests.swift'),
+    'scoped file operations parse options and paths inside the selected folder': 'let words = FileOperationPolicy.tokenize(trimmed)' in chat and 'if word == "--recursive" { recursive = true }' in chat and 'if !optionsEnded, word == "--" { optionsEnded = true; continue }' in chat and 'let directory = UserFolderScope.shared.current' in chat and 'currentDirectory: directory' in chat,
     'every launch is queued for log upload before the token check': re.search(r'writeMetadataIfNeeded\(\)\s+enqueueCurrentFiles\(\)\s+guard let token = token\(\) else', read('src/DotLogSync.swift')) is not None,
     'Remove Dot always leaves the command and says what happened': re.search(r'NSPasteboard\.general\.setString\(offlineCommand, forType: \.string\)\s+let fallback = NSAlert\(\)\s+fallback\.messageText = opened \? "Removal opened in Terminal" : "Terminal could not be opened"', read('src/App.swift')) is not None,
     'real Xcode XCTest target': 'com.apple.product-type.bundle.unit-test' in read('Dot.xcodeproj/project.pbxproj'),
@@ -324,6 +327,25 @@ checks = {
                           read('src/ChatView.swift').split('private func startAdaptiveScreenWatch')[1].split('    /// R5:')[0]
                           + read('src/ScreenContext.swift').split('func captureFeaturePrint()')[1].split('func captureSilentScreenSnapshot')[0]
                           + read('src/ScreenContext.swift').split('struct ScreenFeaturePrint')[1])
+    ),
+    'audit 2026-10-23 security: & splits commands, exact approvals, whole card command, fenced approver, folder root kept, subprocess limits': (
+        '.replacingOccurrences(of: "&", with: "\\n")' in read('src/InteractionCore.swift')
+        and 'lower.hasPrefix("approve")' not in chat and 'lower.hasPrefix("confirm")' not in chat
+        and '.lineLimit(2)' not in chat.split('struct ActionApprovalOverlay')[1].split('struct ')[0]
+        and 'command.unicodeScalars.count > ActionApprovalRequest.maximumShownCommand' in chat and '.format, .lineSeparator' in chat
+        and 'fenced(conversation)' in read('crates/dot-safety/src/main.rs')
+        and 'starts_with("yes")' not in read('crates/dot-safety/src/main.rs')
+        and 'guard !removedPaths.contains(rootPath)' in chat
+        and 'storage.append(chunk.prefix(max(0, limit - storage.count)))' in read('src/InteractionCore.swift')
+        and '!trimmed.contains("=(")' in read('src/InteractionCore.swift')
+        and 'static func systemCommandName' in read('src/InteractionCore.swift')
+        and 'Refused: \\(source) is already there.' in chat
+        and 'static func isSameFile' in chat and 'try await Task.detached(priority: .userInitiated)' in chat
+        and 'curlOptionSendsOrWrites' in read('src/InteractionCore.swift')
+        and 'replace("<<", "< <")' in read('crates/dot-safety/src/main.rs')
+        and 'kill(process.processIdentifier, SIGKILL)' in read('src/InteractionCore.swift')
+        and 'testEndlessOutputAndEndlessRunsAreStopped' in read('Tests/DotCoreTests/InteractionCoreTests.swift')
+        and 'Audit S7' in read('Tests/DotCoreTests/TypedInteractionTests.swift')
     ),
     'dead code removed on 2026-10-23 stays removed': not any(
         name in read(path)

@@ -62,9 +62,29 @@ func trimConversationalPunctuation(_ text: String) -> String {
 /// matters: waiting for exit before draining deadlocks as soon as the child writes more than the
 /// pipe buffer (about 64 KiB on macOS), because the child blocks on write and never exits.
 /// Callers keep their own decoding, trimming, limits and error text so no reply string changes.
+/// Audit S16: a child that runs too long (`sleep 1e9`) is stopped after `timeout`, and one that
+/// prints without end (`yes`) is stopped at `outputLimit` bytes, so neither can hang a worker or
+/// fill memory.
 enum SubprocessRunner {
+    /// Collects output on a background reader, so a grandchild that keeps the pipe open
+    /// (`sleep 1e9; true`) can never hold the caller past the timeout.
+    private final class OutputCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = Data()
+        private(set) var reachedLimit = false
+        let finished = DispatchSemaphore(value: 0)
+        func append(_ chunk: Data, limit: Int) -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            storage.append(chunk.prefix(max(0, limit - storage.count)))
+            reachedLimit = storage.count >= limit
+            return reachedLimit
+        }
+        var data: Data { lock.lock(); defer { lock.unlock() }; return storage }
+    }
+
     static func run(executable: String, arguments: [String], mergeStandardError: Bool = false,
-                    currentDirectory: URL? = nil) throws -> (data: Data, status: Int32) {
+                    currentDirectory: URL? = nil, timeout: TimeInterval = 30,
+                    outputLimit: Int = 1_048_576) throws -> (data: Data, status: Int32, stopped: Bool) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -73,10 +93,30 @@ enum SubprocessRunner {
         process.standardOutput = pipe
         if mergeStandardError { process.standardError = pipe }
         try process.run()
-        // readDataToEndOfFile returns when the child closes stdout, i.e. as it exits.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let deadline = Date().addingTimeInterval(max(0, timeout))
+        let collector = OutputCollector()
+        let reader = pipe.fileHandleForReading
+        DispatchQueue.global(qos: .utility).async {
+            // Reading ends when every writer closes the pipe, or at the output limit.
+            while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty {
+                if collector.append(chunk, limit: outputLimit) { break }
+            }
+            collector.finished.signal()
+        }
+        let ended = collector.finished.wait(timeout: .now() + max(0, timeout)) == .success
+        if ended && !collector.reachedLimit {
+            while process.isRunning && Date() < deadline { usleep(20_000) }
+        }
+        var stopped = false
+        if process.isRunning {
+            stopped = true
+            process.terminate()
+            let grace = Date().addingTimeInterval(2)
+            while process.isRunning && Date() < grace { usleep(20_000) }
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
         process.waitUntilExit()
-        return (data, process.terminationStatus)
+        return (collector.data, process.terminationStatus, stopped || collector.reachedLimit)
     }
 }
 
@@ -5164,17 +5204,15 @@ public enum FileOperationPolicy {
     public static func isAutomaticFileOperation(_ command: String) -> Bool {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 4_000 else { return false }
-        guard !trimmed.contains("`"), !trimmed.contains("$("), !trimmed.contains("<("), !trimmed.contains(">(") else { return false }
-        let normalized = trimmed.replacingOccurrences(of: "&&", with: "\n")
-            .replacingOccurrences(of: "||", with: "\n")
-            .replacingOccurrences(of: ";", with: "\n")
-            .replacingOccurrences(of: "|", with: "\n")
-        let segments = normalized.split(whereSeparator: \.isNewline)
+        // `=(…)` is zsh process substitution and `*(e:…:)` a glob qualifier: both run code.
+        guard !trimmed.contains("`"), !trimmed.contains("$("), !trimmed.contains("<("), !trimmed.contains(">("),
+              !trimmed.contains("=("), !trimmed.contains("(e:"), !trimmed.contains("(+"),
+              !trimmed.contains("${") else { return false }
+        let segments = commandSegments(trimmed)
         guard !segments.isEmpty else { return false }
         for raw in segments {
-            let tokens = tokenize(String(raw))
-            guard let executable = tokens.first else { return false }
-            let name = (executable as NSString).lastPathComponent
+            let tokens = tokenize(raw)
+            guard let executable = tokens.first, let name = systemCommandName(executable) else { return false }
             guard !wrappers.contains(name) else { return false }
             if tokens.contains(where: { $0 == "/dev" || $0.hasPrefix("/dev/") || $0.hasPrefix("/System/") }) {
                 return false
@@ -5185,6 +5223,72 @@ public enum FileOperationPolicy {
                 continue
             }
             guard utilities.contains(name) else { return false }
+        }
+        return true
+    }
+
+    /// Every command in a line: `&&`, `||`, `;`, `|`, a single `&` (background) and a newline
+    /// each start a new one, so `echo x & sudo reboot` is two commands. A backslash line
+    /// continuation joins its lines first.
+    static func commandSegments(_ command: String) -> [String] {
+        command.replacingOccurrences(of: "\\\n", with: " ")
+            // `2>&1` and `&>` are redirects, not a background `&`.
+            .replacingOccurrences(of: ">&", with: ">")
+            .replacingOccurrences(of: "&>", with: ">")
+            .replacingOccurrences(of: "&&", with: "\n")
+            .replacingOccurrences(of: "||", with: "\n")
+            .replacingOccurrences(of: ";", with: "\n")
+            .replacingOccurrences(of: "|", with: "\n")
+            .replacingOccurrences(of: "&", with: "\n")
+            .split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    /// Commands that only read and run with no approver. Every other command that does not
+    /// need the card goes to the safety approver first, so no shell command runs unchecked.
+    /// Tools that can write through a flag (`sort -o`, `uniq in out`, `rg --pre`, `find`)
+    /// are left out on purpose.
+    private static let readOnlyExecutables: Set<String> = [
+        "ls", "cat", "head", "tail", "wc", "grep", "egrep", "fgrep", "pwd", "date", "cal",
+        "which", "file", "stat", "du", "df", "uname", "sw_vers", "whoami", "uptime", "ps",
+        "mdfind", "mdls", "cut", "tr", "diff", "cmp", "shasum", "md5", "basename", "dirname",
+        "realpath", "echo", "printf"
+    ]
+    /// `diff`, `show` and `blame` are left out: a repository's config can run an external diff
+    /// or text filter for them.
+    private static let readOnlyGitSubcommands: Set<String> = ["status", "log", "rev-parse", "describe", "ls-files"]
+
+    /// The command name of a bare word (`ls`) or of a path in a system folder (`/bin/ls`).
+    /// `./cat` or `~/Downloads/ls` could be anything, so they get no name and no shortcut.
+    static func systemCommandName(_ token: String) -> String? {
+        guard token.contains("/") else { return token }
+        let folder = (token as NSString).deletingLastPathComponent
+        guard ["/bin", "/usr/bin", "/sbin", "/usr/sbin"].contains(folder) else { return nil }
+        return (token as NSString).lastPathComponent
+    }
+
+    public static func isReadOnlyCommand(_ command: String) -> Bool {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= 4_000 else { return false }
+        guard !trimmed.contains("`"), !trimmed.contains("$("), !trimmed.contains("<("),
+              !trimmed.contains(">"), !trimmed.contains("("), !trimmed.contains(")"),
+              !trimmed.contains("${") else { return false }
+        let segments = commandSegments(trimmed)
+        guard !segments.isEmpty else { return false }
+        for raw in segments {
+            let tokens = tokenize(raw)
+            guard let executable = tokens.first, let name = systemCommandName(executable) else { return false }
+            if name == "git" {
+                // The subcommand must come right after `git` (or `git --no-pager`): the values
+                // of `-C`, `-c` or `--git-dir` must never be read as one.
+                var rest = tokens.dropFirst()
+                if rest.first == "--no-pager" { rest = rest.dropFirst() }
+                // `-p`, `--patch` and `-u` run a repository's diff filters, like `git diff`.
+                guard let subcommand = rest.first, readOnlyGitSubcommands.contains(subcommand),
+                      !tokens.contains(where: { $0 == "-p" || $0 == "-u" || $0.hasPrefix("--patch") }),
+                      !tokens.contains(where: { $0.hasPrefix("--output") || $0 == "--ext-diff" }) else { return false }
+                continue
+            }
+            guard readOnlyExecutables.contains(name) else { return false }
         }
         return true
     }
@@ -5236,6 +5340,10 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
         self.appAction = appAction
     }
 
+    /// The longest command an approval card shows; it is shown in full, so a longer one is
+    /// refused instead of being offered with a hidden tail.
+    public static let maximumShownCommand = 56
+
     /// Executables whose invocation can destroy data or take over the machine. Matching is by
     /// token basename, so `/bin/rm`, `env rm`, `rm` after any separator and quoted forms all match.
     private static let destructiveExecutables: Set<String> = [
@@ -5248,6 +5356,12 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     private static let wrapperExecutables: Set<String> = [
         "sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh", "fish", "xargs",
         "env", "doas", "osascript", "python", "python3", "perl", "ruby", "node", "php"
+    ]
+    /// Tools that can send data off the Mac, read secrets, start other apps or change system
+    /// settings. They always keep the card, like the destructive ones.
+    private static let approvalExecutables: Set<String> = [
+        "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp", "telnet", "security", "open",
+        "launchctl", "screencapture", "tccutil", "crontab", "networksetup", "systemsetup", "scutil"
     ]
     /// Flags that delete, or execute a command per file, inside another command.
     private static let wrapperFlags: Set<String> = ["-exec", "-execdir", "-delete", "-ok", "-okdir"]
@@ -5272,12 +5386,12 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
             if wrapperFlags.contains(lower) { return true }
             let name = basename(lower)
             if destructiveExecutables.contains(name) || fileWritingExecutables.contains(name) { return true }
+            if isCommandPosition(tokens, index: index), approvalExecutables.contains(name) { return true }
             let later = tokens[(index + 1)...].map { $0.lowercased() }
+            if name == "defaults", later.contains(where: { ["write", "delete", "import", "export", "rename"].contains($0) }) { return true }
+            // Only curl's own options count: `curl -s url | grep -c x` must not need the card.
+            if name == "curl", curlArguments(tokens[(index + 1)...]).contains(where: curlOptionSendsOrWrites) { return true }
             if name == "sed", later.contains(where: { $0.hasPrefix("-i") || $0.hasPrefix("--in-place") }) { return true }
-            if name == "curl", later.contains(where: { word in
-                word == "--output" || word.hasPrefix("--output=") || word.hasPrefix("--remote-name")
-                    || (word.hasPrefix("-") && !word.hasPrefix("--") && (word.contains("o") || word.contains("O")))
-            }) { return true }
             // A shell or executor only counts as a wrapper in command position (start of the
             // command or right after a separator such as `|`), so `echo zsh` stays harmless.
             if isCommandPosition(tokens, index: index), wrapperExecutables.contains(name) { return true }
@@ -5285,6 +5399,41 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
         if hasDestructiveGitInvocation(tokens) { return true }
         // A redirect rewrites a file even when no listed executable is involved.
         return hasUnquotedRedirect(command)
+    }
+
+    /// Reading with curl stays free; sending data off the Mac or writing a file does not.
+    /// curl accepts any unambiguous start of a long option (`--jso`), so a word counts when it
+    /// starts one of these or one of these starts it. Short flags are case-sensitive: `-F` and
+    /// `-T` upload, `-f` only fails quietly.
+    private static let curlSendingOrWritingOptions = [
+        "--data", "--form", "--upload-file", "--json", "--dump-header", "--cookie-jar", "--trace",
+        "--stderr", "--libcurl", "--etag-save", "--hsts", "--alt-svc", "--output", "--remote-name",
+        "--create-dirs"
+    ]
+    /// The words of one curl command: the tokens after `curl` up to the next `;`, `&` or `|`
+    /// outside quotes. A quoted URL such as "https://x/?a=1&b=2" does not end the command.
+    private static func curlArguments(_ tokens: ArraySlice<String>) -> [String] {
+        var words: [String] = []
+        var quote: String?
+        for token in tokens {
+            if token == "\"" || token == "'" {
+                if quote == nil { quote = token } else if quote == token { quote = nil }
+                continue
+            }
+            if quote == nil, token.count <= 2, token.allSatisfy({ ";&|".contains($0) }) { break }
+            words.append(token)
+        }
+        return words
+    }
+
+    private static func curlOptionSendsOrWrites(_ word: String) -> Bool {
+        if word.hasPrefix("--") {
+            let option = word.split(separator: "=", maxSplits: 1).first.map(String.init) ?? word
+            // A full read-only name is itself, not the start of a longer option.
+            guard option.count > 3, option != "--cookie" else { return false }
+            return curlSendingOrWritingOptions.contains { $0.hasPrefix(option) || option.hasPrefix($0) }
+        }
+        return word.hasPrefix("-") && word.count > 1 && word.dropFirst().contains(where: { "dFTDcoO".contains($0) })
     }
 
     /// Splits on whitespace and shell metacharacters, keeping the metacharacters as their own
