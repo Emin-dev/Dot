@@ -184,7 +184,7 @@ own bundle or container.
 **Pass:** it prints `PASS: your Mac is back to how it was`. It quits Dot and
 removes the app, `~/Library/Containers/app.dot.local/`, group containers,
 caches, saved state, HTTP/WebKit stores, preferences, the 22.4 GB model, the
-legacy `Application Support/Dot` folder, LaunchServices registration and resets
+legacy `Application Support/Dot` folder, the optional log token in Keychain, LaunchServices registration and resets
 Dot's microphone/screen-recording approvals with `tccutil reset All
 app.dot.local`. It removes `~/Applications` only when the installer created it
 and it is empty. If anything remains it prints a precise `FAIL:` line instead.

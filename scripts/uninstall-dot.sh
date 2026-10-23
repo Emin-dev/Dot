@@ -99,6 +99,15 @@ for extra in "$HOME/Library/Application Support/com.apple.sharedfilelist/com.app
     rm -f "$extra" || fail "could not remove $extra"
 done
 
+# The owner's optional log-upload token lives in the login Keychain, outside the
+# container. Remove every copy so nothing of Dot stays behind.
+if command -v security >/dev/null 2>&1; then
+    while security delete-generic-password -s dot-github-token >/dev/null 2>&1; do :; done
+    if security find-generic-password -s dot-github-token >/dev/null 2>&1; then
+        fail "the Keychain item dot-github-token could not be removed"
+    fi
+fi
+
 # TCC owns microphone, screen-recording and every other per-app approval.
 if command -v tccutil >/dev/null 2>&1; then
     TCC_OUTPUT="$(tccutil reset All "$BUNDLE_ID" 2>&1)" || {
