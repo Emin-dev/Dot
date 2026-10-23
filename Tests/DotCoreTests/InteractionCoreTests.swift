@@ -1699,6 +1699,17 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("git status"))
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("ls -la"))
         XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("cargo test"))
+        // R16: programs that write files keep the card; reading with them stays free.
+        for command in ["sed -i '' 's/a/b/' notes.txt", "sed --in-place s/a/b/ notes.txt",
+                        "curl -o page.html https://example.com", "curl -fsSLO https://example.com/a.zip",
+                        "rsync -a src/ dst/", "ditto a b", "unzip -o archive.zip", "tar -xf archive.tar",
+                        "sqlite3 notes.db 'DELETE FROM notes'", "git restore notes.txt",
+                        "git checkout -- notes.txt", "git rm notes.txt"] {
+            XCTAssertTrue(ActionApprovalRequest.isPotentiallyDestructive(command), command)
+        }
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("sed 's/a/b/' notes.txt"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("curl -fsSL https://example.com"))
+        XCTAssertFalse(ActionApprovalRequest.isPotentiallyDestructive("git checkout main"))
     }
 
     func testDestructiveCommandsCannotBypassApprovalByPathWrapperPipeOrRedirect() {

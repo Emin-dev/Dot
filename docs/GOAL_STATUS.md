@@ -97,7 +97,7 @@ by actually running the gate, not by assumption.
 | In-app automatic GitHub log sync | ✅ (source) / token pending | `DotLogSync` writes `dot/<install-id>/<launch>/` to the dedicated `dot-logs` branch with an offline queue and backoff; the owner must store the token (see `QUESTIONS_FOR_EMIN.md`). `main` is PR-protected. |
 | R1 five-minute listening | ✅ | `VoiceCaptureDeadline.maximumDuration = 300.0`; recognizer bounds 301 s; spoken cap notice; VoiceTimingTests 37/0 |
 | R14 battery/charging alerts | ✅ | policy + settings + idle-tick monitor + spoken configuration commands; BatteryAlertTests 3/0 |
-| R11 cold-start progress + prewarm | ✅ | live stage messages follow `onReadinessStage`; `prewarm at login` / `stop prewarming` commands; off by default |
+| R11 cold-start progress + prewarm | ✅ | live stage messages follow `onReadinessStage`; `prewarm at login` / `stop prewarming` commands; off by default; prewarm runs at launch (no login item is installed by design) |
 | Placement refresh-before-validate | ✅ | caller asks `needsRefresh` before `current`; 0 `reason=expired` rejections in the live log; RoamingTests 16/0 |
 | Dead code | ✅ | audited backlog cleared (`recentConversations`, `forgetMatching`, `recordVoice` gone; `TypedInteractionStatus` wired) |
 | R5 memory key-points + announcement | ✅ | 20 s lull → LLM key points → keyPoints tier; announcement speaks after each capture |

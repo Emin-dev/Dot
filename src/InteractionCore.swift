@@ -5559,6 +5559,12 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
     ]
     /// Flags that delete, or execute a command per file, inside another command.
     private static let wrapperFlags: Set<String> = ["-exec", "-execdir", "-delete", "-ok", "-okdir"]
+    /// Programs that rewrite or unpack files as their normal job (R16: every file
+    /// mutation Dot chooses is checked). `sed` and `curl` count only with an
+    /// in-place or output flag, so reading with them stays free.
+    private static let fileWritingExecutables: Set<String> = [
+        "rsync", "ditto", "unzip", "tar", "sqlite3", "wget", "patch", "shred"
+    ]
     /// Characters that start a new command in POSIX shell syntax. The backtick and `$`
     /// open command substitutions, so `` `rm -rf ~/Documents` `` and `$(sudo reboot)`
     /// tokenize to their inner destructive commands instead of hiding them inside one token.
@@ -5573,7 +5579,13 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
             let lower = token.lowercased()
             if wrapperFlags.contains(lower) { return true }
             let name = basename(lower)
-            if destructiveExecutables.contains(name) { return true }
+            if destructiveExecutables.contains(name) || fileWritingExecutables.contains(name) { return true }
+            let later = tokens[(index + 1)...].map { $0.lowercased() }
+            if name == "sed", later.contains(where: { $0.hasPrefix("-i") || $0.hasPrefix("--in-place") }) { return true }
+            if name == "curl", later.contains(where: { word in
+                word == "--output" || word.hasPrefix("--output=") || word.hasPrefix("--remote-name")
+                    || (word.hasPrefix("-") && !word.hasPrefix("--") && (word.contains("o") || word.contains("O")))
+            }) { return true }
             // A shell or executor only counts as a wrapper in command position (start of the
             // command or right after a separator such as `|`), so `echo zsh` stays harmless.
             if isCommandPosition(tokens, index: index), wrapperExecutables.contains(name) { return true }
@@ -5684,8 +5696,11 @@ public struct ActionApprovalRequest: Identifiable, Equatable, Sendable {
             switch basename(word) {
             case "reset", "clean":
                 return true
+            case "restore", "rm":
+                return true
             case "checkout":
-                if flags.contains("-f") || flags.contains("--force") { return true }
+                // "git checkout -- file" throws away that file's changes.
+                if flags.contains("-f") || flags.contains("--force") || flags.contains("--") { return true }
             case "push":
                 if flags.contains("-f") || flags.contains("--force")
                     || flags.contains("--force-with-lease") || flags.contains("--force-if-includes") { return true }

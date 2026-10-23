@@ -472,6 +472,14 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertTrue(fileManager.fileExists(atPath: root.path))
     }
 
+    @MainActor func testOnlyProgressBannersFollowEngineStages() {
+        XCTAssertTrue(ChatModel.isProgressMessage(ChatModel.progressMessage(for: "Loading local model")))
+        XCTAssertTrue(ChatModel.isProgressMessage(ChatModel.progressMessage(for: "")))
+        XCTAssertTrue(ChatModel.isProgressMessage(ChatModel.stillPreparingMessage))
+        XCTAssertFalse(ChatModel.isProgressMessage("The safety check refused (unsafe). I'll try a different approach next time."))
+        XCTAssertFalse(ChatModel.isProgressMessage("Microphone access is off. Enable Dot in System Settings > Privacy & Security > Microphone, then click me again."))
+    }
+
     @MainActor func testTypedTextNeverReachesTheLog() {
         // A "type ..." command can carry a password into another app's field.
         XCTAssertEqual(ChatModel.loggableUserText("type this: Tr0ub4dor&3"),

@@ -269,13 +269,13 @@ final class ChatModel: ObservableObject {
             case .denied(let reason):
                 let strikes = SafetyApprover.shared.registerStrike(key: actionText)
                 if strikes >= 3 {
-                    self.block("The safety check refused this three times (\(reason)). It is your call now: say \"force it\" and approve again to run it as-is.", issue: .unknown)
+                    self.block("The safety check refused this three times (\(reason)). It is your call now: say \"force it\" and approve again to run it as-is.", issue: .unknown, clearsAfter: 20)
                 } else {
-                    self.block("The safety check refused (\(reason)). I'll try a different approach next time.", issue: .unknown)
+                    self.block("The safety check refused (\(reason)). I'll try a different approach next time.", issue: .unknown, clearsAfter: 15)
                 }
                 return
             case .unavailable(let reason):
-                self.block("The safety check is unavailable (\(reason)), so I will not run this. Try again in a moment.", issue: .unknown)
+                self.block("The safety check is unavailable (\(reason)), so I will not run this. Try again in a moment.", issue: .unknown, clearsAfter: 15)
                 return
             }
             if isDelete {
@@ -1301,8 +1301,9 @@ final class ChatModel: ObservableObject {
         stt.onCaptureEnded = { [weak self] id, reason in
             guard let self, self.gate.accepts(id) else { return }
             self.cancelTurn()
-            if let message = reason.recoveryMessage { self.block(message, issue: .speech) }
-            else { self.showCaptureOutcome(reason == .noSpeech ? "No reply" : "Stopped") }
+            if let message = reason.recoveryMessage {
+                self.block(message, issue: .speech, clearsAfter: reason == .permissionLost ? nil : 12)
+            } else { self.showCaptureOutcome(reason == .noSpeech ? "No reply" : "Stopped") }
         }
         stt.onSpeechEnded = { [weak self] id, evidence in
             guard let self, self.gate.accepts(id) else { return }
@@ -1329,7 +1330,7 @@ final class ChatModel: ObservableObject {
             guard let satisfied = self.silenceSatisfiedAt,
                   ProcessInfo.processInfo.systemUptime >= satisfied else {
                 self.cancelTurn()
-                self.block("Listening timing could not be verified. Please try again.", issue: .speech)
+                self.block("Listening timing could not be verified. Please try again.", issue: .speech, clearsAfter: 12)
                 return
             }
             self.submit(text, id: id)
@@ -1434,10 +1435,17 @@ final class ChatModel: ObservableObject {
             guard let self else { return }
             self.engineStage = stage
             self.publishHealthSnapshot()
-            // R11: live progress — while the pet is blocked because the engine is not
-            // ready, the message follows the stages instead of staying static.
-            if case .blocked = self.phase, self.issue == .files || self.issue == .unknown {
-                self.block(Self.progressMessage(for: stage ?? ""), issue: .unknown)
+            // R11: live progress. Only a progress or "still preparing" banner follows
+            // the stages, never another error. A nil stage means the check ended, so
+            // that banner clears; it used to become "Checking the local engine…" for
+            // good. Progress is not an error, so it is not logged as one.
+            if let current = self.phase.blockedMessage, Self.isProgressMessage(current) {
+                if let stage {
+                    self.phase = .blocked(Self.progressMessage(for: stage))
+                } else {
+                    self.issue = nil; self.phase = .idle
+                }
+                self.publishHealthSnapshot()
             }
         }
         startPrewarmIfEnabled()
@@ -1445,7 +1453,13 @@ final class ChatModel: ObservableObject {
     }
 
     /// R11: the owner-facing words for each engine stage during a cold start.
-    private static func progressMessage(for stage: String) -> String {
+    static let stillPreparingMessage = "Dot is still preparing — try again in a moment."
+    static func isProgressMessage(_ message: String) -> Bool {
+        message == stillPreparingMessage
+            || ["Starting local engine", "Loading local model", ""].map(progressMessage(for:)).contains(message)
+    }
+
+    static func progressMessage(for stage: String) -> String {
         switch stage {
         case "Starting local engine": return "Starting Dot's engine…"
         case "Loading local model": return "Loading the local model — about a minute the first time…"
@@ -1619,11 +1633,15 @@ final class ChatModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 6_000_000_000)
                 guard let self, !Task.isCancelled, !self.shuttingDown else { break }
                 let now = ProcessInfo.processInfo.systemUptime
+                // R14: battery alerts have their own switch. Paused comments, a playing
+                // video or a hidden Dot must not silence them (over video the alert is
+                // shown, not spoken).
+                if !self.screenPaused, !self.generating, !self.runtime.ttsSpeaking(),
+                   self.checkBatteryAlerts() { continue }
                 if !self.screenPaused, self.visible, !self.proactive.paused, self.phase == .idle,
                    !self.generating, !self.runtime.ttsSpeaking(),
                    !videoPlayback(),
                    self.proactive.activeOpportunity == nil, self.proactiveTurn == nil {
-                    if self.checkBatteryAlerts() { continue }
                     if !self.proactiveEvidence.isRecent(now: now) || !self.proactiveContextChangedAfterUser {
                         self.proactiveEvidence.recordUser(turn: UUID(), now: now)
                         self.proactiveContextChangedAfterUser = true
@@ -2317,7 +2335,7 @@ final class ChatModel: ObservableObject {
         case .paused:
             block("Dot is paused — right-click to resume the file check.", issue: .unknown)
         case .checking:
-            block("Dot is still preparing — try again in a moment.", issue: .unknown)
+            block(Self.stillPreparingMessage, issue: .unknown)
         case .unavailable(let message):
             block(message, issue: .files)
         case .ready:
@@ -2508,6 +2526,14 @@ final class ChatModel: ObservableObject {
                 cancelTurn()
                 denyPendingAction()
                 return
+            }
+            // R6/R13: any other turn means the owner moved on. The card is withdrawn, so
+            // voice commands ("what do you remember") work again and a later "yes" to an
+            // unrelated question cannot approve a stale card.
+            if let req = pendingApproval {
+                pendingApproval = nil
+                DiagnosticChatLogger.recordTool(name: "approval_withdrawn", target: req.command,
+                                                outcome: "The owner moved on to another request", succeeded: false)
             }
         }
 
@@ -3642,11 +3668,27 @@ final class ChatModel: ObservableObject {
         Task { [weak self] in await self?.screen.captureSilentScreenSnapshot() }
     }
 
-    private func block(_ message: String, issue: CompanionIssue) {
+    /// `clearsAfter` is for one-off failures (nothing heard, an action refused): the
+    /// banner shows for that long and Dot carries on. R19: such a block used to keep
+    /// comments, battery alerts, reflection and the wake greeting silent until a click.
+    /// Permission problems stay on screen until the owner fixes them.
+    private func block(_ message: String, issue: CompanionIssue, clearsAfter seconds: Double? = nil) {
         DiagnosticChatLogger.record(role: "dot (error)", text: "\(message) [\(issue)]")
         self.issue = issue; phase = .blocked(message)
         publishHealthSnapshot()
         if issue == .engine { scheduleEngineHeal(for: message) }
+        blockClearTask?.cancel(); blockClearTask = nil
+        if let seconds { scheduleBlockClear(message, after: seconds) }
+    }
+
+    private var blockClearTask: Task<Void, Never>?
+    private func scheduleBlockClear(_ message: String, after seconds: Double) {
+        blockClearTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            guard let self, !Task.isCancelled, self.phase.blockedMessage == message else { return }
+            self.issue = nil; self.phase = .idle
+            self.publishHealthSnapshot()
+        }
     }
 
     /// R19 self-heal: an engine failure retries on its own, three times with
@@ -3830,7 +3872,7 @@ final class ChatModel: ObservableObject {
         greetAfterWake()
     }
     func reset() { proactiveEvidence.clear(); proactiveContextChangedAfterUser = false; recentProactiveReplies = []; cancelTurn(); history = []; answer = ""; displayedAnswerTurn = nil; voiceDeliveryNotice = nil; lastAttemptedText = nil }
-    func beginShutdown() { shuttingDown = true; healTask?.cancel(); healTask = nil; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; screenWatchTask?.cancel(); screenWatchTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
+    func beginShutdown() { shuttingDown = true; healTask?.cancel(); healTask = nil; blockClearTask?.cancel(); blockClearTask = nil; prewarmTask?.cancel(); prewarmTask = nil; memorySummaryTask?.cancel(); memorySummaryTask = nil; screenWatchTask?.cancel(); screenWatchTask = nil; stopProactivity(); cancelTurn(); textHistory.closeAdmissions() }
     func shutdown() { stopProactivity(); cancelTurn(); stt.shutdown(); tts.shutdown(); engine.shutdown(); OfflinePreparation.shared.shutdown() }
 }
 
