@@ -9,8 +9,11 @@ Working rules for agents are in [AGENTS.md](../AGENTS.md).
 - Every documented promise was audited against the code on 2026-10-22/23 and every finding is fixed
   with a test or guardrail: [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md).
 - Latest published release: **v1.1.4** (`Dot.dmg` 793,335,296 bytes, SHA-256
-  `6ba718c7b2051143598596735977541d088f0915d5629856318dea278317fad4`). v1.1.5 and v1.1.6 carry the
-  later fixes; check `Releases` on GitHub for the newest.
+  `6ba718c7b2051143598596735977541d088f0915d5629856318dea278317fad4`). The first v1.1.5 run was
+  cancelled because a push to main replaced its pending no-trace job; `privacy-clean.yml` now uses a
+  separate concurrency group when the release calls it. Check `Releases` on GitHub for the newest.
+- Owner test: [TEST_TODAY.md](TEST_TODAY.md) is a 72-step checklist of every feature; the release
+  page shows the same file.
 - Gates: Native CI green (Swift build, XCTest, SwiftPM, Rust, Python, about 120 static guardrails);
   every release passes install, quarantine, `spctl`/`codesign` and the no-trace lane.
 - Production blocker: Developer ID signing and notarisation, owner-only

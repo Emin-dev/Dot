@@ -1,194 +1,196 @@
 curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
 
-# Dot — test everything today
+# Test Dot on your Mac
 
-For Emin on a MacBook at or above the minimum: **Apple Silicon M5 Pro class,
-48 GB Unified Memory, macOS 27+**. Dot refuses to start below that, on purpose;
-there is no smaller model and no override.
+One pass over every feature. Tick each box when its **Pass** line is true. If a box fails, copy the
+last lines of the log (section 14) and note the box number.
 
-Allow about 45–75 minutes: most of it is the one-time 22.4 GB model download.
+Needs: Apple Silicon M5 Pro class or newer, 48 GB, macOS 27+, about 35 GB free disk. Below that
+Dot shows one clear message and stops, on purpose. Allow about an hour; most of it is the one-time
+22.4 GB model download.
 
-## 1. Install (one Terminal line)
-
-Copy this exact line into Terminal and press Return:
+## 1. Install
 
 ```bash
 curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash
 ```
 
-The line is plain ASCII with no smart quotes. If Terminal asks to confirm pasting,
-choose **Paste Anyway** (or type the line); if macOS blocks the app after that, the
-installer prints the exact macOS/Gatekeeper text instead of hiding it.
+- [ ] 1.1 Paste the line into Terminal. **Pass:** it ends with
+  `PASS: Dot is installed at ~/Applications/Dot.app` and the dot appears on screen.
+- [ ] 1.2 Run the same line again. **Pass:** it passes again and nothing is duplicated.
+- [ ] 1.3 Optional manual check: download `Dot.dmg` and `Dot.dmg.sha256` from the latest release
+  into `~/Downloads`, then run `cd ~/Downloads && shasum -a 256 -c Dot.dmg.sha256`.
+  **Pass:** `Dot.dmg: OK`.
 
-The script downloads `Dot.dmg` (and every part when the release uses split
-parts) with curl, which adds no `com.apple.quarantine`; verifies every SHA-256;
-mounts the DMG; copies `Dot.app` to **`~/Applications`** (never `/Applications`);
-clears quarantine from Dot's own staged bundle only; verifies the App Sandbox
-entitlements and signature; detaches the DMG; and opens Dot. It prints
-`PASS:`/`FAIL:` lines, is idempotent and never uses sudo. It creates
-`~/Applications` only when it is missing.
+If it prints `FAIL:`, stop and send that line. Do not change any System Setting: the release is not
+notarised yet. The installer downloads with curl (no quarantine flag), clears quarantine only on
+Dot's own app, and prints Gatekeeper's exact text if macOS still refuses.
 
-**Pass:** the script prints `PASS: Dot is installed at ~/Applications/Dot.app`
-and Dot appears. If it prints `FAIL:`, send that line back; do not continue. On
-a refusal it also prints the exact macOS/Gatekeeper text, so do not change any
-System Setting.
+## 2. Model download (one time)
 
-### If macOS still blocks the first open
+- [ ] 2.1 Watch the first launch. **Pass:** a progress ring with stage text (verify, download,
+  load) moves forward; no SHA-256 error.
+- [ ] 2.2 Mid-download, turn Wi-Fi off for a minute, then on. **Pass:** the download continues from
+  where it stopped, not from zero.
+- [ ] 2.3 Mid-download, quit Dot (Command-Q, or **Quit Dot** in its menu-bar icon) and open it
+  again. **Pass:** it resumes, and parts already verified are not downloaded again.
+- [ ] 2.4 Wait for the end. **Pass:** Dot says it is ready and answers a click.
 
-Do not change any System Setting. The installer already removes quarantine from
-Dot's own staged bundle and verifies the sandbox entitlements and signature. If
-macOS still refuses, the installer prints the exact `open`/Gatekeeper text; send
-that `FAIL:` block back. A no-warning double-click for every Mac still needs
-Developer ID signing plus notarisation, which is owner-only.
+## 3. Talking
 
-### Owner-only fallback: build and sign on this Mac
+- [ ] 3.1 Click the dot once and say "Hello Dot, what are you?". **Pass:** a listening cue, then a
+  short spoken answer in a British voice.
+- [ ] 3.2 Click again while it speaks. **Pass:** it stops and listens.
+- [ ] 3.3 Hold Fn and speak, then release (first right-click Dot, **Tools & History**, **Enable
+  hold-Fn and global gestures (Accessibility)…**). **Pass:** same as 3.1.
+- [ ] 3.4 Ask a question that needs a reply from you. **Pass:** after answering, it listens again
+  without a click.
+- [ ] 3.5 Speak for a long time without stopping. **Pass:** at 5 minutes it says it stopped
+  listening and answers what it heard.
+- [ ] 3.6 Right-click, **Type to Dot…**, type a question. **Pass:** it answers in text and voice.
+- [ ] 3.7 Play a video with sound for a few minutes. **Pass:** Dot makes no comments over it.
+- [ ] 3.8 Right-click Dot, **Voice settings**: change a setting. **Pass:** the next turn uses it.
 
-If the public download is blocked by policy, run from a checkout:
+## 4. Coming back (wake greeting)
 
-```bash
-bash scripts/build-and-sign-on-mac.sh
-```
+- [ ] 4.1 Lock the Mac or let it sleep for 12 minutes, then return. **Pass:** most times (about 4
+  of 5) a warm greeting that fits the time of day; never a fixed "I'm back".
+- [ ] 4.2 Lock for 1 minute only. **Pass:** no greeting.
+- [ ] 4.3 While locked or asleep. **Pass:** Dot does not talk.
 
-It builds Dot locally with Xcode/SwiftPM and the Rust runtime, signs with the
-first `Apple Development` identity from
-`security find-identity -v -p codesigning` (ad-hoc fallback when none exists),
-installs to `~/Applications` and opens Dot. This works because an Apple
-Development signature is trusted on the Mac that owns the certificate; it is
-not a public release.
+## 5. Memory
 
-**Plainly:** a no-warning double-click for every Mac needs **Developer ID
-signing plus notarisation**. That needs Emin's paid Apple Developer account and
-is owner-only, not available today.
+- [ ] 5.1 Say "Remember that my dentist is on Friday". **Pass:** it confirms in one line.
+- [ ] 5.2 Have a short normal chat, then say "What do you remember?". **Pass:** a short list of key
+  points (5 to 10 per conversation), not whole sentences you said.
+- [ ] 5.3 Say "Forget about the dentist". **Pass:** only the dentist point is gone; ask 5.2 again
+  to check.
+- [ ] 5.4 Quit and reopen Dot, then ask 5.2. **Pass:** the remaining points are still there.
 
-## 2. Download and verify manually (optional)
+## 6. Files
 
-1. Open <https://github.com/Emin-dev/Dot/releases/latest>.
-2. Download `Dot.dmg` and `Dot.dmg.sha256` into `~/Downloads`.
-3. In Terminal:
+Use a test folder: `mkdir -p ~/Desktop/DotTest && echo hello > ~/Desktop/DotTest/note.txt`
 
-   ```bash
-   cd ~/Downloads
-   shasum -a 256 -c Dot.dmg.sha256
-   ```
+- [ ] 6.1 Right-click, **Tools & History**, **Mac actions & receipts…**, choose `~/Desktop/DotTest`.
+  **Pass:** the panel shows the folder.
+- [ ] 6.2 Say "Read note.txt". **Pass:** it reads "hello".
+- [ ] 6.3 Say "Create a file plan.txt with the text test plan". **Pass:** the file appears.
+- [ ] 6.4 Say "Move note.txt into a folder called archive" and "Copy plan.txt to plan-copy.txt".
+  **Pass:** both happen inside DotTest.
+- [ ] 6.5 Say "Delete plan-copy.txt". **Pass:** the safety check approves, then it is gone.
+- [ ] 6.6 Ask for `rm -rf ~/Desktop/DotTest` three times. **Pass:** refused each time, nothing
+  deleted. Then say "force it" and ask once more. **Pass:** only then does that exact command run.
+- [ ] 6.7 Quit and reopen Dot, then say "Read plan.txt". **Pass:** works without choosing the
+  folder again.
+- [ ] 6.8 Ask it to change a file on your Desktop outside DotTest. **Pass:** it says it cannot
+  write there.
+- [ ] 6.9 Say "Find file note". **Pass:** it finds names in Desktop, Documents or Downloads.
 
-   **Pass:** prints `Dot.dmg: OK`. If it prints `FAILED`, delete the file and
-   download again; do not install it.
+## 7. Screen
 
-## 3. Model download (one time, online)
+Allow Screen Recording for Dot when macOS asks.
 
-1. Dot verifies `bundled-models.json`, then downloads the exact Qwen3.8 27B Q4
-   target, DFlash2 draft and the safety aux model from the pinned
-   `model-parts-v1` release (Hugging Face is the hash-checked fallback).
-2. Size: **22.4 GB**. Free disk needed: **at least 35 GB**.
-3. Time: roughly **30 minutes at 100 Mbps**, **6 minutes at 500 Mbps**. The
-   progress ring and detail text advance; the download resumes after a network
-   drop or relaunch.
+- [ ] 7.1 Right-click, turn **Screen awareness** on. Ask "What is on my screen?". **Pass:** a short
+  true description.
+- [ ] 7.2 Turn **Screen awareness** off and ask again. **Pass:** it says screen context is off and
+  does not guess.
+- [ ] 7.3 Say "Read screen text". **Pass:** it reads visible text.
+- [ ] 7.4 Open a page in Safari, Chrome or TextEdit and say "Read this page". **Pass:** it reads that
+  page. In Chrome it may first ask you to allow JavaScript from Apple Events.
+- [ ] 7.5 Say "Highlight window". **Pass:** an outline around the front window.
+- [ ] 7.6 Take a screenshot (Command-Shift-3 or 4). **Pass:** Dot hides itself from the shot.
 
-   **Pass:** the panel reaches the ready state with no SHA-256 error. Open
-   `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot_chat_log.txt` and confirm it
-   records model verification success. A "Not enough free disk space" message
-   is a real failure — free space and retry from the menu.
+## 8. Comments on its own
 
-## 4. Voice conversation
+- [ ] 8.1 Right-click Dot, **Proactivity**: set High. Work normally for 5 minutes. **Pass:** about
+  one short comment a minute; a question only when it really needs your answer.
+- [ ] 8.2 Set Low. **Pass:** about one comment every 10 minutes.
+- [ ] 8.3 Right-click Dot, **Proactivity**, **Pause suggestions**. **Pass:** no comments until you
+  resume.
+- [ ] 8.4 Leave the same app error on screen for a few minutes (Screen awareness on). **Pass:** Dot
+  offers help with that error.
+- [ ] 8.5 Leave Dot idle for 10 minutes. **Pass:** at most one sentence like "I noted an idea to
+  improve myself."; the clipboard is unchanged.
 
-1. Click the dot once (do not drag), wait for the listening cue, and say:
-   "Hello Dot, tell me in one sentence what you are."
-2. Let the answer finish. Click the dot again while it is speaking.
+## 9. Calendar
 
-   **Pass:** your speech is transcribed locally, Dot answers aloud in the warm
-   British voice, and clicking during the answer interrupts and listens again.
-   If macOS asks for Microphone permission, grant it to Dot.
+Allow Calendar access when macOS asks.
 
-## 5. Offline test (Wi-Fi physically off)
+- [ ] 9.1 Say "Upcoming meetings". **Pass:** today's events are read.
+- [ ] 9.2 Say "Add a meeting called Dot test tomorrow at 3 pm for 30 minutes". **Pass:** a
+  confirmation card; the event appears only after you confirm.
+- [ ] 9.3 Say "Move Dot test to 4 pm". **Pass:** a card, then the event moves.
+- [ ] 9.4 Make an event that starts in 10 minutes. **Pass:** about 5 minutes before, Dot says it
+  starts in 5 minutes.
+- [ ] 9.5 Say "Next meeting brief". **Pass:** a short brief of the next event.
 
-1. Turn Wi-Fi off (Control Centre → Wi-Fi off; also unplug Ethernet).
-2. Quit Dot, relaunch it, and repeat one voice question.
+## 10. Mac controls
 
-   **Pass:** Dot starts, loads the model from disk, transcribes, answers aloud
-   and moves normally with no network. Nothing says it is waiting for a
-   connection. Logs may queue uploads; that is expected and is retried later.
-3. Turn Wi-Fi back on after the test.
+- [ ] 10.1 "Volume up", "Mute", "Unmute". **Pass:** each works.
+- [ ] 10.2 "Dark mode on", then "Light mode". **Pass:** the system appearance changes.
+- [ ] 10.3 "Set a timer for 1 minute to stretch". **Pass:** it speaks when the minute ends.
+  "Show timers" lists running timers.
+- [ ] 10.4 With a Finder window in front: "Snap window left", then "Maximize window". **Pass:** the
+  window moves.
+- [ ] 10.5 Click into a TextEdit document and say "Type hello world". **Pass:** the text appears
+  there; the log says only "Typed 11 characters".
+- [ ] 10.6 "Press enter" in TextEdit. **Pass:** a new line.
+- [ ] 10.7 "Lock screen". **Pass:** the Mac locks.
+- [ ] 10.8 "Move to the left", "Go to the top right", "Center". **Pass:** Dot moves. "Volume up"
+  never moves it.
 
-## 6. Screen context
+## 11. Battery (off by default)
 
-1. Right-click Dot and make sure **Screen awareness** is on.
-2. When macOS asks, allow **System Settings → Privacy & Security → Screen
-   Recording** for Dot, then relaunch Dot if macOS asks.
-3. Put a distinctive window on screen (for example this checkout in an editor),
-   click Dot and ask: "What is on my screen right now?"
+- [ ] 11.1 Say "Battery level". **Pass:** it says the percentage.
+- [ ] 11.2 Say "Battery alerts on" (or right-click Dot, **Battery alerts**); unplug, then plug in the
+  charger. **Pass:** one spoken alert per event.
+- [ ] 11.3 Say "Battery alerts off". **Pass:** no more alerts.
 
-   **Pass:** Dot describes the visible content for that one turn and says
-   plainly if it cannot see or permission is missing. Turn **Screen awareness**
-   off and ask again: it must say screen context is off, not invent a view.
+## 12. Research
 
-## 7. Safety override ("force it")
+- [ ] 12.1 Say "Look up the tallest building in Europe". **Pass:** an answer that names its sources.
+- [ ] 12.2 Ask the same again. **Pass:** faster, from the 6-hour cache.
+- [ ] 12.3 Right-click Dot, **Tools & History**, **Web research…**. **Pass:** the panel opens and
+  searches.
 
-Use a disposable folder only.
+## 13. Errors and offline
 
-1. In Terminal: `mkdir -p ~/Desktop/DotSafetyTest && touch ~/Desktop/DotSafetyTest/keep.txt`
-2. In Dot's menu open **Tools & History → Mac actions & receipts…** and choose
-   `~/Desktop/DotSafetyTest` as the folder. That is the user-selected folder the
-   sandbox allows Dot to act in; Dot cannot touch the rest of your home.
-3. Ask Dot to run: `rm -rf ~/Desktop/DotSafetyTest`
-4. Let the local safety approver refuse it **three separate times** (ask again
-   each time).
-5. After the third refusal, say **"force it"**, then ask for the same command
-   and approve once more.
-6. Optional: move the folder and retry — the armed override must not apply to a
-   different action, must expire after 120 seconds, and is one-shot.
+- [ ] 13.1 Turn Wi-Fi off, quit and reopen Dot, ask a question. **Pass:** it starts and answers with
+  no network.
+- [ ] 13.2 With Wi-Fi off, ask for a web lookup. **Pass:** Dot says the web is not reachable and keeps
+  moving; any red banner above it clears by itself.
+- [ ] 13.3 Turn Wi-Fi on again. **Pass:** the next lookup works.
+- [ ] 13.4 Right-click Dot, **Tools & History**, turn **Prewarm local model at launch** on, then
+  reopen Dot. **Pass:** the first answer comes faster.
+- [ ] 13.5 Right-click Dot, **Tools & History**, **Hardware compatibility check…**. **Pass:** it
+  shows your Mac passes.
 
-   **Pass:** the first three attempts are never executed; the exact refusal and
-   "force it" prompt are visible; only the exact action runs after the override.
-   Anything else — an early execution, a silent run, or a permanent override —
-   is a failure.
+## 14. Logs
 
-## 8. Logs and where to send them
+Log folder:
+`~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/`
 
-- Main log:
-  `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot_chat_log.txt`
-- Whole folder:
-  `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/`
-- Uploads go to the `dot-logs` branch of `Emin-dev/Dot` under
-  `dot/<install-id>/<launch-timestamp-UTC>/` when a log-upload token is in
-  Keychain. Without a token they stay queued locally; that is not a failure.
+- [ ] 14.1 Open `dot_chat_log.txt`. **Pass:** your questions and Dot's answers are there, plus app
+  events.
+- [ ] 14.2 Say "My password is test1234" and type a card number in a test chat. **Pass:** the log
+  shows them masked; no images, no typed text from 10.5, no clipboard.
+- [ ] 14.3 Optional upload: store the token as described in
+  [LOG_READING_GUIDE.md](LOG_READING_GUIDE.md). **Pass:** logs appear on the `dot-logs` branch under
+  `dot/<install-id>/<launch-time>/`. Without a token they wait on the Mac; that is not a failure.
 
-  **Pass:** the log contains the conversation text and app/system events, and
-  no keys, tokens, passwords or images.
+## 15. Remove
 
-## 9. What "done" looks like
-
-All of these are true:
-
-- [ ] the one-line installer printed `PASS: Dot is installed`
-- [ ] `Dot.dmg: OK` from `shasum` when checking manually (step 2)
-- [ ] Dot launched after the first-open warning
-- [ ] 22.4 GB model downloaded and verified once
-- [ ] Voice question answered aloud; interruption works
-- [ ] Wi-Fi off: relaunch, voice question and answer still work
-- [ ] Screen context describes one turn; off state is honest
-- [ ] Safety refusal three times, then one-shot `force it` on the scratch folder
-- [ ] Logs contain text only
-
-## 10. Remove Dot completely
-
-When testing is finished, remove Dot with the same release-URL style:
+- [ ] 15.1 Right-click, **Remove Dot completely…** (or run the line below). **Pass:** it ends with
+  `PASS: your Mac is back to how it was`.
 
 ```bash
 curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/uninstall-dot.sh | bash
 ```
 
-The in-app menu also has **Remove Dot completely…** (Options / right-click menu);
-it opens Terminal for the same removal because a sandboxed app cannot delete its
-own bundle or container.
+- [ ] 15.2 Check. **Pass:** no `~/Applications/Dot.app`, no `~/Library/Containers/app.dot.local`,
+  no `.dot-actions` inside `~/Desktop/DotTest`, no Dot tile in the Dock, and Dot is gone from
+  System Settings, Privacy & Security (Microphone, Screen Recording, Calendars).
+- [ ] 15.3 Open `~/Desktop/DotTest`. **Pass:** your own files are still there. Delete the test folder
+  yourself.
 
-**Pass:** it prints `PASS: your Mac is back to how it was`. It quits Dot and
-removes the app, `~/Library/Containers/app.dot.local/`, group containers,
-caches, saved state, HTTP/WebKit stores, preferences, the 22.4 GB model, the
-legacy `Application Support/Dot` folder, the optional log token in Keychain, the `.dot-actions` folders in folders you chose, a pinned Dock tile, Dot's download-history rows, LaunchServices registration and resets
-Dot's microphone/screen-recording approvals with `tccutil reset All
-app.dot.local`. It removes `~/Applications` only when the installer created it
-and it is empty. If anything remains it prints a precise `FAIL:` line instead.
-
-Remaining owner-only step: Developer ID signing and notarisation. That needs a
-paid Apple Developer account; it is not required for this test and is tracked in
-[QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md).
+What removal covers and what macOS keeps for itself: [UNINSTALL_COVERAGE.md](UNINSTALL_COVERAGE.md).
