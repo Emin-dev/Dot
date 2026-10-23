@@ -3,6 +3,11 @@
 This file is the evidence record for the active goal. Every line below was verified
 by actually running the gate, not by assumption.
 
+## Releases v1.1.3 and v1.1.4 (2026-10-22/23)
+
+- Release **`v1.1.3`** (published 2026-10-22, run `39858375138`, commit `6224aa3`): `Dot.dmg` **793,384,448 bytes**, SHA-256 `831c5a0ffb03db35dd783aab47fb920c23a8fa8cb0328caf8f7901f652c88b20`. It carries R18 to R21 and the public-log privacy fixes. Every release gate passed: install, quarantine, `spctl`/`codesign` and the no-trace lane. Release **`v1.1.4`** (run `39949028372`, commit `265abd6`) adds the audit fixes F1 to F10 and D1 to D6; check that run, and when it is green record its DMG here.
+- Native CI on `265abd6` is green (Swift build, XCTest, SwiftPM, Rust, Python, 113 guardrails).
+
 ## Owner decisions R18 to R21 and code-reading fixes (2026-10-22)
 
 - Owner answers recorded verbatim with code and proof in [OWNER_DECISIONS.md](OWNER_DECISIONS.md):

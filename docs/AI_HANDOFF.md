@@ -154,6 +154,7 @@ refactor** by another worker:
 
 ## Current build and gates
 
+- Release **`v1.1.3`** (published 2026-10-22, run `39858375138`, commit `6224aa3`): `Dot.dmg` **793,384,448 bytes**, SHA-256 `831c5a0ffb03db35dd783aab47fb920c23a8fa8cb0328caf8f7901f652c88b20`. It carries R18 to R21 and the public-log privacy fixes. Every release gate passed: install, quarantine, `spctl`/`codesign` and the no-trace lane. Release **`v1.1.4`** (run `39949028372`, commit `265abd6`) adds the audit fixes F1 to F10 and D1 to D6; check that run, and when it is green record its DMG here.
 - Phase 7b release **`v1.1.1`** (Latest) is owner-testable from one Terminal line:
   `curl -fsSL https://github.com/Emin-dev/Dot/releases/latest/download/install-dot.sh | bash`.
   It keeps the 25 model parts on `model-parts-v1` and records the three acceptance
