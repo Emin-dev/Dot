@@ -32,8 +32,8 @@ scene really changed, stay quiet when it did not, and call the 27B less often.
 
 - V-JEPA 2 and 2.1 (Meta, about 1B parameters) output embeddings, not words. Every use needs its own
   trained probe.
-- It runs on PyTorch. Dot's runtime carries PyTorch only for the Kokoro voice; V-JEPA would add a
-  second large model next to the 27B, with its own loader, disk and several GB of RAM on a 48 GB
+- It runs on PyTorch. Dot ships no PyTorch (the Kokoro voice runs in Rust, and the old Python voice
+  runtime was removed in audit N1); V-JEPA would add a second large model next to the 27B, with its own loader, disk and several GB of RAM on a 48 GB
   minimum Mac.
 - Reports of its license conflict (CC-BY-NC or Apache 2.0); it would have to be checked first.
 

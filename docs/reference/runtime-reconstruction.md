@@ -279,8 +279,9 @@ no-replace publication and fail-closed interfaces. They do not test actual nativ
 execution, actual archive layouts, production historical admission, production native
 acceptance, accepted copy or whole-app behavior.
 
-`audit_runtime_payload.py` and `build_complete.sh` are unchanged and do not yet
-consume this independent admission interface. Existing Whisper original-ZIP,
+`audit_runtime_payload.py` and `build_complete.sh` do not consume this independent admission
+interface. Since audit N1 (2026-10-24) every packaging path removes `Voice/python` and
+`Voice/provenance` from the copied payload with `scripts/slim_runtime_payload.py`. Existing Whisper original-ZIP,
 Search, separate complete model hash/copy, outer-signature and clean-source gates
 remain. Do not restart the model hash process or copy the 19.93 GB model set here.
 Public provenance, notarization, license/source clearance, supported hardware,

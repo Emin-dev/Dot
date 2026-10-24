@@ -394,6 +394,22 @@ checks = {
         and 'logAs: "Approved. \\(DiagnosticChatLogger.loggableToolOutput(firstLine))")' in read('src/ChatView.swift')
         and 'func testToolOutputAndDroppedFilesAreLoggedBySizeOnly()' in read('Tests/DotCoreTests/InteractionCoreTests.swift')
     ),
+    'N1 the retired Python voice runtime never ships and the manifest matches what ships': (
+        'Voice/python' not in read('src/OfflinePayload.swift')
+        and "REMOVED_ROOTS = ('Voice/python', 'Voice/provenance')" in read('scripts/slim_runtime_payload.py')
+        and all(read(path).find('scripts/slim_runtime_payload.py') > read(path).find(anchor) > -1
+                for path, anchor in (('scripts/package_default_release.sh', '/usr/bin/ditto "$DOT_RUNTIME_PAYLOAD" "$APP/Contents/Resources/Offline"'),
+                                     ('scripts/build_complete.sh', '/usr/bin/ditto "$DOT_RUNTIME_PAYLOAD" "$APP/Contents/Resources/Offline"'),
+                                     ('scripts/install_local.sh', 'for item in Offline OfflineModels; do')))
+        and read('scripts/package_default_release.sh').count('scripts/audit_runtime_payload.py') == 2
+        and all('scripts/audit_runtime_payload.py --slim "$APP/Contents/Resources/Offline"' in read(path)
+                for path in ('scripts/package_default_release.sh', 'scripts/build_complete.sh', 'scripts/package_complete.sh'))
+        and 'scripts/audit_runtime_payload.py --slim "$STAGE/Dot.app/Contents/Resources/Offline"' in read('scripts/package_public_release.sh')
+        and -1 < read('scripts/package_public_release.sh').find('slim_runtime_payload.py') < read('scripts/package_public_release.sh').find('sign_sandbox_app.sh')
+        and "raise ValueError('retired Python voice runtime still in the payload')" in read('scripts/audit_runtime_payload.py')
+        and 'import_probe' not in read('scripts/audit_runtime_payload.py')
+        and 'def test_python_voice_leaves_payload_and_manifest_and_the_audit_passes' in read('Tests/Python/test_slim_runtime_payload.py')
+    ),
     'a push to main cannot cancel the release no-trace gate': (
         'group: dot-privacy-${{ github.workflow }}-' in read('.github/workflows/privacy-clean.yml')
         and 'uses: ./.github/workflows/privacy-clean.yml' in read('.github/workflows/release.yml')

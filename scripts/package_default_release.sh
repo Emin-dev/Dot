@@ -34,6 +34,10 @@ DOT_WHISPER_FRAMEWORK="$DOT_WHISPER_FRAMEWORK" bash build.sh
 echo "==> adding the audited runtime (no model payload)"
 rm -rf "$APP/Contents/Resources/Offline"
 /usr/bin/ditto "$DOT_RUNTIME_PAYLOAD" "$APP/Contents/Resources/Offline"
+# Audit N1: the retired Python voice runtime (872 MB) never ships; the copy is
+# slimmed and audited again, so every remaining file is still hashed.
+python3 -B scripts/slim_runtime_payload.py "$APP/Contents/Resources/Offline"
+python3 -B scripts/audit_runtime_payload.py --slim "$APP/Contents/Resources/Offline"
 if [ -d "$APP/Contents/Resources/OfflineModels" ]; then
   fail "model payload leaked into the default app"
 fi

@@ -8,7 +8,8 @@ The [future roadmap](BUILD_CHECKLIST.md) preserves offline core AI/speech/memory
    - **Auditor state (2026-10-17):** `scripts/audit_runtime_payload.py` now requires the Voice model
      files for its `speech_synthesis` component and no longer asks for `Voice/python`, the deleted
      voice import probe or the wheel lock. The installed Rust-only payload audits clean: **34,004
-     files, 1,594,205,216 bytes, exit 0**. `packaging/runtime/reconstruction-policy.json` still carries
+     files, 1,594,205,216 bytes, exit 0**. Since audit N1 (2026-10-24) packaging removes
+     `Voice/python` and `Voice/provenance` (26,883 files, about 872 MB) and audits with `--slim`. `packaging/runtime/reconstruction-policy.json` still carries
      the retired Python voice archive and its 92 wheels as inert, `supported: false` reconstruction
      context; it is not a packaging gate. Do not work around a future audit failure by shipping a dummy
      component or by claiming the gate passed.

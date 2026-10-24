@@ -42,6 +42,7 @@ xcrun swiftc -O -warnings-as-errors -module-name Dot -D DOT_COMPLETE_BUNDLE -tar
 nm -u "$APP/Contents/MacOS/Dot" | grep _whisper_full >/dev/null
 /usr/bin/ditto "$VERIFIED_WHISPER_FRAMEWORK" "$APP/Contents/Frameworks/whisper.framework"
 /usr/bin/ditto "$DOT_RUNTIME_PAYLOAD" "$APP/Contents/Resources/Offline"
+python3 -B scripts/slim_runtime_payload.py "$APP/Contents/Resources/Offline"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :LSMinimumSystemVersion 26.4' "$APP/Contents/Info.plist"
 cp Resources/Voice/BIONIC-LICENSE.txt "$APP/Contents/Resources/Voice/"
@@ -102,6 +103,6 @@ PYCODE
 # App Sandbox entitlements and the hardened runtime are applied to the app after
 # every nested executable and the framework have their own valid seals.
 bash scripts/sign_sandbox_app.sh "$APP" "$SIGN_IDENTITY"
-python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"
+python3 -B scripts/audit_runtime_payload.py --slim "$APP/Contents/Resources/Offline"
 printf 'Bundled app staged for native offline acceptance: %s. No installer released.\n' "$APP"
 printf 'After real relocation/conversation/cancellation tests, run scripts/package_complete.sh with the acceptance record.\n'

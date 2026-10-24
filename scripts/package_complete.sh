@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 : "${DOT_OFFLINE_ACCEPTANCE:?Set to the real native offline acceptance JSON and evidence directory}"
 APP=build-complete/Dot.app
 codesign --verify --deep --strict "$APP"
-python3 -B scripts/audit_runtime_payload.py "$APP/Contents/Resources/Offline"
+python3 -B scripts/audit_runtime_payload.py --slim "$APP/Contents/Resources/Offline"
 python3 -B scripts/offline_acceptance.py "$APP" --receipt "$DOT_OFFLINE_ACCEPTANCE"
 [[ ! -e build-complete/Dot.dmg ]] || { echo 'Preserve the existing installer before packaging.'; exit 1; }
 STAGE=$(mktemp -d "${TMPDIR:-/tmp}/dot-complete.XXXXXX")

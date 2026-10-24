@@ -72,6 +72,8 @@ for item in Offline OfflineModels; do
   cp -c -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item" 2>/dev/null \
     || cp -R "$APP/Contents/Resources/$item" "$STAGE/Dot.app/Contents/Resources/$item"
 done
+# Audit N1: an older install may still carry the retired Python voice runtime.
+/usr/bin/python3 -B scripts/slim_runtime_payload.py "$STAGE/Dot.app/Contents/Resources/Offline"
 # The voice payload (Kokoro model + voices, ~330 MB) lives outside git. In-place
 # upgrades copy it from the app being replaced; a fresh install fetches it from the
 # pinned Hugging Face repo. Both paths verify size, and DOT_SKIP_VOICE_FETCH=1

@@ -22,7 +22,7 @@ PINS = {
 }
 
 
-def audit_runtime(root, enforce_pins=True):
+def audit_runtime(root, enforce_pins=True, require_slim=False):
     root = Path(root).resolve(strict=True)
     manifest_path = root / 'runtime-manifest.json'
     manifest_info = manifest_path.lstat()
@@ -33,6 +33,9 @@ def audit_runtime(root, enforce_pins=True):
         raise ValueError('complete runtime manifest required')
     files = manifest.get('files', [])
     if not 1 <= len(files) <= 100000: raise ValueError('invalid file count')
+    # A packaged payload must not carry the retired Python voice runtime (audit N1).
+    if require_slim and any(entry['path'].split('/')[:2] in (['Voice', 'python'], ['Voice', 'provenance']) for entry in files):
+        raise ValueError('retired Python voice runtime still in the payload')
     entries = {}
     canonical = set()
     total = 0
@@ -77,13 +80,13 @@ def audit_runtime(root, enforce_pins=True):
         for name, (size, sha) in PINS.items():
             if entries.get(name, {}).get('bytes') != size or entries[name].get('sha256') != sha:
                 raise ValueError('wrong pinned neural asset')
-        imports = manifest.get('import_probe', {})
-        if imports.get('status') != 'passed_offline' or imports.get('kokoro') != '0.9.4' or imports.get('misaki') != '0.9.4':
-            raise ValueError('offline voice import probe has not passed')
-        if manifest.get('dependency_lock_complete') is not True: raise ValueError('voice dependency lock incomplete')
+        # The Python voice import probe and dependency lock described Voice/python,
+        # which slim_runtime_payload.py removes; dot-voice reads only Voice/model.
     return {'files': len(entries), 'bytes': total}
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument('payload'); args = parser.parse_args()
-    print(json.dumps(audit_runtime(args.payload)))
+    parser = argparse.ArgumentParser(description=__doc__); parser.add_argument('payload')
+    parser.add_argument('--slim', action='store_true', help='also require that slim_runtime_payload.py ran')
+    args = parser.parse_args()
+    print(json.dumps(audit_runtime(args.payload, require_slim=args.slim)))

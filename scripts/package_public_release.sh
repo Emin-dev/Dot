@@ -55,6 +55,9 @@ echo "==> staging the runtime-only app"
 rm -rf "$STAGE"; mkdir -p "$STAGE"
 cp -c -R "$APP" "$STAGE/Dot.app" 2>/dev/null || cp -R "$APP" "$STAGE/Dot.app"
 rm -rf "$STAGE/Dot.app/Contents/Resources/OfflineModels"
+# Audit N1: the retired Python voice runtime never ships, whatever the installed app carries.
+/usr/bin/python3 -B scripts/slim_runtime_payload.py "$STAGE/Dot.app/Contents/Resources/Offline"
+/usr/bin/python3 -B scripts/audit_runtime_payload.py --slim "$STAGE/Dot.app/Contents/Resources/Offline"
 du -sh "$STAGE/Dot.app"
 
 echo "==> marking the public provenance"

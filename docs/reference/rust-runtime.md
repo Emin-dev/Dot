@@ -98,8 +98,9 @@ so the Rust-only claim is not read as complete:
   reconstruction tool's native gates 2, 5 and 8 still describe Python voice evidence.
 
 `scripts/audit_runtime_payload.py` no longer requires that closure: its `speech_synthesis` component
-is the Voice model files, and the installed Rust-only payload audits clean (34,004 files, exit 0 on
-2026-10-17). The policy file is named in [offline acceptance](offline-acceptance.md) and
+is the Voice model files. Since audit N1 (2026-10-24) the closure itself no longer ships:
+`scripts/slim_runtime_payload.py` removes `Voice/python` (26,876 files, 872 MB) and
+`Voice/provenance` from every packaged payload and rewrites the manifest to match. The policy file is named in [offline acceptance](offline-acceptance.md) and
 [runtime reconstruction](runtime-reconstruction.md); it is not a documentation defect.
 
 ## Not claimed
