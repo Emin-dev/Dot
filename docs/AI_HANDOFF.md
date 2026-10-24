@@ -2,6 +2,7 @@
 
 For any AI or developer continuing Dot. Read this, then [OWNER_DECISIONS.md](OWNER_DECISIONS.md)
 (never re-ask or revert a decision) and the rules in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md).
+Open work and owner questions: [NEXT_TASKS.md](NEXT_TASKS.md).
 Working rules for agents are in [AGENTS.md](../AGENTS.md).
 
 ## State (2026-10-24)
