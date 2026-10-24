@@ -92,6 +92,8 @@ Ask one at a time with 2 to 4 numbered options, then record the answer in OWNER_
   - N5, N7, N10: search, page fetching and the Splash link on Apple frameworks instead of Rust and
     Python helpers.
   - S3: whether proactive comments about the screen are logged in full or masked.
+  - S15: keep the silent screen snapshot after each reply (and reword the Screen Recording text), or
+    take snapshots only when asked.
   - D9: remove the old `dots/` per-install logs from the public repository.
   - S9, N12, S10: an XPC helper for the runtime, Data Protection Keychain, a logs-only token (all
     after Developer ID signing).
