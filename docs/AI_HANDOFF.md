@@ -4,18 +4,23 @@ For any AI or developer continuing Dot. Read this, then [OWNER_DECISIONS.md](OWN
 (never re-ask or revert a decision) and the rules in [DEV_TEAM_PROMPT.md](DEV_TEAM_PROMPT.md).
 Working rules for agents are in [AGENTS.md](../AGENTS.md).
 
-## State (2026-10-23)
+## State (2026-10-24)
 
 - Every documented promise was audited against the code on 2026-10-22/23 and every finding is fixed
-  with a test or guardrail: [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md).
-- Latest published release: **v1.1.5** (2026-10-23, run `39968284682`, commit `95b68d1`):
-  `Dot.dmg` 793,125,376 bytes, SHA-256
-  `c8eeba582d2e01a4ca78b85490dfc98c850ebaecd03b95b85a88dbb9ca0e3c8e`. Every release gate passed.
-  The first v1.1.5 run was cancelled by a push to main; `privacy-clean.yml` now has its own
-  concurrency group when the release calls it.
+  with a test or guardrail: [AUDIT_2026-10-22.md](AUDIT_2026-10-22.md). The delete, speed, security
+  and Apple-native audit is [AUDIT_2026-10-23.md](AUDIT_2026-10-23.md): its "Done" rows shipped in
+  v1.1.6; the open rows are owner decisions, security fixes not yet shipped, speed work and
+  Apple-native swaps.
+- Latest published release: **v1.1.6** (2026-10-24, run `40086010216`, commit `3d759da`):
+  `Dot.dmg` 548,590,592 bytes (v1.1.5 was 793,125,376), SHA-256
+  `8ef8df6d1db561179ff2377e9ecb48eac17b0da0231f8349164e3660b6ab633a`. Every release gate passed
+  (package, quarantine install, `spctl`/`codesign`, one-line installer, no-trace, publish).
+- Speech-to-text: Apple SpeechAnalyzer once macOS has installed its English model; whisper.cpp
+  stays as the fallback until the owner's real-Mac check (TEST_TODAY step 3.9) confirms Apple's
+  recognizer, then R25 step 2 removes it.
 - Owner test: [TEST_TODAY.md](TEST_TODAY.md) is a 73-step checklist of every feature; the release
   page shows the same file.
-- Gates: Native CI green (Swift build, XCTest, SwiftPM, Rust, Python, about 120 static guardrails);
+- Gates: Native CI green (Swift build, XCTest, SwiftPM, Rust, Python, 131 static guardrails);
   every release passes install, quarantine, `spctl`/`codesign` and the no-trace lane.
 - Production blocker: Developer ID signing and notarisation, owner-only
   ([QUESTIONS_FOR_EMIN.md](QUESTIONS_FOR_EMIN.md) section 2).
