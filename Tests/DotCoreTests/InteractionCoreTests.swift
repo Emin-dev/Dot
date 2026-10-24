@@ -2166,6 +2166,31 @@ final class SelfCodebaseReaderTests: XCTestCase {
 }
 
 final class DiagnosticChatLoggerTests: XCTestCase {
+    /// S3: the public log keeps the owner's words and Dot's replies in full, but only the
+    /// first line and size of command output, files, pages and calendar listings.
+    func testToolOutputAndDroppedFilesAreLoggedBySizeOnly() {
+        XCTAssertEqual(DiagnosticChatLogger.loggableToolOutput("ok"), "ok")
+        XCTAssertEqual(DiagnosticChatLogger.loggableToolOutput("You have 2 meetings today:\n1. Board review at 9:00\n2. Dentist at 15:00\n"),
+                       "You have 2 meetings today: [71 characters in all, the rest not logged]")
+        let long = String(repeating: "x", count: 250)
+        XCTAssertEqual(DiagnosticChatLogger.loggableToolOutput(long),
+                       String(repeating: "x", count: 200) + "… [250 characters in all, the rest not logged]")
+        XCTAssertEqual(DiagnosticChatLogger.loggableToolOutput(""), "")
+        XCTAssertEqual(DiagnosticChatLogger.loggableToolOutput("\nsecret on line two"),
+                       "secret on line two [19 characters in all, the rest not logged]")
+        XCTAssertEqual(DiagnosticChatLogger.loggableDroppedFileText(
+            "I dropped the file 'notes.txt'. Here are its contents:\n\nmy PIN is 1234\n\nPlease briefly inspect and summarize this file."),
+            "I dropped the file 'notes.txt'. [14 characters of its text, not logged]")
+        XCTAssertEqual(DiagnosticChatLogger.loggableDroppedFileText(
+            "I dropped the PDF document 'a.pdf'. Here is the text extracted from it:\n\nIBAN DE00\n\nPlease briefly summarize this PDF."),
+            "I dropped the PDF document 'a.pdf'. [9 characters of its text, not logged]")
+        XCTAssertEqual(DiagnosticChatLogger.loggableDroppedFileText(
+            "I dropped the PDF document 'b.pdf'. Here is the text extracted from it:\n\nIBAN 'x'. Here are its contents:\n\nmore"),
+            "I dropped the PDF document 'b.pdf'. [38 characters of its text, not logged]")
+        XCTAssertNil(DiagnosticChatLogger.loggableDroppedFileText("I dropped the file 'x.bin'. Please let me know how you can help me with it."))
+        XCTAssertNil(DiagnosticChatLogger.loggableDroppedFileText("What is in my calendar?"))
+    }
+
     /// The self-reflection reads the persistent log. A test run must never append
     /// fixture turns to it, and the current test process must detect itself.
     func testTestProcessesWriteOnlyToTemporaryDirectory() {

@@ -283,9 +283,11 @@ final class ChatModel: ObservableObject {
                 self.speakDirect(result.succeeded ? "Approved. File deleted." : result.message)
             } else {
                 let output = await Self.runShellCommand(cmd)
-                DiagnosticChatLogger.recordTool(name: "execute_command", target: cmd, outcome: output, succeeded: true)
+                DiagnosticChatLogger.recordTool(name: "execute_command", target: cmd,
+                                                outcome: DiagnosticChatLogger.loggableToolOutput(output), succeeded: true)
                 let firstLine = output.components(separatedBy: .newlines).first ?? "Command finished"
-                self.speakDirect("Approved. \(firstLine)")
+                self.speakDirect("Approved. \(firstLine)",
+                                 logAs: "Approved. \(DiagnosticChatLogger.loggableToolOutput(firstLine))")
             }
         }
     }
@@ -733,7 +735,7 @@ final class ChatModel: ObservableObject {
         // 1. User Correction: "You did not move yourself" / "Fix it"
         if clean.contains("did not move") || clean.contains("didn't move") || (clean.contains("fix it") && (clean.contains("move") || clean.contains("screen"))) {
             DiagnosticChatLogger.recordFailure(
-                task: text,
+                task: Self.loggableUserText(text),
                 reason: "User indicated movement was missed or incomplete",
                 missingCapability: "Corrective movement dispatch on feedback",
                 proposedFix: "Execute immediate corrective relocation"
@@ -2077,7 +2079,7 @@ final class ChatModel: ObservableObject {
         case .type(let content), .typeAndSubmit(let content):
             return "[type command: \(content.count) characters, text not logged]"
         default:
-            return text
+            return DiagnosticChatLogger.loggableDroppedFileText(text) ?? text
         }
     }
 
@@ -2634,7 +2636,8 @@ final class ChatModel: ObservableObject {
                     return
                 }
                 let clipped = text.count > 4_000 ? String(text.prefix(4_000)) + "\n… (truncated)" : text
-                self.respondDirectly("Contents of \(expanded):\n\(clipped)", id: id)
+                self.respondDirectly("Contents of \(expanded):\n\(clipped)", id: id,
+                                     logAs: "Contents of \(expanded): [\(text.count) characters, text not logged]")
             }
             return
         }
@@ -2647,7 +2650,8 @@ final class ChatModel: ObservableObject {
             case .text(let source, let content):
                 let clipped = content.count > 4_000
                     ? String(content.prefix(4_000)) + "\n… (truncated)" : content
-                respondDirectly("\(source):\n\(clipped)", id: id)
+                respondDirectly("\(source):\n\(clipped)", id: id,
+                                logAs: "\(source): [\(content.count) characters, page text not logged]")
             case .permissionDenied:
                 respondDirectly("I could not read the active page because macOS Automation permission is off. Allow Dot under System Settings > Privacy & Security > Automation for that app (Chrome also needs View > Developer > Allow JavaScript from Apple Events), then ask again.", id: id)
             case .noText:
@@ -3092,6 +3096,7 @@ final class ChatModel: ObservableObject {
                 let result = await self.onExecuteAction?(action)
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 let replyText: String
+                var loggedReply: String?
                 switch action {
                 case .launchApplication:
                     replyText = result?.receipt.status == .succeeded ? "Opening application." : "Could not open that application."
@@ -3104,6 +3109,7 @@ final class ChatModel: ObservableObject {
                 case .readText(let path):
                     if let content = result?.text {
                         replyText = "File \(path): \(content)"
+                        loggedReply = "File \(path): [\(content.count) characters, text not logged]"
                     } else {
                         replyText = "Could not read file \(path)."
                     }
@@ -3117,10 +3123,10 @@ final class ChatModel: ObservableObject {
                 default:
                     replyText = "Action completed."
                 }
-                DiagnosticChatLogger.record(role: "dot", text: replyText)
+                DiagnosticChatLogger.record(role: "dot", text: loggedReply ?? replyText)
                 if result?.receipt.status != .succeeded && result?.receipt.status != .handedOff {
                     DiagnosticChatLogger.recordFailure(
-                        task: text,
+                        task: Self.loggableUserText(text),
                         reason: replyText,
                         missingCapability: "Action failed or unconfirmed (\(result?.receipt.detail ?? "unknown"))",
                         proposedFix: "Verify bundle identifier or target path"
@@ -3353,6 +3359,8 @@ final class ChatModel: ObservableObject {
                 // 5-10 key points after a conversation and explicit "remember ..." facts.
                 let snapshot = chatInput
                 var executedToolConfirmation: String?
+                // S3: command output joins the spoken answer; the log keeps its first line and size.
+                var maskedConfirmation: (shown: String, logged: String)?
                 let question = try await self.engine.chat(history: snapshot, onDelta: { [weak self] content in
                     guard let self, self.gate.accepts(id) else { return }
                     if !self.firstAnswer { self.firstAnswer = true; self.timing("first_answer") }
@@ -3437,7 +3445,10 @@ final class ChatModel: ObservableObject {
                         } else {
                             let output = await Self.runShellCommand(command)
                             executedToolConfirmation = "Executed command:\n\(output)"
-                            DiagnosticChatLogger.recordTool(name: "execute_command", target: command, outcome: output, succeeded: true)
+                            maskedConfirmation = ("Executed command:\n\(output)",
+                                                  "Executed command: \(DiagnosticChatLogger.loggableToolOutput(output))")
+                            DiagnosticChatLogger.recordTool(name: "execute_command", target: command,
+                                                            outcome: DiagnosticChatLogger.loggableToolOutput(output), succeeded: true)
                         }
                     case .deleteFile(let path, _):
                         // R7 revised: deletion needs no card, but the local safety
@@ -3471,11 +3482,13 @@ final class ChatModel: ObservableObject {
                         case "today_schedule":
                             let schedule = CalendarMeetingAssistant.shared.formatTodaySchedule()
                             executedToolConfirmation = schedule
-                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action, outcome: schedule, succeeded: true)
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action,
+                                                            outcome: DiagnosticChatLogger.loggableToolOutput(schedule), succeeded: true)
                         case "next_meeting_brief":
                             let brief = CalendarMeetingAssistant.shared.prepareNextMeetingBrief()
                             executedToolConfirmation = brief
-                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action, outcome: brief, succeeded: true)
+                            DiagnosticChatLogger.recordTool(name: "calendar_schedule", target: action,
+                                                            outcome: DiagnosticChatLogger.loggableToolOutput(brief), succeeded: true)
                         case "create_event":
                             let eventTitle = title ?? "New Meeting"
                             let duration = durationMinutes ?? 30
@@ -3611,7 +3624,8 @@ final class ChatModel: ObservableObject {
                 self.history.append(ChatMessage(role: "assistant", content: self.answer))
                 self.textHistory.recordAssistant(turn: id, text: self.answer, event: .generated)
                 let finalAnswer = self.answer
-                DiagnosticChatLogger.record(role: "dot", text: finalAnswer)
+                let loggedAnswer = maskedConfirmation.map { finalAnswer.replacingOccurrences(of: $0.shown, with: $0.logged) } ?? finalAnswer
+                DiagnosticChatLogger.record(role: "dot", text: loggedAnswer)
                 self.scheduleMemorySummary()
                 Task { [weak self] in await self?.screen.captureSilentScreenSnapshot() }
 
@@ -3649,8 +3663,8 @@ final class ChatModel: ObservableObject {
                 let lowerAns = finalAnswer.lowercased()
                 if lowerAns.contains("i can't") || lowerAns.contains("i cannot") || lowerAns.contains("i don't have") || lowerAns.contains("unable to") {
                     DiagnosticChatLogger.recordFailure(
-                        task: text,
-                        reason: finalAnswer,
+                        task: Self.loggableUserText(text),
+                        reason: loggedAnswer,
                         missingCapability: "Model expressed inability to perform task",
                         proposedFix: "Expose direct native implementation or system control"
                     )
@@ -3677,7 +3691,7 @@ final class ChatModel: ObservableObject {
                 guard self.gate.accepts(id), !Task.isCancelled else { return }
                 self.logFailure(error, stage: stage)
                 DiagnosticChatLogger.recordFailure(
-                    task: text,
+                    task: Self.loggableUserText(text),
                     reason: "\(error)",
                     missingCapability: "Pipeline stage \(stage) failure",
                     proposedFix: "Examine stage diagnostic and provide direct fallback"

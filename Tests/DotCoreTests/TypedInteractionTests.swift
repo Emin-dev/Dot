@@ -485,6 +485,8 @@ final class TypedInteractionTests: XCTestCase {
         XCTAssertEqual(ChatModel.loggableUserText("type this: Tr0ub4dor&3"),
                        "[type command: 11 characters, text not logged]")
         XCTAssertEqual(ChatModel.loggableUserText("What do you remember?"), "What do you remember?")
+        XCTAssertEqual(ChatModel.loggableUserText("I dropped the file 'a.md'. Here are its contents:\n\nhunter2"),
+                       "I dropped the file 'a.md'. [7 characters of its text, not logged]")
         XCTAssertEqual(ChatModel.loggableSystemReply("Your clipboard contains: hunter2"),
                        "Your clipboard contains: [7 characters, text not logged]")
         XCTAssertEqual(ChatModel.loggableSystemReply("Battery is at 80% (charging)."), "Battery is at 80% (charging).")

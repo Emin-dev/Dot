@@ -5107,6 +5107,27 @@ public enum DiagnosticChatLogger {
         record(role: "dot (self-improvement)", text: msg)
     }
 
+    /// S3: command output, files, pages and calendar listings are not conversation, so
+    /// the public log keeps their first line (at most 200 characters) and their size.
+    public static func loggableToolOutput(_ output: String) -> String {
+        let first = output.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
+        let shown = first.count > 200 ? String(first.prefix(200)) + "…" : first
+        guard shown != output else { return output }
+        return "\(shown) [\(output.count) characters in all, the rest not logged]"
+    }
+
+    /// The text of a dropped file is not the owner's words: only its name and size are logged.
+    public static func loggableDroppedFileText(_ text: String) -> String? {
+        guard text.hasPrefix("I dropped the ") else { return nil }
+        // The earliest marker ends the header, so file text that repeats a marker stays out.
+        let markers = ["'. Here are its contents:\n\n", "'. Here is the text extracted from it:\n\n"]
+        guard let range = markers.compactMap({ text.range(of: $0) }).min(by: { $0.lowerBound < $1.lowerBound }) else { return nil }
+        var body = text[range.upperBound...]
+        for request in ["\n\nPlease briefly inspect and summarize this file.", "\n\nPlease briefly summarize this PDF."]
+        where body.hasSuffix(request) { body = body.dropLast(request.count) }
+        return "\(text[..<range.lowerBound])'. [\(body.count) characters of its text, not logged]"
+    }
+
     public static func recordTool(name: String, target: String, outcome: String, succeeded: Bool) {
         let status = succeeded ? "SUCCESS" : "FAILED"
         let msg = "TOOL: \(name) | TARGET: \"\(target)\" | OUTCOME: \(outcome) | STATUS: \(status)"

@@ -376,6 +376,24 @@ checks = {
         'search capability: {error}"))?;\n' in read('crates/dot-research/src/main.rs')
         and 'idx * 37 + 13' not in read('crates/dot-research/src/main.rs')
     ),
+    'S3 the public log keeps file, page, dropped-file, command and calendar text by size only': (
+        'outcome: output' not in read('src/ChatView.swift')
+        and 'outcome: schedule' not in read('src/ChatView.swift') and 'outcome: brief' not in read('src/ChatView.swift')
+        and read('src/ChatView.swift').count('outcome: DiagnosticChatLogger.loggableToolOutput(') == 4
+        and 'logAs: "Contents of \\(expanded): [\\(text.count) characters, text not logged]")' in read('src/ChatView.swift')
+        and 'logAs: "\\(source): [\\(content.count) characters, page text not logged]")' in read('src/ChatView.swift')
+        and 'return DiagnosticChatLogger.loggableDroppedFileText(text) ?? text' in read('src/ChatView.swift')
+        and 'task: text,' not in read('src/ChatView.swift')
+        and read('src/ChatView.swift').count('task: Self.loggableUserText(text),') == 4
+        and 'DiagnosticChatLogger.record(role: "dot", text: loggedReply ?? replyText)' in read('src/ChatView.swift')
+        and 'DiagnosticChatLogger.record(role: "dot", text: loggedAnswer)' in read('src/ChatView.swift')
+        and 'maskedConfirmation.map { finalAnswer.replacingOccurrences(of: $0.shown, with: $0.logged) } ?? finalAnswer' in read('src/ChatView.swift')
+        and 'DiagnosticChatLogger.record(role: "dot", text: finalAnswer)' not in read('src/ChatView.swift')
+        and 'reason: finalAnswer,' not in read('src/ChatView.swift')
+        and '"Executed command: \\(DiagnosticChatLogger.loggableToolOutput(output))")' in read('src/ChatView.swift')
+        and 'logAs: "Approved. \\(DiagnosticChatLogger.loggableToolOutput(firstLine))")' in read('src/ChatView.swift')
+        and 'func testToolOutputAndDroppedFilesAreLoggedBySizeOnly()' in read('Tests/DotCoreTests/InteractionCoreTests.swift')
+    ),
     'a push to main cannot cancel the release no-trace gate': (
         'group: dot-privacy-${{ github.workflow }}-' in read('.github/workflows/privacy-clean.yml')
         and 'uses: ./.github/workflows/privacy-clean.yml' in read('.github/workflows/release.yml')
