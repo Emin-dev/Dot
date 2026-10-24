@@ -97,6 +97,8 @@ class TokenFileTests(unittest.TestCase):
 
     def token_file(self, mode, text='  ghp_exampleexampleexample \n', name='github.token'):
         path = self.dir / name
+        # A previous case may have left it read-only (0o400): only root could rewrite that.
+        path.unlink(missing_ok=True)
         path.write_text(text)
         os.chmod(path, mode)
         return path
