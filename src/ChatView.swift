@@ -158,7 +158,6 @@ final class ChatModel: ObservableObject {
     private var taskProgressTicker: Task<Void, Never>?
     private var selfReflectionTicker: Task<Void, Never>?
     private var shuttingDown = false
-    private let fallbackSynthesizer = AVSpeechSynthesizer()
     var onExecuteAction: ((NativeAction) async -> NativeActionResult?)?
     var onRequestResearch: ((String) -> Void)?
     /// Opens the readable local history, so a spoken or typed request can put

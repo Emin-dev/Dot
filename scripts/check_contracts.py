@@ -361,6 +361,20 @@ checks = {
         for name in ('wakeMissedNotice', 'shutdownNotice(dropped', 'extractImportantFacts', 'persistFacts',
                      'ExtractedMemoryFact', 'InteractiveWalkthroughManager', 'ModelPartProgress',
                      'consumeLastDiagnostic')
+    ) and not any(
+        name in path.read_text(encoding='utf-8')
+        for path in sorted(root.glob('src/*.swift')) + sorted(root.glob('Tests/**/*.swift'))
+        + sorted(root.glob('tests/**/*.swift'))
+        for name in ('TavilyBasicSearchProvider', 'PerplexityRawSearchProvider', 'RawWebSearchClient',
+                     'RawSearchAPI', 'RawSearchNetworkPolicy', 'WebSearchBudgetAuthorizing', 'WebSearchCharge',
+                     'WebSearchResultRetention', 'WebSearchProviderError', 'TavilyResponse', 'PerplexityResponse',
+                     'RawSearchFixture', 'SearchFixtureBudget', 'SearchChallengeSender',
+                     'api.tavily.com', 'api.perplexity.ai', 'fallbackSynthesizer', 'updateMarkdownFile')
+    ),
+    'S17 the search capability comes from the OS random source or the runtime stops': (
+        'getrandom::getrandom(&mut cap_bytes)\n        .map_err(|error| format!("no secure random source for the '
+        'search capability: {error}"))?;\n' in read('crates/dot-research/src/main.rs')
+        and 'idx * 37 + 13' not in read('crates/dot-research/src/main.rs')
     ),
     'a push to main cannot cancel the release no-trace gate': (
         'group: dot-privacy-${{ github.workflow }}-' in read('.github/workflows/privacy-clean.yml')

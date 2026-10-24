@@ -3823,22 +3823,6 @@ public final class PersistentMemoryBrain: @unchecked Sendable {
         return Array(lines.suffix(limit))
     }
 
-    private func updateMarkdownFile(url: URL, header: String, newBullets: [String], maxLines: Int) {
-        var existing = readBullets(from: url, limit: maxLines * 2)
-        for bullet in newBullets {
-            let norm = bullet.lowercased()
-            if !existing.contains(where: { $0.lowercased() == norm }) {
-                existing.append(bullet)
-            }
-        }
-        if existing.count > maxLines {
-            existing = Array(existing.suffix(maxLines))
-        }
-        let body = header + "\n" + existing.joined(separator: "\n") + "\n"
-        try? body.write(to: url, atomically: true, encoding: .utf8)
-        _ = try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-    }
-
     public func readProfile() -> String {
         lock.lock()
         defer { lock.unlock() }

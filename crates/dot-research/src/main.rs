@@ -106,13 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         generation = "00000000-0000-0000-0000-000000000001".to_string();
     }
 
-    // Generate random 64-character lowercase hex capability
+    // Generate random 64-character lowercase hex capability. Without the OS random
+    // source there is no capability worth issuing, so the runtime stops instead.
     let mut cap_bytes = [0u8; 32];
-    getrandom::getrandom(&mut cap_bytes).unwrap_or_else(|_| {
-        for (idx, b) in cap_bytes.iter_mut().enumerate() {
-            *b = ((idx * 37 + 13) % 256) as u8;
-        }
-    });
+    getrandom::getrandom(&mut cap_bytes)
+        .map_err(|error| format!("no secure random source for the search capability: {error}"))?;
     let capability: String = cap_bytes.iter().map(|b| format!("{:02x}", b)).collect();
 
     // Bind local TCP listener

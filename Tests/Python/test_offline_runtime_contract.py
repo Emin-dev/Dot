@@ -84,7 +84,7 @@ class OfflineRuntimeContractTests(unittest.TestCase):
         sockets = {path.name for path in SRC.glob('*.swift') if re.search(r'\bsocket\(', code(path.name))}
         self.assertEqual(sockets, {
             'ResearchHTTPTransport.swift',  # bounded user-requested source reading
-            'WebSearchProviders.swift',     # optional keyed research providers
+            'WebSearchProviders.swift',     # loopback link to the bundled dot-search runtime
         })
         sessions = {path.name for path in SRC.glob('*.swift') if 'URLSession' in code(path.name)}
         self.assertEqual(sessions, {
@@ -92,12 +92,13 @@ class OfflineRuntimeContractTests(unittest.TestCase):
             'Engine.swift',            # loopback Splash inference, TLS-pinned
             'OfflinePreparation.swift',  # first-launch only, hash-verified
             'SourceReference.swift',   # user-requested own-source reading
-            'WebSearchProviders.swift',  # optional keyed research providers
+            'WebSearchProviders.swift',  # ephemeral configuration only; no request is sent
         })
         self.assertIn('https://api.github.com', read('DotLogSync.swift'))
         self.assertIn('https://huggingface.co/mlx-community/Qwen3.8-27B-4bit', read('OfflinePreparation.swift'))
         self.assertIn('https://raw.githubusercontent.com/Emin-dev/Dot/', read('SourceReference.swift'))
-        self.assertIn('https://api.tavily.com/search', read('WebSearchProviders.swift'))
+        self.assertNotIn('api.tavily.com', read('WebSearchProviders.swift'))
+        self.assertNotIn('api.perplexity.ai', read('WebSearchProviders.swift'))
 
 
 if __name__ == '__main__':
