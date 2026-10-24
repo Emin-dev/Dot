@@ -50,6 +50,10 @@ Dot's own app, and prints Gatekeeper's exact text if macOS still refuses.
 - [ ] 3.6 Right-click, **Type to Dot…**, type a question. **Pass:** it answers in text and voice.
 - [ ] 3.7 Play a video with sound for a few minutes. **Pass:** Dot makes no comments over it.
 - [ ] 3.8 Right-click Dot, **Voice settings**: change a setting. **Pass:** the next turn uses it.
+- [ ] 3.9 Turn Wi-Fi off and repeat 3.1, then open the log (section 14). **Pass:** it hears and
+  answers offline, and the log line before your words reads
+  `Speech-to-text: Apple SpeechAnalyzer (on device).` If it names whisper.cpp instead, turn Wi-Fi
+  on, wait a few minutes while macOS installs Apple's English speech model, and try again.
 
 ## 4. Coming back (wake greeting)
 

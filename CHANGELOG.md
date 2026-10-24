@@ -4,8 +4,20 @@ Short and newest first. Details are in each commit and in
 [docs/AUDIT_2026-10-22.md](docs/AUDIT_2026-10-22.md). Older entries:
 [docs/archive/CHANGELOG_EARLIER.md](docs/archive/CHANGELOG_EARLIER.md).
 
-## v1.1.6 (2026-10-23)
+## v1.1.6 (2026-10-24)
 
+- The unused Python voice runtime (872 MB) no longer ships, and the launch check
+  hashes three model files at once ([docs/AUDIT_2026-10-23.md](docs/AUDIT_2026-10-23.md)).
+- Speech-to-text runs on Apple's on-device SpeechAnalyzer once macOS has installed its English
+  model (asked at first launch); until then the bundled whisper.cpp recognizer answers, and the log
+  names the one used (R25). Screen watching measures change with Apple Vision feature prints, so
+  a ticking clock stays below the change threshold (R23).
+- Every command that is not a plain read goes to the safety approver; network,
+  credential and launcher tools keep the card; the card shows the whole command; voice approval
+  needs a whole phrase; commands stop after 30 s or 1 MB; the chosen folder itself is never removed.
+- The public log keeps file and page text by size only and command output by its first line;
+  conversation lines keep their existing masking of secrets and personal numbers.
+- Unused code removed (paid search clients, an unused synthesizer).
 - The chosen folder is remembered across launches (R22).
 - Removal also deletes `.dot-actions` folders, a pinned Dock tile, Dot's download-history rows,
   crash records and the Keychain log token ([docs/UNINSTALL_COVERAGE.md](docs/UNINSTALL_COVERAGE.md)).

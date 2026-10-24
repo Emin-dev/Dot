@@ -291,11 +291,14 @@ final class STTManager: ObservableObject {
                     if !useApple { Task.detached(priority: .utility) { _ = await AppleSpeechRecognizer.prepareAssets() } }
                 }
                 let text: String
+                // One app event per voice turn, so a log shows which recognizer heard it (R25).
                 if useApple, #available(macOS 26.0, *) {
+                    DiagnosticChatLogger.record(role: "system", text: "Speech-to-text: Apple SpeechAnalyzer (on device).")
                     text = try await AppleSpeechRecognizer.transcribe(samples, sampleRate: pcm.rate, cancellation: token)
                 } else if !WhisperRecognizer.available {
                     throw RecognitionFailure.modelNotReady
                 } else {
+                    DiagnosticChatLogger.record(role: "system", text: "Speech-to-text: bundled whisper.cpp (Apple's SpeechAnalyzer is not ready yet).")
                     text = try await self.recognizer.transcribe(samples, sampleRate: pcm.rate, model: modelURL, cancellation: token)
                 }
                 guard !Task.isCancelled, !token.isCancelled, self.capture == id else { return }

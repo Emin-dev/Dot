@@ -13,7 +13,7 @@ Working rules for agents are in [AGENTS.md](../AGENTS.md).
   `c8eeba582d2e01a4ca78b85490dfc98c850ebaecd03b95b85a88dbb9ca0e3c8e`. Every release gate passed.
   The first v1.1.5 run was cancelled by a push to main; `privacy-clean.yml` now has its own
   concurrency group when the release calls it.
-- Owner test: [TEST_TODAY.md](TEST_TODAY.md) is a 72-step checklist of every feature; the release
+- Owner test: [TEST_TODAY.md](TEST_TODAY.md) is a 73-step checklist of every feature; the release
   page shows the same file.
 - Gates: Native CI green (Swift build, XCTest, SwiftPM, Rust, Python, about 120 static guardrails);
   every release passes install, quarantine, `spctl`/`codesign` and the no-trace lane.

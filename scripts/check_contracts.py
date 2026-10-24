@@ -47,6 +47,8 @@ checks = {
         and 'AppleSpeechRecognizer.transcribe(samples' in speech
         and 'AppleSpeechRecognizer.prepareAssets()' in chat
         and 'testCapturedSamplesConvertToTheRecognizerFormat' in read('Tests/DotCoreTests/VoiceTimingTests.swift')
+        and 'text: "Speech-to-text: Apple SpeechAnalyzer (on device).")' in read('src/Speech.swift')
+        and 'text: "Speech-to-text: bundled whisper.cpp (Apple\'s SpeechAnalyzer is not ready yet).")' in read('src/Speech.swift')
     ),
     'capture task rejects stale generation': 'guard let self, !Task.isCancelled, self.gate.accepts(id)' in chat,
     'capture checks cancellation before permissions': re.search(r'func start\(id: UUID, settings: VoiceTimingSettings, invitation: Bool\) async \{\s*guard !Task.isCancelled', speech) is not None,
