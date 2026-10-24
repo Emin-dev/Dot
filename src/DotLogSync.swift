@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Security
 
 /// Publishes this Dot's text logs to the dedicated `dot-logs` branch of
@@ -8,7 +9,9 @@ import Security
 /// - The conversation log is text only; secrets are masked by `LogRedaction`.
 /// - The credential is read from Keychain service `dot-github-token` (stored by
 ///   the owner with `scripts/store_github_token.sh`) and falls back to the
-///   owner-created `Application Support/Dot/github.token` file.
+///   owner-created `Application Support/Dot/github.token` file, which is read
+///   only when it is a regular file this user owns with mode 0600 or stricter.
+/// - Requests that carry the credential never follow a redirect.
 /// - Uploads survive restarts and offline periods through a bounded queue with
 ///   exponential backoff. Nothing is written to `main`; CI and code stay safe.
 final class DotLogSync: @unchecked Sendable {
@@ -33,6 +36,16 @@ final class DotLogSync: @unchecked Sendable {
     private var cachedToken: String?
     private var keychainDeclined = false
     private var lastKeychainStatus: OSStatus?
+    private var lastTokenFileRefusal: String?
+    /// Every request that carries the token goes through this session. It is
+    /// ephemeral and uncached, and its delegate refuses every redirect, so the
+    /// Authorization header is never resent to wherever a 3xx points.
+    private let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration, delegate: LogSyncRedirectRefusal(), delegateQueue: nil)
+    }()
     private lazy var installID = loadOrCreateInstallID()
     private lazy var launchFolder = LogSyncPolicy.folder(installID: installID, launch: launchDate)
     private lazy var launchStamp = LogSyncPolicy.launchStamp(for: launchDate)
@@ -360,12 +373,16 @@ final class DotLogSync: @unchecked Sendable {
         let semaphore = DispatchSemaphore(value: 0)
         var status = 0
         var body: Data?
-        URLSession.shared.dataTask(with: request) { data, response, _ in
+        session.dataTask(with: request) { data, response, _ in
             status = (response as? HTTPURLResponse)?.statusCode ?? 0
             body = data
             semaphore.signal()
         }.resume()
         semaphore.wait()
+        if (300...399).contains(status) {
+            notice("redirect-refused",
+                   "[SYNC] GitHub answered \(status) with a redirect; it is not followed, so the credential stays with api.github.com and uploads stay queued")
+        }
         return (status, body)
     }
 
@@ -388,11 +405,49 @@ final class DotLogSync: @unchecked Sendable {
                 syncLog("[SYNC] Keychain read failed with status \(keychain.status); falling back to the config file")
             }
         }
-        guard let url = supportDirectory?.appendingPathComponent("github.token"),
-              let value = try? String(contentsOf: url, encoding: .utf8)
+        return fileToken()
+    }
+
+    /// Why the fallback token file must be ignored, or nil when it is private:
+    /// a regular file owned by this user with no group or other permission bits.
+    static func tokenFileRefusal(mode: UInt32, owner: UInt32, currentUser: UInt32) -> String? {
+        if (mode & 0o170000) != 0o100000 { return "it is not a regular file" }
+        if owner != currentUser { return "it is not owned by this user" }
+        if (mode & 0o077) != 0 { return "group or others can access it (mode \(String(mode & 0o777, radix: 8)))" }
+        return nil
+    }
+
+    /// The owner-created fallback file. `O_NOFOLLOW` refuses a symbolic link and
+    /// the checks run on the opened descriptor, so the file cannot be swapped
+    /// between the check and the read. A refused file is ignored with one local
+    /// line that never contains the file's contents.
+    private func fileToken() -> String? {
+        guard let url = supportDirectory?.appendingPathComponent("github.token") else { return nil }
+        let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)
+        guard fd >= 0 else {
+            if errno == ELOOP { refuseTokenFile("it is a symbolic link") }
+            return nil
+        }
+        defer { close(fd) }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else { return nil }
+        if let reason = Self.tokenFileRefusal(mode: UInt32(info.st_mode), owner: info.st_uid, currentUser: getuid()) {
+            refuseTokenFile(reason)
+            return nil
+        }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        guard let data = try? handle.read(upToCount: 4096),
+              let value = String(data: data, encoding: .utf8)?
                   .trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else { return nil }
         return value
+    }
+
+    private func refuseTokenFile(_ reason: String) {
+        guard reason != lastTokenFileRefusal else { return }
+        lastTokenFileRefusal = reason
+        syncLog("[SYNC] ignored the fallback file Application Support/Dot/github.token because \(reason); "
+                + "it must be a regular file you own with mode 0600 (Keychain item dot-github-token comes first)")
     }
 
     private func keychainToken() -> (value: String?, status: OSStatus) {
@@ -483,5 +538,16 @@ final class DotLogSync: @unchecked Sendable {
                 try? fileManager.removeItem(at: file)
             }
         }
+    }
+}
+
+/// Refuses every redirect for requests that carry the log token: URLSession
+/// would otherwise resend the Authorization header to the redirect target. The
+/// 3xx response becomes the result, so the upload stays queued and retries.
+final class LogSyncRedirectRefusal: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

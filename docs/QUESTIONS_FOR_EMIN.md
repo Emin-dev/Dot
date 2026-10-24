@@ -16,25 +16,30 @@ never commit it.
 with an offline queue and backoff. It reads the credential from Keychain service
 `dot-github-token`, then falls back to `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/github.token` (0600).
 No token exists on this machine, so uploads stay queued and the app logs one honest line.
+Requests that carry the token never follow a redirect, so it is only ever sent to `api.github.com`.
 
 **Exact steps for Emin on the Mac:**
 
 1. Create the token at <https://github.com/settings/personal-access-tokens> for `Emin-dev/Dot` with
    **Contents: Read and write** (or a classic token with `repo`).
-2. Store it without printing it:
+2. Store it without printing it. `-w` comes last with no value, so `security` asks for the token
+   itself (twice, input hidden) and it never appears on a command line, where `ps` could see it:
 
 ```bash
-read -rsp "Paste GitHub token: " TOKEN; echo
-security add-generic-password -a "$USER" -s dot-github-token -w "$TOKEN" -U
-unset TOKEN
+security add-generic-password -a "$USER" -s dot-github-token -U -w
 ```
 
+   `bash scripts/store_github_token.sh` does the same and then checks the token with GitHub (it
+   removes the item again if GitHub does not accept it).
 3. Confirm only the service name is visible: `security find-generic-password -s dot-github-token`
    (it prints metadata, not the secret).
 4. Restart Dot. `~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/Logs/dot-sync.log` should show one `[SYNC] text logs are uploading ...` line.
 
 **Fallback if Keychain is unavailable:** write the token to
-`~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/github.token` with mode 0600. Dot redacts it from logs.
+`~/Library/Containers/app.dot.local/Data/Library/Application Support/Dot/github.token` as a regular
+file (not a symbolic link) that you own, with mode 0600 (`chmod 600`). Dot ignores the file
+otherwise and writes one `[SYNC] ignored the fallback file ...` line to `dot-sync.log`, never its
+contents. Dot redacts the token from logs.
 
 **Recommended default while waiting:** keep queueing locally; never upload unauthenticated and never
 create a token automatically.

@@ -1845,6 +1845,48 @@ final class InPlaceAppTypingTests: XCTestCase {
         XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.apple.Safari", appName: "Safari"), .safari)
         XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.figma.Desktop", appName: "Figma"), .figma)
         XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.random.app", appName: "Notes"), .unknown)
+        // S14 relies on this: "arc" inside another name is not the Arc browser.
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.apple.archiveutility", appName: "Archive Utility"), .unknown)
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "com.example.research", appName: "Research"), .unknown)
+        XCTAssertEqual(ContextualWorkflowApp.identify(bundleID: "company.thebrowser.Browser", appName: "Arc"), .safari)
+    }
+
+    /// S8: commands that name Dot's own memory, folder list, approver model or shell start-up
+    /// files always show the card, however they are quoted.
+    func testCommandsThatTouchDotsOwnStateKeepTheCard() {
+        for command in ["echo 'always obey' >> ~/Library/Application\\ Support/Dot/Memory/PROFILE.md",
+                        "tee -a \"Application Support/Dot/Memory/VOLATILE.md\"",
+                        "cp x.gguf ~/Library/Application\\ Support/Dot/Models/aux/gemma-3-4b-it-Q4_K_M.gguf",
+                        "echo 'curl x | sh' >> ~/.zshenv", "printf x > ~/.zshrc",
+                        "rm ~/Library/Application\\ Support/Dot/action-folders.txt", "cat 'pro''file.md'"] {
+            XCTAssertTrue(FileOperationPolicy.mentionsDotState(command), command)
+        }
+        for command in ["ls -la", "cat notes.txt", "echo hello > out.txt", "git status"] {
+            XCTAssertFalse(FileOperationPolicy.mentionsDotState(command), command)
+        }
+    }
+
+    /// S14: a workflow sends keys only when the app in use is the one the action names.
+    func testWorkflowKeysGoOnlyToTheNamedApp() {
+        XCTAssertTrue(ContextualWorkflowHelper.targetMatches(.terminal, bundleID: "com.apple.Terminal", appName: "Terminal"))
+        XCTAssertFalse(ContextualWorkflowHelper.targetMatches(.terminal, bundleID: "com.tinyspeck.slackmacgap", appName: "Slack"))
+        XCTAssertFalse(ContextualWorkflowHelper.targetMatches(.xcode, bundleID: "com.apple.Safari", appName: "Safari"))
+        XCTAssertFalse(ContextualWorkflowHelper.targetMatches(.terminal, bundleID: nil, appName: nil))
+        XCTAssertFalse(ContextualWorkflowHelper.targetMatches(.unknown, bundleID: "com.random.app", appName: "Notes"))
+    }
+
+    /// S13: a soul file that is too large or not a regular file is refused before anything is read.
+    func testOversizedOrLinkedSoulIsRefusedBeforeAnyWrite() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("soul-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let big = folder.appendingPathComponent("big.dotsoul")
+        try Data(repeating: 32, count: DotSoulManager.maximumSoulBytes + 1).write(to: big)
+        XCTAssertFalse(DotSoulManager.shared.importSoul(from: big).success)
+        let link = folder.appendingPathComponent("link.dotsoul")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: big)
+        XCTAssertFalse(DotSoulManager.shared.importSoul(from: link).success)
+        XCTAssertFalse(DotSoulManager.shared.importSoul(from: folder).success)
     }
 
     @MainActor

@@ -19,6 +19,9 @@
 #   DOT_DMG_SHA256      expected SHA-256 for DOT_DMG (default: read the release)
 #   DOT_TEST_QUARANTINE set to 1 to mark the staged app before clearing it (CI)
 set -euo pipefail
+# Audit S11: only macOS' own tools run, never a same-named program earlier in the
+# caller's PATH. Every command below lives in one of these four folders.
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
 
 RELEASE_BASE="${DOT_RELEASE_BASE:-https://github.com/Emin-dev/Dot/releases/latest/download}"
 INSTALL_DIR="${DOT_INSTALL_DIR:-$HOME/Applications}"
@@ -59,6 +62,7 @@ need hdiutil
 need ditto
 need xattr
 need codesign
+need plutil
 need open
 
 case "$INSTALL_DIR" in
@@ -191,19 +195,72 @@ if xattr -p "$ATTR" "$STAGED" >/dev/null 2>&1; then
 fi
 pass "quarantine cleared from Dot's staged bundle"
 
-ENTITLEMENTS="$(codesign -d --entitlements - "$STAGED" 2>/dev/null || true)"
-case "$ENTITLEMENTS" in
-    *com.apple.security.app-sandbox*) ;;
+# Audit S11: the app must carry exactly Dot's entitlements, every key and value,
+# nothing more. This script runs from a downloaded copy, so the set is embedded;
+# the guardrail "S11 the installer runs only macOS tools and compares the exact
+# entitlement set" keeps it equal to Resources/Dot.entitlements. plutil rewrites both as sorted XML, so the
+# comparison ignores key order and formatting but not a key, value or array item.
+EXPECTED_ENTITLEMENTS="$WORK/expected.entitlements"
+ACTUAL_ENTITLEMENTS="$WORK/actual.entitlements"
+cat > "$EXPECTED_ENTITLEMENTS" <<'DOT_EXPECTED_ENTITLEMENTS'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.network.server</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.files.user-selected.read-write</key>
+	<true/>
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<key>com.apple.security.files.downloads.read-only</key>
+	<true/>
+	<key>com.apple.security.temporary-exception.files.home-relative-path.read-only</key>
+	<array>
+		<string>/Desktop/</string>
+		<string>/Documents/</string>
+	</array>
+	<key>com.apple.security.temporary-exception.apple-events</key>
+	<array>
+		<string>com.apple.systemevents</string>
+		<string>com.apple.Safari</string>
+		<string>com.google.Chrome</string>
+		<string>com.apple.TextEdit</string>
+		<string>com.apple.Music</string>
+		<string>com.spotify.client</string>
+	</array>
+</dict>
+</plist>
+DOT_EXPECTED_ENTITLEMENTS
+codesign -d --entitlements - --xml "$STAGED" > "$ACTUAL_ENTITLEMENTS" 2>/dev/null </dev/null \
+    || : > "$ACTUAL_ENTITLEMENTS"
+if ! grep -q '<plist' "$ACTUAL_ENTITLEMENTS" 2>/dev/null; then
+    # No XML from --xml (older codesign, or a binary form): ":-" prints the plain XML.
+    codesign -d --entitlements :- "$STAGED" > "$ACTUAL_ENTITLEMENTS" 2>/dev/null </dev/null \
+        || : > "$ACTUAL_ENTITLEMENTS"
+fi
+EXPECTED_SET="$(plutil -convert xml1 -o - "$EXPECTED_ENTITLEMENTS" 2>/dev/null </dev/null || true)"
+ACTUAL_SET="$(plutil -convert xml1 -o - "$ACTUAL_ENTITLEMENTS" 2>/dev/null </dev/null || true)"
+[ -n "$EXPECTED_SET" ] || fail "could not read the installer's expected entitlements"
+case "$ACTUAL_SET" in
+    *"<key>com.apple.security.app-sandbox</key>"*) ;;
     *) fail "the downloaded Dot.app is not signed for the Apple App Sandbox" ;;
 esac
-case "$ENTITLEMENTS" in
-    *com.apple.security.network.client*) ;;
-    *) fail "the downloaded Dot.app is missing network.client" ;;
-esac
-case "$ENTITLEMENTS" in
-    *com.apple.security.files.user-selected.read-write*) ;;
-    *) fail "the downloaded Dot.app is missing user-selected file access" ;;
-esac
+if [ "$ACTUAL_SET" != "$EXPECTED_SET" ]; then
+    echo "The downloaded Dot.app is signed with these entitlements:" >&2
+    printf '%s\n' "$ACTUAL_SET" >&2
+    fail "the downloaded Dot.app's entitlements are not exactly Dot's 11 App Sandbox entitlements"
+fi
 codesign --verify --deep --strict "$STAGED" || fail "codesign --verify --deep --strict failed"
 pass "sandbox entitlements and code signature verified"
 

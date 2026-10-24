@@ -325,7 +325,8 @@ final class ChatModel: ObservableObject {
         do {
             // Off the main thread, so a slow command never freezes Dot.
             let result = try await Task.detached(priority: .userInitiated) {
-                try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-c", command],
+                // S8: -f skips every zsh start-up file, so nothing written into the container runs.
+                try SubprocessRunner.run(executable: "/bin/zsh", arguments: ["-f", "-c", command],
                                          mergeStandardError: true, currentDirectory: directory)
             }.value
             let output = String(decoding: result.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2509,6 +2510,14 @@ final class ChatModel: ObservableObject {
             "txt", "md", "swift", "py", "js", "ts", "json", "csv", "html", "css", "sh", "yml", "yaml", "xml", "rs", "c", "cpp", "h", "m"
         ]
         if ext == "dotsoul" {
+            // S13: a dropped soul replaces the profile and standing rules used on every turn.
+            let alert = NSAlert()
+            alert.messageText = "Replace Dot's memory with \(filename)?"
+            alert.informativeText = "This replaces Dot's profile, standing rules and session memory with the ones in this file."
+            alert.addButton(withTitle: "Cancel")
+            alert.addButton(withTitle: "Replace")
+            // Cancel leaves memory and the current turn as they were.
+            guard alert.runModal() == .alertSecondButtonReturn else { return }
             let (_, msg) = DotSoulManager.shared.importSoul(from: url)
             respondDirectly(msg, id: cancelTurn())
             return
@@ -3423,8 +3432,9 @@ final class ChatModel: ObservableObject {
                         // R7: file utilities are autonomous; every other destructive,
                         // network, credential or launcher command keeps the card. Only
                         // read-only commands skip the safety approver; all others ask it.
-                        let needsCard = ActionApprovalRequest.isPotentiallyDestructive(command)
-                            && !FileOperationPolicy.isAutomaticFileOperation(command)
+                        let needsCard = FileOperationPolicy.mentionsDotState(command)
+                            || (ActionApprovalRequest.isPotentiallyDestructive(command)
+                                && !FileOperationPolicy.isAutomaticFileOperation(command))
                         // Scalars, not characters: combining marks cannot stretch the card, and
                         // format characters (bidi overrides, zero-width) cannot reorder or hide text.
                         if needsCard, command.unicodeScalars.count > ActionApprovalRequest.maximumShownCommand

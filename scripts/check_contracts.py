@@ -35,6 +35,12 @@ root = Path(__file__).resolve().parents[1]
 # A missing file yields empty text: one deletion can only fail its own guard, never
 # abort the whole run before the remaining guards report.
 read = lambda p: (root / p).read_text() if (root / p).is_file() else ''
+def plist_or_none(data):
+    """A malformed plist fails its own guard instead of aborting the run."""
+    try:
+        return plistlib.loads(data)
+    except Exception:
+        return None
 swift_sources = ''.join(path.read_text() for path in sorted((root / 'src').glob('*.swift')))
 engine, speech, chat = map(read, ['src/Engine.swift', 'src/Speech.swift', 'src/ChatView.swift'])
 checks = {
@@ -190,6 +196,32 @@ checks = {
     'R11 engine stages update only a progress banner and a finished check clears it': 'if let current = self.phase.blockedMessage, Self.isProgressMessage(current) {' in chat and 'self.block(Self.progressMessage(for: stage ?? ""), issue: .unknown)' not in chat,
     'R22 the chosen folder is kept across launches as a security-scoped bookmark': 'url.bookmarkData(options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'URL(resolvingBookmarkData: data, options: [.withSecurityScope]' in read('src/ActionPanel.swift') and 'NativeActionPanel(model: NativeActionPanelModel(folderBookmarks: .standard))' in read('src/App.swift') and 'await self.actionPanel.model.restoreSavedFolder()' in read('src/App.swift') and 'selectFolder(docDir, remember: false)' in read('src/App.swift') and '        return await selectFolder(url)\n    }' in read('src/ActionPanel.swift'),
     'removal also deletes the Keychain log token': 'while security delete-generic-password -s dot-github-token >/dev/null 2>&1; do :; done' in read('scripts/uninstall-dot.sh') and 'dot-github-token' in read('src/DotLogSync.swift'),
+    'S10 the fallback token file is read only as a private regular file this user owns': (
+        'let fd = Darwin.open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK)' in read('src/DotLogSync.swift')
+        and 'if (mode & 0o170000) != 0o100000 { return "it is not a regular file" }' in read('src/DotLogSync.swift')
+        and 'if owner != currentUser { return "it is not owned by this user" }' in read('src/DotLogSync.swift')
+        and 'if (mode & 0o077) != 0 { return "group or others can access it' in read('src/DotLogSync.swift')
+        and 'Self.tokenFileRefusal(mode: UInt32(info.st_mode), owner: info.st_uid, currentUser: getuid())' in read('src/DotLogSync.swift')
+        and -1 < read('src/DotLogSync.swift').find('refuseTokenFile(reason)\n            return nil') < read('src/DotLogSync.swift').find('handle.read(upToCount: 4096)')
+        and 'String(contentsOf:' not in read('src/DotLogSync.swift').partition('    private func token() -> String? {')[2].partition('private func keychainToken()')[0]
+        and 'def test_a_symbolic_link_is_never_followed' in read('Tests/Python/test_log_token_hardening.py')
+    ),
+    'S10 requests that carry the log token never follow a redirect': (
+        'URLSession.shared' not in read('src/DotLogSync.swift')
+        and read('src/DotLogSync.swift').count('Task(with:') == 1
+        and '        session.dataTask(with: request) { data, response, _ in' in read('src/DotLogSync.swift')
+        and 'URLSession(configuration: configuration, delegate: LogSyncRedirectRefusal(), delegateQueue: nil)' in read('src/DotLogSync.swift')
+        and re.search(r'final class LogSyncRedirectRefusal: NSObject, URLSessionTaskDelegate \{\s*func urlSession\(_ session: URLSession, task: URLSessionTask,'
+                      r'\s*willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,'
+                      r'\s*completionHandler: @escaping \(URLRequest\?\) -> Void\) \{\s*completionHandler\(nil\)\s*\}\s*\}', read('src/DotLogSync.swift')) is not None
+    ),
+    'S10 the log token never reaches a command line': (
+        re.search(r'(?m)^security add-generic-password -a "\$USER" -s "\$SERVICE" -U -w$', read('scripts/store_github_token.sh')) is not None
+        and 'SERVICE="dot-github-token"' in read('scripts/store_github_token.sh')
+        and re.search(r'(?m)^security add-generic-password -a "\$USER" -s dot-github-token -U -w$', read('docs/QUESTIONS_FOR_EMIN.md')) is not None
+        and not re.search(r'-w\s+"?\$', read('scripts/store_github_token.sh') + read('docs/QUESTIONS_FOR_EMIN.md'))
+        and 'def test_store_script_keeps_the_token_out_of_argv' in read('Tests/Python/test_log_token_hardening.py')
+    ),
     'removal also clears .dot-actions folders, Dot Dock tiles, download history rows and crash records': 'Self.recordActionFolder(canonical)' in read('src/ActionPanel.swift') and '[ -f "$target/owner.lock" ] || continue' in read('scripts/uninstall-dot.sh') and '[ ! -L "$target" ]' in read('scripts/uninstall-dot.sh') and 'defaults import com.apple.dock "$DOCK_PLIST"' in read('scripts/uninstall-dot.sh') and "LSQuarantineDataURLString LIKE '%github.com/Emin-dev/Dot/%'" in read('scripts/uninstall-dot.sh') and '/CrashReporter/Dot_' in read('scripts/uninstall-dot.sh'),
     'voice approve and deny end the listening turn first': re.search(r'cancelTurn\(\)\s+approvePendingAction\(\)\s+return', chat) is not None and re.search(r'cancelTurn\(\)\s+denyPendingAction\(\)\s+return', chat) is not None,
     'every command that is not read-only passes the R16 safety approver': re.search(r'!FileOperationPolicy\.isReadOnlyCommand\(command\),\s*let refusal = await self\.safetyRefusal\(for: command\)', chat) is not None
@@ -327,6 +359,50 @@ checks = {
         and 'privacy_diff.py .tmp/snapshot-before.json .tmp/snapshot-after.json' in read('.github/workflows/privacy-clean.yml')
         and 'app.dot.local' not in read('scripts/privacy_allowlist.txt')
     ),
+    'S11 the installer runs only macOS tools and compares the exact entitlement set': (
+        re.search(r'\nset -euo pipefail\n(?:#[^\n]*\n)*export PATH=/usr/bin:/bin:/usr/sbin:/sbin\n',
+                  read('scripts/install-dot.sh')) is not None
+        and len(re.findall(r'(?m)^\s*(?:export\s+)?PATH=', read('scripts/install-dot.sh'))) == 1
+        and (lambda embedded, signed: embedded is not None and embedded == signed and len(signed) == 11)(
+            plist_or_none(read('scripts/install-dot.sh').partition("<<'DOT_EXPECTED_ENTITLEMENTS'\n")[2]
+                          .partition('\nDOT_EXPECTED_ENTITLEMENTS\n')[0].encode()),
+            plist_or_none(read('Resources/Dot.entitlements').encode()))
+        and 'cat > "$EXPECTED_ENTITLEMENTS" <<\'DOT_EXPECTED_ENTITLEMENTS\'' in read('scripts/install-dot.sh')
+        and 'EXPECTED_SET="$(plutil -convert xml1 -o - "$EXPECTED_ENTITLEMENTS"' in read('scripts/install-dot.sh')
+        and 'ACTUAL_SET="$(plutil -convert xml1 -o - "$ACTUAL_ENTITLEMENTS"' in read('scripts/install-dot.sh')
+        and 'if [ "$ACTUAL_SET" != "$EXPECTED_SET" ]; then' in read('scripts/install-dot.sh')
+        and '*com.apple.security.network.client*)' not in read('scripts/install-dot.sh')
+        and 'def test_installer_accepts_only_the_exact_entitlement_set' in read('Tests/Python/test_phase7s_contract.py')
+    ),
+    "S12 the uninstaller validates the bundle id and removes only what is Dot's": (
+        (lambda s: -1 < s.find('valid_bundle_id "$BUNDLE_ID" || fail') < s.find('rm -rf')
+         and '[[ "$1" =~ ^[A-Za-z][A-Za-z0-9.-]*$ ]] && [[ "$1" != *..* ]]' in s
+         and 'if [ "$APP_ID" = "$BUNDLE_ID" ]; then\n        APP_IS_DOT=1' in s
+         and s.count('rm -rf "$APP"') == 1
+         and 'if [ "$APP_IS_DOT" = "1" ]; then\n    rm -rf "$APP" || fail' in s
+         and 'Dot" \\' not in s.partition('\nrm -rf \\\n')[2].partition("|| fail \"could not remove one of Dot's data folders\"")[0]
+         and s.count('rm -rf "$folder"') == 1
+         and 'if [ -d "$folder" ] && [ ! -L "$folder" ]; then' in s
+         and 'if [ -e "$folder/$marker" ]; then\n                rm -rf "$folder"' in s
+         and ('\nremove_dot_folder "$HOME/Library/Application Support/Dot" \\\n    install-id github.token Logs/dot_chat_log.txt'
+              ' Logs/dot-sync.log Logs/upload-queue.json \\\n    dot-health.json .screen_permission_configured'
+              ' action-folders.txt\n') in s
+         and '\nremove_dot_folder "$HOME/Library/Logs/Dot" dot_chat_log.txt dot-sync.log\n' in s
+         and 'DiagnosticReports/Dot"*.ips >' not in s
+         and 'grep -qF "\\"$BUNDLE_ID\\"" "$report" 2>/dev/null || continue' in s
+         and '${CHECK_PATHS[@]+"${CHECK_PATHS[@]}"}' in s)(read('scripts/uninstall-dot.sh'))
+        # The markers are files Dot itself writes in its Application Support folder.
+        and 'appendingPathComponent("install-id")' in read('src/DotLogSync.swift')
+        and 'appendingPathComponent("dot-sync.log")' in read('src/DotLogSync.swift')
+        and 'static let fileName = "dot_chat_log.txt"' in read('src/InteractionCore.swift')
+        and all(f'def {name}(self)' in read('Tests/Python/test_phase7s_contract.py') for name in (
+            'test_a_bundle_id_that_is_not_plain_reverse_dns_removes_nothing',
+            'test_an_app_that_is_not_dot_is_left_alone',
+            'test_dot_and_its_marked_folders_go_and_lookalikes_stay',
+            'test_generic_dot_folders_need_one_of_dots_own_files'))
+        and -1 < read('scripts/uninstall-dot.sh').find('if [ "$APP_IS_OTHER" != "1" ] || [ "$LEGACY_IS_DOT" = "1" ]; then') < read('scripts/uninstall-dot.sh').find('pkill -x Dot')
+        and 'if [ "$LEGACY_IS_DOT" = "1" ]; then\n        "$LSREGISTER" -u "$LEGACY_APP"' in read('scripts/uninstall-dot.sh')
+    ),
     'R23 screen change is measured by Apple Vision feature prints': (
         'VNGenerateImageFeaturePrintRequestRevision2' in read('src/ScreenContext.swift')
         and 'func captureFeaturePrint() async -> ScreenFeaturePrint?' in read('src/ScreenContext.swift')
@@ -411,6 +487,18 @@ checks = {
         and "raise ValueError('retired Python voice runtime still in the payload')" in read('scripts/audit_runtime_payload.py')
         and 'import_probe' not in read('scripts/audit_runtime_payload.py')
         and 'def test_python_voice_leaves_payload_and_manifest_and_the_audit_passes' in read('Tests/Python/test_slim_runtime_payload.py')
+    ),
+    'S8 S13 S14 the shell cannot make an injection permanent and keys go only to the named app': (
+        'arguments: ["-f", "-c", command]' in read('src/ChatView.swift')
+        and 'let needsCard = FileOperationPolicy.mentionsDotState(command)' in read('src/ChatView.swift')
+        and 'guard let model = await verifiedModelURL() else' in read('src/SafetyApprover.swift')
+        and 'try? await OfflinePayload.verifyHash(url, bytes: asset.bytes, expected: asset.sha256)' in read('src/SafetyApprover.swift')
+        and 'alert.addButton(withTitle: "Replace")' in read('src/ChatView.swift')
+        and '(values.fileSize ?? Int.max) <= Self.maximumSoulBytes' in read('src/InteractionCore.swift')
+        and 'guard targetMatches(app, bundleID: target?.bundleIdentifier, appName: target?.localizedName) else' in read('src/InteractionCore.swift')
+        and all(name in read('Tests/DotCoreTests/InteractionCoreTests.swift') for name in (
+            'func testCommandsThatTouchDotsOwnStateKeepTheCard()', 'func testWorkflowKeysGoOnlyToTheNamedApp()',
+            'func testOversizedOrLinkedSoulIsRefusedBeforeAnyWrite()'))
     ),
     'a push to main cannot cancel the release no-trace gate': (
         'group: dot-privacy-${{ github.workflow }}-' in read('.github/workflows/privacy-clean.yml')

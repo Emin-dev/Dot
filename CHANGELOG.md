@@ -4,6 +4,18 @@ Short and newest first. Details are in each commit and in
 [docs/AUDIT_2026-10-22.md](docs/AUDIT_2026-10-22.md). Older entries:
 [docs/archive/CHANGELOG_EARLIER.md](docs/archive/CHANGELOG_EARLIER.md).
 
+## v1.1.7 (2026-10-24)
+
+- Dot's own memory, folder list, approver model and shell start-up files can no longer be changed
+  by a command without your approval card; the shell starts without start-up files; the approver
+  model is checked before every verdict.
+- A dropped `.dotsoul` file asks before it replaces Dot's memory; app shortcuts (Xcode build,
+  Terminal git status) go only to the app they name.
+- The installer runs only macOS tools and checks the exact entitlement set; the uninstaller checks
+  the app's bundle id and removes generic "Dot" folders only when they hold Dot's files.
+- The log token file is read only when it is yours and private; the upload never follows a
+  redirect; storing the token no longer puts it on the command line.
+
 ## v1.1.6 (2026-10-24)
 
 - The unused Python voice runtime (872 MB) no longer ships, and the launch check

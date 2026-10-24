@@ -36,6 +36,46 @@ final class SafetyApprover: @unchecked Sendable {
         }
     }
 
+    /// S8: the shell can write Dot's container, where the downloaded approver model lives.
+    /// Before every verdict the model must be the file hashed against the signed index: a full
+    /// SHA-256 the first time, then the same size, inode and change time, which no write,
+    /// rename or `touch` can keep.
+    private var verifiedModel: (path: String, identity: [Int64])?
+
+    private static func identity(of url: URL) -> [Int64]? {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG else { return nil }
+        return [Int64(info.st_size), Int64(bitPattern: UInt64(info.st_ino)), Int64(info.st_dev),
+                Int64(info.st_ctimespec.tv_sec), Int64(info.st_ctimespec.tv_nsec)]
+    }
+
+    private static func signedModelAsset() -> BundledModelIndex.Asset? {
+        guard let url = Bundle.main.url(forResource: "bundled-models", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let index = try? JSONDecoder().decode(BundledModelIndex.self, from: data) else { return nil }
+        return index.files.first { $0.path == auxiliaryModelPath }
+    }
+
+    private func knownModel() -> (path: String, identity: [Int64])? {
+        lock.lock(); defer { lock.unlock() }
+        return verifiedModel
+    }
+
+    private func rememberModel(path: String, identity: [Int64]) {
+        lock.lock(); defer { lock.unlock() }
+        verifiedModel = (path, identity)
+    }
+
+    private func verifiedModelURL() async -> URL? {
+        guard let url = await modelURL(), let before = Self.identity(of: url) else { return nil }
+        if let known = knownModel(), known.path == url.path, known.identity == before { return url }
+        guard let asset = Self.signedModelAsset(),
+              (try? await OfflinePayload.verifyHash(url, bytes: asset.bytes, expected: asset.sha256)) != nil,
+              Self.identity(of: url) == before else { return nil }
+        rememberModel(path: url.path, identity: before)
+        return url
+    }
+
     private var binaryURL: URL? {
         guard let bin = Bundle.main.executableURL?
             .deletingLastPathComponent().appendingPathComponent("dot-safety") else { return nil }
@@ -84,7 +124,7 @@ final class SafetyApprover: @unchecked Sendable {
     func evaluate(conversation: String, action: String) async -> SafetyVerdict {
         if consumeForce(for: action) { return .allowed }
         guard let binary = binaryURL else { return .unavailable(reason: "approver binary missing") }
-        guard let model = await modelURL() else { return .unavailable(reason: "approver model missing") }
+        guard let model = await verifiedModelURL() else { return .unavailable(reason: "approver model missing or changed") }
         // The approver runs a 2,048-token context: send the newest part of the
         // conversation and a bounded action so every request fits.
         let request: [String: String] = ["conversation": Self.recent(conversation),

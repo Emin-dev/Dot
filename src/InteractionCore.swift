@@ -4487,8 +4487,17 @@ public final class DotSoulManager: @unchecked Sendable {
         return importSoul(from: latest)
     }
 
+    /// S13: a soul replaces the profile and standing rules read on every turn; the app asks
+    /// the owner first, and a file that is not a small regular file is never read.
+    public static let maximumSoulBytes = 1_048_576
+
     public func importSoul(from url: URL) -> (success: Bool, message: String) {
         do {
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard values.isRegularFile == true, values.isSymbolicLink != true,
+                  (values.fileSize ?? Int.max) <= Self.maximumSoulBytes else {
+                return (false, "That .dotsoul file is not a regular file of at most 1 MB, so I left my memory as it was.")
+            }
             let data = try Data(contentsOf: url)
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return (false, "Invalid .dotsoul archive format.")
@@ -5206,6 +5215,16 @@ public enum FileOperationPolicy {
         "env", "xargs", "osascript", "python", "python3", "perl", "ruby", "node"
     ]
 
+    /// S8: the shell can write Dot's own container. A command that names Dot's memory, its
+    /// folder list, the approver model or a shell start-up file always shows the card, so a
+    /// one-off injection cannot make itself permanent. Quotes and escapes do not hide a name.
+    static let protectedStateNames = ["profile.md", "volatile.md", "action-folders", "application support/dot",
+                                      "gemma", ".gguf", ".zshenv", ".zprofile", ".zshrc", ".zlogin", ".zlogout"]
+    public static func mentionsDotState(_ command: String) -> Bool {
+        let plain = command.lowercased().filter { !"\\\"'".contains($0) }
+        return protectedStateNames.contains { plain.contains($0) }
+    }
+
     public static func isAutomaticFileOperation(_ command: String) -> Bool {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 4_000 else { return false }
@@ -5601,7 +5620,7 @@ public enum ContextualWorkflowApp: String, CaseIterable, Sendable {
             return .xcode
         } else if id.contains("terminal") || id.contains("iterm") || id.contains("ghostty") || id.contains("warp") || name.contains("terminal") || name.contains("iterm") || name.contains("ghostty") {
             return .terminal
-        } else if id.contains("safari") || id.contains("chrome") || id.contains("browser") || name.contains("safari") || name.contains("chrome") || name.contains("arc") {
+        } else if id.contains("safari") || id.contains("chrome") || id.contains("browser") || name.contains("safari") || name.contains("chrome") || name == "arc" {
             return .safari
         } else if id.contains("figma") || name.contains("figma") {
             return .figma
@@ -5611,9 +5630,23 @@ public enum ContextualWorkflowApp: String, CaseIterable, Sendable {
 }
 
 public struct ContextualWorkflowHelper {
+    /// S14: the keys go to the app the owner was using, so that app must be the one the action
+    /// names; "terminal git_status" never types into a chat window.
+    public static func targetMatches(_ app: ContextualWorkflowApp, bundleID: String?, appName: String?) -> Bool {
+        app != .unknown && ContextualWorkflowApp.identify(bundleID: bundleID, appName: appName) == app
+    }
+
     @MainActor
     public static func performAction(app: ContextualWorkflowApp, action: String) async -> (succeeded: Bool, message: String) {
         let act = action.lowercased().replacingOccurrences(of: " ", with: "_")
+        #if canImport(AppKit)
+        // The front app, or the app used before Dot took focus; with neither known, nothing is sent.
+        let front = NSWorkspace.shared.frontmostApplication
+        let target = front?.bundleIdentifier != Bundle.main.bundleIdentifier ? front : InPlaceAppTyping.lastExternalApplication()
+        guard targetMatches(app, bundleID: target?.bundleIdentifier, appName: target?.localizedName) else {
+            return (false, "That action is for \(app.rawValue), but \(target?.localizedName ?? "no matching app") is in use, so I sent nothing.")
+        }
+        #endif
         switch app {
         case .xcode:
             switch act {
