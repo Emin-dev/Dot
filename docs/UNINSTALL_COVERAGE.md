@@ -41,7 +41,7 @@ system extensions, `/usr/local`, package receipts, plug-ins, login items, backgr
 
 What stays and why: macOS updates its own records whenever any app runs, including Apple's own
 apps: Spotlight and Siri indexes, app-usage statistics (Biome, Duet), the Shortcuts index of App
-Intents, preference caches and the unified system log. They hold no Dot data, they belong to macOS,
+Intents, the Trial experiment store (`~/Library/Trial`), preference caches and the unified system log. They hold no Dot data, they belong to macOS,
 and removing them would need admin rights and would touch every other app's records. The no-trace
 release lane lists each of these in `scripts/privacy_allowlist.txt` with its reason; any Dot-owned
 path left behind fails the release.
